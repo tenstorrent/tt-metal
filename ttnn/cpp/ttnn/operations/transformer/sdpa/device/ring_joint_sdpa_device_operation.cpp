@@ -615,7 +615,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "sol_pooled_k must be [1, NH, n_blocks_pad, DH]");
         const uint32_t nkc_local = tt::div_up(k_shape[2], args.get_k_chunk_size());
         const uint32_t nkc_pad = tt::round_up(nkc_local * args.ring_size, 32u);
-        const uint32_t mask_width = tensor_args.sol_chunk_mode(args.sol_mode) ? nkc_pad : n_blocks_pad;
+        // Resident mode (M2) takes the block-form mask: its exact set is per 64-token block, like compact.
+        const bool chunk_width_mask =
+            tensor_args.sol_chunk_mode(args.sol_mode) && !tensor_args.sol_resident_mode(args.sol_mode);
+        const uint32_t mask_width = chunk_width_mask ? nkc_pad : n_blocks_pad;
         TT_FATAL(
             mask.logical_shape()[1] == q_shape[1] && mask.logical_shape()[2] >= nqc &&
                 mask.logical_shape()[3] == mask_width,

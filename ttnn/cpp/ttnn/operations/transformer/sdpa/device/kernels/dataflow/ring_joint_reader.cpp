@@ -590,7 +590,10 @@ void kernel_main() {
     // Resident mode (sol_attn_status_2026-10-21.md 4a, M1): chunk-mode semantics, one pass of each K/V piece per
     // ring iteration shared by every Q chunk the core owns. See the branch in the ring loop below.
     constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
+    // M2: words of per-shard kept-block bits in every resident plan page (block-form mask, as compact).
+    constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
+    static_assert(!sol_resident || sol_res_block_words * 32 >= sol_nb, "resident: block words cover the shard");
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -1364,11 +1367,13 @@ void kernel_main() {
 
         [[maybe_unused]] const uint32_t do_pooled = (sol_pooled_pending && !sol_pooled_off) ? 1u : 0u;
         if constexpr (sol_resident) {
-            // ---- Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, M1). One pass of each K/V piece per
-            // ring iteration, applied by compute to every resident Q chunk (sdpa_ring_resident). This reader:
+            // ---- Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2). One pass of each K/V piece
+            // per ring iteration, applied by compute to every resident Q chunk (sdpa_ring_resident). This reader:
             //   1. on the first active iteration reads every resident Q chunk into cb_q_in, once for the whole op;
-            //   2. per head the core's chunks fall in: the chain-wide kept union over every chunk of every chain
-            //      member, then one plan page per resident chunk [kept lo, hi, do_pooled, union lo, hi];
+            //   2. per head the core's chunks fall in: the chain-wide kept union (per piece) over every chunk of
+            //      every chain member, then one plan page per resident chunk [this shard's kept-block words,
+            //      union piece bits lo, hi, do_pooled]; the mask is the block-form one (M2), a piece is kept by a
+            //      chunk when the chunk keeps any 64-token block of it, and compute steps only on those blocks;
             //   3. streams the shard's pieces once each, heads interleaved per k in head order, skipping a piece
             //      no member of the head's chain needs (compute mirrors both rules);
             //   4. on the first active iteration the pooled K/V chunks once per head, then one bias row per
@@ -1397,11 +1402,11 @@ void kernel_main() {
                 }
                 q_pushed = true;
             }
-            // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time.
+            // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time:
+            //    the whole block-form row (n_blocks_pad words, every shard), which the bias generator needs too.
             CircularBuffer cb_plan(cb_sol_plan);
             cb_plan.reserve_back(1);
-            const uint32_t plan_addr = cb_plan.get_write_ptr();
-            const uint32_t scratch = plan_addr + 64;
+            uint32_t scratch = cb_plan.get_write_ptr() + 64;
             const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
                 noc.async_read(
                     sol_mask_reader,
@@ -1411,14 +1416,58 @@ void kernel_main() {
                     {});
                 noc.async_read_barrier();
             };
-            // Kept local chunks of the row in the scratch; chunk 0 forced when the row is empty (every (Q chunk,
-            // shard) must compute at least one chunk, and compute creates each chunk's state on chunk 0).
-            const auto row_kept_bits = [&](uint32_t& lo, uint32_t& hi) {
+            // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch: all the bit
+            // extraction needs, and 8x less than the whole row for every member row on the chain's critical path.
+            const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
+                noc.async_read(
+                    sol_mask_reader,
+                    CoreLocalMem<uint32_t>(scratch),
+                    sol_nb_pad * sizeof(uint32_t),
+                    {.page_id = nq * sol_nqc_pad + qc, .offset_bytes = ring_id * sol_nb_pad * sizeof(uint32_t)},
+                    {});
+                noc.async_read_barrier();
+            };
+            // This shard's kept FULL blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32).
+            // Block 0 forced: every (Q chunk, shard) computes at least one block, compute creates each chunk's state
+            // on piece 0, and the pre-pass forces the same block (the bias row is patched to match below).
+            // (>= 1 so the arrays below are well-formed in the non-resident builds, where this branch is discarded.)
+            constexpr uint32_t kBlockWords = sol_res_block_words > 0 ? sol_res_block_words : 1;
+            constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / sol_bias_gen::kBlockTiles;
+            uint32_t full_bits[kBlockWords];  // the shard's full blocks, once per ring iteration
+            for (uint32_t w = 0; w < kBlockWords; ++w) {
+                full_bits[w] = 0;
+            }
+            for (uint32_t b = 0; b < sol_nb; ++b) {
+                if (sol_block_is_full(ring_id, b)) {
+                    full_bits[b >> 5] |= 1u << (b & 31);
+                }
+            }
+            const auto row_block_bits = [&](uint32_t* words) {
                 CoreLocalMem<volatile uint32_t> row(scratch);
+                for (uint32_t w = 0; w < kBlockWords; ++w) {
+                    words[w] = 0;
+                }
+                for (uint32_t b = 0; b < sol_nb; ++b) {
+                    if (row[b] != 0) {
+                        words[b >> 5] |= 1u << (b & 31);
+                    }
+                }
+                for (uint32_t w = 0; w < kBlockWords; ++w) {
+                    words[w] &= full_bits[w];
+                }
+                words[0] |= 1u;
+            };
+            // Piece k is kept when any of its blocks is: the streaming / chain-union granularity.
+            const auto piece_bits = [&](const uint32_t* words, uint32_t& lo, uint32_t& hi) {
                 lo = 0;
                 hi = 0;
                 for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-                    if (row[ring_id * sol_nkc + k] != 0) {
+                    bool kept = false;
+                    for (uint32_t j = 0; j < kBlocksPerPiece && !kept; ++j) {
+                        const uint32_t b = k * kBlocksPerPiece + j;
+                        kept = b < sol_nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
+                    }
+                    if (kept) {
                         if (k < 32) {
                             lo |= 1u << k;
                         } else {
@@ -1426,7 +1475,11 @@ void kernel_main() {
                         }
                     }
                 }
-                lo |= 1u;
+            };
+            const auto row_kept_bits = [&](uint32_t& lo, uint32_t& hi) {
+                uint32_t words[kBlockWords];
+                row_block_bits(words);
+                piece_bits(words, lo, hi);
             };
             uint32_t res_lo[kResMax];
             uint32_t res_hi[kResMax];
@@ -1435,7 +1488,7 @@ void kernel_main() {
             {
                 SOL_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
                 for (uint32_t i = 0; i < n_res; ++i) {
-                    read_chunk_row(res_nq[i], res_qc[i]);
+                    read_shard_slice(res_nq[i], res_qc[i]);
                     row_kept_bits(res_lo[i], res_hi[i]);
                 }
             }
@@ -1459,7 +1512,7 @@ void kernel_main() {
                             if (qc >= res_qc[i0] && qc < res_qc[i0] + (i1 - i0)) {
                                 continue;  // this core's own chunks are already in
                             }
-                            read_chunk_row(res_nq[i0], qc);
+                            read_shard_slice(res_nq[i0], qc);
                             uint32_t lo;
                             uint32_t hi;
                             row_kept_bits(lo, hi);
@@ -1479,13 +1532,19 @@ void kernel_main() {
                 for (uint32_t i = 0; i < n_res; ++i) {
                     if (i > 0) {
                         cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
+                        scratch = cb_plan.get_write_ptr() + 64;
                     }
+                    // The chunk's own block bits, from its slice again (the scratch held the members' since).
+                    read_shard_slice(res_nq[i], res_qc[i]);
+                    uint32_t words[kBlockWords];
+                    row_block_bits(words);
                     CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
-                    plan_words[0] = res_lo[i];
-                    plan_words[1] = res_hi[i];
-                    plan_words[2] = do_pooled;
-                    plan_words[3] = seg_ulo[i];
-                    plan_words[4] = seg_uhi[i];
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        plan_words[w] = words[w];
+                    }
+                    plan_words[kBlockWords] = seg_ulo[i];
+                    plan_words[kBlockWords + 1] = seg_uhi[i];
+                    plan_words[kBlockWords + 2] = do_pooled;
                     cb_plan.push_back(1);
                 }
             }
@@ -1613,9 +1672,20 @@ void kernel_main() {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
                                 read_chunk_row(nq, res_qc[i]);
+                                // Block 0 of every live shard is forced exact by every ring iteration's bits (above),
+                                // so mark it exact in the row the bias is generated from (no double counting).
+                                {
+                                    CoreLocalMem<volatile uint32_t> row(scratch);
+                                    for (uint32_t s = 0; s < ring_size; ++s) {
+                                        if (sol_block_is_full(s, 0)) {
+                                            row[s * sol_nb_pad] = 1u;
+                                        }
+                                    }
+                                }
                                 CircularBuffer cb_bias(cb_sol_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
-                                sol_bias_gen::generate_tiles<true, sol_bias_tile_bytes>(
+                                // Block-form row: exact iff the block's own bit is set on a full block (M2).
+                                sol_bias_gen::generate_tiles<false, sol_bias_tile_bytes>(
                                     noc,
                                     cb_bias.get_write_ptr(),
                                     row0,
@@ -1635,7 +1705,7 @@ void kernel_main() {
             // pushed. Compute pops exactly KV_chunks_processed_in_iter entries (plus the same dummy padding) if the
             // two sides agree; a count that differs from a chain neighbour's is a phase fault.
             DPRINT(
-                "RES it={} rid={} n={} heads={}/{} own0={} union0={} pushed={} pooled={} qread={}\n",
+                "RES it={} rid={} n={} heads={}/{} pieces0={} union0={} pushed={} pooled={} qread={}\n",
                 ring_iter,
                 ring_id,
                 n_res,

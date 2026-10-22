@@ -151,9 +151,13 @@ def _run(
         for x in (q, k, v)
     )
 
-    # "resident" is a chunk mode in the kernel; the pre-pass produces the same chunk-form mask as "chunk".
+    # "resident" (M2) takes the block-form mask with the bias generated on device, exactly like "compact".
     pre = SolPrepass(
-        mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=tau, mode="chunk" if mode == "resident" else mode
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        sp_axis=sp_axis,
+        tau=tau,
+        mode="compact" if mode == "resident" else mode,
     )
     pre.prepare(geo, sink_tokens, scale)
     sol = pre(tq, tk, tv, scale=scale, report_density=True)
@@ -334,8 +338,8 @@ def test_density_falls_as_tau_rises(
     ]
     logger.info(f"[tau] {mode}: densities {d}")
     assert d[0] >= d[1] >= d[2] - 1e-9, f"densities {d} increase with tau"
-    if mode not in ("chunk", "resident"):
-        # Chunk mode (and resident, which shares its chunk-form mask) is exempt by construction, as the docstring above says: its density is CHUNK occupancy,
+    if mode != "chunk":
+        # Chunk mode is exempt by construction, as the docstring above says: its density is CHUNK occupancy,
         # and a chunk survives if any of its 8 blocks does, so it pins at 0.8086 across the whole tau range.
         # Only the block-form modes expose the knob. Asserting otherwise here was my error, not the kernel's.
         assert d[0] > d[2], f"tau has no effect between 0.5 and 4.0 in {mode} mode: {d}"
@@ -406,9 +410,10 @@ def _check_partial_tail(r: Result, mode, S, rows, logical_n):
     logger.info(
         f"[tail] mode={mode} rows={rows} logical_n={logical_n}: pcc vs pooled-tail ref {pcc_ref:.5f}, vs dense {pcc_dense:.5f}"
     )
-    if mode in ("chunk", "resident"):
+    if mode == "chunk":
         assert pcc_dense > 0.999, f"{mode} mode computes the tail chunk exactly; pcc vs dense {pcc_dense:.5f}"
     else:
+        # Block-form exact sets (gather, compact, resident since M2): partial tail blocks are pooled.
         assert pcc_ref > 0.98, f"{mode}: pcc vs pooled-tail reference {pcc_ref:.5f}"
 
 
@@ -494,17 +499,20 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
     [(512, 4096, 512), (1024, 8192, 512), (1024, 8192, 256), (1184, 9472, 512), (1184, 9472, 256)],
     ids=["r512k512", "r1024k512", "r1024k256", "r1184k512", "r1184k256"],
 )
-def test_resident_matches_chunk(
+def test_resident_matches_compact(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, tau, reset_seeds, capfd
 ):
-    """M1's correctness gate (sol_attn_status_2026-10-21.md 4a): resident mode is chunk mode with the K/V-once loop
-    order -- each piece streamed once per core and applied to every resident 64-row query chunk from L1.
+    """The correctness gate of resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2): the K/V-once loop order --
+    each piece streamed once per core and applied to every resident 64-row query chunk from L1 -- with, since M2,
+    the per-64-token-block exact set of compact mode: a chunk multiplies only its kept blocks of a piece, in place.
 
-    Same inputs and the same chunk-form mask at 64-row query chunks; only the loop order and where the accumulators
-    live differ, so the two outputs must agree to bf16 noise. tau=-1e4 keeps every piece (no state rotation), tau 2
-    rotates most of them. rows 1184 leaves a partial last K chunk and partial Q chunks (the geometry that produced
-    garbage on 2026-10-21); k_chunk 256 halves the piece (Sk_chunk_t 8). At rows=1024 a core holds about two
-    resident chunks and some cores straddle two heads, which exercises the interleaved per-head streaming.
+    Same inputs and the same block-form mask at 64-row query chunks as compact mode (even-up off, so compact's
+    exact set is the mask's full blocks plus the forced block 0 of every shard, exactly resident's); only the loop
+    order, the block addressing and where the accumulators live differ, so the two outputs must agree to bf16
+    noise. tau=-1e4 keeps every block (full-width steps, no state rotation), tau 2 narrows most steps and rotates
+    many pieces. rows 1184 leaves a partial last K chunk and partial Q chunks; k_chunk 256 halves the piece
+    (Sk_chunk_t 8). At rows=1024 a core holds about two resident chunks and some cores straddle two heads, which
+    exercises the interleaved per-head streaming.
     """
     kw = dict(
         tau=tau,
@@ -513,21 +521,22 @@ def test_resident_matches_chunk(
         logical_n=logical_n,
         k_chunk=k_chunk,
     )
-    base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
+    base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", **kw)
     res = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", want_dense=False, **kw)
     p_chunk = _pcc(base.sol, res.sol, logical_n)
     p_dense = _pcc(res.sol, base.dense, logical_n)
     p_chunk_dense = _pcc(base.sol, base.dense, logical_n)
     logger.info(
-        f"[resident] rows={rows} k_chunk={k_chunk} tau={tau} density {res.density:.4f}; "
-        f"pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}; pcc(chunk, dense) {p_chunk_dense:.5f}"
+        f"[resident] rows={rows} k_chunk={k_chunk} tau={tau} block density {res.density:.4f}; "
+        f"pcc(resident, compact) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}; "
+        f"pcc(compact, dense) {p_chunk_dense:.5f}"
     )
     # Where does it go wrong? PCC per (shard, 64-row query chunk) for each pair, worst first: a bad chunk position
     # (first / last per core, the partial tail, one head) points at the loop structure; uniform noise at the step;
-    # the same regions in chunk-vs-dense point at the shared q_chunk=64 path rather than at resident mode.
+    # the same regions in compact-vs-dense point at the shared q_chunk=64 path rather than at resident mode.
     S = tuple(mesh_device.shape)[sp_axis]
     nqc = -(-rows // Q1_CHUNK)
-    outs = {"dense": base.dense, "chunk": base.sol, "resident": res.sol}
+    outs = {"dense": base.dense, "compact": base.sol, "resident": res.sol}
     for name, t in outs.items():
         per_shard = []
         for sh in range(S):
@@ -551,9 +560,9 @@ def test_resident_matches_chunk(
         raise AssertionError(flat)
 
     for name, (x, y) in {
-        "res-chunk": (res.sol, base.sol),
+        "res-compact": (res.sol, base.sol),
         "res-dense": (res.sol, base.dense),
-        "chunk-dense": (base.sol, base.dense),
+        "compact-dense": (base.sol, base.dense),
     }.items():
         worst = []
         by_pos, by_slot = {}, {}
@@ -594,7 +603,7 @@ def test_resident_matches_chunk(
             + " ".join(f"{k}:{mean(v):.4f}" for k, v in sorted(by_slot.items()))
         )
     assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
-    assert base.density == res.density, "the mask must be the chunk-mode one"
+    assert base.density == res.density, "the mask must be the same block-form one"
     assert p_chunk > 0.999, p_chunk
 
 
@@ -921,7 +930,11 @@ def _run_sequence(
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     mesh_axes = [sp_axis, None, None, None]
     pre = SolPrepass(
-        mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=tau, mode="chunk" if mode == "resident" else mode
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        sp_axis=sp_axis,
+        tau=tau,
+        mode="compact" if mode == "resident" else mode,
     )
     pre.prepare(geo, sink_tokens, scale)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -996,24 +1009,25 @@ def _run_sequence(
 def test_resident_call_parity(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, reset_seeds, capfd
 ):
-    """Four resident calls in a row, fresh inputs each, each checked against chunk mode run the same way.
+    """Four resident calls in a row, fresh inputs each, each checked against compact mode run the same way (the
+    same block-form mask and exact set; see test_resident_matches_compact).
 
-    Resident at 5 s (4736 rows per shard, 384-key pieces: the bench's geometry) alternates 11.9 / 4.3 ms by
-    call. Fresh inputs per call make a skipped wait visible as a wrong answer (the previous call's K/V), and
-    per-call timing ties the parity to it. Measured 2026-10-21 at 1024 and 1184 rows with 256-key pieces: every
-    call 2.4 ms and bit-exact against chunk mode, i.e. no alternation at the small shapes.
+    Resident at 5 s (4736 rows per shard, 384-key pieces: the bench's geometry) alternated 11.9 / 4.3 ms by call
+    on the first machine (two different masks, 2026-10-21). Fresh inputs per call make a skipped wait visible as a
+    wrong answer (the previous call's K/V), and per-call timing ties the parity to it. The per-call ms are also the
+    first M2 timing at the real shape (tau 2, random inputs: block density ~0.07).
     """
     kw = dict(tau=2.0, seeds=[11, 12, 13, 14], rows=rows, logical_n=logical_n, q_chunk=Q1_CHUNK, k_chunk=k_chunk)
     res = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", **kw)
-    ref = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
+    ref = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", **kw)
     pccs = []
     for i, (seed, (r, r_ms, dens), (c, c_ms, _)) in enumerate(zip(kw["seeds"], res, ref)):
         pcc = _pcc(r, c, logical_n)
         sane = torch.isfinite(r[:, :logical_n]).all() and float(r[:, :logical_n].abs().max()) < 1e3
         pccs.append(pcc)
         logger.info(
-            f"[parity] rows={rows} call {i} seed {seed}: resident {r_ms:.2f} ms, chunk {c_ms:.2f} ms, "
-            f"pcc(resident, chunk) {pcc:.6f}, density {dens:.4f}, resident sane {bool(sane)}"
+            f"[parity] rows={rows} call {i} seed {seed}: resident {r_ms:.2f} ms, compact {c_ms:.2f} ms, "
+            f"pcc(resident, compact) {pcc:.6f}, block density {dens:.4f}, resident sane {bool(sane)}"
         )
     logger.info(f"[parity] rows={rows} resident ms: " + " / ".join(f"{m:.2f}" for _, m, _ in res))
-    assert min(pccs) > 0.99, f"a resident call disagrees with chunk mode on its own inputs: {pccs}"
+    assert min(pccs) > 0.99, f"a resident call disagrees with compact mode on its own inputs: {pccs}"

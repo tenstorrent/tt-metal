@@ -1445,6 +1445,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "sol_mode=resident holds at most {} Q chunks per core, this split needs {}",
         kSolResidentMaxSlots,
         max_q_per_core);
+    // M2: the plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the
+    // union piece bits (2 words) and the pooled flag.
+    TT_FATAL(
+        !sol_resident || tt::div_up(sol_nb, 32u) + 3 <= 16,
+        "sol_mode=resident: {} blocks per shard exceed the plan header (at most 416)",
+        sol_nb);
     uint32_t q_tiles = Sq_chunk_t * DHt * (sol_resident ? max_q_per_core : q_buffer_factor);
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
@@ -2191,7 +2197,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
     // Sol-Attn: reader->compute per-(ring iter, Q chunk) plan words, and the pooled-chunk column bias tiles.
-    // Plan page: 16 summary words, then the Q chunk's full mask row (scratch the reader scans in place).
+    // Plan page: 16 summary words, then the Q chunk's full mask row (scratch the reader scans in place). Resident
+    // mode's summary is [kept-block words (sol_res_block_words)][union piece bits lo, hi][do_pooled].
     // Single page: compute pops the plan at the start of each Q chunk, before any K chunk, and the two-deep
     // K/V CBs throttle the reader harder than this does. A second page pushed the static CB region past the
     // L1 buffers the full pipeline's CCL manager pins (clash by 1792 B at the 10 s shape).
@@ -3313,9 +3320,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // visits scale with density rather than chunk occupancy. Raw chunks land in the staging CBs (reader-only)
         // and compute sees only packed pages, on cb_k_in / cb_v_in as before.
         {"sol_pack", sol_pack ? 1u : 0u},
-        // Resident mode (see sol_resident above): the FIFO depth every core sizes its state arrays by.
+        // Resident mode (see sol_resident above): the FIFO depth every core sizes its state arrays by, and (M2) the
+        // words of per-shard kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
         {"sol_resident", sol_resident ? 1u : 0u},
         {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
+        {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
         {"cb_k_stage", cb_k_stage},
         {"cb_v_stage", cb_v_stage},
         // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and

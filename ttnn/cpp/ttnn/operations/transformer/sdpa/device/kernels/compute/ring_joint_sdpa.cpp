@@ -246,6 +246,7 @@ void kernel_main() {
     // Resident mode: piece-outer loop over the core's resident Q chunks (sdpa_ring_resident).
     constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
     constexpr uint32_t sol_resident_slots = get_named_compile_time_arg_val("sol_resident_slots");
+    constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(
         !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
@@ -642,6 +643,7 @@ void kernel_main() {
                 sol_pooled_chunks,
                 sol_pooled_last_tiles,
                 sol_resident_slots,
+                sol_res_block_words,
                 kv_cb_pages,
                 RingStreamingMaskCtx<
                     neginf_tile_idx,

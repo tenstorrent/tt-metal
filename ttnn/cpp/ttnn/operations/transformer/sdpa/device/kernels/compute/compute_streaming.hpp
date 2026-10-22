@@ -1504,7 +1504,13 @@ static void sdpa_inner_loop_step(
     // Sol-Attn: this chunk is a pooled chunk carrying a column bias.
     [[maybe_unused]] const bool apply_col_bias = false,
     // Resident mode: several Q chunks consume the same K/V entry in turn, so only the last of them pops it.
-    const bool hold_kv = false) {
+    const bool hold_kv = false,
+    // Sol-Attn resident mode (M2): block-run addressing. When set, K^T sub-block `s` (actual_sbw tiles wide) is
+    // read from physical K^T column tile run_cols[s] of the entry instead of column s * actual_sbw, and the
+    // matching V rows from row run_cols[s]; the scores stay packed at the compacted columns [0, active_Sk), so
+    // the max / exp / sum / correction work unchanged on the kept blocks only. active_Sk = kept sub-blocks x
+    // actual_sbw. Needs no masking inside the entry (the caller lists only full, kept blocks).
+    const uint8_t* run_cols = nullptr) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1624,7 +1630,7 @@ static void sdpa_inner_loop_step(
                     cb_kt_in,
                     cb_qkt_im,
                     q_index_offset,
-                    kt_index_offset,
+                    run_cols != nullptr ? static_cast<uint32_t>(run_cols[kt_subblock]) : kt_index_offset,
                     q_subblock,
                     kt_subblock * actual_sbw,
                     actual_sbw,
@@ -1868,8 +1874,11 @@ static void sdpa_inner_loop_step(
                             UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                             UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                         }
+                        // Block-run addressing (resident M2): this sub-block's V rows start at run_cols[kt_sub].
+                        const uint32_t v_row0 =
+                            run_cols != nullptr ? static_cast<uint32_t>(run_cols[kt_sub]) : kt_sub * matmul_inner;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
+                            const uint32_t qktv_in1_index = v_row0 * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -2050,27 +2059,57 @@ static void sdpa_inner_loop_step(
                 sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
-                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
-                    // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
-                    // single row-group — so this outer q_subblock loop is skipped entirely on that
-                    // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
-                    // with the q_subblock-0 site so the addressing forms stay paired.
-                    const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
-                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        out_cb,
-                        qktv_in0_index_offset,
-                        qktv_in1_index,
-                        w_q,
-                        v_subblock * qktv_subblock_w,
-                        qktv_subblock_w,
-                        cur_h,
-                        active_Sk,
-                        KT_stride,
-                        /*skip_pack_configure=*/true);
-                    v_index_offset += qktv_subblock_w;
+                if (run_cols == nullptr) {
+                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                        // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
+                        // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
+                        // single row-group — so this outer q_subblock loop is skipped entirely on that
+                        // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
+                        // with the q_subblock-0 site so the addressing forms stay paired.
+                        const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
+                        blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            w_q,
+                            v_subblock * qktv_subblock_w,
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*skip_pack_configure=*/true);
+                        v_index_offset += qktv_subblock_w;
+                    }
+                } else {
+                    // Block-run addressing (resident M2): the inner dimension is split per kept sub-block, each
+                    // read from its own V rows; partial products accumulate in L1 as the drain loop above does.
+                    for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                        if (kt_sub > 0) {
+                            PACK((llk_pack_reconfig_l1_acc(1)));
+                        }
+                        uint32_t v_col = 0;
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                out_cb,
+                                qktv_in0_index_offset + kt_sub * actual_sbw,
+                                static_cast<uint32_t>(run_cols[kt_sub]) * vDHt + v_col,
+                                w_q,
+                                v_subblock * qktv_subblock_w,
+                                qktv_subblock_w,
+                                cur_h,
+                                actual_sbw,
+                                KT_stride,
+                                /*skip_pack_configure=*/true);
+                            v_col += qktv_subblock_w;
+                        }
+                        if (kt_sub > 0) {
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                        }
+                    }
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
             }
@@ -3654,11 +3693,14 @@ static __attribute__((noinline, noclone)) void sol_rotate_fifo_entry(uint32_t cb
  * chunk 0 of every shard kept for every Q chunk (the reader repairs an empty row the same way), so every state
  * exists before any rotation.
  *
- * Chunk semantics (chunk-width mask): a kept piece is computed in full, dropped pieces are pooled by the column
- * bias of the pooled chunks that follow the local pieces on the first active ring iteration (one bias row per
- * resident chunk, pushed by the reader in Q-chunk order after the pooled K/V entry). The Q chunks a core owns can
- * span two heads (a contiguous flat split); the reader streams the heads' pieces interleaved per k, in head order,
- * and every entry rotates the whole FIFO, so the order invariant holds across heads.
+ * Block semantics (M2, block-form mask): a chunk that keeps any 64-token block of a piece steps on that piece, and
+ * its step multiplies only the kept blocks, addressed in place inside the staged K^T / V entry (run table into
+ * sdpa_inner_loop_step: one 2-tile sub-block per kept block; a fully kept piece runs the full-width step). Dropped
+ * blocks are pooled by the column bias of the pooled chunks that follow the local pieces on the first active ring
+ * iteration (one bias row per resident chunk, pushed by the reader in Q-chunk order after the pooled K/V entry).
+ * The Q chunks a core owns can span two heads (a contiguous flat split); the reader streams the heads' pieces
+ * interleaved per k, in head order, and every entry rotates the whole FIFO, so the order invariant holds across
+ * heads.
  *
  * On the last ring iteration the normalized output of every resident chunk is left in cb_out, in Q-chunk order,
  * for the writer, and the resident Q chunks are popped.
@@ -3698,6 +3740,7 @@ template <
     uint32_t sol_pooled_chunks,
     uint32_t sol_pooled_last_tiles,
     uint32_t sol_resident_slots,
+    uint32_t sol_res_block_words,
     uint32_t kv_cb_pages,
     typename MaskCtx>
 void sdpa_ring_resident(
@@ -3745,10 +3788,18 @@ void sdpa_ring_resident(
     const uint32_t n_res = global_q_end - global_q_start;
     ASSERT(n_res >= 1 && n_res <= sol_resident_slots);
 
-    // Resident chunk i: head and kept-piece bitmask for this ring iteration (plan words from the reader).
+    // M2: 64-token blocks of 2 tiles; a piece holds kBlocksPerPiece of them. The plan page carries this shard's
+    // kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks, block 0 forced).
+    constexpr uint32_t kBlockTiles = 2;
+    constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
+    constexpr uint32_t kBW = sol_res_block_words;
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
+    static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
+    static_assert(qkt_subblock_w % kBlockTiles == 0, "the narrow step uses one block per K^T sub-block");
+
+    // Resident chunk i: head, kept-block words and the head chain's kept-piece union (plan words from the reader).
     uint32_t res_head[sol_resident_slots];
-    uint32_t kept_lo[sol_resident_slots];
-    uint32_t kept_hi[sol_resident_slots];
+    uint32_t res_blk[sol_resident_slots][kBW];
     uint32_t union_lo[sol_resident_slots];
     uint32_t union_hi[sol_resident_slots];
     uint32_t do_pooled = 0;
@@ -3756,15 +3807,29 @@ void sdpa_ring_resident(
         const uint32_t flat = global_q_start + i;
         res_head[i] = (flat / num_q_chunks) % NH;
         CircularBuffer(cb_sol_plan).wait_front(1);
-        kept_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, 0);
-        kept_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, 1);
-        do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
-        union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, 3);
-        union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, 4);
+        for (uint32_t w = 0; w < kBW; ++w) {
+            res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, w);
+        }
+        union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW);
+        union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 1);
+        do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 2);
         CircularBuffer(cb_sol_plan).pop_front(1);
     }
     const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
         return k < 32 ? ((lo >> k) & 1u) != 0 : ((hi >> (k - 32)) & 1u) != 0;
+    };
+    // Does resident chunk i keep local block b (of this ring iteration's shard)?
+    const auto block_kept = [&](uint32_t i, uint32_t b) -> bool {
+        return b < kBW * 32 && ((res_blk[i][b >> 5] >> (b & 31)) & 1u) != 0;
+    };
+    // Does it keep any block of piece k?
+    const auto piece_kept = [&](uint32_t i, uint32_t k) -> bool {
+        for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+            if (block_kept(i, k * kBlocksPerPiece + j)) {
+                return true;
+            }
+        }
+        return false;
     };
     // Which resident chunks have a FIFO entry. Carried across ring iterations in acc_state.last_call_k_chunks
     // (unused by this mode otherwise): the entries persist in L1 between calls.
@@ -3772,13 +3837,16 @@ void sdpa_ring_resident(
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
-    // One K/V entry, consumed by the resident chunks in `step_mask` (every other initialized chunk rotates).
+    // One K/V entry, consumed by the resident chunks in `step_mask` (every other initialized chunk rotates). For a
+    // local piece (`piece_k`), each stepping chunk multiplies only its kept blocks of the piece (M2 narrow step);
+    // a pooled entry is stepped at full width by every chunk of the head.
     const auto run_entry = [&](const uint32_t step_mask,
                                const bool is_pooled,
                                const uint32_t active_Sk_param,
                                const bool apply_mask,
                                const uint32_t lw_partial_tile_idx,
-                               const uint32_t k_start_tile) {
+                               const uint32_t k_start_tile,
+                               const uint32_t piece_k) {
         if (step_mask == 0) {
             // Streamed for another chain member only: drain the entry.
             MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_DRAIN");
@@ -3808,6 +3876,23 @@ void sdpa_ring_resident(
                 }
                 continue;
             }
+            // The chunk's kept blocks of this piece as a run table: K^T column tile (= V row tile) of each kept
+            // block, in order. A fully kept, unnarrowed piece takes the full-width step (reduce trigger, wide
+            // sub-blocks); anything else is a narrow step over the kept blocks only, 2 tiles per sub-block, no
+            // in-entry masking (only full blocks are ever kept).
+            uint8_t run_cols[kBlocksPerPiece];
+            uint32_t n_runs = 0;
+            if (!is_pooled) {
+                for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
+                    if (block_kept(i, piece_k * kBlocksPerPiece + j)) {
+                        run_cols[n_runs++] = static_cast<uint8_t>(j * kBlockTiles);
+                    }
+                }
+                ASSERT(n_runs > 0);
+            }
+            const bool narrow = !is_pooled && !(n_runs == kBlocksPerPiece && active_Sk_param == Sk_chunk_t);
+            const uint32_t step_Sk = narrow ? n_runs * kBlockTiles : active_Sk_param;
+            const uint32_t step_sbw = narrow ? kBlockTiles : chunk_sbw;
             // prev: this chunk's state at the FIFO front (ignored when first). cur: the scratch half for the max
             // (the step mirrors it into cb_max_in); out and sum go straight to the FIFO back.
             AccumulatorHalf prev = {cb_sum_in, cb_max_in, cb_prev_out};
@@ -3860,11 +3945,11 @@ void sdpa_ring_resident(
                     cur,
                     /*is_last_iter=*/false,
                     first,
-                    apply_mask,
-                    lw_partial_tile_idx,
-                    active_Sk_param,
-                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
-                    chunk_sbw,
+                    narrow ? false : apply_mask,
+                    narrow ? 0u : lw_partial_tile_idx,
+                    step_Sk,
+                    can_reduce_trigger && !narrow && (active_Sk_param == Sk_chunk_t) && !is_pooled,
+                    step_sbw,
                     /*save_out_cb=*/cb_prev_out,
                     /*save_max_cb=*/cb_max_in,
                     /*apply_causal=*/false,
@@ -3882,7 +3967,8 @@ void sdpa_ring_resident(
                     /*q_base_tiles=*/i * q_chunk_tiles,
                     {},
                     /*apply_col_bias=*/is_pooled,
-                    /*hold_kv=*/i != last_step);
+                    /*hold_kv=*/i != last_step,
+                    /*run_cols=*/narrow ? run_cols : nullptr);
             }
             if (!first) {
                 // prev.out was popped row by row inside the step's SALAD correction.
@@ -3931,7 +4017,7 @@ void sdpa_ring_resident(
             for (uint32_t i = i0; i < n_res; ++i) {
                 if (res_head[i] == res_head[i0]) {
                     head_mask |= 1u << i;
-                    if (bit(kept_lo[i], kept_hi[i], k)) {
+                    if (piece_kept(i, k)) {
                         step_mask |= 1u << i;
                     }
                 }
@@ -3940,8 +4026,8 @@ void sdpa_ring_resident(
             if (!bit(union_lo[i0], union_hi[i0], k)) {
                 continue;  // nobody on this head's chain needs the piece: nothing was pushed
             }
-            ASSERT(k != 0 || step_mask == head_mask);  // chunk 0 is forced kept: every state is created on it
-            run_entry(step_mask, false, active_Sk_param, apply_mask, lw_partial_tile_idx, k * Sk_chunk_t);
+            ASSERT(k != 0 || step_mask == head_mask);  // block 0 is forced kept: every state is created on piece 0
+            run_entry(step_mask, false, active_Sk_param, apply_mask, lw_partial_tile_idx, k * Sk_chunk_t, k);
             KV_chunks_processed_in_iter++;
         }
     }
@@ -3962,7 +4048,7 @@ void sdpa_ring_resident(
             heads_done |= head_mask;
             for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
                 const uint32_t active_Sk_param = (pc + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
-                run_entry(head_mask, true, active_Sk_param, false, 0, 0);
+                run_entry(head_mask, true, active_Sk_param, false, 0, 0, 0);
                 KV_chunks_processed_in_iter++;
             }
         }
