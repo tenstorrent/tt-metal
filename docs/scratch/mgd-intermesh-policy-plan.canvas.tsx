@@ -986,13 +986,37 @@ const InterMeshBindingPlan& TopologyMapper::get_inter_mesh_binding() const;`}
             ]}
           />
           <Text size="small" tone="tertiary">
-            The seat solve uses the same PortCapacityModel when it counts links between footprints (saturated_link_count), so a
-            seating it accepts has enough placeable channels, not just enough cables. Callers without the mapper (custom fabric
-            topology) call resolve_inter_mesh_binding with their own mapping.
+            Callers without the mapper (custom fabric topology) call resolve_inter_mesh_binding with their own mapping.
           </Text>
         </Stack>
       </Grid>
-      <H3>Direction assignment: extracted now, moved later</H3>
+      <H3>Decision: cheap conditions in the seat solve, exact binding after</H3>
+      <Grid columns={fit(440)} gap={16} align="start">
+        <Stack gap={8}>
+          <Text tone="secondary">
+            Channel selection is not encoded in the seat solve. The seat solve works on footprints, not chips, and which channels
+            can be bound depends on the exit chips the intra-mesh solve picks later. Encoding it means solving seats, intra-mesh
+            mappings and channels jointly, with variables per channel for every candidate seat pair: the largest problem in the
+            stack, paid on every solve to avoid a failure the conditions here make rare.
+          </Text>
+          <Callout tone="info" title="The backstop">
+            When the binding still fails, the failing boundary names two seats and the enumerator adds a pair-level blocking clause
+            (¬seat_a ∨ ¬seat_b) through a new add_forbidden_seat_pair. Today a failed intra-mesh solve forbids one mesh's seat
+            outright (add_forbidden_constraint, topology_mapper_utils.cpp:1830), which is too strong here: the seat may bind next
+            to a different neighbor. PlacementSolveStats counts rejections; if real systems show more than a handful per solve,
+            encode capacity per exit chip in the seat solve next.
+          </Callout>
+        </Stack>
+        <Table
+          headers={["Condition in the seat solve", "Catches", "Encoding"]}
+          rows={[
+            ["Placeable link count per seat pair", "enough cables, too few ports in one direction", "saturated_link_count counts with PortCapacityModel; same clauses, different numbers"],
+            ["Aggregate per seat", "an exit chip shared by two boundaries that can't serve both", "total placeable channels of the seat cover the sum of its boundaries' STRICT demands; one cardinality constraint per seat"],
+            ["Exit-node capacity", "exit chips that cover the count but not the ports", "add_exit_node_constraints counts with the same capacity model"],
+          ]}
+        />
+      </Grid>
+      <H3>Decision: direction assignment extracted now, moved when needed</H3>
       <Grid columns={fit(440)} gap={16} align="start">
         <CodeCard
           added
@@ -1003,13 +1027,27 @@ const InterMeshBindingPlan& TopologyMapper::get_inter_mesh_binding() const;`}
 std::optional<AnnotatedIntermeshConnections> assign_intermesh_ports(
     const InterMeshBindingPlan& plan, const PortCapacityModel& port_capacity);`}
         />
-        <Text tone="secondary">
-          Now: the control plane calls it on every rank, on the broadcast-identical plan, so there is no rank-0 pairing and no
-          second broadcast. The mapper calls it only as the feasibility check in step 4 and discards the ports. Later: the
-          mapper keeps the ports, InterMeshChannelBinding gains src_port / dst_port, and the control plane stops calling it.
-          That lets the seat solve reject placements with no valid direction assignment, and lets direction choices join the
-          objective (for example consistent directions around a ring).
-        </Text>
+        <Stack gap={8}>
+          <Text tone="secondary">
+            The control plane calls it on every rank, on the broadcast-identical plan, so there is no rank-0 pairing and no
+            second broadcast. The mapper calls it only as the feasibility check in step 4 and discards the ports. The check
+            already guarantees an assignment exists, so moving the ports adds no correctness; it would make the mapper's output,
+            broadcast and goldens change whenever the port layout (torus reservations, Z ports, fabric config) changes. A test
+            checks that the mapper's discarded ports equal the control plane's.
+          </Text>
+          <Table
+            headers={["Move direction assignment into the mapper when"]}
+            rows={[
+              ["a solve objective needs directions (e.g. consistent directions around a ring)"],
+              ["a consumer needs directions at mapping time (e.g. a pipeline builder planning routes before the control plane)"],
+              ["direction failures show up as binding rejections: the capacity model is too coarse"],
+            ]}
+          />
+          <Text size="small" tone="tertiary">
+            The move is then small: the mapper keeps the ports, InterMeshChannelBinding gains src_port / dst_port, and the
+            control plane stops calling the function.
+          </Text>
+        </Stack>
       </Grid>
       <Grid columns={fit(440)} gap={16} align="start">
         <CodeCard
@@ -1034,10 +1072,10 @@ void ControlPlane::generate_intermesh_connectivity() {
             forward_intermesh_connections_from_controller, pair_logical_intermesh_ports (body moves to
             assign_intermesh_ports), generate_intermesh_connections_on_local_host, PortDescriptor / PortDescriptorTable.
           </Text>
-          <Callout tone="neutral" title="A link that goes down after the solve">
-            Each rank re-checks is_ethernet_link_up on its own bound channels and reports downs through LinkHealth. One
-            all-reduce of the down hashes, the only MPI step left in inter-mesh setup, makes every rank reach the same STRICT /
-            RELAXED / FSD verdict.
+          <Callout tone="neutral" title="Out of scope: a link that goes down after the solve">
+            Today's gather checks is_ethernet_link_up once, and nothing handles a link that goes down after that. The down-link
+            report in the chip info replaces that check at about the same point, so behaviour is unchanged. Later link-downs are
+            left for a follow-up.
           </Callout>
         </Stack>
       </Grid>
@@ -1046,23 +1084,24 @@ void ControlPlane::generate_intermesh_connectivity() {
         headers={["Area", "Effect"]}
         rows={[
           ["Consistency", "a placement the mapper accepts is bindable by construction"],
-          ["MPI", "one gather and one broadcast go away; the plan rides the existing chip-info broadcast; one small all-reduce for late link-downs"],
+          ["MPI", "one gather and one broadcast go away; the down-link report and the plan ride the existing chip-info messages; no new MPI step"],
+          ["Seat solve", "placeable-channel counts, one cardinality constraint per seat, pair-level blocking clauses on binding failures; rejections counted"],
           ["Single-host", "same algorithm as multi-host; bindings the old greedy chose differently can change; golden report lists them"],
           ["Several dst chips per src chip", "works instead of fataling"],
           ["Testing", "resolve_inter_mesh_binding and assign_intermesh_ports are pure: CPU-only tests on PSD fixtures"],
           ["Debugging", "inter_mesh_binding.yaml next to asic_to_fabric_node_mapping_rank_*.yaml"],
           ["Parity", "uniform policies, no cable data, cabling the old path accepted: multi-host bindings identical to today"],
         ]}
-        rowTone={["success", "success", "warning", "success", "success", undefined, undefined]}
+        rowTone={["success", "success", undefined, "warning", "success", "success", undefined, undefined]}
       />
       <H3>Implementation: one PR, after the policy PR</H3>
       <Table
         headers={["Area", "Change"]}
         rows={[
           ["New", "inter_mesh_binding.hpp/.cpp (types, resolve_inter_mesh_binding, PortCapacityModel); intermesh_port_assignment.hpp/.cpp (moved from pair_logical_intermesh_ports)"],
-          ["Mapper", "down-link hashes in the chip info to rank 0; binding after the final mapping; rejected placements feed the enumerator; plan in the chip-info broadcast; get_inter_mesh_binding(); seat solve uses PortCapacityModel; yaml dump"],
-          ["Control plane", "the new generate_intermesh_connectivity; the removals above; late link-down all-reduce"],
-          ["Tests", "parity on every multi-host golden; pins first, one-dst-chip rule, round-robin, tiers, excluded hashes; capacity rejection retries; same plan on every rank; single-host golden report"],
+          ["Mapper", "down-link hashes in the chip info to rank 0; binding after the final mapping; placeable-channel counts, per-seat aggregate, exit-node capacity; add_forbidden_seat_pair and rejection stats; plan in the chip-info broadcast; get_inter_mesh_binding(); yaml dump"],
+          ["Control plane", "the new generate_intermesh_connectivity; the removals above"],
+          ["Tests", "parity on every multi-host golden; pins first, one-dst-chip rule, round-robin, tiers, excluded hashes; capacity conditions and pair-level retry; mapper's ports equal the control plane's; same plan on every rank; single-host golden report"],
         ]}
       />
     </Stack>
@@ -1152,9 +1191,7 @@ function PlanTab() {
           ["9", "Lexicographic tiers (proposed), or integer costs per type, e.g. two QSFP-DD links as good as one WARP400?"],
           ["10", "Who signs off on default_port_type_preference(), and is fewest connectors / shortest reach the right rule? Per arch or cluster type?"],
           ["11", "Implicit default as tie-break below preferred node hits (proposed), or above them so cables can outrank a PGD-preferred layout?"],
-          ["12", "Bind after each candidate placement and reject failures (proposed), or encode channel selection in the seat solve so it never proposes an unbindable placement?"],
-          ["13", "Move direction assignment right after the binding lands, or only once a solve objective needs it?"],
-          ["14", "Late link-downs: one all-reduce and the existing policy (proposed), or re-run the binding on surviving links (second broadcast)?"],
+          ["12", "Is one cardinality constraint per seat enough to keep binding rejections rare on SC16 / SC20 and the dual- and quad-galaxy systems, or does it need capacity per exit chip from the start?"],
         ]}
       />
     </Stack>

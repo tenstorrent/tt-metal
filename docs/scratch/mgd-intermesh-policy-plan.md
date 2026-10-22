@@ -758,9 +758,9 @@ failure only shows up after the mapping is fixed.
 | Budgets per boundary / per exit chip, STRICT vs RELAXED | `pair_logical_intermesh_ports` | mapper, from the demand table (section 2) |
 | Cable type preference | none | mapper (section 7) |
 | One dst chip per (src chip, neighbor mesh) | fatal at gather | a binding rule: the mapper picks one dst chip per src chip (most allowed channels, then best tier), so cabling that has more than one no longer fails |
-| Port capacity per chip | implicit in `find_free_dir` | an explicit capacity model, shared with the seat solve (10.4) |
+| Port capacity per chip | implicit in `find_free_dir` | an explicit capacity model, shared with the seat solve (10.5) |
 | Placement that can't be bound | throws in the control plane | the mapper rejects the placement and tries the next one, as it already does for intra-mesh failures (`failing_pair_out`) |
-| Direction / port assignment (Z claim, N/E/S/W, overflow) | `pair_logical_intermesh_ports`, rank 0 | **stays in the control plane**, extracted as a pure function run on every rank (10.5) |
+| Direction / port assignment (Z claim, N/E/S/W, overflow) | `pair_logical_intermesh_ports`, rank 0 | **stays in the control plane**, extracted as a pure function run on every rank (10.6) |
 | Applying to ETH channels, routing tables, link health, shortfall policy, validation | control plane | control plane, reading the mapper's binding |
 
 ### 10.3 API
@@ -845,20 +845,46 @@ channel):
    directions it has edge ports in and their port counts, built from
    `MeshGraph::get_mesh_edge_ports_to_chip_id` (`mesh_graph.cpp:560-615`), plus which
    boundaries are `assign_z`. Before accepting a channel the binding checks that a direction
-   assignment still exists, by calling the direction-assignment function (10.5) on the partial
+   assignment still exists, by calling the direction-assignment function (10.6) on the partial
    plan. That function is cheap (a few dozen channels per chip at most), so the check costs
    little.
 5. **Result.** `strict_shortfall()` is the STRICT channels the plan couldn't place. If it is
-   non-zero, the mapper treats the placement as failed and enumerates the next one, the same
-   way `complete_intra_mesh_for_placement` reports a failing mesh pair. Only when no placement
-   binds does the mapper fail, with a message naming the boundary, the demand, and the live
-   channels found.
+   non-zero, the mapper treats the placement as failed and enumerates the next one (10.5).
+   Only when no placement binds does the mapper fail, with a message naming the boundary, the
+   demand, and the live channels found.
 
-The seat solve uses the same `PortCapacityModel` when it counts links between two footprints
-(`AdjacencyMatrixCache` / `saturated_link_count`), so a seating it accepts has enough
-placeable channels, not just enough cables.
+### 10.5 Decision: cheap conditions in the seat solve, exact binding after
 
-### 10.5 Direction assignment: extracted now, moved later
+Channel selection is **not** encoded in the seat solve. The seat solve gets cheap necessary
+conditions so it rarely proposes an unbindable placement, and the exact binding runs after each
+placement as a backstop.
+
+**Why not encode it.** The seat solve works on footprints (`const Candidate*`), not chips. Which
+channels can be bound depends on the exit chips, which the intra-mesh solve picks later.
+Encoding channel selection means solving seats, intra-mesh mappings and channels jointly, with
+variables per channel for every candidate seat pair. That is the largest problem in the stack,
+paid on every solve to avoid a failure that the conditions below make rare.
+
+**What the seat solve gets instead:**
+
+| Condition | Catches | Encoding |
+|---|---|---|
+| Placeable link count per seat pair | a pair with enough cables but too few ports in one direction | `saturated_link_count` counts with the `PortCapacityModel` instead of raw cables. Same clauses as today, different numbers |
+| Aggregate per seat | an exit chip shared by two boundaries that can't serve both | for each seat, its total placeable inter-mesh channels must cover the sum of the STRICT demands of its boundaries. One cardinality constraint per seat |
+| Exit-node capacity | the intra-mesh solve picking exit chips that cover the count but not the ports | `add_exit_node_constraints` uses the same capacity model when it counts channels per candidate exit chip |
+
+**The backstop.** When the binding still fails, the boundary that failed names two seats. The
+enumerator adds a **pair-level blocking clause** (`¬seat_a ∨ ¬seat_b`), a new
+`add_forbidden_seat_pair` on the placement session. Today a failed intra-mesh solve forbids one
+mesh's seat outright (`add_forbidden_constraint`, `topology_mapper_utils.cpp:1830`). That is
+too strong for a binding failure, because the same seat may bind fine next to a different
+neighbor seat.
+
+**When to revisit.** `PlacementSolveStats` counts binding rejections. If real systems show more
+than a handful per solve, the next step is to encode capacity per exit chip in the seat solve.
+Full channel selection still isn't needed for that.
+
+### 10.6 Decision: direction assignment extracted now, moved when needed
 
 The three placement phases of `pair_logical_intermesh_ports` (Z claim for `assign_z`,
 N/E/S/W, overflow onto leftover Z) become a pure function:
@@ -876,15 +902,27 @@ rank-0 pairing and no second broadcast are needed, because every rank computes t
 answer from the same input. The mapper calls the same function only as the feasibility check
 in 10.4 and discards the ports.
 
-Moving direction assignment into the mapper later is then a small change: the mapper keeps the
-ports it already computed, `InterMeshChannelBinding` gains `src_port` / `dst_port`, and the
-control plane stops calling the function. Doing it later is useful for two reasons:
-- the seat solve could then reject placements that have enough channels but no valid
-  direction assignment, instead of only checking capacity per chip;
-- direction choices could join the solve's objective, for example to keep a ring's inter-mesh
-  hops on consistent directions.
+**Not moved in this PR.** The feasibility check already guarantees that an assignment exists
+for every placement the mapper accepts, so moving the ports into the mapper adds no correctness.
+What it would add is cost: the mapper's output, its broadcast payload and its goldens would all
+carry logical ports, so a change to the port layout (torus reservations, Z ports, fabric config)
+would show up as a mapping change. Both sides call the same function on the same
+`PortCapacityModel`, built from the same `MeshGraph`, so they get the same answer. A test checks
+that the mapper's discarded ports equal the control plane's.
 
-### 10.6 What the control plane keeps
+**Move it when one of these happens:**
+- a solve objective needs directions, for example keeping a ring's inter-mesh hops on
+  consistent directions;
+- a consumer needs directions at mapping time, for example a pipeline builder planning
+  routes before the control plane exists;
+- direction failures show up as binding rejections, which would mean the capacity model is too
+  coarse.
+
+The move is then small: the mapper keeps the ports it already computes,
+`InterMeshChannelBinding` gains `src_port` / `dst_port`, and the control plane stops calling the
+function.
+
+### 10.7 What the control plane keeps
 
 `generate_intermesh_connectivity` becomes:
 
@@ -910,33 +948,33 @@ to `assign_intermesh_ports`), `generate_intermesh_connections_on_local_host`, an
 shrinks to `apply_intermesh_connections_to_local_chips`, which looks up channels in the plan
 instead of re-reading the PSD.
 
-**A link that goes down between the solve and fabric init.** Each rank re-checks
-`is_ethernet_link_up` on its own bound channels. A bound channel that is now down is reported
-through `LinkHealth` like any downed link. All ranks agree on the verdict through one
-all-reduce of the down hashes, the only MPI step left in inter-mesh setup, and the STRICT /
-RELAXED / FSD policy then applies on every rank.
+**Out of scope: a link that goes down after the solve.** Today's gather checks
+`is_ethernet_link_up` once, and nothing handles a link that goes down after that. In the new
+flow, the down-link report in the chip info replaces that check, at about the same point, so
+behaviour is unchanged. Handling later link-downs is left for a follow-up.
 
-### 10.7 Implications
+### 10.8 Implications
 
 | Area | Effect |
 |---|---|
 | Consistency | The mapper and the control plane can no longer disagree: a placement the mapper accepts is bindable by construction |
-| MPI | One gather and one broadcast of port descriptors go away; the binding rides on the existing chip-info broadcast; one small all-reduce for late link-downs |
+| MPI | One gather and one broadcast of port descriptors go away; the down-link report and the binding ride on the existing chip-info messages; no new MPI step |
+| Seat solve | Link counts become placeable-channel counts, plus one cardinality constraint per seat; binding failures add pair-level blocking clauses. Rejections are counted in `PlacementSolveStats` |
 | Single-host | Uses the same algorithm as multi-host. Bindings that the old single-host greedy chose differently can change; the golden report lists them |
 | Cabling with several dst chips per src chip | Works instead of fataling |
 | Testing | `resolve_inter_mesh_binding` and `assign_intermesh_ports` are pure, so CPU-only tests can run them on PSD fixtures without a cluster or MPI |
 | Debugging | The plan can be dumped next to the existing `asic_to_fabric_node_mapping_rank_*.yaml` as `inter_mesh_binding.yaml`: every boundary, its demand, and each bound channel with its cable type |
 | Parity | With uniform policies, no cable data, and cabling that the old path accepted, multi-host bindings are identical to today's: same candidates, same round-robin or boundary-major order, same phases |
 
-### 10.8 Implementation
+### 10.9 Implementation
 
 One PR, after the policy PR (it needs the demand table and the port-type rules):
 
 | Area | Change |
 |---|---|
 | New | `inter_mesh_binding.hpp/.cpp` (types, `resolve_inter_mesh_binding`, `PortCapacityModel`); `intermesh_port_assignment.hpp/.cpp` (`assign_intermesh_ports`, moved from `pair_logical_intermesh_ports`) |
-| Mapper | down-link hashes in the chip info sent to rank 0; binding after the final mapping; rejected placements feed the enumerator; plan in the chip-info broadcast; `get_inter_mesh_binding()`; seat solve uses `PortCapacityModel`; `inter_mesh_binding.yaml` dump |
-| Control plane | the new `generate_intermesh_connectivity`; the removals in 10.6; late link-down all-reduce |
+| Mapper | down-link hashes in the chip info sent to rank 0; binding after the final mapping; placeable-channel counts, per-seat aggregate and exit-node capacity (10.5); `add_forbidden_seat_pair` and rejection stats; plan in the chip-info broadcast; `get_inter_mesh_binding()`; `inter_mesh_binding.yaml` dump |
+| Control plane | the new `generate_intermesh_connectivity`; the removals in 10.7 |
 
 Tests:
 - **Parity.** For every multi-host golden in the control-plane and CPU-only fabric suites, the
@@ -944,10 +982,14 @@ Tests:
 - **Binding.** Device-level pins filled first; the one-dst-chip rule picks the larger link
   instead of fataling; round-robin keeps a shared exit chip from being drained; cable tiers
   break ties; excluded hashes are never bound.
-- **Capacity.** A placement whose channels fit per chip but have no direction assignment is
-  rejected by the mapper, and the next placement is tried.
-- **Multi-host.** Every rank gets the same plan; a link that goes down after the solve gives the
-  same verdict on every rank.
+- **Capacity.** A seat pair with enough cables but too few ports in one direction isn't
+  proposed. Two boundaries sharing an exit chip that can't serve both are rejected by the
+  per-seat aggregate. A placement that passes those checks but has no direction assignment is
+  rejected after binding; the pair-level blocking clause still lets each seat be used next to a
+  different neighbor.
+- **Same ports on both sides.** The ports the mapper computes in its feasibility check equal the
+  control plane's.
+- **Multi-host.** Every rank gets the same plan.
 - **Single-host.** Golden report of bindings that differ from the old single-host greedy.
 
 ## 11. Open questions
@@ -976,10 +1018,6 @@ Tests:
     cluster type?
 11. **Strength of the implicit default.** Tie-break below preferred node hits (proposed), or
     above them, so cables can outrank a PGD-preferred layout?
-12. **Binding in the solve or after it.** Section 10 binds after each candidate placement and
-    rejects failures. Should channel selection instead be encoded in the seat solve, so the
-    solver never proposes an unbindable placement?
-13. **When to move direction assignment.** Right after section 10 lands, or only once a solve
-    objective needs it (ring direction consistency)?
-14. **Late link-downs.** One all-reduce and the existing policy (proposed), or re-run the binding
-    on the surviving links, which needs a second broadcast?
+12. **Aggregate threshold.** Is one cardinality constraint per seat (10.5) enough to keep
+    binding rejections rare on SC16 / SC20 and the dual- and quad-galaxy systems, or does it need
+    capacity per exit chip from the start?
