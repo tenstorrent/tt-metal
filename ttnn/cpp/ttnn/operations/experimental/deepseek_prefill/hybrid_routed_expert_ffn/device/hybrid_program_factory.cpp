@@ -493,8 +493,12 @@ void append_to_descriptor(
         blocking.l1_budget,
         blocking.describe());
 
+    // With NEED_START the counts scratch holds two pages: counts, then `start` (the reader's
+    // COUNTS_BCAST fills both once per dispatch, so start no longer reuses the counts page).
+    const bool need_start = direct_write || operation_arguments.read_x_at_offset;
+    const uint32_t counts_scratch_bytes = need_start ? 2 * counts_page : counts_page;
     for (const auto& allocation : blocking.cb_allocations(
-             activations_are_row_major, output_tile, idx_page, counts_page, /*aliases_enabled=*/true)) {
+             activations_are_row_major, output_tile, idx_page, counts_scratch_bytes, /*aliases_enabled=*/true)) {
         CBDescriptor cb_descriptor{
             .total_size = allocation.total_size,
             .core_ranges = all_cores,
