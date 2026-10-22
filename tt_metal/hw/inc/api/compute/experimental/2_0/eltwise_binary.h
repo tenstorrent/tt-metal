@@ -329,7 +329,7 @@ namespace experimental {
  * Paired init for a two-operand eltwise binary op. Configures MATH and the AB unpacker from operand A's
  * descriptor; geometry comes from operand A. compute_kernel_hw_startup(a, b, out) must already have
  * programmed the formats. Operand B contributes nothing at init -- A.shape == B.shape is enforced at
- * execute (add/sub/mul_tiles).
+ * execute (add/sub/mul_tile).
  *
  * | Template | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL               | EltwiseBinaryType |  | True |
  * | Function | a                   | Operand A (A -> SrcA); drives geometry | LLKOperand       |  | True |
@@ -349,9 +349,9 @@ ALWI void binary_tiles_init(LLKOperand<AFormat, AShape> /*a*/, bool acc_to_dest 
 
 // clang-format off
 /**
- * Paired init for add_tiles (ELWADD). Configures MATH + the AB unpacker from operand A's descriptor;
+ * Paired init for add_tile (ELWADD). Configures MATH + the AB unpacker from operand A's descriptor;
  * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
- * init (A.shape == B.shape is assumed, enforced at add_tiles) -- see binary_tiles_init.
+ * init (A.shape == B.shape is assumed, enforced at add_tile) -- see binary_tiles_init.
  *
  * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
  * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
@@ -367,9 +367,9 @@ ALWI void add_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
 
 // clang-format off
 /**
- * Paired init for sub_tiles (ELWSUB). Configures MATH + the AB unpacker from operand A's descriptor;
+ * Paired init for sub_tile (ELWSUB). Configures MATH + the AB unpacker from operand A's descriptor;
  * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
- * init (A.shape == B.shape is assumed, enforced at sub_tiles) -- see binary_tiles_init.
+ * init (A.shape == B.shape is assumed, enforced at sub_tile) -- see binary_tiles_init.
  *
  * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
  * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
@@ -385,9 +385,9 @@ ALWI void sub_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = false) {
 
 // clang-format off
 /**
- * Paired init for mul_tiles (ELWMUL). Configures MATH + the AB unpacker from operand A's descriptor;
+ * Paired init for mul_tile (ELWMUL). Configures MATH + the AB unpacker from operand A's descriptor;
  * compute_kernel_hw_startup(a, b, out) must already have programmed the formats. Only operand A is needed at
- * init (A.shape == B.shape is assumed, enforced at mul_tiles) -- see binary_tiles_init.
+ * init (A.shape == B.shape is assumed, enforced at mul_tile) -- see binary_tiles_init.
  *
  * | Param Type | Name           | Description                              | Type                   | Valid Range | Required |
  * |------------|----------------|------------------------------------------|------------------------|-------------|----------|
@@ -420,14 +420,14 @@ template <
     TensorShape AShape,
     DataFormat BFormat,
     TensorShape BShape>
-ALWI void add_tiles(
+ALWI void add_tile(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
-    static_assert(is_legal_tile_shape(AShape), "add_tiles: illegal tile shape for operand A.");
-    static_assert(same_tile_shape(AShape, BShape), "add_tiles: operands A and B must have the same tile shape.");
+    static_assert(is_legal_tile_shape(AShape), "add_tile: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "add_tile: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<
@@ -458,14 +458,14 @@ template <
     TensorShape AShape,
     DataFormat BFormat,
     TensorShape BShape>
-ALWI void sub_tiles(
+ALWI void sub_tile(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
-    static_assert(is_legal_tile_shape(AShape), "sub_tiles: illegal tile shape for operand A.");
-    static_assert(same_tile_shape(AShape, BShape), "sub_tiles: operands A and B must have the same tile shape.");
+    static_assert(is_legal_tile_shape(AShape), "sub_tile: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "sub_tile: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<
@@ -496,14 +496,14 @@ template <
     TensorShape AShape,
     DataFormat BFormat,
     TensorShape BShape>
-ALWI void mul_tiles(
+ALWI void mul_tile(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
     std::uint32_t itile0,
     std::uint32_t itile1,
     std::uint32_t idst) {
-    static_assert(is_legal_tile_shape(AShape), "mul_tiles: illegal tile shape for operand A.");
-    static_assert(same_tile_shape(AShape, BShape), "mul_tiles: operands A and B must have the same tile shape.");
+    static_assert(is_legal_tile_shape(AShape), "mul_tile: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(AShape, BShape), "mul_tile: operands A and B must have the same tile shape.");
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1))));
     MATH((llk_math_eltwise_binary<
@@ -518,7 +518,7 @@ ALWI void mul_tiles(
 // clang-format off
 /**
  * Element-wise C = A + B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
- * add_tiles (same semantics, same init: add_init). Tile (start_itile0 + i) of A pairs with tile
+ * add_tile (same semantics, same init: add_init). Tile (start_itile0 + i) of A pairs with tile
  * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
@@ -547,14 +547,14 @@ ALWI void add_block(
     static_assert(is_legal_tile_shape(AShape), "add_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "add_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        add_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        add_tile<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 
 // clang-format off
 /**
  * Element-wise C = A - B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
- * sub_tiles (same semantics, same init: sub_init). Tile (start_itile0 + i) of A pairs with tile
+ * sub_tile (same semantics, same init: sub_init). Tile (start_itile0 + i) of A pairs with tile
  * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
@@ -583,14 +583,14 @@ ALWI void sub_block(
     static_assert(is_legal_tile_shape(AShape), "sub_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "sub_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        sub_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        sub_tile<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 
 // clang-format off
 /**
  * Element-wise C = A * B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
- * mul_tiles (same semantics, same init: mul_init). Tile (start_itile0 + i) of A pairs with tile
+ * mul_tile (same semantics, same init: mul_init). Tile (start_itile0 + i) of A pairs with tile
  * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
@@ -619,7 +619,7 @@ ALWI void mul_block(
     static_assert(is_legal_tile_shape(AShape), "mul_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "mul_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        mul_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        mul_tile<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 

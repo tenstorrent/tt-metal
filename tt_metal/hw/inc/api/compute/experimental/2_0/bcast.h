@@ -128,7 +128,7 @@ ALWI void unary_bcast_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile
 // compute_kernel_hw_startup); geometry (for MATH + the AB-unpack init) comes from operand A.
 //
 // The ROW path additionally needs operand B's L1 format (forwarded to the unpacker); COL / SCALAR ignore
-// it. BroadcastType::NONE (plain binary) belongs to experimental::add/sub/mul_tiles in eltwise_binary.h.
+// it. BroadcastType::NONE (plain binary) belongs to experimental::add/sub/mul_tile in eltwise_binary.h.
 // =====================================================================================================
 
 // clang-format off
@@ -197,7 +197,7 @@ ALWI void any_tiles_bcast(
     std::uint32_t bcast_row_idx = 0) {
     static_assert(is_legal_tile_shape(AShape), "any_tiles_bcast: illegal tile shape for operand A.");
     static_assert(is_legal_tile_shape(BShape), "any_tiles_bcast: illegal tile shape for operand B.");
-    static_assert(tBcastDim != BroadcastType::NONE, "any_tiles_bcast: use add/sub/mul_tiles for BroadcastType::NONE.");
+    static_assert(tBcastDim != BroadcastType::NONE, "any_tiles_bcast: use add/sub/mul_tile for BroadcastType::NONE.");
     // bcast_row_idx selects which row of B's tile the ROW broadcast reads; ignored by COL / SCALAR.
     // ADD/SUB use LoFi (no fidelity multiplier), MUL uses MATH_FIDELITY; the ternary must stay inside MATH()
     // since MATH_FIDELITY is a MATH-thread-only macro.

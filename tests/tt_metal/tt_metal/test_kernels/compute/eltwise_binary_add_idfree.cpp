@@ -41,7 +41,7 @@ void kernel_main() {
         c16.reserve_back(1);
 
         tile_regs_acquire();
-        experimental::add_tiles(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()), 0, 0, 0);
+        experimental::add_tile(AOp(in0_cb.read_address()), BOp(in1_cb.read_address()), 0, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
