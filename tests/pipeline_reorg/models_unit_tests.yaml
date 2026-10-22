@@ -22,6 +22,7 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
@@ -978,6 +979,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -1214,7 +1216,9 @@
   model: dit-encoders
   skus:
     wh_llmbox:
-      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
+      # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

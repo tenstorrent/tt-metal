@@ -17,7 +17,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
 #include <vector>
@@ -27,7 +27,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 #include "fabric_host_utils.hpp"
