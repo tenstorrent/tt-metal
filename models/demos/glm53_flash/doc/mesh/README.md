@@ -935,3 +935,8 @@ users x ISL envelope is now measured end to end at 32 x 1 M, 64 x 512 K, 128 x 2
 1.95 / 1.63 / 1.12 GiB). Decode per user at the envelope: 6.6 / 5.6 / 5.3 / 5.0 tok/s: the step grows with the slot
 count (160.8 -> 178.2 -> 188.1 -> 199.0 ms) far less than the batch, i.e. the long-context decode is latency-bound
 (the ledger's per-op items), and the aggregate scales 210 -> 359 -> 681 -> 1287 tok/s.
+
+**README 64 K x 4 users per row, one config (02:25, `long_8x4_N65536_4users_readme.log`, regions prefill +
+`GLM53_REGIONS_KEEP_STACKED=1`):** TTFT 33.3 / 27.3 / 27.3 / 27.2 s (1964-2400 tok/s), decode 91.4 ms = 10.9 tok/s
+per user (350 aggregate) on the block expert op, needles 32/32, rows and users agree, 3.83 GiB free after the
+prefills. This is the configuration `GLM53_PREFILL_EXPERTS=auto` selects at 64 K (block validation next).
