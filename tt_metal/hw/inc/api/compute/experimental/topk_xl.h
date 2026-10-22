@@ -147,6 +147,14 @@ ALWI void topk_xl_rebuild(std::uint32_t idst, bool ascending) {
 }
 
 /**
+ * Sorts each 64 row column of a fused K = 1024 tile; the columns must be bitonic. No transposes, so no SrcB valid.
+ */
+template <std::uint32_t K>
+ALWI void topk_xl_rebuild_columns(std::uint32_t idst, bool ascending) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild_columns<K>(idst, ascending)));
+}
+
+/**
  * Initialize TopK-XL SFPU state.
  *
  * Must be called once before topk_xl_local_sort/topk_xl_merge/topk_xl_rebuild.
