@@ -344,3 +344,19 @@ def test_a_fix_job_runs_its_gate_tasks_commands_exactly(sandbox):
     calls = (sandbox.repo.parent / "calls.txt").read_text().splitlines()
     assert calls[:2] == ["C.1 --run-all t_c.py", "L.1 --no-precompile --run-all t_l.py"]
     assert len(calls) == 5 and all(c.startswith("X.3 --no-precompile") for c in calls[2:])
+
+
+def test_until_runs_the_task_and_what_it_needs_then_stops(orch):  # noqa: F811
+    """F152: `--until X` stopped only X's downstream tasks, so every independent task still ran (DeepSeek-V4.1: FIX.5's
+    70 min gate after `resume --until FIX.7`). It now runs X and its dependencies, then stops."""
+    o = orch(
+        [impl_task(), impl_task(id="C.2", deps=["C.1"]), impl_task(id="C.3"), impl_task(id="C.4", deps=["C.2"])],
+        {f"C.{n}.implement.1.md": {"write": {"src/impl.txt": "0.999"}} for n in (1, 2, 3, 4)},
+    )
+    assert o.run(until="C.2") == DONE
+    st = o.led.state()
+    assert st["C.1"]["status"] == st["C.2"]["status"] == "PASS"
+    assert "C.3" not in st or st["C.3"].get("status") in (None, "TODO")
+    assert "C.4" not in st or st["C.4"].get("status") in (None, "TODO")
+    assert any("reached C.2" in ln for ln in orch.lines)
+    assert o.run(until="C.2") == DONE and not [c for c in orch.calls() if c.startswith(("C.3", "C.4"))]
