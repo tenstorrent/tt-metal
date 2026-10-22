@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Watcher and assert builds do not fit the kernel config buffer at O3.
+#if defined(WATCHER_ENABLED) || defined(ENABLE_LLK_ASSERT) || defined(LIGHTWEIGHT_KERNEL_ASSERTS)
+#pragma GCC optimize("Os")
+#endif
+
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -79,9 +84,14 @@ inline void _topk_large_indices_mark_neginf_indices_() {
 
 // A K = 2048 segment's unfused result from tiles 0 to 3 to tiles 4 to 7, raw words; ADDR_MOD_0 steps two rows.
 inline void _topk_large_indices_move_segment_result_() {
-    for (uint32_t i = 0; i < 128; ++i) {
+    constexpr uint32_t rows_per_tile = 64;
+    constexpr uint32_t result_tiles = 4;
+    constexpr uint32_t rows_per_access = 2;
+    constexpr uint32_t iterations = result_tiles * rows_per_tile / rows_per_access;
+    constexpr uint32_t destination_offset = result_tiles * rows_per_tile;
+    for (uint32_t i = 0; i < iterations; ++i) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 256);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, destination_offset);
     }
 }
 
@@ -99,15 +109,15 @@ using ttnn::operations::experimental::topk_large_indices::program::max_fused_chu
 
 constexpr uint32_t fused_chunk_id_mask = max_fused_chunks - 1;
 
-// FirstOfRow: a row's first chunk configures the unpacker and math unit; later chunks find that intact and set up only
-// the copy.
-template <uint32_t K, bool FirstOfRow = true>
+// FullCopyInit: the first chunk after a configuration of the unpacker and math unit runs the full copy init; later
+// chunks find that intact and set up only the copy.
+template <uint32_t K, bool FullCopyInit = true>
 FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb = input.get_cb_id();
 
     input.wait_front(tiles_per_sequence);
-    if constexpr (FirstOfRow || !multi_chunk_rows) {
+    if constexpr (FullCopyInit || !multi_chunk_rows) {
         topk_xl_copy_tile_init(input_cb);
     } else {
         topk_xl_copy_tile_init_short(input_cb);
@@ -117,7 +127,8 @@ FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t activ
 }
 
 // FullInit is compile-time and this helper is force-inlined so the hot loop has
-// neither a mode branch nor a repeated full TopK configuration sequence.
+// neither a mode branch nor a repeated full TopK configuration sequence. It also selects the full copy init
+// (copy_chunk) over the short one.
 template <uint32_t K, bool FullInit, bool Columns = false>
 FORCE_INLINE void sort_fused_chunk(
     CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending, uint32_t local_chunk_id) {
@@ -239,7 +250,7 @@ FORCE_INLINE void reduce_segmented_row(
     }
 }
 
-// Tree merge round: the child's unfused survivor lands as raw FP32 tiles and merges into ours.
+// Tree merge round: the child's unfused survivor lands as raw 32-bit words (values and indices) and merges into ours.
 template <uint32_t K>
 FORCE_INLINE void merge_landed_survivor(
     CircularBuffer& landing, uint32_t input_cb, uint32_t survivor_slot, bool final_ascending) {
@@ -280,8 +291,9 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 }
 
 #ifdef ARCH_BLACKHOLE
-// A row of two or more chunks split across MATH and PACK (topk_large_indices_split.hpp); it ends with the -inf indices
-// marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order leave a row.
+// A row split across MATH and PACK (topk_large_indices_split.hpp; kernel_main says from how many chunks); it ends with
+// the -inf indices marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order
+// leave a row.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_row(
     CircularBuffer& input,
@@ -298,7 +310,8 @@ FORCE_INLINE void reduce_split_row(
         if (chunk == (first_prefetched ? 1 : 0)) {
             topk_xl_copy_tile_init(input_cb);
         }
-        topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == num_chunks ? tail_elements : K);
+        topk_xl_copy_tile<K>(
+            input_cb, 0 /*dst*/, 0 /*first tile*/, chunk + 1 == num_chunks ? tail_elements : K /*active_elements*/);
         input.pop_front(tiles_per_sequence);
         llk_unpack_set_srcb_dummy_valid();
         if (chunk > 0) {
@@ -308,7 +321,7 @@ FORCE_INLINE void reduce_split_row(
     if (prefetch_next) {
         // MATH copies the next row's first chunk before this row's index transposes, so UNPACK feeds it first.
         input.wait_front(tiles_per_sequence);
-        topk_xl_copy_tile<K>(input_cb, 0, 0, K);
+        topk_xl_copy_tile<K>(input_cb, 0 /*dst*/, 0 /*first tile*/, K /*active_elements*/);
         input.pop_front(tiles_per_sequence);
         llk_unpack_set_srcb_dummy_valid();
     }
@@ -322,14 +335,15 @@ FORCE_INLINE void reduce_split_row(
     // The previous row's index transposes reprogram MATH after a prefetched first chunk, so the first copy made here
     // inits it.
     bool init_copy = true;
-    topk_large_indices_split::math_row<K, false>(
+    topk_large_indices_split::math_row<K>(
         num_chunks,
         [&](uint32_t chunk, uint32_t tile) {
             if (init_copy) {
                 topk_xl_copy_tile_init(input_cb);
                 init_copy = false;
             }
-            topk_xl_copy_tile<K>(input_cb, tile, 0, chunk + 1 == num_chunks ? tail_elements : K);
+            topk_xl_copy_tile<K>(
+                input_cb, tile, 0 /*first tile*/, chunk + 1 == num_chunks ? tail_elements : K /*active_elements*/);
         },
         first_prefetched,
         prefetch_next);
@@ -338,19 +352,16 @@ FORCE_INLINE void reduce_split_row(
     if (first_prefetched) {
         topk_large_indices_split::take_math_token();
     }
-    topk_large_indices_split::pack_row<K, false>(
-        num_chunks,
-        [] {},
-        [] {
-            ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
-            ckernel::sfpu::_topk_xl_split_begin_(0);
-            ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>();
-            TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
-            ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_();
-            ckernel::sfpu::_topk_xl_split_begin_(0);
-            ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>();
-            TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
-        });
+    topk_large_indices_split::pack_row<K>(num_chunks, [] {
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
+        ckernel::sfpu::_topk_xl_split_begin_(0);
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>();
+        TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
+        ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_();
+        ckernel::sfpu::_topk_xl_split_begin_(0);
+        ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>();
+        TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
+    });
 #endif
     transpose_dest_init<true, false>(indices_cb);
     for (uint32_t tile = 0; tile < tiles_per_sequence; ++tile) {
@@ -358,39 +369,42 @@ FORCE_INLINE void reduce_split_row(
     }
 }
 
-// A K = 2048 row of more than 32 chunks, its segments split as above. A later segment needs tiles 0 to 5, so the
-// unfused accumulator (tiles 0 to 3) waits in acc_cb's L1 until its merge with the segment.
+// A K = 2048 row of more than 32 chunks, its segments split as above. A later segment's chunks cycle through all eight
+// Dst tiles and its result moves to tiles 4 to 7, so the unfused accumulator (tiles 0 to 3) waits in acc_cb's L1 until
+// its merge with the segment.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_segmented_row(
     CircularBuffer& input, uint32_t acc_cb, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
     static_assert(K == 2048, "the segmented body is K = 2048's");
-    constexpr uint32_t tiles_per_sequence = 2;
-    constexpr uint32_t segment_capacity = 32;
+    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
+    constexpr uint32_t accumulator_tiles = 2 * tiles_per_sequence;
     constexpr uint32_t accumulator_slot = 0;
-    constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
+    constexpr uint32_t segment_slot = accumulator_tiles;
     constexpr uint32_t chunk_slot = segment_slot + tiles_per_sequence;
     // A shorter last segment runs on one thread: the accumulator's two copies cost more than its split saves.
     constexpr uint32_t min_split_later_chunks = 3;
     const uint32_t input_cb = input.get_cb_id();
-    const uint32_t num_segments = (num_chunks + segment_capacity - 1) / segment_capacity;
+    const uint32_t num_segments = (num_chunks + max_fused_chunks - 1) / max_fused_chunks;
     CircularBuffer acc(acc_cb);
     for (uint32_t segment = 0; segment < num_segments; ++segment) {
-        const uint32_t first_chunk = segment * segment_capacity;
+        const uint32_t first_chunk = segment * max_fused_chunks;
         const uint32_t seg_chunks =
-            num_chunks - first_chunk < segment_capacity ? num_chunks - first_chunk : segment_capacity;
+            num_chunks - first_chunk < max_fused_chunks ? num_chunks - first_chunk : max_fused_chunks;
         const uint32_t seg_tail = first_chunk + seg_chunks == num_chunks ? tail_elements : K;
         const bool later = segment != 0;
         const bool split = !later || seg_chunks >= min_split_later_chunks;
 
         if (!split) {
-            sort_fused_chunk<K, true>(input, segment_slot, seg_chunks == 1 ? seg_tail : K, false, 0);
+            sort_fused_chunk<K, true>(
+                input, segment_slot, seg_chunks == 1 ? seg_tail : K, false /*ascending*/, 0 /*local_chunk_id*/);
             if (seg_chunks == 1) {
-                topk_xl_rebuild<K, true>(segment_slot, true);
+                topk_xl_rebuild<K, true>(segment_slot, true /*ascending*/);
             }
             for (uint32_t chunk = 1; chunk < seg_chunks; ++chunk) {
-                sort_fused_chunk<K, false>(input, chunk_slot, chunk + 1 == seg_chunks ? seg_tail : K, true, chunk);
+                sort_fused_chunk<K, false>(
+                    input, chunk_slot, chunk + 1 == seg_chunks ? seg_tail : K, true /*ascending*/, chunk);
                 topk_xl_merge<K, true>(segment_slot);
-                topk_xl_rebuild<K, true>(segment_slot, chunk + 1 == seg_chunks);
+                topk_xl_rebuild<K, true>(segment_slot, chunk + 1 == seg_chunks /*ascending*/);
             }
         } else {
             if (later) {
@@ -400,17 +414,13 @@ FORCE_INLINE void reduce_split_segmented_row(
 #ifdef TRISC_PACK
                 topk_large_indices_split::hold_accumulator([&] {
                     // Segment 1 finds the packer in its untilize mode, a later segment in pack_tile mode with the MOP
-                    // the pack thread's SFPU work reprogrammed.
-                    if (segment == 1) {
-                        pack_untilize_uninit(acc_cb);
-                    } else {
-                        pack_init(acc_cb);
-                    }
-                    acc.reserve_back(2 * tiles_per_sequence);
-                    for (uint32_t tile = 0; tile < 2 * tiles_per_sequence; ++tile) {
+                    // the pack thread's SFPU work reprogrammed; both need the pack_tile setup.
+                    pack_init(acc_cb);
+                    acc.reserve_back(accumulator_tiles);
+                    for (uint32_t tile = 0; tile < accumulator_tiles; ++tile) {
                         pack_tile<true>(accumulator_slot + tile, acc_cb, tile);
                     }
-                    acc.push_back(2 * tiles_per_sequence);
+                    acc.push_back(accumulator_tiles);
                 });
 #endif
             }
@@ -420,7 +430,7 @@ FORCE_INLINE void reduce_split_segmented_row(
                 if (chunk == 0) {
                     topk_xl_copy_tile_init(input_cb);
                 }
-                topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == seg_chunks ? seg_tail : K);
+                topk_xl_copy_tile<K>(input_cb, 0 /*dst*/, 0 /*first tile*/, chunk + 1 == seg_chunks ? seg_tail : K);
                 input.pop_front(tiles_per_sequence);
                 llk_unpack_set_srcb_dummy_valid();
                 if (chunk > 0) {
@@ -430,18 +440,18 @@ FORCE_INLINE void reduce_split_segmented_row(
 #endif
 #ifdef TRISC_MATH
             _llk_math_eltwise_unary_sfpu_init_once_();
-            topk_large_indices_split::math_row<K, false>(seg_chunks, [&](uint32_t chunk, uint32_t tile) {
+            topk_large_indices_split::math_row<K>(seg_chunks, [&](uint32_t chunk, uint32_t tile) {
                 if (chunk == 0) {
                     topk_xl_copy_tile_init(input_cb);
                 }
-                topk_xl_copy_tile<K>(input_cb, tile, 0, chunk + 1 == seg_chunks ? seg_tail : K);
+                topk_xl_copy_tile<K>(input_cb, tile, 0 /*first tile*/, chunk + 1 == seg_chunks ? seg_tail : K);
             });
 #endif
 #ifdef TRISC_PACK
             auto epilogue = [segment, later] {
                 ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
                 ckernel::sfpu::_topk_xl_split_begin_(accumulator_slot);
-                ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K>(segment * (segment_capacity * K));
+                ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K>(segment * (max_fused_chunks * K));
                 TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
                 if (later) {
                     ckernel::sfpu::_topk_xl_split_begin_(accumulator_slot);
@@ -450,9 +460,9 @@ FORCE_INLINE void reduce_split_segmented_row(
                 }
             };
             if (later) {
-                topk_large_indices_split::pack_row<K, false, true>(seg_chunks, [] {}, epilogue);
+                topk_large_indices_split::pack_row<K, true /*mirror_last*/>(seg_chunks, epilogue);
             } else {
-                topk_large_indices_split::pack_row<K, false>(seg_chunks, [] {}, epilogue);
+                topk_large_indices_split::pack_row<K>(seg_chunks, epilogue);
             }
 #endif
         }
@@ -462,40 +472,28 @@ FORCE_INLINE void reduce_split_segmented_row(
                 // copy_init sets no formats: the unpack to Dst needs acc_cb's, the merge and transposes the input's.
                 reconfig_data_format_srca(input_cb, acc_cb);
                 copy_init(acc_cb);
-                acc.wait_front(2 * tiles_per_sequence);
-                for (uint32_t tile = 0; tile < 2 * tiles_per_sequence; ++tile) {
+                acc.wait_front(accumulator_tiles);
+                for (uint32_t tile = 0; tile < accumulator_tiles; ++tile) {
                     copy_tile(acc_cb, tile, accumulator_slot + tile);
                 }
-                acc.pop_front(2 * tiles_per_sequence);
+                acc.pop_front(accumulator_tiles);
                 reconfig_data_format_srca(acc_cb, input_cb);
                 // The next copy init configures the unpacker from the RISC, after the last unpack to Dst has finished.
                 UNPACK((ckernel::tensix_sync()));
             }
             if (!split) {
                 topk_xl_separate_indices_row_major_global_init();
-                topk_xl_separate_indices_row_major_global_base<K>(segment_slot, segment * (segment_capacity * K));
+                topk_xl_separate_indices_row_major_global_base<K>(segment_slot, segment * (max_fused_chunks * K));
             }
             topk_xl_init<K, false>();
             topk_xl_merge<K, false>(accumulator_slot);
-            topk_xl_rebuild<K, false>(accumulator_slot, false);
+            topk_xl_rebuild<K, false>(accumulator_slot, false /*ascending*/);
         }
     }
     mark_neginf_indices<K>(accumulator_slot);
     materialize_index_rank_order<K>(accumulator_slot, indices_cb);
 }
 #endif
-
-// One discarded datacopy keeps the next program's first tile on this core intact after a raw pack and unpack round
-// trip.
-FORCE_INLINE void settle_next_program(uint32_t input_cb) {
-    reconfig_data_format_srca(input_cb);
-    copy_init(input_cb);
-    tile_regs_acquire();
-    copy_tile(input_cb, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
-}
 
 }  // namespace
 
@@ -585,6 +583,7 @@ void kernel_main() {
     // Whole rows run split across MATH and PACK; a core's split row stays on one thread.
     if constexpr (split_whole_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
+        // Shorter rows run on one thread; K 512 gains nothing from the split at two chunks.
         constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
         if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
             (num_chunks <= max_fused_chunks || split_segments)) {
@@ -622,11 +621,7 @@ void kernel_main() {
                     tile_regs_release();
                 }
             }
-            if constexpr (split_segments) {
-                if (num_chunks > max_fused_chunks) {
-                    settle_next_program(input_cb);
-                }
-            }
+            MATH((topk_large_indices_split::finish()));
             if (!has_split) {
                 return;
             }
@@ -668,7 +663,7 @@ void kernel_main() {
 
             // Raw tile pack so the parent can unpack the survivor straight back into DST.
             send.reserve_back(survivor_tiles);
-            pack_untilize_uninit(send_cb);
+            pack_init(send_cb);
             pack_reconfig_data_format(send_cb);
             for (uint32_t tile = 0; tile < survivor_tiles; ++tile) {
                 pack_tile(final_survivor + tile, send_cb);
@@ -693,8 +688,5 @@ void kernel_main() {
             // Re-arm the untilize pack the row output path expects.
             pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
         }
-    }
-    if (num_recv_rounds > 0 || sends_survivor) {
-        settle_next_program(input_cb);
     }
 }

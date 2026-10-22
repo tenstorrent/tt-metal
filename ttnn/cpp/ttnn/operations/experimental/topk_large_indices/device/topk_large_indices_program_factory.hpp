@@ -73,16 +73,12 @@ inline bool row_split_possible(uint32_t num_rows, uint32_t num_cores) {
 }
 
 ComputeBodyMode compute_body_mode(
-    uint32_t k,
-    uint32_t num_rows,
-    uint32_t input_last_dim,
-    uint32_t num_cores,
-    std::optional<uint32_t> valid_length = std::nullopt);
+    uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores, std::optional<uint32_t> valid_length);
 
 // Whether the input's rows span two or more K' chunks, a compile-time argument of the compute kernel.
 bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim);
 
-// Whether a core can hold a whole row of two or more chunks, which the compute kernel splits across MATH and PACK.
+// Whether a core can hold a whole row of several chunks, which the compute kernel splits across MATH and PACK.
 bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

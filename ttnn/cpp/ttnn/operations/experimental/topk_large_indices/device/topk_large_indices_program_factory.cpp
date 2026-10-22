@@ -336,8 +336,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t llk_k = body_mode == ComputeBodyMode::ColumnSegmented ? to_uint32(LlkTargetK::K1024)
                                                                          : to_uint32(snap_to_llk_target_k(k));
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
-    // Row counts are runtime args, hashed only through the body mode (k <= 64). The core grid is hashed, so a cache
-    // hit never creates kernels or CBs on cores owned by another subdevice.
+    // Row counts are runtime args, hashed only through the program classes (body mode, multi_chunk_rows,
+    // split_whole_rows, row_split_possible). The core grid is hashed, so a cache hit never creates kernels or CBs on
+    // cores owned by another subdevice.
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
@@ -392,9 +393,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, meta_cb_config);
     }
 
+    // A row of one chunk cannot split, so its program carries no tree (multi_chunk_rows is in the program hash).
     const uint32_t tree =
-        row_split_possible(
-            flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
+        multi_chunk_rows(k, input.logical_shape()[-1]) &&
+                row_split_possible(
+                    flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
             ? 1u
             : 0u;
     uint32_t credit_semaphore_id = 0;
@@ -449,12 +452,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     compute_compile_args.push_back(cb_send);
     compute_compile_args.push_back(multi_chunk_rows(k, input.logical_shape()[-1]) ? 1u : 0u);
     compute_compile_args.push_back(has_acc ? cb_acc : 0u);
-    // Landed survivors are raw 32-bit words; the default Float32 unpack path would round them through Tf32.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (tree) {
-        unpack_to_dest_mode[cb_landing] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -464,7 +461,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .fp32_dest_acc_en = true,
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_args,
             .named_compile_args = {
                 {"tree", tree},
@@ -545,7 +541,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
 
-    // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
+    // The cache key fixes k, dtype, grid, compute body mode and the row-split classes. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and
     // rebuild the per-core assignment only when the row or searched chunk count changes.
     if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
