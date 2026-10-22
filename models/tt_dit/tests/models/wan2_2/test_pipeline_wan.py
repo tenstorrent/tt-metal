@@ -4,6 +4,7 @@
 
 import itertools
 import os
+import time
 
 import numpy as np
 import PIL
@@ -27,11 +28,27 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import check_first_frame_matches_seed, check_output_sanity, create_fractal_image
+from .common import (
+    check_first_frame_matches_seed,
+    check_output_sanity,
+    check_timings,
+    create_fractal_image,
+    timing_limits,
+)
 
 PROMPTS = {
     "t2v": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
     "i2v": "The cat in the hat runs up the hill to the house.",
+}
+
+# Sanity checks only: the single cold run (kernel compile included) must finish within this multiple
+# of the perf test's total limit, and its mean CLIP score must clear a floor well below normal output.
+# Uncalibrated placeholders until the first runs are measured (#60481).
+TIMING_FACTOR = 4.0
+CLIP_THRESHOLDS = {
+    "t2v": 30.0,  # observed ~37
+    # The fractal seed image dominates the frames, so expect low scores; only near-random fails.
+    "i2v": 15.0,
 }
 
 # These thresholds are deliberately loose, they're just to catch a broken pipeline
@@ -204,6 +221,7 @@ def test_pipeline_inference(
         logger.info(f"Running {model_type} inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
+        start = time.perf_counter()
         with torch.no_grad():
             frames = pipeline(
                 prompts=[prompt],
@@ -215,8 +233,9 @@ def test_pipeline_inference(
                 output_type="uint8",
                 on_event=log_event_section,
             )
+        elapsed = time.perf_counter() - start
 
-        logger.info(f"Inference completed successfully")
+        logger.info(f"Inference completed successfully in {elapsed:.2f}s")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
         logger.info(f"  Output type: {type(frames)}")
 
@@ -241,12 +260,20 @@ def test_pipeline_inference(
         else:
             logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
 
-        return frames
+        return frames, elapsed
 
-    def check_output_with_clip(prompt, frames, clip_threshold=36.0):
-        # T2V only: the I2V CI seed is a fractal, which CLIP can't relate to a natural-language prompt.
-        if model_type != "t2v":
+    def check_output_with_timing(elapsed):
+        limits = timing_limits(model_type, mesh_device.shape, height, topology)
+        if limits is None:
+            logger.info(f"No timing limits for {model_type} on {mesh_device.shape} at {height}p; skipping timing check")
             return
+        upper = limits["total"][1] * TIMING_FACTOR
+        logger.info(f"Pipeline total {elapsed:.2f}s (loose limit {upper:.2f}s)")
+        messages = check_timings({"total": elapsed}, {"total": (0.0, upper)}, "pipeline")
+        assert not messages, "\n".join(messages)
+
+    def check_output_with_clip(prompt, frames):
+        clip_threshold = CLIP_THRESHOLDS[model_type]
         if int(ttnn.distributed_context_get_rank()) == 0:
             # Sample ~8 evenly-spaced frames from the video
             total_frames = frames.shape[0]
@@ -280,10 +307,23 @@ def test_pipeline_inference(
             thresholds = VBENCH_THRESHOLDS[model_type][height]
             assert_vbench_quality(output_filename(number), prompt=prompt, thresholds=thresholds)
 
+    def check_all(prompt, number, frames, elapsed):
+        # Run every check before failing, so one run reports all of them.
+        failures = []
+        for check in (
+            lambda: check_output_with_clip(prompt, frames),
+            lambda: check_output_with_vbench(prompt, number),
+            lambda: check_output_with_timing(elapsed),
+        ):
+            try:
+                check()
+            except AssertionError as error:
+                failures.append(str(error))
+        assert not failures, "\n".join(failures)
+
     if no_prompt:
-        frames = run(prompt=prompt, number=0, seed=42)
-        check_output_with_clip(prompt, frames)
-        check_output_with_vbench(prompt, 0)
+        frames, elapsed = run(prompt=prompt, number=0, seed=42)
+        check_all(prompt, 0, frames, elapsed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -291,6 +331,5 @@ def test_pipeline_inference(
                 prompt = new_prompt
             if prompt[0] == "q":
                 break
-            frames = run(prompt=prompt, number=i, seed=i)
-            check_output_with_clip(prompt, frames)
-            check_output_with_vbench(prompt, i)
+            frames, elapsed = run(prompt=prompt, number=i, seed=i)
+            check_all(prompt, i, frames, elapsed)

@@ -27,13 +27,9 @@ from ....utils.test import (
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
 )
-from .common import create_fractal_image
+from .common import check_timings, create_fractal_image, timing_limits
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
-
-# BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
-BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
-
 
 # VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
 # each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
@@ -57,106 +53,6 @@ def vbench_thresholds(model_type: str, height: int) -> dict:
         "dynamic_degree": 0.75,
         "imaging_quality": 0.5 if height == 720 else 0.45,
     }
-
-
-def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
-    return {k: v * factor for k, v in expected_metrics.items()}
-
-
-def t2v_metrics(mesh_device, height):
-    expected_metrics = {}
-    if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 240.0,
-                "vae": 5.0,
-                "total": 255.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 800.0,
-                "vae": 9.0,
-                "total": 850.0,
-            }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        # 30% headroom over measured, 100% on encoder, for now.
-        # Ring measurements only; linear needs remeasuring.
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.21,
-                "denoising": 75.0,
-                "vae": 0.42,
-                "total": 76.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.23,
-                "denoising": 142.0,
-                "vae": 1.55,
-                "total": 144.0,
-            }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        # 30% headroom over measured, 100% on encoder, for now.
-        # Ring measurements only; linear needs remeasuring.
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.22,
-                "denoising": 205.0,
-                "vae": 0.85,
-                "total": 206.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.22,
-                "denoising": 449.0,
-                "vae": 3.4,
-                "total": 452.0,
-            }
-    elif tuple(mesh_device.shape) == (2, 2):
-        assert height == 480, "2x2 is only supported for 480p"
-        assert is_blackhole(), "2x2 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 0.12,
-            "denoising": 680.0,
-            "vae": 60.0,
-            "total": 760.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 32):
-        assert is_blackhole(), "4x32 is only supported for blackhole"
-        assert height == 720, "4x32 is only supported for 720p"
-        expected_metrics = {
-            "encoder": 0.54,
-            "denoising": 75.0,
-            "vae": 5.0,
-            "total": 80.5,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
-    return expected_metrics
-
-
-# TODO: Update device/config specific metrics for i2v
-def i2v_metrics(mesh_device, height):
-    return t2v_metrics(mesh_device, height)
-
-
-def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topology: ttnn.Topology):
-    if model_type == "t2v":
-        pipeline_cls = WanPipeline
-        expected_metrics = t2v_metrics(mesh_device, height)
-        image_prompt = None
-    else:
-        pipeline_cls = WanPipelineI2V
-        expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = create_fractal_image(width, height)
-
-    # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
-    if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
-        expected_metrics = _scale_expected_metrics(expected_metrics, BH_4X8_LINEAR_EXPECTED_METRICS_SLACK)
-
-    return pipeline_cls, image_prompt, expected_metrics
 
 
 @pytest.mark.parametrize(
@@ -286,9 +182,16 @@ def test_pipeline_performance(
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    pipeline_cls, image_prompt, expected_metrics = wan_pipeline_metrics_condimg(
-        mesh_device, width, height, model_type, topology
-    )
+    limits = timing_limits(model_type, mesh_device.shape, height, topology)
+    assert limits is not None, f"No timing limits for {model_type} on {mesh_device.shape} at {height}p"
+    # Upper limits double as the CI report targets.
+    expected_metrics = {k: upper for k, (_, upper) in limits.items()}
+    if model_type == "i2v":
+        pipeline_cls = WanPipelineI2V
+        image_prompt = create_fractal_image(width, height)
+    else:
+        pipeline_cls = WanPipeline
+        image_prompt = None
 
     h_factor = tuple(mesh_device.shape)[tp_axis]
     w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -363,13 +266,13 @@ def test_pipeline_performance(
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
 
-    # Gate clips are timed too: each prompt's mean over its seeds must also clear that prompt's timing
-    # limits (for now the same expected_metrics as the timed run).
+    # Gate clips are timed too: each prompt's mean over its seeds must also fall within that prompt's
+    # timing limits (for now the same limits as the timed run).
     gate_prompts = []
     gate_timings = []
     if run_vbench:
         gate_prompts = [
-            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height), "timing": expected_metrics}
+            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height), "timing": limits}
             for i in VBENCH_PROMPTS
         ]
         gate_profiler = BenchmarkProfiler()
@@ -539,23 +442,11 @@ def test_pipeline_performance(
             },
         )
 
-    pass_perf_check = True
-    assert_msgs = []
-    for k in expected_metrics.keys():
-        if measurements[k] > expected_metrics[k]:
-            assert_msgs.append(
-                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
-            )
-            pass_perf_check = False
+    assert_msgs = check_timings(measurements, limits, "timed run")
     for index, (gate_prompt, timing) in enumerate(zip(gate_prompts, gate_timings)):
-        for k, limit in gate_prompt["timing"].items():
-            if timing[k] > limit:
-                assert_msgs.append(
-                    f"Warning: VBench prompt {index} mean {k} is outside of the tolerance range. Expected: {limit}, Actual: {timing[k]}"
-                )
-                pass_perf_check = False
+        assert_msgs += check_timings(timing, gate_prompt["timing"], f"VBench prompt {index} mean")
 
-    assert pass_perf_check, "\n".join(assert_msgs)
+    assert not assert_msgs, "\n".join(assert_msgs)
 
     if run_vbench and not vbench_export_dir and is_global_rank_zero():
         vbench_bundle.evaluate(vbench_dir)
