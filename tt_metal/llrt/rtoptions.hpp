@@ -320,7 +320,7 @@ class RunTimeOptions {
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
 
-    // Blackhole silicon: BRISC halts on an L1 or RISC memory ECC error and the host reports it.
+    // Blackhole silicon: BRISC halts on an L1 ECC error and the host reports it.
     bool disable_l1_ecc_halt = false;
 
     // Enable instruction gathering in Tensix core.

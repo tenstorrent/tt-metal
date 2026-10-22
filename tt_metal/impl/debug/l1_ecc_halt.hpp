@@ -7,8 +7,8 @@
 #include <internal/l1_ecc_halt.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-// Blackhole silicon: BRISC halts on an L1 DBE, a RISC local memory DBE or an instruction cache parity error, and
-// writes mailboxes_t::l1_ecc_halt. Waits detect halts through L1EccHaltWatch.
+// Blackhole silicon: BRISC halts on an L1 DBE and writes mailboxes_t::l1_ecc_halt. Waits detect halts through
+// L1EccHaltWatch.
 namespace tt::tt_metal::internal {
 
 // Throws if a Tensix BRISC is still inside an interrupt handler, which only tt-smi -r clears and which makes

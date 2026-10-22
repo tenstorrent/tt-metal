@@ -765,7 +765,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING: this->disable_relaxed_memory_ordering = true; break;
 
         // TT_METAL_DISABLE_L1_ECC_HALT
-        // Do not halt a Blackhole Tensix BRISC on an L1 or RISC memory ECC error. After such a halt the chip must be
+        // Do not halt a Blackhole Tensix BRISC on an L1 ECC error. After such a halt the chip must be
         // reset with tt-smi -r.
         // Default: false (halt enabled on Blackhole silicon)
         // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
