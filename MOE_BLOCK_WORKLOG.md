@@ -460,3 +460,44 @@ reduced over TP (the 4-chip line, 2 links), the model's fabric payload (8256 B),
 | ratio | 1.42x | 1.28x |
 The fused op costs what the stock reduce-scatter alone does. Whole head so far, sequential: GLM 163 + 118 = 281
 (target 360), K3 377 + 187 = 564 (target 660); left for router / logits RS / top-k / routing prep / K3 latent: 79 / 96.
+Stage A (the bar wired in, two programs - superseded below; kept as rs_mode "mrs" for comparison only): the engine
+stops at h (down=False, h to DRAM), then the op. GLM 131 + 117 = 237 us, K3 310 + 186 = 490 (sum of the two programs'
+slowest chips), PCC 0.99988. The op's zones (device 1): GLM's first send waits for entry 0's matmul with the resident
+W fill (20 us), then 3 blocks at ~23.5 GB/s a link (28 us each); K3 the same with 48 us blocks. Its knobs on our
+shapes: MRS_WAVES 2 / INC_PER_WAVE 0 / PORT_GROUP 8 - all within noise.
+
+### Down + SE reduce-scatter inside the fused program (tt/se_rs.py; user: h never leaves L1)
+matmul_reduce_scatter's schedule (plan_transport: block order by distance to the owner, start / relay / fin, arrival
+thresholds) on the engine's own tiling - no 2D re-tiling, no h in DRAM: the row h exchange (h from the L1 gate / up
+packed it to) gives each core all of K for its MT rows, the W_down stream is the engine's column stream (resident
+weights, loaded during the gather).
+- Tiling: K3 (scatter -1, width) - every column owns a 5-6 tile slice of every block, so every core works on every
+  entry and the entries run in transport order (2 passes a block); GLM (scatter -2, rows) - a core row's 2 row tiles
+  fall into one or two blocks, all passes first (GLM's down is ~10 us).
+- Per core: own partials of the entries that add an arrival stay **fp32 in L1 (HOLD)**, start sub-blocks are packed
+  bf16 straight into FINB (the exchanged buffer, compact in entry order); a finish (behind the next entry's passes,
+  matmul_reduce_scatter's lag) adds the bf16 arrival(s) in fp32 DEST (HOLD + arrival, the second direction by DEST
+  reuse) and packs bf16 into FINB (relay, then handed off) or OUTF (fin: the NCRISC writes y - the stage's only DRAM
+  write).
+- Ports: the gather's movers, (direction, link) - after their gather units: per unit, per core of their link, wait
+  the core's hand-off on its mailbox word (an L1 word a core a port), NoC-read its FINB sub-block, one fabric packet a
+  4-tile chunk into the downstream chip's same core's zone slot (written once a call: no credits), the core's last
+  chunk carrying the fused increment of its arrival counter (global semaphore a direction). The receiving NCRISC
+  credits zone slot i (P pages) once its counter reached the slot's threshold. The gather's call fence covers it.
+- CPU protocol model (tests/test_rs_protocol_model.py): the plan's compute programs, hand-offs, ports and thresholds
+  under random interleavings, symbolic sums - line / ring of 4, G 2, 1-2 links: 24 / 24, and an off-by-one threshold
+  is caught.
+| x chain + SE reduce-scatter, us (PCC) | GLM-Flash | K3 |
+|---|---|---|
+| bar: x chain v3 + matmul_reduce_scatter (2 programs, h via DRAM) | 237 (0.99988) | 490 (0.99988) |
+| **one program, in-L1 down + RS** | 250.5 (0.99988) | 455.5 (0.99987) |
+| + the first down pass on each column's h as it lands | **248.2** | **449.9** |
+| floor (AG + last shard's gate / up + RS links) | ~170 | ~312 |
+Per chip (K3): gate / up ends 220-257 us, the h exchange 14, down + RS to 435-455 (~185 us; the end link's 3 blocks
+146). GLM: gate / up 96-125, h 16, RS to 212-250 (the end chips' 3 blocks 84 us from their first hand-off ~135).
+The stage is link-bound once it sends; what is left above the floor is the gather (K3 ends 220-257 vs 143).
+
+Precision (user rule: accumulate fp32, exchange bf16 unless measured): x gather bf16 (the input); h exchange bf16;
+gate / up between-shard partials fp32 in L1 (not exchanged); SE reduce-scatter: own partials fp32 (HOLD), exchanged
+sub-blocks bf16, adds in fp32 DEST; output bf16. No fp32 on any wire. Router logits: not built yet - bf16 vs fp32
+exchange to be measured on routing-pick agreement.

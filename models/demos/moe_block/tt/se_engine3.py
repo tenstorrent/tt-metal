@@ -159,8 +159,13 @@ void kernel_main() {
         for (uint32_t c = 0; c < GX; ++c) {
             if (c == cx) sh->send(hown, hs + c * MT * POMAX * 2048, MT * POMAX * 2048);
             else rh->receive(m * GX + c);
+#ifdef SE_RS
+            cb_push_back(CB_HALL, MT * POMAX);  // (column c's block: the down's first pass starts on its K tiles)
+#endif
         }
+#ifndef SE_RS
         cb_push_back(CB_HALL, HA);
+#endif
         cb_pop_front(CB_HOWN, MT * POMAX);
 #endif
     }
@@ -464,8 +469,7 @@ void kernel_main() {
         // Partials accumulate fp32 in L1; only the exchanged sub-blocks are bf16 (matmul_reduce_scatter's rule).
         const uint32_t r0 = NPG + NPD + GX + 1, nops = get_arg_val<uint32_t>(r0), pt0 = r0 + 1 + nops;
         const uint32_t et0 = pt0 + NPD * (1 + MT);
-        cb_wait_front(HALL, HA);
-        uint32_t npass = 0;
+        uint32_t npass = 0, hin = 0;  // (h-all columns waited for: the first pass follows the exchange's rounds)
         for (uint32_t o = 0; o < nops; ++o) {
             const uint32_t op = get_arg_val<uint32_t>(r0 + 1 + o), kind = op & 0xFF, idx = op >> 8;
             if (kind == 0) {
@@ -479,6 +483,10 @@ void kernel_main() {
                     for (uint32_t k = 0; k < KBD; ++k) {
                         const uint32_t kt = i * KBD + k;
                         while (kt >= get_arg_val<uint32_t>(NPG + NPD + c + 1)) ++c;
+                        if (c >= hin) {
+                            hin = c + 1;
+                            cb_wait_front(HALL, hin * MT * POMAX);
+                        }
                         const uint32_t a0 = c * MT * POMAX + kt - get_arg_val<uint32_t>(NPG + NPD + c);
 #ifndef SE_PROBE_NOMATH
                         matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
