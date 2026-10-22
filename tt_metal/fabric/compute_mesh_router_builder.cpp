@@ -4,8 +4,12 @@
 
 #include "compute_mesh_router_builder.hpp"
 #include <enchantum/enchantum.hpp>
+#include <array>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include "hostdevcommon/fabric_host_bridge.h"
+#include "tt_metal/fabric/host_bridge_links.hpp"
 #include <string>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -31,6 +35,38 @@
 #include <tt_stl/fmt.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+// A cmd buf on `noc` that no router channel uses, so the host bridge's PCIe writes cannot clobber a
+// stateful cmd buf (the receiver's local writes and forwards, the sender's worker acks).
+uint32_t host_bridge_free_cmd_buf(
+    const FabricEriscDatamoverConfig& cfg, std::size_t noc, std::optional<uint32_t> also_taken) {
+    std::array<bool, 4> taken{};
+    for (std::size_t i = 0; i < cfg.num_used_receiver_channels; i++) {
+        if (cfg.receiver_channel_forwarding_noc_ids[i] == noc) {
+            taken[cfg.receiver_channel_forwarding_data_cmd_buf_ids[i]] = true;
+            taken[cfg.receiver_channel_forwarding_sync_cmd_buf_ids[i]] = true;
+        }
+        if (cfg.receiver_channel_local_write_noc_ids[i] == noc) {
+            taken[cfg.receiver_channel_local_write_cmd_buf_ids[i]] = true;
+        }
+    }
+    for (std::size_t i = 0; i < cfg.num_used_sender_channels; i++) {
+        if (cfg.sender_channel_ack_noc_ids[i] == noc) {
+            taken[cfg.sender_channel_ack_cmd_buf_ids[i]] = true;
+        }
+    }
+    if (also_taken.has_value()) {
+        taken[*also_taken] = true;
+    }
+    for (uint32_t b = 0; b < taken.size(); b++) {
+        if (!taken[b]) {
+            return b;
+        }
+    }
+    TT_THROW("host bridge: every cmd buf on NOC {} is in use by a router channel", noc);
+}
+}  // namespace
 
 namespace {
 
@@ -943,6 +979,44 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto eth_chan = location_.eth_chan;
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
+    // Host-bridged link: the router's sends and credits go to a host ring instead of the eth txq
+    // (fabric_router_host_bridge_transport.hpp); a FabricHostBridge on the host carries them to the peer.
+    const auto& router_cfg = erisc_builder_->config;
+    const bool host_bridged = host_bridge::link_is_bridged(
+        fabric_context_.get_rtoptions().get_fabric_host_bridge(), control_plane, local_node_, eth_chan);
+    if (host_bridged) {
+        TT_FATAL(
+            router_cfg.host_bridge_block_address != 0,
+            "host bridge on chip {} eth_chan {}: no control block reserved in router L1",
+            device_id,
+            eth_chan);
+        // The second erisc's PCIe writes are never acked on Blackhole, so the receiver direction (which
+        // it would service) cannot reach the host ring from there.
+        TT_FATAL(
+            get_configured_risc_count() == 1,
+            "host bridge on chip {} eth_chan {}: bridged routers need single-erisc mode "
+            "(TT_METAL_DISABLE_MULTI_AERISC=1)",
+            device_id,
+            eth_chan);
+        defines["FABRIC_HOST_BRIDGE"] = "1";
+        // Zero the block before the kernel runs: the router opens its sockets only once the host arms it.
+        std::vector<uint32_t> zeros(host_bridge::kBlockBytes / sizeof(uint32_t), 0);
+        cluster.write_core(
+            zeros.data(),
+            static_cast<uint32_t>(zeros.size() * sizeof(uint32_t)),
+            tt_cxy_pair(
+                device_id,
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, eth_logical_core, CoreType::ETH)),
+            router_cfg.host_bridge_block_address);
+        log_warning(
+            tt::LogFabric,
+            "Fabric router chip {} eth_chan {} -> {} is host-bridged (block 0x{:x})",
+            device_id,
+            eth_chan,
+            location_.remote_node,
+            router_cfg.host_bridge_block_address);
+    }
+
     // Configure for host signal wait
     erisc_builder_->set_wait_for_host_signal(true);
 
@@ -960,6 +1034,34 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
         named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
         named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
+        if (host_bridged) {
+            // Each direction writes its ring on a cmd buf no channel on that NOC drives statefully.
+            const auto tx_noc = router_cfg.sender_channel_ack_noc_ids[0];
+            const auto tx_cmd_buf = host_bridge_free_cmd_buf(router_cfg, tx_noc, std::nullopt);
+            const auto rx_noc = router_cfg.receiver_channel_local_write_noc_ids[0];
+            // One RISC servicing both directions never runs them concurrently, so they may share a cmd buf.
+            const bool separate_riscs = num_enabled_risc_cores > 1;
+            const auto rx_cmd_buf = host_bridge_free_cmd_buf(
+                router_cfg,
+                rx_noc,
+                (separate_riscs && rx_noc == tx_noc) ? std::optional<uint32_t>(tx_cmd_buf) : std::nullopt);
+            named_ct_args["HOST_BRIDGE_BLOCK_ADDR"] = static_cast<uint32_t>(router_cfg.host_bridge_block_address);
+            named_ct_args["HOST_BRIDGE_PAGE_BYTES"] =
+                host_bridge::frame_page_bytes(static_cast<uint32_t>(router_cfg.channel_buffer_size_bytes));
+            named_ct_args["HOST_BRIDGE_TX_NOC"] = static_cast<uint32_t>(tx_noc);
+            named_ct_args["HOST_BRIDGE_TX_CMD_BUF"] = tx_cmd_buf;
+            named_ct_args["HOST_BRIDGE_RX_NOC"] = static_cast<uint32_t>(rx_noc);
+            named_ct_args["HOST_BRIDGE_RX_CMD_BUF"] = rx_cmd_buf;
+            log_warning(
+                tt::LogFabric,
+                "host bridge eth_chan {} risc {}: tx noc {} cmd_buf {}, rx noc {} cmd_buf {}",
+                eth_chan,
+                risc_id,
+                tx_noc,
+                tx_cmd_buf,
+                rx_noc,
+                rx_cmd_buf);
+        }
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);

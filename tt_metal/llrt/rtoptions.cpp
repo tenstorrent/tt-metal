@@ -117,6 +117,7 @@ enum class EnvVarID {
     RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
     TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
+    TT_METAL_FABRIC_HOST_BRIDGE,                        // Fabric links carried through the host
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
@@ -896,6 +897,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_USE_MGD_2_0:
             this->use_mesh_graph_descriptor_2_0 = (std::strncmp(value, "0", 1) != 0);
             break;
+
+        // TT_METAL_FABRIC_HOST_BRIDGE
+        // Fabric links whose routers send through the host instead of the ethernet wire
+        // (tt_metal/fabric/host_bridge_links.hpp). Experimental.
+        // Default: none
+        // Usage: export TT_METAL_FABRIC_HOST_BRIDGE=intermesh  or  =0:1:4,1:0:4
+        case EnvVarID::TT_METAL_FABRIC_HOST_BRIDGE: this->fabric_host_bridge = value; break;
 
         // TT_METAL_FORCE_JIT_COMPILE
         // Force JIT compilation even if dependencies are up-to-date.

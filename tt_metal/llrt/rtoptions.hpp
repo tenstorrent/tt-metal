@@ -406,6 +406,9 @@ class RunTimeOptions {
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
+    // Fabric links carried through the host (TT_METAL_FABRIC_HOST_BRIDGE); empty: none
+    std::string fabric_host_bridge;
+
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
@@ -419,7 +422,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    // Serve simulation devices over sockets for a debug tool to attach; enable with
+    // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
     // NOC API version for Quasar
@@ -1022,6 +1026,10 @@ public:
 
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
+
+    // "intermesh" or "mesh:chip:chan,..."; see tt_metal/fabric/host_bridge_links.hpp
+    const std::string& get_fabric_host_bridge() const { return fabric_host_bridge; }
+    void set_fabric_host_bridge(std::string spec) { fabric_host_bridge = std::move(spec); }
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }

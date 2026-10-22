@@ -19,6 +19,7 @@ target_sources(
         test_socket_hotswap.cpp
         test_host_socket_latency.cpp
         test_host_socket_burst.cpp
+        test_fabric_host_bridge.cpp
 )
 
 target_include_directories(

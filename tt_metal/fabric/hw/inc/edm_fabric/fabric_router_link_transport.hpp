@@ -20,6 +20,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include "internal/ethernet/tunneling.h"
+#ifdef FABRIC_HOST_BRIDGE
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_host_bridge_transport.hpp"
+#endif
 
 #include <cstdint>
 
@@ -51,5 +54,23 @@ struct EthTxqLinkTransport {
 };
 
 // Transport selection. Sender side carries packets + packets-sent updates, receiver side carries acks + completions.
+// FABRIC_HOST_BRIDGE (builder define): both go through the host instead of the wire.
+#ifdef FABRIC_HOST_BRIDGE
+constexpr bool link_is_host_bridged = true;
+using SenderLinkTransport = HostBridgeLinkTransport<
+    host_bridge_block_addr + tt::tt_fabric::host_bridge::kTxSocketOffset,
+    host_bridge_block_addr + tt::tt_fabric::host_bridge::kStatusOffset,
+    host_bridge_page_bytes,
+    host_bridge_tx_noc,
+    host_bridge_tx_cmd_buf>;
+using ReceiverLinkTransport = HostBridgeLinkTransport<
+    host_bridge_block_addr + tt::tt_fabric::host_bridge::kRxSocketOffset,
+    host_bridge_block_addr + tt::tt_fabric::host_bridge::kStatusOffset,
+    host_bridge_page_bytes,
+    host_bridge_rx_noc,
+    host_bridge_rx_cmd_buf>;
+#else
+constexpr bool link_is_host_bridged = false;
 using SenderLinkTransport = EthTxqLinkTransport<sender_txq_id>;
 using ReceiverLinkTransport = EthTxqLinkTransport<receiver_txq_id>;
+#endif

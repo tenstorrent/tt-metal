@@ -111,6 +111,7 @@ if(TT_METAL_ENABLE_HOST_TRANSPORT)
         host_transport/host_transport.cpp
         host_transport/mpi_transport.cpp
         host_transport/socket_relay.cpp
+        fabric_host_bridge.cpp
     )
 endif()
 

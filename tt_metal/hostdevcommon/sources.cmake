@@ -6,6 +6,7 @@ set(HOSTDEVCOMMON_JIT_API_HEADERS
     api/hostdevcommon/kernel_structs.h
     api/hostdevcommon/flags.hpp
     api/hostdevcommon/fabric_common.h
+    api/hostdevcommon/fabric_host_bridge.h
     api/hostdevcommon/fabric_telemetry_msgs.h
     api/hostdevcommon/tensor_accessor/arg_config.hpp
     api/hostdevcommon/uva.h

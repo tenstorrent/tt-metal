@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "hostdevcommon/fabric_host_bridge.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "impl/streaming_profiler/sync/link_sync.hpp"
@@ -375,6 +376,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     if (rtoptions.get_streaming_profiler_enabled()) {
         this->max_l1_loading_size =
             tt::tt_metal::streaming_profiler::link_sync::router_l1_limit(fabric_context, this->max_l1_loading_size);
+    }
+    if (!rtoptions.get_fabric_host_bridge().empty()) {
+        this->max_l1_loading_size = (this->max_l1_loading_size - ::tt::tt_fabric::host_bridge::kBlockBytes) &
+                                    ~(static_cast<std::size_t>(::tt::tt_fabric::host_bridge::kBlockAlign) - 1);
+        this->host_bridge_block_address = this->max_l1_loading_size;
     }
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;

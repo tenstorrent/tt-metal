@@ -221,6 +221,9 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
+    // Control block for host-bridged links (hostdevcommon/fabric_host_bridge.h), above the channel
+    // buffers; 0 when no link is bridged.
+    std::size_t host_bridge_block_address = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
