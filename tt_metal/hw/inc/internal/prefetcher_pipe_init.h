@@ -385,7 +385,9 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     local.entry_size = relay_entry_size;
     local.num_entries = static_cast<uint16_t>(ring_bytes / relay_entry_size);
     local.tc_idx = 0;
-    if (local.num_tcs_to_rr == 1 && local.block_size <= 1) {
+    const bool is_plain_ring = local.num_tcs_to_rr == 1 && local.block_size <= 1 &&
+                               local.stride_size == old_entry_size && local.jump == old_entry_size;
+    if (is_plain_ring) {
         local.stride_size = relay_entry_size;
         local.jump = local.stride_size;  // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
