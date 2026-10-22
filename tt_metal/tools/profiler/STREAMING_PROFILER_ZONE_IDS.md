@@ -156,11 +156,10 @@ flag too when `TT_METAL_STREAMING_PROFILER=1`, so the loader can rebase firmware
 
 ## 3. The load: the host picks the base
 
-An image is read from the JIT cache exactly once per process, in `ll_api::memory::memory()`
-(`llrt/tt_memory.cpp`, reached through `llrt::get_risc_binary`; see *Parallel links and parallel loads* below for
-why it is exactly once). Under the streaming
-profiler that constructor calls `ObservabilityEventMetaRegistry::ingest_elf(path, elf)` (`llrt/observability_event_meta.cpp`) before
-the image's segments are packed for the device:
+An image is read from the JIT cache exactly once per process, in `llrt::get_cached_binary` (`llrt/llrt.cpp`,
+reached through `llrt::get_risc_binary`; see *Parallel links and parallel loads* below for why it is exactly once).
+It opens the ELF once and calls `ObservabilityEventMetaRegistry::ingest_elf(path, elf)` (`llrt/observability_event_meta.cpp`) before
+`ll_api::memory::from_elf` packs the image's segments for the device:
 
 1. `n = size of .tt_observability_event_ids` -- the number of zone sites. No section, nothing to do (dispatch kernels, the
    relay, anything built without the producer).
@@ -214,7 +213,7 @@ after the JIT build has written the ELF (`impl/kernels/kernel.cpp`, `impl/device
 It keeps one process-wide map from ELF path to loaded image:
 
 - The first caller for a path inserts an empty slot, **releases the map lock**, and constructs the image
-  (`ll_api::memory`: read the ELF, rebase zone ids, XIP-transform a kernel, pack the segments). Then it fills the
+  (read the ELF, rebase zone ids, then `ll_api::memory::from_elf`: XIP-transform a kernel, pack the segments). Then it fills the
   slot and wakes any waiters.
 - Any caller for the same path, at the same time or later, finds the slot and waits on a condition variable
   until it is filled, then gets the same image. It never constructs its own.
@@ -301,11 +300,11 @@ affects whether they are unique.
 | file | role |
 |---|---|
 | `tt_metal/hw/inc/hostdev/observability_event_id.h` | `TT_OBSERVABILITY_EVENT_DEFINE_ID`, the id-space constants, the link VMA |
-| `tt_metal/tools/profiler/kernel_profiler_streaming.hpp` | `profileScope<Site>` and the `DeviceZone*`/`DeviceRecordEvent`/`DeviceTimestampedData` macros |
+| `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp` | `profileScope<Site>` and the `DeviceZone*`/`DeviceRecordEvent`/`DeviceTimestampedData` macros |
 | `tt_metal/hw/toolchain/main.ld` | places the three sections, asserts the per-image budget |
 | `tt_metal/jit_build/build.cpp` | `-DTT_PROFILER_TU_ID=<index>` per TU; `--emit-relocs` for firmware under the streaming profiler |
 | `tt_metal/llrt/tt_elffile.{hpp,cpp}` | `ElfFile::RebaseZoneIds` |
 | `tt_metal/llrt/observability_event_meta.{hpp,cpp}` | `ObservabilityEventMetaRegistry`: block allocation, rebase, name harvesting, listener |
-| `tt_metal/llrt/tt_memory.cpp` | calls `ingest_elf` as each image loads |
+| `tt_metal/llrt/llrt.cpp` | calls `ingest_elf` as each image loads, before `ll_api::memory::from_elf` |
 | `tt_metal/api/tt-metalium/experimental/streaming_profiler.hpp`, `impl/streaming_profiler/api.cpp` | `ObservabilityEventRegistry::sites[65536]`, `observability_event_of`, the listener that fills it |
 | `tt_metal/impl/streaming_profiler/receiver.cpp` | the teardown report |
