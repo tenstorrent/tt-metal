@@ -4,7 +4,10 @@ One program for the state side of a GLM-5.3-Flash DSA decode step, from the deco
 (`[q_a | kv_a | indexer k | pool gate | ...]`): the q_a RMSNorm (returned as `q_resid`), the latent append, the
 indexer ring update and the pooled key of the current pool — all four caches read-modify-written **in place**.
 Kernels: `kernels/{reader,writer,compute}_dsa_decode_state.cpp`; launcher `op.py::DsaDecodeState`; torch reference
-`DsaDecodeState.golden`; test `tests/custom_ops/test_dsa_decode_state.py`. Used by `tt/dsa.py` (`GLM53_DSA_FUSED=1`).
+`DsaDecodeState.golden`; test `tests/custom_ops/test_dsa_decode_state.py`. Used by `tt/dsa.py`: the dense fused block
+(`GLM53_DSA_FUSED=1`, `_fused_decode`) and the state block of the traced multi-user sparse decode (`GLM53_DSA_DECODE_STATE=1`, `_decode_state_unified`; A/B
+`tests/test_dsa_decode_state_mesh.py`). `DsaDecodeState.composite_golden` is the composite path's 29-op math in
+torch, bit-identical to `golden` for the bf16 checkpoint norms (`tests/test_dsa_decode_state_host.py`).
 
 ## Contract (interleaved DRAM/L1; D = 128; Lq, L multiples of 128; pool size P <= 32)
 

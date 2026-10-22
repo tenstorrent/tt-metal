@@ -383,11 +383,20 @@ class TtDSAIndexer(LightweightModule):
         return ttnn.reshape(self._pool_groups(ring_k, ring_g), [1, B, 1, self.D])
 
     def queries_and_weights(
-        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, w: ttnn.Tensor | None = None, *, rows_form: bool = False
+        self,
+        x: ttnn.Tensor,
+        q_resid: ttnn.Tensor,
+        w: ttnn.Tensor | None = None,
+        *,
+        rows_form: bool = False,
+        free_view: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """-> q [1,Hi,T,D] bf16 (scale folded), w [1,1,T,Hi] bf16 (n_heads^-0.5 folded; ``w`` given =
         already computed by the caller's fused stem). ``rows_form``: q as [1,T,Hi,D] instead (query t's heads as
-        the rows of its tile row: the custom scorer's layout, ``select(q_rows_form=True)``)."""
+        the rows of its tile row: the custom scorer's layout, ``select(q_rows_form=True)``). ``free_view`` (decode,
+        T <= 32, not ``rows_form``): the head-major [1,Hi,T,D] as a free view of the projection's packed tile row
+        (tile j of [1,1,T,Hi*D] is tile j % (D/32) of head j // (D/32): the same tile sequence), instead of the
+        reshape copy + transpose (the ``GLM53_DSA_DECODE_STATE`` block)."""
         T = x.shape[-2]
         if T > TILE and os.environ.get("GLM53_PREFILL_STEMS", "fixed") == "fixed":
             # M-independent (fixed K blocking) like the k / gate stems: the index queries decide the top-k, and a
@@ -397,9 +406,12 @@ class TtDSAIndexer(LightweightModule):
             )
         else:
             q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
-        q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
-        if not rows_form:
-            q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
+        if free_view and not rows_form and T <= TILE:
+            q = ttnn.experimental.view(q, [1, self.Hi, T, self.D])  # [1,Hi,T,D]: the packed tiles re-read
+        else:
+            q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
+            if not rows_form:
+                q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
         if w is None:  # [1,1,T,Hi]; fixed K blocking for prefill rows (see keys_and_gates)
             w = prefill_linear(x, self.w_weights, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return q, w
