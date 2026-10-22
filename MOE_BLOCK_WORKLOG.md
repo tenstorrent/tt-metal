@@ -720,3 +720,10 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   97.54), not the K chunking or accumulating in DEST vs the packer's L1 (both 99.10), not a race (write barrier
   before the count). Ideal bf16-input routing (host, bf16 x and W, fp32 sums) agrees 99.65% (K3) / 99.69% (GLM)
   with the fp32 host. Unexplained: default off until it is.
+- Plan choice (RouterSpec.on_engine=None -> HeadSE3.router_on_engine): on unless a latent (the K3 pick drop).
+  GLM LoudBox 291.3 us, Galaxy-projected 261 (2.86x its 91 us floor); K3 (router cores) LoudBox 510.2, Galaxy 492
+  x-first-profile projection (2.89x of 170). Pick-drop checks: the engine's fp32 partials are full fp32 (low 16 bits
+  set: not a bf16 pack); one partial vs the host's exact bf16-input dot product: 0.268743 vs 0.268982 (~1e-3
+  relative, ~1/4 bf16 ulp) - far above fp32 accumulation; host models: bf16-rounded or chopped per-chip partials
+  99.57%, bf16 accumulation per 8 K tiles 99.22% (K3) - the device's 99.10% is closer to a low-precision accumulation /
+  product than to a partial-format issue. A second hw startup for the router's operands hung (reverted).

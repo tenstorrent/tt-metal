@@ -208,7 +208,7 @@ class RouterSpec:
     K: int
     route_scale: float = 1.0
     logits_first: bool | None = None
-    on_engine: bool = False  # (the logits' matmul on the engine's cores at the start, else on the router cores)
+    on_engine: bool | None = None  # (the logits' matmul on the engine's cores at the start; None: the head's choice)
 
 
 @dataclass(frozen=True)
@@ -311,7 +311,7 @@ class HeadSE3:
                     prep=bool(routing is not None and routing.prep and self.plan is not None),
                     router=(
                         dict(ET=router.E // 32, KTO=H // G // 32)
-                        if router is not None and router.on_engine and self.plan is not None
+                        if router is not None and self.router_on_engine(router, latent) and self.plan is not None
                         else None
                     ),
                 )
@@ -382,7 +382,7 @@ class HeadSE3:
                 route_scale=router.route_scale,
                 cores=free,
                 prio_first=self.logits_priority(router, latent),
-                on_engine=router.on_engine,
+                on_engine=self.router_on_engine(router, latent),
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 16 * GX * GY,
             )
@@ -485,6 +485,15 @@ class HeadSE3:
             topology=Topology.Ring if self._ring() else Topology.Linear,
             num_links=self.num_links,
         )
+
+    def router_on_engine(self, router, latent):
+        """Where the logits' matmul runs. From the Galaxy projections (tests/galaxy_projection.py): on the engine's cores
+        at the start every chip's routing chain starts ~25 us earlier (GLM: Galaxy-projected 265-273 us vs 296-299),
+        the SE path ~15 us later - the chain binds there, so on. With a latent (K3) off: its picks drop 99.45 ->
+        99.10% that way (not fidelity, chunking, accumulation or a race - unexplained), and its SE path pays 44 us."""
+        if router.on_engine is not None:
+            return router.on_engine
+        return not latent
 
     def logits_priority(self, router, latent):
         """The ports' logits-vs-x-gather priority. From the Galaxy projections (tests/galaxy_projection.py) and the
