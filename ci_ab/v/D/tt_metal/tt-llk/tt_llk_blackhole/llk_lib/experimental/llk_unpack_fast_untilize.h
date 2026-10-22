@@ -1,0 +1,333 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// BH Fast-Untilize Unpack.
+//
+// This is the standard unpack_A face stream specialized for fast_untilize. It
+// still emits the same real SrcA face payload as regular unpack_A, but the
+// common 16-bit DEST path skips the generic unpack_A zero-SrcB dvalid sideband.
+// Native fp32 DEST is the exception: math uses ELWADD as SrcA + zero-SrcB, so
+// unpack emits one valid zero SrcB face alongside each real SrcA face. Compressed
+// BFP inputs use a unit_dim=1 MOP internally because each tile must be addressed
+// explicitly to skip exponent sections, while the block-level chunk size still
+// follows the 2/3/4-tile fast-untilize decomposition.
+
+#pragma once
+
+#include <cstdint>
+
+#include "experimental/llk_fast_untilize_common.h"
+#include "llk_unpack_A.h"
+
+namespace ckernel
+{
+
+// bank_per_tile (16-bit DEST): a tile fills one SrcA bank (Unpack_Src_Reg_Set_Upd steps the row by 16 per UNPACR) and only the
+// fourth UNPACR sets the dvalid, so unpack and math hand off per tile instead of per face.
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
+inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
+{
+    static_assert(!(bank_per_tile && is_fp32_dest_acc_en), "bank per tile needs a 16-bit DEST");
+    LLK_ASSERT(unit_dim >= 1 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize unpack supports unit_dim 1 to 8");
+
+    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_set_dvalid =
+        TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+
+    const std::uint32_t outerloop     = unit_dim * 4;
+    constexpr std::uint32_t innerloop = 1;
+
+    // One MOP covers every face in the chunk: unit_dim tiles x 4 faces/tile.
+    // The 16-bit DEST path copies SrcA to DEST with MOVA2D, so the loop body
+    // only needs real SrcA UNPACRs. The fp32 DEST path copies with ELWADD,
+    // which is a binary op and therefore needs a dummy zero SrcB dvalid for
+    // every real SrcA face.
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Native fp32 DEST math uses ELWADD as a SrcA->DEST copy, which needs
+        // a valid zero SrcB face alongside each real SrcA face.
+        ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb_set_dvalid);
+        tmp.program();
+    }
+    else if constexpr (bank_per_tile)
+    {
+        static constexpr std::uint32_t unpack_srca_nodv = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(unit_dim, 2, unpack_srca_nodv, unpack_srca_nodv);
+        tmp.set_last_inner_loop_instr(unpack_srca);
+        tmp.set_last_outer_loop_instr(unpack_srca);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(outerloop, innerloop, unpack_srca);
+        tmp.program();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
+inline void _llk_unpack_fast_untilize_init_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
+{
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
+    _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en, bank_per_tile>(init_unit_dim);
+    if constexpr (bank_per_tile)
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd_RMW>(1);
+    }
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void _llk_unpack_fast_untilize_reinit_unit_dim_(const std::uint32_t unit_dim)
+{
+    _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en>(unit_dim);
+}
+
+inline void _llk_unpack_fast_untilize_block_(const std::uint32_t address, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(unit_dim >= 1 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize unpack supports unit_dim 1 to 8");
+
+    // Reset both SrcA/SrcB Z/W counters before each block so the MOP is
+    // stateless across calls. SrcB is included here because fp32 DEST mode uses
+    // the same MOP shape with a zero-SrcB dvalid sideband.
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    // The base-address store above is a RISCV write to Tensix backend config,
+    // and the following MOP expands to UNPACR instructions that consume it.
+    // STALL_UNPACK blocks those UNPACRs; TRISC_CFG is STALLWAIT C10, which waits
+    // until the current TRISC's config/GPR/TDMA write requests are processed.
+    // ISA: BlackholeA0/TensixTile/TensixCoprocessor/STALLWAIT.md,
+    // BlackholeA0/TensixTile/BabyRISCV/MemoryOrdering.md.
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    ckernel::ckernel_template::run();
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize BFP unpack supports unit_dim 2 to 8");
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const bool use_context_0     = unp_cfg_context == 0;
+    const std::uint32_t upk0_reg = use_context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    // SCRATCH_SEC0_val is not context-double-buffered and is consumed by the per-tile
+    // CFGSHIFTMASK updates below. Program it with an ordered Tensix WRCFG (as in
+    // llk_unpack_tilize.h) rather than a raw MMIO store, so it is stream-ordered after a
+    // prior call's still-in-flight CFGSHIFTMASK that reads it (a trailing TRISC_CFG stall
+    // only orders the write before the next run, not against that prior consumer).
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    // Order the RISCV MMIO write to the unpack base address before any UNPACR from the MOP
+    // can start (the scratch stride above is already ordered via WRCFG).
+    // ISA: STALLWAIT C10 plus the RISCV-store-to-Tensix-instruction ordering rule.
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    // Compressed BFP tiles are not laid out as one dense multi-tile payload:
+    // each tile has its own exponent section. Run the same per-tile face MOP,
+    // then advance the unpack base register by the CB page stride before the
+    // next tile. Non-BFP input can use one wider base address for the chunk.
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        ckernel::ckernel_template::run();
+
+        if (tile + 1 < unit_dim)
+        {
+            if (use_context_0)
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            }
+            // CFGSHIFTMASK updates the unpack base register for the next tile.
+            // Keep the scheduling bubble local to the address update so the next
+            // loop iteration can issue its UNPACR MOP without reasoning about the
+            // two-cycle config write. ISA: CFGSHIFTMASK.md.
+            TTI_NOP;
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+// Face-pair passes (dense input, 16-bit DEST): pass 0 unpacks F0 and F1 of every tile, pass 1 F2 and F3. The second
+// UNPACR of a pair steps Z by 3, to the same face pair of the next tile.
+inline void _llk_unpack_fast_untilize_pass_mop_config_(const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+
+    static constexpr std::uint32_t unpack_first_face  = TT_OP_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_second_face = TT_OP_UNPACR(SrcA, 0b11, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    ckernel_template tmp(unit_dim, 1, unpack_first_face, unpack_second_face);
+    tmp.program();
+}
+
+inline void _llk_unpack_fast_untilize_pass_init_(
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
+{
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
+    _llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+}
+
+inline void _llk_unpack_fast_untilize_set_pass_face_(const std::uint32_t pass)
+{
+    if (pass == 0)
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    }
+    else
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 2, 0b1111);
+    }
+}
+
+inline void _llk_unpack_fast_untilize_pass_block_(const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
+
+    _llk_unpack_fast_untilize_set_pass_face_(pass);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    ckernel::ckernel_template::run();
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+// The rest of a face-pass row (a chunk of 2 to 8 tiles) issues its UNPACRs itself, so the pass MOP stays programmed.
+inline void _llk_unpack_fast_untilize_rest_block_(const std::uint32_t address, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize row rest supports unit_dim 2 to 8");
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+// Block-float tiles are not one contiguous face run, so the base address steps by the page stride per tile.
+template <std::uint32_t faces_per_tile>
+inline void _llk_unpack_fast_untilize_bfp_faces_(
+    const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim, const std::uint32_t first_face)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const bool use_context_0     = unp_cfg_context == 0;
+    const std::uint32_t upk0_reg = use_context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        TT_SETADCZW(0b011, 0, 0, 0, first_face, 0b1111);
+        for (std::uint32_t face = 0; face < faces_per_tile; face++)
+        {
+            TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
+        if (tile + 1 < unit_dim)
+        {
+            if (use_context_0)
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            }
+            TTI_NOP;
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
+inline void _llk_unpack_fast_untilize_bfp_pass_block_(
+    const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim, const std::uint32_t pass)
+{
+    _llk_unpack_fast_untilize_bfp_faces_<2>(address, tile_stride_16B, unit_dim, pass * 2);
+}
+
+inline void _llk_unpack_fast_untilize_bfp_rest_block_(const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim)
+{
+    _llk_unpack_fast_untilize_bfp_faces_<4>(address, tile_stride_16B, unit_dim, 0);
+}
+
+template <bool bank_per_tile = false>
+inline void _llk_unpack_fast_untilize_uninit_()
+{
+    if constexpr (bank_per_tile)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd_RMW>(0);
+    }
+}
+
+} // namespace ckernel
