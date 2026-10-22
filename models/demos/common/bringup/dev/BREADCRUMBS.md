@@ -1635,3 +1635,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   the step's margin: recorded (`in_step_rounding`), never an error. The tap map is checked by F136's official_vs_taps
   (the reference's official numerics on the tapped inputs reproduce each tapped output; a mis-mapped tap or a stale
   state fails there, and an `explained` entry cannot hide it). Selftests: test_noise_floor.py.
+- F146 (overseer, 2026-10-22): component_checks.limits keeps the structural column factor under its pre-F138 name
+  (`component_col_factor` = `struct_col_factor`): DeepSeek-V4.1's frozen experts tests (swa, swa_engram) read it and
+  failed FIX.9's gate with KeyError. Only that structural factor is aliased; the removed fixed accuracy numbers stay gone.
+  Selftest: test_component_checks.py::test_frozen_tests_keep_the_structural_column_factor_under_its_old_name.
