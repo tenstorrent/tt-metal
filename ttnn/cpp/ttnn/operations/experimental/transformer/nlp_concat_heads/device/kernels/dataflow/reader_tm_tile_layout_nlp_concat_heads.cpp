@@ -34,12 +34,21 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
     const auto s0 = TensorAccessor(tensor::src);
 
-    // Blocks are (row, head) in row-major order: one head's tile row each.
+    // Blocks are (row, head) in row-major order: one head's tile row each. The batch and the row within it
+    // are tracked incrementally: a division by the runtime row count is a software division per block.
+    uint32_t head = start_block % in0_c;
+    const uint32_t first_row = start_block / in0_c;
+    uint32_t batch_slot = first_row / in0_h_tiles;
+    uint32_t row_in_batch = first_row - batch_slot * in0_h_tiles;
     for (uint32_t block = start_block; block < end_block; ++block) {
-        const uint32_t row = block / in0_c;
-        const uint32_t head = block % in0_c;
-        uint32_t in0_tensor_current_tile_id =
-            (row / in0_h_tiles * in0_c + head) * in0_HtWt + (row % in0_h_tiles) * in0_w_tiles;
+        uint32_t in0_tensor_current_tile_id = (batch_slot * in0_c + head) * in0_HtWt + row_in_batch * in0_w_tiles;
+        if (++head == in0_c) {
+            head = 0;
+            if (++row_in_batch == in0_h_tiles) {
+                row_in_batch = 0;
+                ++batch_slot;
+            }
+        }
 #ifdef ARCH_QUASAR
         // On Quasar DM, get_write_ptr() returns the UNCACHED L1 alias and NOC APIs do not accept uncached
         // addresses, so read through the DFB endpoint one tile at a time.

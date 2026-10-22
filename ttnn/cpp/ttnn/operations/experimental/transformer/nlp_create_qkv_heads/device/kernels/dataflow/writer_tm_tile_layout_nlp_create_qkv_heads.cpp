@@ -84,9 +84,11 @@ void kernel_main() {
         const uint32_t total_blocks = total_rows * slots;
         const uint32_t first_block = ttnn::runtime_length::balanced_start(core_idx, total_blocks, num_cores);
         const uint32_t end_block = ttnn::runtime_length::balanced_end(core_idx, total_blocks, num_cores);
+        // The (batch slot, row) split is tracked incrementally: a division by the runtime row count is a
+        // software division per block.
+        uint32_t batch_slot = first_block / q_out_h_tiles;
+        uint32_t row = first_block - batch_slot * q_out_h_tiles;
         for (uint32_t block = first_block; block < end_block; ++block) {
-            const uint32_t batch_slot = block / q_out_h_tiles;
-            const uint32_t row = block % q_out_h_tiles;
             const uint32_t batch_idx = batch_slot / slots;
             const uint32_t slot = batch_slot % slots;
             const bool is_q = kv_out_c == 0 || slot < q_out_c;
@@ -94,6 +96,10 @@ void kernel_main() {
             const uint32_t head = is_q ? batch_idx * q_out_c + slot
                                        : batch_idx * kv_out_c + slot - q_out_c - (is_k ? 0 : kv_out_c);
             uint32_t tile_id = (head * q_out_h_tiles + row) * q_out_w_tiles;
+            if (++row == q_out_h_tiles) {
+                row = 0;
+                ++batch_slot;
+            }
             for (uint32_t w = 0; w < q_out_w_tiles; w += tile_batch) {
                 dfb_qv.wait_front(tile_batch);
                 uint32_t source = dfb_qv.get_read_ptr();

@@ -65,9 +65,11 @@ void kernel_main() {
         const uint32_t total_blocks = total_rows * slots;
         const uint32_t first_block = ttnn::runtime_length::balanced_start(core_idx, total_blocks, num_cores);
         const uint32_t end_block = ttnn::runtime_length::balanced_end(core_idx, total_blocks, num_cores);
+        // The (batch slot, row) split is tracked incrementally: a division by the runtime row count is a
+        // software division per block.
+        uint32_t batch_slot = first_block / seq_tiles;
+        uint32_t row = first_block - batch_slot * seq_tiles;
         for (uint32_t block = first_block; block < end_block; ++block) {
-            const uint32_t batch_slot = block / seq_tiles;
-            const uint32_t row = block % seq_tiles;
             uint32_t slot = batch_slot % slots;
 #ifdef KV_TIED
             if (slot >= q_heads + kv_heads) {
@@ -76,6 +78,10 @@ void kernel_main() {
 #endif
             uint32_t source =
                 ((batch_slot / slots) * seq_tiles + row) * input_heads * head_tiles + slot * head_tiles;
+            if (++row == seq_tiles) {
+                row = 0;
+                ++batch_slot;
+            }
             for (uint32_t tile = 0; tile < head_tiles; tile += tile_batch) {
                 dfb_qv.reserve_back(tile_batch);
                 uint32_t destination = dfb_qv.get_write_ptr();
