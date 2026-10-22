@@ -45,7 +45,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     static_assert(row_bytes % L1_ALIGNMENT == 0 && row_bytes % DRAM_ALIGNMENT == 0);
     const uint32_t tile_bytes = weights.get_entry_size();
-    const uint32_t window_base = window.get_base_address();
+    const uint32_t window_base = local_mem::detail::AddressAccess::address(window.local_mem());
     UnicastEndpoint self;
     const uint32_t self_x = my_x[noc.get_noc_id()];
     const uint32_t self_y = my_y[noc.get_noc_id()];
