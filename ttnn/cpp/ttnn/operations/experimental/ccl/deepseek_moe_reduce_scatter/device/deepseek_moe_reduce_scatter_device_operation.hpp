@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::experimental::prim {
@@ -30,8 +31,6 @@ struct DeepseekMoEReduceScatterDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
         const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

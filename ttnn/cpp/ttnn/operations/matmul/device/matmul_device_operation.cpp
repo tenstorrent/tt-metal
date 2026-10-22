@@ -208,11 +208,19 @@ void validate_matmul_optional_tensors(
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
+        const auto computed_shape = operations::matmul::utilities::compute_matmul_output_shape(
+            args.input_tensors.at(0), args.input_tensors.at(1), attributes.transpose_a, attributes.transpose_b);
+        const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
+        const bool same_rows =
+            optional_output_tensor_shape[-2] == computed_shape[-2] ||
+            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0);
         TT_FATAL(
-            optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
+            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows &&
+                optional_output_tensor_shape.volume() == computed_shape.volume(),
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the volume and the last dimension must "
+            "match, and leading dimensions may only be folded into whole tile rows",
             optional_output_tensor_shape,
-            output_tensor_spec.logical_shape());
+            computed_shape);
         TT_FATAL(
             optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
@@ -2857,8 +2865,22 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                             uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
-                            auto cwsg_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                            CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, cwsg_1d, true);
+                            // Mirror MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts anchor.
+                            const auto& worker_bbox = program_config.allowed_worker_cores.value().bounding_box();
+                            CoreCoord start_core = worker_bbox.start_coord;
+                            if (attributes.sub_device_id.has_value()) {
+                                start_core = input_tensor_a.device()
+                                                 ->worker_cores(
+                                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                     attributes.sub_device_id.value())
+                                                 .bounding_box()
+                                                 .start_coord;
+                            }
+                            const auto cwsg_1d = worker_bbox.grid_size();
+                            const CoreRangeSet matmul_core_rect(CoreRange(
+                                start_core, CoreCoord(start_core.x + cwsg_1d.x - 1, start_core.y + cwsg_1d.y - 1)));
+                            CoreRangeSet all_cores = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                                start_core, num_cores, matmul_core_rect, /*row_wise=*/true);
                             tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
