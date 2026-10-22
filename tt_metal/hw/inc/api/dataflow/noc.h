@@ -796,9 +796,7 @@ public:
      *
      * Zeroes [start, start + @p size_bytes) where start = base + @p args.offset_bytes, and base is:
      *   - CircularBuffer / DataflowBuffer : get_write_ptr()
-     *   - Scratchpad                      : get_base_address()
-     *   - LocalTensorAccessor             : get_bank_base_address()
-     *   - CoreLocalMem                    : get_address()
+     *   - Scratchpad / LocalTensorAccessor / CoreLocalMem : the start of the local region
      * @p args.offset_bytes is in bytes, including for the typed handles (whose operator[] is not).
      *
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read

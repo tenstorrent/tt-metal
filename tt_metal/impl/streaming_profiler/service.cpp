@@ -6,73 +6,113 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <limits>
 #include <memory>
+#include <new>
 #include <thread>
 #include <utility>
+#include <pthread.h>
 
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
-#include "llrt/rtoptions.hpp"
 #include "impl/streaming_profiler/decode.hpp"
 #include "impl/streaming_profiler/ops_csv.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 #include "impl/streaming_profiler/tracy_consumer.hpp"
 #include "impl/streaming_profiler/zone_csv.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-thread_local bool t_in_consumer = false;
+thread_local experimental::streaming_profiler::detail::CallbackId t_consumer_id{};
 
 }  // namespace
 
-namespace api = experimental::streaming_profiler;
+void set_thread_name(const std::string& name) {
+    tracy::SetThreadName(name.c_str());
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%s", name.c_str());
+    pthread_setname_np(pthread_self(), buf);
+}
 
-// A consumer's position in one stream and the decoder that turns its frames into records.
-struct Service::AttachedStream {
-    profiler::SpanDecodeState state;
-    std::vector<profiler::SpscRecConsts> lanes;
-    StreamDecoder dec;
-    uint64_t cursor = 0;   // bytes, absolute: the next frame this consumer reads
-    uint64_t dropped = 0;  // bytes of frames this consumer never saw
-    uint64_t stalls_reported = 0;
+namespace {
+
+// A decoded batch that waits until the receiver's clock map has final host times up to its newest record.
+struct Parked {
+    std::unique_ptr<uint8_t[]> buffer;
+    StreamDecoder::Produced produced;
 };
-struct Service::Attached {
-    Producer* producer = nullptr;
-    uint64_t capture = 0;
-    std::vector<std::unique_ptr<AttachedStream>> streams;  // stable: dec.st points into the stream
+struct AttachedStream {
+    StreamDecoder decoder;
+    uint64_t cursor = 0;
+    uint32_t dev = 0;
+    uint32_t index = 0;
+    std::deque<Parked> pending;
+    int64_t final_through = std::numeric_limits<int64_t>::min();
+};
+struct Attached {
+    Receiver* receiver = nullptr;
+    std::deque<AttachedStream> streams;
+    ClockMap::Reader reader;
+    uint64_t dropped = 0;
+    uint64_t order_regressions = 0;
 };
 
-// Frames decoded per delivery; bounds the consumer's scratch and the callback's batch.
-constexpr uint32_t kBatchFrames = 64;
+// The most output a single batch can produce.
+constexpr StreamDecoder::Capacity kFullBatch =
+    StreamDecoder::out_capacity(kBatchBytes / sizeof(uint32_t), kBatchFrames);
+
+// A batch decodes into one buffer holding its zones, events, data records and values in that order, each region sized
+// for a full batch. These are the regions' offsets and the buffer's size.
+constexpr size_t kEventsAt = kFullBatch.zone_bytes;
+constexpr size_t kDataAt = kEventsAt + kFullBatch.event_bytes;
+constexpr size_t kValuesAt = kDataAt + kFullBatch.data_bytes;
+constexpr size_t kOutBufferBytes = kValuesAt + kFullBatch.value_bytes;
+
+StreamDecoder::Out out_in(uint8_t* buffer) {
+    return {buffer, buffer + kEventsAt, buffer + kDataAt, reinterpret_cast<uint64_t*>(buffer + kValuesAt)};
+}
+
+}  // namespace
 
 struct Service::Consumer {
     std::string name;
-    BatchCallback cb;
-    uint64_t captures = 0;  // producers attached so far; the capture number its callback sees
-    ConsumerHandle handle = 0;
+    uint32_t types = 0;
+    BatchCallback callback;
+    experimental::streaming_profiler::detail::CallbackId id;
     std::thread thread;
     std::atomic<bool> stop{false};
     std::atomic<bool> control_pending{false};
     std::mutex control_mu;
-    std::vector<std::pair<Producer*, bool>> control;  // (producer, attach), in order
-    std::atomic<uint64_t> dropped{0};
+    std::vector<std::pair<Receiver*, bool>> control;  // (receiver, attach), in order
 };
 
-Service::Service() { init_site_registry(); }
+Service::Service() : steady_(new SteadyClock) { init_site_registry(); }
+
+SteadyClock& Service::steady() { return *steady_; }
+
+const char* Service::plot_name(const std::string& name) {
+    std::lock_guard<std::mutex> lk(plot_names_mu_);
+    return plot_names_.insert(name).first->c_str();
+}
 
 Service& service() {
     static ttsl::Indestructible<Service> instance;
     return instance.get();
 }
 
-void Service::post_control(Consumer& c, Producer* producer, bool attach) {
+void Service::post_control(Consumer& c, Receiver* receiver, bool attach) {
     {
         std::lock_guard<std::mutex> lk(c.control_mu);
-        c.control.emplace_back(producer, attach);
+        c.control.emplace_back(receiver, attach);
     }
     c.control_pending.store(true, std::memory_order_release);
     pending_acks_++;
@@ -83,76 +123,76 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
     ack_cv_.wait(lk, [&] { return pending_acks_ == 0; });
 }
 
-ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb) {
-    TT_FATAL(!t_in_consumer, "streaming profiler: add_consumer must not be called from a consumer callback");
+experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
+    std::string name, uint32_t types, BatchCallback callback) {
+    TT_FATAL(
+        t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
+        "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
-    auto c = std::make_unique<Consumer>();
-    c->name = std::move(name);
-    c->cb = std::move(cb);
-    Consumer& ref = *c;
+    auto owned = std::make_unique<Consumer>();
+    owned->name = std::move(name);
+    owned->types = types;
+    owned->callback = std::move(callback);
+    Consumer& consumer = *owned;
     std::unique_lock<std::mutex> lk(mu_);
-    ref.handle = next_handle_++;
-    for (Producer* p : producers_) {
-        post_control(ref, p, true);
+    consumer.id = experimental::streaming_profiler::detail::CallbackId{next_id_++};
+    for (Receiver* receiver : receivers_) {
+        post_control(consumer, receiver, true);
     }
-    consumers_.push_back(std::move(c));
-    ref.thread = std::thread(&Service::consumer_thread, this, std::ref(ref));
+    consumers_.push_back(std::move(owned));
+    consumer.thread = std::thread(&Service::consumer_thread, this, std::ref(consumer));
     wait_acks(lk);
-    return ref.handle;
+    return consumer.id;
 }
 
-void Service::remove_consumer(ConsumerHandle handle) {
-    TT_FATAL(!t_in_consumer, "streaming profiler: remove_consumer must not be called from a consumer callback");
-    std::lock_guard<std::mutex> topo(topology_mu_);
+void Service::remove_consumer(experimental::streaming_profiler::detail::CallbackId id) {
+    const bool self = id == t_consumer_id;
+    TT_FATAL(
+        self || t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
+        "streaming profiler: a consumer callback may unregister only itself");
+    std::unique_lock<std::mutex> topo(topology_mu_, std::defer_lock);
+    if (!self) {
+        topo.lock();
+    }
     std::unique_ptr<Consumer> victim;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        auto it =
-            std::find_if(consumers_.begin(), consumers_.end(), [&](const auto& c) { return c->handle == handle; });
-        TT_FATAL(it != consumers_.end(), "streaming profiler: unknown consumer handle {}", handle);
+        const auto it = std::ranges::find_if(consumers_, [&](const auto& consumer) { return consumer->id == id; });
+        if (self) {
+            (*it)->stop.store(true, std::memory_order_release);
+            return;
+        }
         victim = std::move(*it);
         consumers_.erase(it);
     }
     victim->stop.store(true, std::memory_order_release);
     wake_consumers();
     victim->thread.join();
-    warn_missed(*victim);
 }
 
-void Service::attach_producer(Producer& producer) {
+void Service::attach_receiver(Receiver& receiver) {
     std::lock_guard<std::mutex> topo(topology_mu_);
     std::unique_lock<std::mutex> lk(mu_);
-    TT_FATAL(
-        std::find(producers_.begin(), producers_.end(), &producer) == producers_.end(),
-        "streaming profiler: producer attached twice");
-    producers_.push_back(&producer);
+    receivers_.push_back(&receiver);
     for (auto& c : consumers_) {
-        post_control(*c, &producer, true);
+        post_control(*c, &receiver, true);
     }
     wait_acks(lk);
 }
 
-void Service::detach_producer(Producer& producer) {
+void Service::detach_receiver(Receiver& receiver) {
     std::lock_guard<std::mutex> topo(topology_mu_);
     bool last = false;
     {
         std::unique_lock<std::mutex> lk(mu_);
-        auto it = std::find(producers_.begin(), producers_.end(), &producer);
-        TT_FATAL(it != producers_.end(), "streaming profiler: detaching a producer that is not attached");
         for (auto& c : consumers_) {
-            post_control(*c, &producer, false);
+            post_control(*c, &receiver, false);
         }
         wait_acks(lk);
-        producers_.erase(it);
-        last = producers_.empty();
+        std::erase(receivers_, &receiver);
+        last = receivers_.empty();
     }
     if (last) {
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            for (const auto& c : consumers_) {
-                warn_missed(*c);
-            }
-        }
         for (const auto& write : file_sinks_) {
             write();
         }
@@ -161,208 +201,304 @@ void Service::detach_producer(Producer& producer) {
 
 bool Service::is_active() const {
     std::lock_guard<std::mutex> lk(mu_);
-    return !producers_.empty();
-}
-
-void Service::warn_missed(const Consumer& c) {
-    if (const uint64_t dropped = c.dropped.load(std::memory_order_relaxed); dropped != 0) {
-        log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" missed {} bytes of frames", c.name, dropped);
-    }
+    return !receivers_.empty();
 }
 
 void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions) {
     std::call_once(builtins_once_, [&] {
-        if (rtoptions.get_streaming_profiler_tracy_enabled()) {
-            tracy_ = std::make_unique<TracySink>(*this);
-        }
-        auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
-            using B = typename C::Batch;
-            add_consumer(name, [c](const api::Batch<api::RecordType::All>& full, uint64_t) {
-                (*c)(api::Batch<B::types>(full));
-            });
+        auto add_sink = [&]<typename Sink>(const char* name, const std::shared_ptr<Sink>& sink) {
+            builtin_callbacks_.push_back(experimental::streaming_profiler::RegisterCallback(
+                [sink](const typename Sink::Batch& batch) { (*sink)(batch); }, name));
         };
+        auto add_file_sink = [&]<typename Sink>(const char* name, const std::shared_ptr<Sink>& sink) {
+            add_sink(name, sink);
+            file_sinks_.push_back([sink] { sink->write_csv(); });
+        };
+#if defined(TRACY_ENABLE)
+        if (rtoptions.get_streaming_profiler_tracy_enabled()) {
+            add_sink("tracy", std::make_shared<TracyConsumer>());
+        }
+#endif
         if (const std::string& path = rtoptions.get_streaming_profiler_zone_csv_path(); !path.empty()) {
-            auto c = std::make_shared<ZoneCsvConsumer>(path);
-            add_public("zone-csv", c);
-            file_sinks_.push_back([c] { c->write_csv(); });
+            add_file_sink("zone-csv", std::make_shared<ZoneCsvConsumer>(path));
         }
         if (const std::string& path = rtoptions.get_streaming_profiler_ops_csv_path(); !path.empty()) {
-            auto c = std::make_shared<OpsCsvConsumer>(path);
-            add_public("ops-csv", c);
-            file_sinks_.push_back([c] { c->write_csv(); });
+            add_file_sink("ops-csv", std::make_shared<OpsCsvConsumer>(path));
         }
     });
 }
 
-void Service::consumer_thread(Consumer& c) {
-    const std::string name = "sp-con:" + c.name;
-    tracy::SetThreadName(name.c_str());
-    set_os_thread_name(name);
-    t_in_consumer = true;
-    std::vector<Attached> attached;
-    const size_t rec_bytes =
-        (size_t{kBatchFrames} * kFrameRecsReserve + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
-    const size_t data_bytes = size_t{kBatchFrames} * kFrameDataBytesReserve;
-    auto zones_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
-    auto events_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
-    auto data_buf = std::make_unique_for_overwrite<uint8_t[]>(data_bytes);
-    constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
-    std::array<uint32_t, kBatchFrames> frame_words;
-    auto frames_buf = std::make_unique_for_overwrite<std::byte[]>(kFramesBytes);
+class Service::ConsumerLoop {
+public:
+    ConsumerLoop(Service& service, Consumer& consumer) :
+        service_(service), consumer_(consumer), frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kBatchBytes)) {}
 
-    auto attach = [&](Producer* p) {
-        Attached a;
-        a.producer = p;
-        const CaptureContext& ctx = p->capture_context();
-        for (const ProducerStream& ps : p->streams()) {
-            auto s = std::make_unique<AttachedStream>();
-            s->cursor = ps.walked->load(std::memory_order_acquire);
-            const CaptureContext::Device& dev = ctx.devices[ps.dev];
-            s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
-            s->state.core_of_xy.load(dev.core_xy);
-            s->lanes.reserve(dev.lanes.size());
-            for (const auto& core : dev.lanes) {
-                s->lanes.push_back(record_consts(core, p->clock(ps.dev)));
+    void run() {
+        set_thread_name("sp-con:" + consumer_.name);
+        IdleBackoff backoff(0);
+        while (true) {
+            const uint32_t seen = service_.wake_token();
+            if (consumer_.control_pending.load(std::memory_order_acquire)) {
+                consumer_.control_pending.store(false, std::memory_order_release);
+                apply_control();
             }
-            s->dec.st = &s->state;
-            s->dec.lanes = s->lanes.data();
-            a.streams.push_back(std::move(s));
+            if (consumer_.stop.load(std::memory_order_acquire)) {
+                break;
+            }
+            bool any = false;
+            for (auto& attached : attached_) {
+                any |= pass(*attached);
+            }
+            any |= drain();
+            if (any) {
+                backoff.reset();
+                continue;
+            }
+            if (backoff.spin()) {
+                continue;
+            }
+            service_.wait_wake(seen);
         }
-        a.capture = ++c.captures;
-        attached.push_back(std::move(a));
-    };
-
-    auto deliver = [&](Attached& a, AttachedStream& s, const StreamDecoder::Produced& n, uint64_t dropped) {
-        api::Batch<api::RecordType::All> b;
-        b.zones_ = std::span<const api::Zone>(reinterpret_cast<const api::Zone*>(zones_buf.get()), n.zones);
-        b.events_ = std::span<const api::Event>(reinterpret_cast<const api::Event*>(events_buf.get()), n.events);
-        b.timestamped_data_ = std::ranges::subrange(
-            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get())),
-            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get()) + n.data_bytes));
-        b.dropped_ = dropped;
-        b.stall_count_ = s.dec.stall_zones - s.stalls_reported;
-        s.stalls_reported = s.dec.stall_zones;
-        try {
-            c.cb(b, a.capture);
-        } catch (const std::exception& ex) {
-            log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, ex.what());
+        for (const auto& attached : attached_) {
+            report(*attached);
         }
-        s.dec.commit();
-    };
+    }
 
-    // One delivery of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position.
-    // False when the stream had nothing new.
-    auto read = [&](Attached& a, AttachedStream& s, uint32_t stream_index) {
-        const ProducerStream& ps = a.producer->streams()[stream_index];
-        const Walked w = walk_frames(
-            ps.fifo,
-            s.cursor,
-            ps.walked->load(std::memory_order_acquire),
-            ps.marks,
-            std::span<std::byte>(frames_buf.get(), kFramesBytes),
-            frame_words,
-            [&] { return a.producer->live_head(stream_index); });
-        if (w.cursor == s.cursor) {
+private:
+    void apply_control() {
+        std::vector<std::pair<Receiver*, bool>> control;
+        {
+            std::lock_guard<std::mutex> lk(consumer_.control_mu);
+            control.swap(consumer_.control);
+        }
+        for (const auto& [receiver, attaching] : control) {
+            if (attaching) {
+                attach(receiver);
+            } else {
+                detach(receiver);
+            }
+        }
+        std::lock_guard<std::mutex> lk(service_.mu_);
+        service_.pending_acks_ -= control.size();
+        service_.ack_cv_.notify_all();
+    }
+
+    void attach(Receiver* receiver) {
+        auto attached = std::make_unique<Attached>();
+        attached->receiver = receiver;
+        attached->reader = receiver->clock_map().reader();
+        const CaptureContext& ctx = receiver->capture_context();
+        const auto sources = receiver->streams();
+        for (uint32_t index = 0; index < sources.size(); index++) {
+            const ReceiverStream& source = sources[index];
+            attached->streams.push_back(AttachedStream{
+                .decoder = StreamDecoder(ctx.devices[source.dev], consumer_.types),
+                .cursor = source.walked->load(std::memory_order_acquire),
+                .dev = source.dev,
+                .index = index});
+        }
+        attached_.push_back(std::move(attached));
+    }
+
+    // Drains the receiver's streams, delivers every batch and drops the receiver. A receiver detaches only after its
+    // clock solver finishes, so every placement is final.
+    void detach(Receiver* receiver) {
+        const auto it = std::ranges::find_if(attached_, [&](const auto& entry) { return entry->receiver == receiver; });
+        Attached& attached = **it;
+        // Every placement is final, so each pass's batches are delivered before the next pass parks more. Otherwise a
+        // consumer that is far behind would hold its whole backlog decoded at once.
+        bool more = true;
+        while (more) {
+            more = pass(attached);
+            for (AttachedStream& stream : attached.streams) {
+                for (Parked& parked : stream.pending) {
+                    deliver(attached, stream.dev, parked);
+                }
+                stream.pending.clear();
+            }
+        }
+        report(attached);
+        attached_.erase(it);
+    }
+
+    // Takes one batch from each stream and returns whether any stream had one. Taking one per stream keeps any stream
+    // from getting lapped while another is being drained.
+    bool pass(Attached& attached) {
+        bool any = false;
+        for (AttachedStream& stream : attached.streams) {
+            any |= take_batch(attached, stream);
+        }
+        return any;
+    }
+
+    bool take_batch(Attached& attached, AttachedStream& stream) {
+        const ReceiverStream& source = attached.receiver->streams()[stream.index];
+        const Walked walked = walk_frames(
+            source.fifo,
+            stream.cursor,
+            source.walked->load(std::memory_order_acquire),
+            source.marks,
+            std::span<std::byte>(frames_buf_.get(), kBatchBytes),
+            frame_words_,
+            [&] { return attached.receiver->live_head(stream.index); });
+        if (walked.cursor == stream.cursor) {
             return false;
         }
-        s.cursor = w.cursor;
-        s.dropped += w.dropped;
-        StreamDecoder::Produced n{0, 0, 0};
-        const std::byte* p = frames_buf.get();
-        for (uint32_t i = 0; i < w.frames; i++) {
-            const uint32_t fw = frame_words[i];
-            const auto out = s.dec.decode_frame(
-                reinterpret_cast<const uint32_t*>(p),
-                fw,
-                {zones_buf.get() + size_t{n.zones} * profiler::kSpscRecBytes,
-                 events_buf.get() + size_t{n.events} * profiler::kSpscRecBytes,
-                 data_buf.get() + n.data_bytes});
-            n.zones += out.zones;
-            n.events += out.events;
-            n.data_bytes += out.data_bytes;
-            p += size_t{fw} * 4;
-        }
-        deliver(a, s, n, w.dropped);
+        stream.cursor = walked.cursor;
+        attached.dropped += walked.dropped;
+        dropped_since_callback_ += walked.dropped;
+        std::unique_ptr<uint8_t[]> buffer = take_buffer();
+        const StreamDecoder::Produced produced = stream.decoder.decode_frames(
+            stream.pending.size(),
+            reinterpret_cast<const uint32_t*>(frames_buf_.get()),
+            std::span<const uint32_t>(frame_words_.data(), walked.frames),
+            out_in(buffer.get()));
+        attached.order_regressions += produced.order_regressions;
+        stream.pending.push_back(Parked{.buffer = std::move(buffer), .produced = produced});
         return true;
-    };
-    // One delivery per stream per round, so no stream's ring laps while an earlier one is drained to empty.
-    auto pass = [&](Attached& a) {
-        bool any = false;
-        for (bool progress = true; progress;) {
-            progress = false;
-            for (uint32_t i = 0; i < a.streams.size(); i++) {
-                progress |= read(a, *a.streams[i], i);
-            }
-            any |= progress;
-        }
-        return any;
-    };
-
-    auto detach = [&](Producer* p) {
-        auto it = std::find_if(attached.begin(), attached.end(), [&](const Attached& a) { return a.producer == p; });
-        if (it == attached.end()) {
-            return;
-        }
-        Attached& a = *it;
-        while (pass(a)) {
-        }
-        for (size_t i = 0; i < a.streams.size(); i++) {
-            c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
-            p->finish_stream(static_cast<uint32_t>(i), a.streams[i]->dropped, a.streams[i]->dec.stats);
-        }
-        attached.erase(it);
-    };
-
-    auto handle_control = [&](bool run) {
-        std::vector<std::pair<Producer*, bool>> control;
-        {
-            std::lock_guard<std::mutex> lk(c.control_mu);
-            control.swap(c.control);
-        }
-        if (run) {
-            for (const auto& [p, is_attach] : control) {
-                is_attach ? attach(p) : detach(p);
-            }
-        }
-        std::lock_guard<std::mutex> lk(mu_);
-        pending_acks_ -= control.size();
-        ack_cv_.notify_all();
-    };
-
-    auto pass_all = [&] {
-        bool any = false;
-        for (Attached& a : attached) {
-            any |= pass(a);
-        }
-        return any;
-    };
-    IdleBackoff backoff(0);
-    for (;;) {
-        const uint32_t seen = wake_token();
-        if (c.control_pending.load(std::memory_order_acquire)) {
-            c.control_pending.store(false, std::memory_order_release);
-            handle_control(true);
-        }
-        if (pass_all()) {
-            backoff.reset();
-            continue;
-        }
-        if (c.stop.load(std::memory_order_acquire)) {
-            break;
-        }
-        if (backoff.spin()) {
-            continue;
-        }
-        wait_wake(seen);
     }
-    // Stopped mid-capture: the readers go before the queues they read.
-    for (const Attached& a : attached) {
-        for (const auto& s : a.streams) {
-            c.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
+
+    void report(const Attached& attached) const {
+        if (attached.dropped != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] consumer \"{}\" missed {} bytes of frames",
+                consumer_.name,
+                attached.dropped);
+        }
+        if (attached.order_regressions != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] consumer \"{}\": {} order regressions",
+                consumer_.name,
+                attached.order_regressions);
         }
     }
-    attached.clear();
-    handle_control(false);
+
+    bool drain() {
+        bool any = false;
+        for (auto& attached : attached_) {
+            const ClockMap& map = attached->receiver->clock_map();
+            for (AttachedStream& stream : attached->streams) {
+                while (!stream.pending.empty()) {
+                    Parked& parked = stream.pending.front();
+                    const int64_t newest = parked.produced.newest_ticks;
+                    if (newest > stream.final_through) {
+                        if (!map.is_final(attached->reader, stream.dev, newest)) {
+                            break;
+                        }
+                        stream.final_through = newest;
+                    }
+                    deliver(*attached, stream.dev, parked);
+                    stream.pending.pop_front();
+                    any = true;
+                }
+            }
+        }
+        return any;
+    }
+
+    void deliver(Attached& attached, uint32_t dev, Parked& parked) {
+        const StreamDecoder::Out out = out_in(parked.buffer.get());
+        const StreamDecoder::Produced& produced = parked.produced;
+        place(attached, dev, out, produced);
+        using experimental::streaming_profiler::Event;
+        using experimental::streaming_profiler::TimestampedData;
+        using experimental::streaming_profiler::Zone;
+        const experimental::streaming_profiler::detail::BatchData batch{
+            .records =
+                {std::span(std::launder(reinterpret_cast<const Zone*>(out.zones)), produced.zones),
+                 std::span(std::launder(reinterpret_cast<const TimestampedData*>(out.data)), produced.data),
+                 std::span(std::launder(reinterpret_cast<const Event*>(out.events)), produced.events)},
+            .dropped_bytes = std::exchange(dropped_since_callback_, 0),
+            .stall_count = produced.stalls};
+        try {
+            if (!consumer_.stop.load(std::memory_order_relaxed)) {
+                consumer_.callback(batch);
+            }
+        } catch (const std::exception& ex) {
+            log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", consumer_.name, ex.what());
+        }
+        free_buffers_.push_back(std::move(parked.buffer));
+    }
+
+    // Puts the batch's records on host time through the clock map. The decoder leaves each record's clock offset in its
+    // tsc_ slot, and this overwrites it with the host time.
+    void place(
+        Attached& attached, uint32_t dev, const StreamDecoder::Out& out, const StreamDecoder::Produced& produced) {
+        const ClockMap& map = attached.receiver->clock_map();
+        ClockMap::Reader& reader = attached.reader;
+        using namespace profiler;
+        // A memmove onto itself compiles to nothing and implicitly creates the zones, events, data-record array and
+        // payload values already in these bytes.
+        std::memmove(out.zones, out.zones, size_t{produced.zones} * kSpscZoneBytes);
+        std::memmove(out.events, out.events, size_t{produced.events} * kSpscEventBytes);
+        std::memmove(out.data, out.data, size_t{produced.data} * kSpscDataBytes);
+        std::memmove(out.values, out.values, size_t{produced.values} * sizeof(uint64_t));
+        const auto wall_of = [](const uint64_t* record) {
+            return static_cast<int64_t>(record[kSpscQwTimestamp] + record[kSpscQwTsc]);
+        };
+        const auto host_tsc = [&](const uint8_t* record) {
+            return map.place_host(reader, dev, wall_of(reinterpret_cast<const uint64_t*>(record)));
+        };
+        for (uint32_t i = 0; i < produced.zones; i++) {
+            uint64_t* const zone = reinterpret_cast<uint64_t*>(out.zones + size_t{i} * kSpscZoneBytes);
+            const int64_t wall = wall_of(zone);
+            const int64_t start = map.place_host(reader, dev, wall);
+            const int64_t end = map.place_host(reader, dev, wall + static_cast<int64_t>(zone[kSpscQwDuration]));
+            zone[kSpscQwTsc] = static_cast<uint64_t>(start);
+            zone[kSpscQwEndTsc] = static_cast<uint64_t>(end);
+        }
+        for (uint32_t i = 0; i < produced.events; i++) {
+            uint8_t* const event = out.events + size_t{i} * kSpscEventBytes;
+            reinterpret_cast<uint64_t*>(event)[kSpscQwTsc] = static_cast<uint64_t>(host_tsc(event));
+        }
+        for (uint32_t i = 0; i < produced.data; i++) {
+            uint8_t* const record = out.data + size_t{i} * kSpscDataBytes;
+            construct_timestamped_data(record);
+            reinterpret_cast<uint64_t*>(record)[kSpscQwTsc] = static_cast<uint64_t>(host_tsc(record));
+        }
+    }
+
+    // Returns an output buffer, reusing the most recently freed one, which is still in cache and already faulted in.
+    std::unique_ptr<uint8_t[]> take_buffer() {
+        if (free_buffers_.empty()) {
+            return std::make_unique_for_overwrite<uint8_t[]>(kOutBufferBytes);
+        }
+        std::unique_ptr<uint8_t[]> buffer = std::move(free_buffers_.back());
+        free_buffers_.pop_back();
+        return buffer;
+    }
+
+    Service& service_;
+    Consumer& consumer_;
+    std::vector<std::unique_ptr<Attached>> attached_;
+    std::array<uint32_t, kBatchFrames> frame_words_{};
+    std::unique_ptr<std::byte[]> frames_buf_;
+    std::vector<std::unique_ptr<uint8_t[]>> free_buffers_;
+    uint64_t dropped_since_callback_ = 0;
+};
+
+void Service::consumer_thread(Consumer& consumer) {
+    t_consumer_id = consumer.id;
+    ConsumerLoop(*this, consumer).run();
+    // A consumer that unregistered itself stays listed until here, so attach_receiver and detach_receiver may have
+    // posted it controls that only this thread can acknowledge.
+    std::unique_ptr<Consumer> self;
+    std::lock_guard<std::mutex> lk(mu_);
+    const auto it = std::ranges::find_if(consumers_, [&](const auto& entry) { return entry.get() == &consumer; });
+    if (it == consumers_.end()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> control_lock(consumer.control_mu);
+        pending_acks_ -= consumer.control.size();
+        consumer.control.clear();
+    }
+    ack_cv_.notify_all();
+    self = std::move(*it);
+    consumers_.erase(it);
+    self->thread.detach();
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

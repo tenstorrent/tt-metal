@@ -10,6 +10,7 @@ import torch
 from helpers.constraints import is_valid_quasar_fpu_path
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
+    ReshuffleRowsGolden,
     TilizeGolden,
     UnarySFPUGolden,
     UntilizeGolden,
@@ -35,6 +36,9 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
+    DROPOUT_SEED,
     INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
@@ -57,6 +61,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DROPOUT_PARAMS,
     SFPU_UNARY_MAX_MIN_SCALAR,
     SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
@@ -424,8 +429,8 @@ def prepare_inputs_for_operation(
         max_val = 2.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Neg:
-        # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
+    elif mathop in (MathOperation.Neg, MathOperation.Dropout):
+        # Neg and dropout's p = 0 path (x * 2.0) are exact; span both signs.
         min_val = -10.0
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
@@ -923,6 +928,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
+    OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
@@ -1079,7 +1086,7 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, ema, typecast,
+    tanh, sigmoid, silu, rsqrt, square, cumsum, ema, dropout, typecast,
     floor/ceil/trunc/frac/round, unary max/min (float and Int32), the six
     compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
@@ -1513,6 +1520,152 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
 
 
+# reshuffle_rows: needs an L1 row mask (written to buffer_B) and (input, accumulator) tile pairs,
+# so it has its own stimulus and oracle instead of joining the random sweep.
+RESHUFFLE_NO_DESTINATION = ReshuffleRowsGolden.NO_DESTINATION
+
+
+def _reshuffle_mixed_mask() -> List[int]:
+    """Seeded mix of repeated targets and skipped rows."""
+    gen = torch.Generator().manual_seed(1234)
+    targets = torch.randint(0, DEFAULT_TILE_R_DIM, (DEFAULT_TILE_R_DIM,), generator=gen)
+    skipped = torch.rand(DEFAULT_TILE_R_DIM, generator=gen) < 0.25  # skip rate
+    return [
+        RESHUFFLE_NO_DESTINATION if skip else int(target)
+        for target, skip in zip(targets.tolist(), skipped.tolist())
+    ]
+
+
+# Many-to-one masks hit the Dest store -> reload hazard; reverse crosses the face-pair boundary.
+RESHUFFLE_MASKS = {
+    "identity": list(range(DEFAULT_TILE_R_DIM)),
+    "reverse": [DEFAULT_TILE_R_DIM - 1 - i for i in range(DEFAULT_TILE_R_DIM)],
+    "all_skip": [RESHUFFLE_NO_DESTINATION] * DEFAULT_TILE_R_DIM,
+    "halves_to_boundary": [
+        MAX_FACE_R_DIM if i < MAX_FACE_R_DIM else MAX_FACE_R_DIM - 1
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
+    "all_to_last": [DEFAULT_TILE_R_DIM - 1] * DEFAULT_TILE_R_DIM,
+    "mixed": _reshuffle_mixed_mask(),
+    # Every target >= 32 must be skipped, not just 255 (32 would alias row 16, 48+ the next tile).
+    "out_of_range": [
+        [32, 47, 48, 254, 64, 100, 128, 200][(i // 2) % 8] if i % 2 else i
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
+}
+
+# Two pairs, so the second runs at a non-zero Dest index.
+RESHUFFLE_DIMS = [64, 64]
+
+
+def _reshuffle_stimulus(dimensions) -> torch.Tensor:
+    """Half-integers in [-2, 2]: every partial sum is exact in all formats, so the check is bit-exact."""
+    return torch.randint(-4, 5, tuple(dimensions)).to(torch.float32) / 2
+
+
+def _reshuffle_mask_buffer(mask: List[int]) -> torch.Tensor:
+    """One UInt8 tile whose first 32 bytes are the mask; the rest is the skip sentinel."""
+    buffer = torch.full(
+        (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM,),
+        RESHUFFLE_NO_DESTINATION,
+        dtype=torch.int32,
+    )
+    buffer[: len(mask)] = torch.tensor(mask, dtype=torch.int32)
+    return buffer
+
+
+@pytest.mark.quasar
+@parametrize(
+    reshuffle_variant_mask=[
+        (variant, runtime(mask_name))
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.ReshuffleRows, SFPU_UNARY_FORMATS
+        )
+        for mask_name in RESHUFFLE_MASKS
+    ],
+)
+def test_reshuffle_rows_quasar(reshuffle_variant_mask):
+    """Accumulators must match exactly and input tiles must come back unchanged."""
+    (format_variant, mask_name) = reshuffle_variant_mask[0]
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
+    mask = RESHUFFLE_MASKS[mask_name]
+    input_dimensions = RESHUFFLE_DIMS
+
+    src_A = _reshuffle_stimulus(input_dimensions).to(format_dict[formats.input_format])
+    tile_cnt = (input_dimensions[0] // DEFAULT_TILE_R_DIM) * (
+        input_dimensions[1] // DEFAULT_TILE_C_DIM
+    )
+
+    expected = get_golden_generator(ReshuffleRowsGolden)(
+        src_A, mask, input_dimensions, formats.output_format
+    )
+
+    device_src_A = get_golden_generator(TilizeGolden)(
+        src_A, input_dimensions, formats.input_format
+    )
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.ReshuffleRows),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if format_variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                device_src_A,
+                formats.input_format,
+                _reshuffle_mask_buffer(mask),
+                DataFormat.UInt8,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=1,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": format_variant.unpack_to_dest,
+            "dest_acc": dest_acc,
+        },
+    )
+
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = get_golden_generator(UntilizeGolden)(
+        res_tensor, formats.output_format, input_dimensions
+    )
+
+    result = res_tensor.to(torch.float32).reshape(input_dimensions)
+    expected = expected.to(torch.float32).reshape(input_dimensions)
+    mismatched_rows = sorted(
+        {int(r) for r in (result != expected).nonzero()[:, 0].tolist()}
+    )
+    assert torch.equal(result, expected), (
+        f"reshuffle_rows mismatch for mask {mask_name} {mask}: logical rows "
+        f"{mismatched_rows} differ\ngot\n{result}\nexpected\n{expected}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Float32 -> UInt16 negative-clamp and rounding detector.
 #
@@ -1688,4 +1841,180 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         "Float32 -> UInt16 mismatch:\n"
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
+    )
+
+
+# Dropout seeding: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
+# varying row-pair masks, and same-seed repeatability. The deterministic endpoints (p = 0 with a
+# real scale, p = 1) are fuser YAMLs: sfpu_dropout_real_scale / sfpu_dropout_drop_all.
+DROPOUT_DETECTOR_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+
+# Nonzero inputs, so a zero output can only mean a drop.
+DROPOUT_STIMULI_SPEC = StimuliSpec.uniform(low=0.5, high=10.0)
+
+DROPOUT_HALF_PROBABILITY = DROPOUT_PROBABILITY_MAX // 2
+DROPOUT_HALF_FRACTION_BAND = (0.4, 0.6)
+
+DROPOUT_ROW_PAIR_DATUMS = 32
+# A mask repeating per row pair gives one distinct mask; independent lanes give ~all distinct.
+DROPOUT_MIN_DISTINCT_MASK_FRACTION = 0.9
+
+DROPOUT_SEED_ALT = 0x1234ABCD
+
+
+def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
+    formats = variant.formats
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Dropout),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+                dropout_params,
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+    variant.apply_formats(configuration.formats_config)
+    return configuration
+
+
+def _dropout_result(configuration, variant, src_A):
+    formats = variant.formats
+    res_from_L1 = configuration.run().result
+    result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
+        torch.float32
+    )
+    assert (
+        result.numel() == src_A.numel()
+    ), f"result has {result.numel()} elements, expected {src_A.numel()}"
+    return result
+
+
+def _check_dropout_values(name, src_A, result, scale, output_format):
+    """Every output is 0 or x * scale; returns the drop mask."""
+    kept = (
+        (src_A.to(torch.float32).flatten() * torch.tensor(scale, dtype=torch.float32))
+        .to(format_dict[output_format])
+        .to(torch.float32)
+    )
+    dropped = result == 0.0
+    stray = ~dropped & (result != kept)
+    assert not stray.any(), (
+        f"{name}: {int(stray.sum())} of {result.numel()} outputs are neither 0 nor "
+        f"x * {scale}; first got {result[stray][:8].tolist()}, "
+        f"expected {kept[stray][:8].tolist()}"
+    )
+    return dropped
+
+
+def _check_row_pair_masks_vary(name, dropped):
+    masks = dropped.reshape(-1, DROPOUT_ROW_PAIR_DATUMS)
+    distinct = torch.unique(masks, dim=0).shape[0]
+    assert distinct >= DROPOUT_MIN_DISTINCT_MASK_FRACTION * masks.shape[0], (
+        f"{name}: only {distinct} distinct masks among {masks.shape[0]} row pairs; "
+        "the PRNG is not stepping per lane / per row pair"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    dropout_variant=[
+        (MathOperation.Dropout, variant)
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Dropout, DROPOUT_DETECTOR_FORMATS
+        )
+    ],
+)
+def test_dropout_reseed_quasar(dropout_variant):
+    """Seeds A, A, B at p = 1/2: masks look random, the same seed repeats the mask, a different one changes it."""
+    _, variant = dropout_variant[0]
+    formats = variant.formats
+
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=TENSOR_DIMS[0],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=TENSOR_DIMS[0],
+        spec_A=DROPOUT_STIMULI_SPEC,
+        spec_B=DROPOUT_STIMULI_SPEC,
+    )
+    seeds = (DROPOUT_SEED, DROPOUT_SEED, DROPOUT_SEED_ALT)
+    configurations = [
+        _dropout_config(
+            variant,
+            src_A,
+            src_B,
+            tile_cnt,
+            SFPU_DROPOUT_PARAMS(
+                dropout_probability=DROPOUT_HALF_PROBABILITY, dropout_seed=seed
+            ),
+        )
+        for seed in seeds
+    ]
+    # Build every ELF first: in the split flow, run() ends the compile step after one config.
+    for configuration in configurations:
+        configuration.prepare()
+
+    masks = [
+        _check_dropout_values(
+            f"seed {seed:#x}",
+            src_A,
+            _dropout_result(configuration, variant, src_A),
+            DROPOUT_SCALE,
+            formats.output_format,
+        )
+        for seed, configuration in zip(seeds, configurations)
+    ]
+
+    min_frac, max_frac = DROPOUT_HALF_FRACTION_BAND
+    for seed, mask in zip(seeds, masks):
+        dropped_frac = mask.float().mean().item()
+        assert min_frac <= dropped_frac <= max_frac, (
+            f"seed {seed:#x}: dropped fraction {dropped_frac:.4f} outside "
+            f"[{min_frac}, {max_frac}] at p = 1/2"
+        )
+        _check_row_pair_masks_vary(f"seed {seed:#x}", mask)
+
+    same_seed_diff = int((masks[0] != masks[1]).sum())
+    assert same_seed_diff == 0, (
+        f"seed {DROPOUT_SEED:#x} run twice gave masks differing in {same_seed_diff} of "
+        f"{masks[0].numel()} datums; dropout_init does not reseed deterministically"
+    )
+    alt_seed_diff = int((masks[0] != masks[2]).sum())
+    assert alt_seed_diff > 0, (
+        f"seeds {DROPOUT_SEED:#x} and {DROPOUT_SEED_ALT:#x} gave identical masks; "
+        "dropout_init does not reach the PRNG"
     )

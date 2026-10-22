@@ -111,8 +111,8 @@ When porting `<your-model>`:
   [`models/model_targets.yaml`](./model_targets.yaml) for every (model,
   SKU, batch_size) combination your test runs. The CI verifier checks
   the test's benchmark payload against these on every run and fails on
-  drift. Tier 3 models are exempt from perf targets, but accuracy
-  targets still apply. See
+  drift. Tier 3 models set `enforce_perf: false` so perf is reported but
+  does not fail the job; accuracy targets still apply. See
   [Performance / accuracy targets](#performance--accuracy-targets) for
   the schema and SKU-aliasing rules. Ongoing standardization is
   tracked in [#42671](https://github.com/tenstorrent/tt-metal/issues/42671).
@@ -513,8 +513,10 @@ Every tiered model is expected to declare:
   `decode_t/s/u`, `decode_t/s` for LLMs; `fps` for vision classifiers),
   each with a tolerance for slack.
 
-**Tier 3 models are exempt from perf targets** (the perf fields can be
-omitted or set to `{}`), but accuracy targets still apply.
+**Tier 3 models are exempt from perf enforcement.** Set `enforce_perf: false`
+on the entry (the perf fields can be omitted or set to `{}`). Measured perf
+is still printed by the CI step. Accuracy targets on an active entry still
+apply.
 
 ### Tolerances
 

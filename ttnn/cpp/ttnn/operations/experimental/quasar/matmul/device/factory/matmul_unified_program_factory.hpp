@@ -160,7 +160,7 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
 UnifiedMatmulPlan plan_unified_matmul(
-    const tt::tt_metal::IDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
