@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -745,6 +746,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     }
 
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_2d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
