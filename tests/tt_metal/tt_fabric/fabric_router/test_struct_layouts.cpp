@@ -414,7 +414,7 @@ TEST(StructLayout, HeaderExamples) {
     static_assert(sizeof(ex::Pixel) == 12);
     static_assert(sizeof(ex::Geometry) == 8);
 
-    constexpr auto& pixel = StructLayout<ex::Pixel>::members;
+    constexpr const auto& pixel = StructLayout<ex::Pixel>::members;
     static_assert(validate_struct_members<ex::Pixel>(pixel));
     EXPECT_TRUE((is_member(pixel[0], "at", 0, {element::Struct{"Point"}, 4, 0})));
     EXPECT_TRUE((is_member(pixel[1], "color", 4, {element::Enum{"Color"}, 1, 0})));
@@ -442,7 +442,7 @@ TEST(StructLayout, HeaderExamples) {
     EXPECT_TRUE((is_member(point.members[0], "x", 0, {element::Uint{}, 2, 0})));
     EXPECT_TRUE((is_member(point.members[1], "y", 2, {element::Uint{}, 2, 0})));
 
-    constexpr auto& geometry_members = UnionLayout<ex::Geometry>::members;
+    constexpr const auto& geometry_members = UnionLayout<ex::Geometry>::members;
     static_assert(validate_union_members<ex::Geometry>(geometry_members));
     const UnionType geometry = union_type<ex::Geometry>();
     EXPECT_EQ(geometry.name, "Geometry");
@@ -457,7 +457,7 @@ TEST(StructLayout, HeaderExamples) {
     EXPECT_TRUE(validate_union_members<ex::Geometry>(
         std::array{geometry_members[0], LAYOUT_UNION_DEFAULT(ex::Geometry, line)}));
 
-    constexpr auto& shape = StructLayout<ex::Shape>::members;
+    constexpr const auto& shape = StructLayout<ex::Shape>::members;
     static_assert(validate_struct_members<ex::Shape>(shape));
     EXPECT_TRUE((is_member(shape[1], "geometry", 4, {element::Union{"Geometry", "kind"}, 8, 0})));
 }

@@ -358,7 +358,7 @@ decltype(auto) visit(const PacketHeaderConfig& config, F& f, std::index_sequence
 // Calls f(std::type_identity<H>{}) with the packet header type H for config and returns its result. f must return
 // the same type for every header; void is allowed. Throws for a configuration FabricContext can't choose.
 template <typename F>
-decltype(auto) visit_packet_header_type(const PacketHeaderConfig& config, F&& f) {
+decltype(auto) visit_packet_header_type(const PacketHeaderConfig& config, F f) {
     return packet_header_detail::visit(config, f, std::make_index_sequence<PACKET_HEADER_CONFIGS.size()>{});
 }
 
