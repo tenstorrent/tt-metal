@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <type_traits>
 
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
+namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 using address_t = uint32_t;
 

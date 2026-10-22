@@ -17,6 +17,16 @@
 
 namespace ttnn::operations::ccl {
 
+// Picks the Python-facing overload; the other one (with sub_core_grid) is C++ only.
+using AllBroadcastFn = std::vector<ttnn::Tensor> (*)(
+    const ttnn::Tensor&,
+    std::optional<uint32_t>,
+    const std::optional<tt::tt_metal::SubDeviceId>&,
+    const std::optional<ttnn::MemoryConfig>&,
+    std::optional<uint32_t>,
+    std::optional<ttnn::ccl::Topology>,
+    bool);
+
 void bind_all_broadcast(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -56,7 +66,7 @@ void bind_all_broadcast(nb::module_& mod) {
     ttnn::bind_function<"all_broadcast">(
         mod,
         doc,
-        &ttnn::all_broadcast,
+        static_cast<AllBroadcastFn>(&ttnn::all_broadcast),
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("cluster_axis") = nb::none(),

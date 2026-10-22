@@ -133,21 +133,19 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
-// The cores driving one fabric connection: the workers push data into it and the mux owns it. A single
-// worker connects to the fabric directly, so its group has no mux.
-struct MuxWorkerGroup {
-    std::optional<CoreCoord> mux;
-    std::vector<CoreCoord> workers;
-};
-
-// Allocates `num_groups` groups of (mux + `num_workers_per_group` workers), putting each mux on a NOC row of
-// its own where the grid allows (see the implementation for why). Always succeeds if the cores exist.
-std::vector<MuxWorkerGroup> choose_mux_worker_cores(
-    size_t num_groups,
-    size_t num_workers_per_group,
+// The sub-device's worker cores, restricted to sub_core_grid if given. TT_FATALs if none remain.
+uint32_t num_available_worker_cores(
     MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid);
+
+// Picks n of the available worker cores (see num_available_worker_cores), one per NOC row before any row gets a
+// second. Deterministic, so every device gets the same coordinates.
+std::vector<CoreCoord> choose_worker_cores_across_rows(
+    uint32_t n,
+    MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& sub_core_grid);
 
 class EriscDatamoverBuilder;
 

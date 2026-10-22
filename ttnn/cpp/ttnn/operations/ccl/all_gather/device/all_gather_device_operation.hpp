@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -40,6 +42,19 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config);
+
+// Devices along each mesh axis the gather spans (1 for an inactive axis). The collective is their product.
+std::array<uint32_t, 2> all_gather_axis_devices(const Tensor& input_tensor, std::optional<uint32_t> cluster_axis);
+
+// What ttnn::prim::all_gather launches with. ttnn::all_gather plans with the same params before launching.
+std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    int32_t dim,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid);
 
 }  // namespace ttnn::operations::ccl
 

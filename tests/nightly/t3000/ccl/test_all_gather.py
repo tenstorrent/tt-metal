@@ -1249,51 +1249,6 @@ def test_all_gather_contiguous_runs(
     )
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run")
-
-# Two configurations that the unicast all_gather gets wrong, both reachable with the production
-# factory heuristic. Verified to fail identically on the commit before the tiled-transpose walk, so
-# they are pre-existing, not a regression from it. Skipped because one of them hangs the board.
-#
-#   mismatched_alignment: input L1 (16 B align) -> output DRAM (64 B align) with a 32 B page, so the
-#       output page is padded relative to the chunk. Small shapes hang; large ones return garbage
-#       (PCC 0.0005 before the rewrite, 0.003 after).
-#   chunk_over_packet: a page larger than the fabric packet, which takes queue_segment's
-#       "chunk bigger than a packet" split. PCC 0.5338325678716095, bit-identical before and after.
-@pytest.mark.skip(reason="pre-existing all_gather unicast bugs; mismatched_alignment hangs the board")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
-    [
-        ([8, 1, 4096, 16], 0, ttnn.ROW_MAJOR_LAYOUT, _l1_width_sharded(4096, 16, 1), _dram_width_sharded(32768, 16, 1)),
-        ([1, 1, 64, 4096], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-    ],
-    ids=["mismatched_alignment", "chunk_over_packet"],
-)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring)],
-    indirect=["device_params"],
-    ids=["fabric_ring"],
-)
-def test_all_gather_unicast_known_bad(
-    mesh_device, ag_output_shape, dim, layout, mem_config_input, mem_config_ag, all_gather_topology
-):
-    run_all_gather_impl(
-        mesh_device,
-        ag_output_shape,
-        dim,
-        ttnn.bfloat16,
-        layout,
-        mem_config_input,
-        mem_config_ag,
-        all_gather_topology=all_gather_topology,
-        enable_trace=False,
-        num_iters=1,
-        use_persistent_buffers=False,
-    )
-
-
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(

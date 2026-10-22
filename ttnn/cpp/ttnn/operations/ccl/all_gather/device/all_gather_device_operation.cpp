@@ -4,6 +4,8 @@
 
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
+#include "all_gather_plan.hpp"
+#include "all_gather_program.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -17,10 +19,8 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -97,10 +97,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape);
     }
 
-    // NOTE: implementation-specific constraints (row-major page alignment, tile
-    // padding on the gather dim, input/output page-size ratios, concat vs multi-shard,
-    // etc.) are not checked here. use_composite_all_gather() checks those and routes
-    // to composite path if needed.
+    // NOTE: implementation-specific constraints (alignment, gather-dim padding, page grids) are not checked
+    // here. all_gather_plan::make_plan checks those and routes to the composite path if needed.
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
@@ -240,93 +238,16 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // Pick the kernel algorithm based on limitations and heuristics
-    bool use_unicast = false;
-    if (args.is_true_2d()) {
-        // Limitation: Unicast algorithm currently does not support true 2D topologies
-        use_unicast = false;
-        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
-    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
-        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
-        use_unicast = true;
-    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // Limitation: NeighborExchange only permits 1-hop unicast
-        use_unicast = true;
-    } else {
-        // Heuristics: Decide between multicast or unicast algorithm
-        const auto& input_tensor = tensor_args.input_tensor;
-        const uint32_t axis = args.get_1d_axis();
-        const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
-        // Packed bytes of the gathered output crossing one link.
-        const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-        const uint64_t per_link_bytes = args.output_spec.compute_packed_buffer_size_bytes() / num_links;
-
-        switch (input_tensor.device()->arch()) {
-            case tt::ARCH::WORMHOLE_B0: {
-                // Multicast's packets are copied onward by the fabric; unicast re-reads and re-sends at
-                // every hop, but its relay splits the sending across devices. So hop count decides, and
-                // device count sets hop count -- non-monotonically:
-                //   ring       always multicast; the fabric does the relay for free.
-                //   2 devices  one hop, so unicast never relays while multicast still pays its barrier
-                //              fan-in and packet setup.
-                //   3-6        multicast, its edge shrinking as N grows.
-                //   7+         near tie, so size decides: unicast's split sending pays once the link
-                //              saturates.
-                // Calibrated on T3000 at 2-8 devices; the shrinking-edge trend makes the size test the
-                // safer extrapolation above 8.
-                if (is_ring) {
-                    use_unicast = false;
-                } else if (args.num_devices <= 2) {
-                    use_unicast = true;
-                } else if (args.num_devices <= 6) {
-                    use_unicast = false;
-                } else {
-                    use_unicast = per_link_bytes >= 3'000'000;
-                }
-                break;
-            }
-            case tt::ARCH::BLACKHOLE: {
-                // Multicast buys the hops unicast's store-and-forward relay must pay (N/2 on a ring,
-                // N-1 on a line), so the crossover moves sharply with device count: at 4 devices a ring
-                // is 2 hops and unicast wins outright; at 8, multicast takes a wide band at the small
-                // end. Neither page size nor stripe length moves it.
-                // Linear in device count is a two-point fit (4 and 8 devices), not a law: re-measure
-                // before trusting it beyond 8. Both thresholds floor at zero, which is also right for
-                // the 2- and 3-device cases they extrapolate to -- one or two hops of relay is never
-                // worth a multicast.
-                const int64_t dev = static_cast<int64_t>(args.num_devices);
-                const int64_t threshold_kb = std::max<int64_t>(
-                    0,
-                    is_ring ? 320 * (dev / 2 - 2)   // 4 dev -> 0,      8 dev -> 640 KB
-                            : 384 + 544 * (dev - 4));  // 4 dev -> 384 KB, 8 dev -> 2560 KB
-                use_unicast = per_link_bytes >= static_cast<uint64_t>(threshold_kb) * 1024u;
-                break;
-            }
-            default: break;  // uncalibrated arch
-        }
-
-        // Limitation: unicast relays by reading its own output back into a CB packed at chunk
-        // stride, and a NoC read needs local and remote congruent mod the output's read alignment
-        // (64 B DRAM on Blackhole, 32 B on Wormhole). So an aligned output page must be exactly
-        // tiled by chunks. Multicast never reads the output.
-        // Heuristic branch only: the branches above have no alternative, and the unicast factory
-        // TT_FATALs there instead.
-        if (use_unicast) {
-            const auto& in_buf = *input_tensor.buffer();
-            const uint32_t in_page = in_buf.page_size();
-            const uint32_t out_page = args.output_spec.compute_page_size_bytes();
-            // Mirrors the copy-mode derivation in AllGatherUnicastFactory.
-            const bool is_split = in_page > out_page;
-            const uint32_t chunk = is_split ? out_page : in_buf.aligned_page_size();
-            const uint32_t chunks_per_page = is_split ? 1u : out_page / in_page;
-            const uint32_t out_align = args.output_spec.memory_config().is_dram()
-                                           ? tt::tt_metal::hal::get_dram_alignment()
-                                           : tt::tt_metal::hal::get_l1_alignment();
-            use_unicast = tt::align(out_page, out_align) == chunks_per_page * chunk;
-        }
+    // The same plan all_gather() ran to rule out the composite path, so the two cannot disagree.
+    const auto& output_spec = tensor_args.persistent_output_tensor.has_value()
+                                  ? tensor_args.persistent_output_tensor->tensor_spec()
+                                  : args.output_spec;
+    switch (all_gather_program::make_device_plan(args, tensor_args.input_tensor, output_spec).algo) {
+        case all_gather_plan::AgAlgo::Unicast: return AllGatherUnicastFactory{};
+        case all_gather_plan::AgAlgo::Multicast: return AllGatherMulticastFactory{};
+        case all_gather_plan::AgAlgo::Composite: break;
     }
-
-    return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
+    TT_THROW("all_gather has no native algorithm for this input; all_gather() should have taken the composite path");
 }
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(
@@ -347,6 +268,17 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
         tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
 }
 
+std::array<uint32_t, 2> all_gather_axis_devices(const Tensor& input_tensor, std::optional<uint32_t> cluster_axis) {
+    const auto mesh_shape = input_tensor.device()->shape();
+    std::array<uint32_t, 2> devices{1u, 1u};
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        if (mesh_shape[axis] > 1 && cluster_axis.value_or(axis) == axis) {
+            devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        }
+    }
+    return devices;
+}
+
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
@@ -360,23 +292,20 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // so we include it in AllGatherParams.
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
-    const auto mesh_shape = mesh_device->shape();
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::array<bool, 2> axis_is_straight{true, true};
-    std::array<uint32_t, 2> axis_num_devices{1u, 1u};
+    const std::array<uint32_t, 2> axis_num_devices = all_gather_axis_devices(input_tensor, cluster_axis);
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
     for (uint32_t axis = 0; axis < 2; ++axis) {
-        const bool is_axis_active = mesh_shape[axis] > 1 && cluster_axis.value_or(axis) == axis;
-        if (!is_axis_active) {
+        if (axis_num_devices[axis] <= 1) {
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
         axis_is_straight[axis] = ::ttnn::ccl::is_axis_straight(*mesh_device, axis);
-        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective

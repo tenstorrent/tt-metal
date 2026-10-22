@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -350,7 +351,11 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    // sub_core_grid reaches all_broadcast and concat. The to_memory_config / typecast steps (sharded or
+    // bfloat8_b inputs only) and the final copy pick their own cores.
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -397,10 +402,12 @@ ttnn::Tensor composite_all_gather(
         input_tensor.memory_config(),
         num_links,
         topology,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        sub_core_grid);
 
     // Do the gather itself
-    ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+    ttnn::Tensor all_gather_output_tensor =
+        ttnn::concat(broadcasted_tensors, gather_dim, std::nullopt, std::nullopt, 1, sub_core_grid);
 
     if (convert_to_bfloat16_for_composite) {
         all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
@@ -408,6 +415,22 @@ ttnn::Tensor composite_all_gather(
 
     if (output_memory_config.is_sharded()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
+    }
+
+    // A persistent output is filled by one extra device copy.
+    if (persistent_output_tensor.has_value()) {
+        const auto& dst = *persistent_output_tensor;
+        TT_FATAL(
+            dst.dtype() == all_gather_output_tensor.dtype() && dst.layout() == all_gather_output_tensor.layout() &&
+                dst.logical_shape() == all_gather_output_tensor.logical_shape(),
+            "all_gather output_tensor is {} {} {}, but the gathered result is {} {} {}",
+            dst.logical_shape(),
+            dst.dtype(),
+            dst.layout(),
+            all_gather_output_tensor.logical_shape(),
+            all_gather_output_tensor.dtype(),
+            all_gather_output_tensor.layout());
+        return ttnn::copy(all_gather_output_tensor, dst);
     }
 
     return all_gather_output_tensor;

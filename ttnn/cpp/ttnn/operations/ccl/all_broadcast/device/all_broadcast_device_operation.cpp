@@ -26,6 +26,13 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
         "Worker cores used by links are parallelized over rows");
+    // Each device multicasts to every other one, which needs the fabric to forward past the neighbor.
+    TT_FATAL(
+        tt::tt_fabric::GetFabricConfig() != tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE ||
+            operation_attributes.ring_size <= 2,
+        "all_broadcast across {} devices needs multi-hop multicast, which FABRIC_1D_NEIGHBOR_EXCHANGE does not "
+        "provide",
+        operation_attributes.ring_size);
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
@@ -103,7 +110,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -132,7 +140,8 @@ std::vector<ttnn::Tensor> all_broadcast(
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
             .topology = topology,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .sub_core_grid = sub_core_grid},
         input_tensor);
 }
 }  // namespace ttnn::prim

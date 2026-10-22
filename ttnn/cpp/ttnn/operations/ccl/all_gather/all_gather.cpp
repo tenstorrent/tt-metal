@@ -4,124 +4,14 @@
 
 #include "all_gather.hpp"
 
+#include <string_view>
+
 #include "device/all_gather_device_operation.hpp"
+#include "device/all_gather_plan.hpp"
+#include "device/all_gather_program.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
-
-#include <algorithm>
 
 namespace ttnn {
-
-// Native implementation only handles cases where every output write is an aligned NoC
-// write into the output buffer, computed with index math alone -- the bytes are never
-// rearranged on-device first. If it needs a transpose, untilize, re-pad, or
-// re-shard ("massaged op"), it goes to composite.
-std::pair<bool, std::string> use_composite_all_gather(
-    const ttnn::Tensor& input_tensor,
-    int32_t dim,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<uint32_t> cluster_axis) {
-    const auto& logical_shape = input_tensor.logical_shape();
-    const int32_t gather_dim = static_cast<int32_t>(logical_shape.get_normalized_index(dim));
-    // Indexes both logical_shape and padded_shape, identical to AllGatherParams::dim_from_end.
-    const int32_t gather_dim_from_end = gather_dim - static_cast<int32_t>(logical_shape.rank());
-
-    // Below is equivalent to: axis_num_devices[0] * axis_num_devices[1]
-    const auto& mesh_shape = input_tensor.device()->shape();
-    const uint32_t num_devices = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_shape[0] * mesh_shape[1];
-
-    // Gather-dim padding would need the output's gather-dim extent to be num_devices * the input's
-    // padded extent, but it is num_devices * the logical one.
-    auto gathered_padded_shape = input_tensor.padded_shape();
-    if (logical_shape[gather_dim_from_end] != gathered_padded_shape[gather_dim_from_end]) {
-        return {
-            true,
-            fmt::format(
-                "gather dim {} is padded from {} to {}; size must be a multiple of the tile/shard extent",
-                gather_dim,
-                logical_shape[gather_dim_from_end],
-                gathered_padded_shape[gather_dim_from_end])};
-    }
-
-    // Keep the padding check above this: building the spec can TT_FATAL on a legacy output config that
-    // can't hold the gathered shape, and a gather-dim-padded input should route to composite instead.
-    const auto output_spec =
-        operations::ccl::compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config);
-
-    // The kernel walks the output page grid as the input's with only the gather dim scaled, so any
-    // other difference breaks it -- e.g. an output shard width that doesn't divide the row, which
-    // pads the last dim.
-    gathered_padded_shape[gather_dim_from_end] *= num_devices;
-    if (output_spec.padded_shape() != gathered_padded_shape) {
-        return {
-            true,
-            fmt::format(
-                "output stored as {} instead of {}; its shard shape must divide the gathered shape evenly",
-                output_spec.padded_shape(),
-                gathered_padded_shape)};
-    }
-
-    // Page sizes are UNALIGNED (content) sizes, so a matched-but-padded gather reads as matched, not
-    // concat. The page checks below are no-ops for tile, whose pages are always aligned and equally
-    // sized on both sides.
-    const uint32_t input_page_size = input_tensor.buffer()->page_size();
-    const uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_spec.compute_page_size_bytes();
-
-    // The factory derives chunks-per-page (concat) and split-factor (split) with a truncating
-    // division, so a non-integer page ratio would silently mis-place every write.
-    if (std::max(input_page_size, output_page_size) % std::min(input_page_size, output_page_size) != 0) {
-        return {
-            true,
-            fmt::format(
-                "input and output rows are {} B and {} B; one shard width must be a whole multiple of the other",
-                input_page_size,
-                output_page_size)};
-    }
-    // concat and split move data at content granularity, so the input page must have no padding.
-    if (input_page_size != output_page_size && input_page_size != input_aligned_page_size) {
-        return {
-            true,
-            fmt::format(
-                "input rows ({} B) are padded to the {} B memory alignment; resharding needs unpadded rows",
-                input_page_size,
-                input_tensor.buffer()->alignment())};
-    }
-    // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
-    // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
-    constexpr uint32_t noc_write_alignment = 16;
-    // Split moves output-row sized chunks, written to the output and read at those offsets inside an input
-    // page, so the row must suit the write alignment and the input's own (DRAM reads need 32/64 B).
-    const uint32_t split_chunk_alignment = std::max(noc_write_alignment, input_tensor.buffer()->alignment());
-    if (input_page_size > output_page_size && output_page_size % split_chunk_alignment != 0) {
-        return {
-            true,
-            fmt::format(
-                "output is sharded finer than the input; its rows ({} B) must be a multiple of {} B",
-                output_page_size,
-                split_chunk_alignment)};
-    }
-    // matched and concat write a whole *aligned* input page into each output page slot, so the slot
-    // must be at least that large. They differ only across memories with unequal alignments.
-    const uint32_t output_alignment = output_spec.memory_config().is_dram() ? tt::tt_metal::hal::get_dram_alignment()
-                                                                            : tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t output_aligned_page_size = tt::align(output_page_size, output_alignment);
-    if (input_page_size <= output_page_size && output_aligned_page_size < input_aligned_page_size) {
-        return {
-            true,
-            fmt::format(
-                "input rows pad to {} B but the output reserves {} B; use the same buffer type, or a row size "
-                "that is a multiple of both DRAM and L1 alignments",
-                input_aligned_page_size,
-                output_aligned_page_size)};
-    }
-
-    return {false, {}};
-}
 
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
@@ -167,18 +57,43 @@ ttnn::Tensor all_gather(
             ? std::optional<ttnn::MemoryConfig>(persistent_output_tensor->memory_config())
             : memory_config;
 
-    auto [use_composite, composite_reason] =
-        use_composite_all_gather(input_tensor, dim, output_memory_config, cluster_axis);
-    if (use_composite) {
-        log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
-        // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
-        // path and are ignored here for now.
+    auto composite = [&](std::string_view reason) {
+        log_info(tt::LogOp, "Using slower composite all_gather: {}", reason);
         return composite_common::composite_all_gather(
-            input_tensor, dim, std::nullopt, std::nullopt, output_memory_config, subdevice_id, cluster_axis);
+            input_tensor,
+            dim,
+            std::nullopt,
+            std::nullopt,
+            output_memory_config,
+            subdevice_id,
+            cluster_axis,
+            false,
+            persistent_output_tensor,
+            sub_core_grid);
+    };
+
+    // Before the params: building them builds the output spec, which can TT_FATAL on a legacy output config that
+    // cannot hold a gather-dim-padded shape.
+    const auto& logical_shape = input_tensor.logical_shape();
+    const int32_t dim_from_end =
+        static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
+    const auto axis_devices = operations::ccl::all_gather_axis_devices(input_tensor, cluster_axis);
+    const uint32_t num_devices = axis_devices[0] * axis_devices[1];
+    if (!operations::ccl::all_gather_plan::gather_shape_ok(input_tensor.tensor_spec(), dim_from_end, num_devices)) {
+        return composite("the gather dim is padded or its gathered extent overflows uint32");
     }
 
-    return ttnn::prim::all_gather(
+    // The same plan select_program_factory makes from the same params, so the two cannot disagree.
+    auto [params, inputs] = operations::ccl::all_gather_build_operation_args(
         input_tensor, persistent_output_tensor, dim, output_memory_config, cluster_axis, subdevice_id, sub_core_grid);
+    const auto& output_spec =
+        persistent_output_tensor.has_value() ? persistent_output_tensor->tensor_spec() : params.output_spec;
+    const auto plan = operations::ccl::all_gather_program::make_device_plan(params, input_tensor, output_spec);
+    if (plan.algo == operations::ccl::all_gather_plan::AgAlgo::Composite) {
+        return composite(plan.composite_reason);
+    }
+
+    return ttnn::device_operation::launch<operations::ccl::AllGatherDeviceOperation>(params, inputs);
 }
 
 }  // namespace ttnn
