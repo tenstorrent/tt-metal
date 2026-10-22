@@ -65,6 +65,13 @@ DEFAULT_KV_GB_PER_CHIP = 6.0
 SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
 # MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, and decode's host time every 128 steps.
 TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
+# MIMO_NUCLEUS_STATS=1: every 1024 host-sampled decode rows, log how many tokens the top-p nucleus of the full
+# vocabulary holds (MIMO_NUCLEUS_TEMPERATURE / MIMO_NUCLEUS_TOP_P, default 1.0 / 0.95, MiMo's generation_config) and
+# how often a device top-M candidate set (M 32, 64) contains it: the condition for exact device top-p sampling.
+NUCLEUS_STATS = os.environ.get("MIMO_NUCLEUS_STATS") == "1"
+NUCLEUS_TEMPERATURE = float(os.environ.get("MIMO_NUCLEUS_TEMPERATURE", "1.0"))
+NUCLEUS_TOP_P = float(os.environ.get("MIMO_NUCLEUS_TOP_P", "0.95"))
+NUCLEUS_BUCKETS = (8, 16, 32, 64, 128, 256, 1024)
 # MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
@@ -466,7 +473,7 @@ class MiMoV2ForCausalLM:
             rows = positions.numel()
             if rows > self.dp * self.per_lane:
                 raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
-        handles = []
+        handles, live = [], []
         for lane, model in enumerate(self.models):
             first = lane * self.per_lane
             last = min(first + self.per_lane, rows)
@@ -497,7 +504,8 @@ class MiMoV2ForCausalLM:
             handle = model.decode_enqueue(tok, pos) if reload_inputs else model.decode_enqueue_resident(pos)
             self.decode_positions[lane] = torch.where(active, pos + 1, pos)
             handles.append((lane, last - first, handle))
-        out = {"rows": rows, "handles": handles, "tokens": on_device}
+            live += [first + s for s in range(last - first) if active[s]]
+        out = {"rows": rows, "handles": handles, "tokens": on_device, "live": live}
         if TIMING:
             self._decode_timing(t0, reload_inputs, on_device)
         if read_from_device:
@@ -562,7 +570,47 @@ class MiMoV2ForCausalLM:
                 continue
             lane, n, handle = entry
             logits[lane * self.per_lane : lane * self.per_lane + n, 0] = self.models[lane].decode_read_rows(handle)[:n]
+        if NUCLEUS_STATS:
+            self._nucleus_stats(logits[out["live"], 0])
         return logits
+
+    def _nucleus_stats(self, rows):
+        """Accumulate the top-p nucleus size of each live row (fp32 [n, vocab] logits; the row's own temperature and
+        top_p are unknown here, so NUCLEUS_TEMPERATURE / NUCLEUS_TOP_P stand in) and, every 1024 rows, log its
+        distribution and the share of rows whose nucleus a top-32 / top-64 candidate set holds."""
+        stats = getattr(self, "_nucleus", None) or {"rows": 0, "sizes": [], "mass32": [], "mass64": []}
+        for logits in rows:
+            z = logits / NUCLEUS_TEMPERATURE
+            probs = torch.exp(z - torch.logsumexp(z, dim=0))
+            top = torch.topk(probs, 4096).values
+            mass = torch.cumsum(top, dim=0)
+            if float(mass[-1]) >= NUCLEUS_TOP_P:
+                size = int(torch.searchsorted(mass, torch.tensor(NUCLEUS_TOP_P))) + 1
+            else:
+                mass = torch.cumsum(torch.sort(probs, descending=True).values, dim=0)
+                size = int(torch.searchsorted(mass, torch.tensor(NUCLEUS_TOP_P))) + 1
+            stats["sizes"].append(size)
+            stats["mass32"].append(float(mass[31]))
+            stats["mass64"].append(float(mass[63]))
+            stats["rows"] += 1
+        if stats["rows"] >= 1024:
+            sizes = torch.tensor(stats["sizes"], dtype=torch.float32)
+            n = sizes.numel()
+            counts, low = [], 0
+            for high in NUCLEUS_BUCKETS:
+                counts.append(f"{low + 1}-{high}: {100 * float(((sizes > low) & (sizes <= high)).sum()) / n:.1f}%")
+                low = high
+            counts.append(f">{low}: {100 * float((sizes > low).sum()) / n:.1f}%")
+            m32, m64 = torch.tensor(stats["mass32"]), torch.tensor(stats["mass64"])
+            logger.info(
+                f"MiMo vLLM nucleus (T {NUCLEUS_TEMPERATURE}, top_p {NUCLEUS_TOP_P}) over {n} rows: size p50 "
+                f"{float(sizes.quantile(0.5)):.0f} p90 {float(sizes.quantile(0.9)):.0f} p99 "
+                f"{float(sizes.quantile(0.99)):.0f} max {float(sizes.max()):.0f}; {', '.join(counts)}; nucleus inside "
+                f"top-32 {100 * float((sizes <= 32).sum()) / n:.1f}%, top-64 {100 * float((sizes <= 64).sum()) / n:.1f}%; "
+                f"top-32 mass p10 {float(m32.quantile(0.1)):.3f}, top-64 mass p10 {float(m64.quantile(0.1)):.3f}"
+            )
+            stats = None
+        self._nucleus = stats
 
     def process_decode_output_host(self, out, is_tokens=False, **kwargs):
         """Host output of ``read_decode_output``: greedy tokens int32 [B] in slot order (``is_tokens``; idle slots
