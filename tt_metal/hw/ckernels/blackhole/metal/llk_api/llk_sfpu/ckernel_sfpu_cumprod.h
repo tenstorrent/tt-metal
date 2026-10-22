@@ -9,8 +9,12 @@
 namespace ckernel {
 namespace sfpu {
 
+// cumprod_init records one SFPMUL for each LREG: 4 instructions per pass. No SFPNOPs: Blackhole stalls
+// an SFPU instruction that reads the previous SFPMUL's result.
+constexpr std::uint32_t cumprod_step = 4;
+
 // The cumsum tile walk, replaying the product chain that cumprod_init records.
-template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_cumprod(const bool first) {
     if (first) {
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 4, 0);
@@ -18,14 +22,13 @@ inline void calculate_cumprod(const bool first) {
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 6, 0);
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 7, 0);
     }
-    scan_tile_columns</*STEP=*/4>();
+    scan_tile_columns<cumprod_step>();
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumprod_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // No SFPNOPs: Blackhole stalls an SFPU instruction that reads the previous SFPMUL's result.
-    load_replay_buf(0, 8, [] {
+    load_replay_buf(0, 2 * cumprod_step, [] {
         TTI_SFPMUL(0, 7, p_sfpu::LCONST_0, 0, 0);
         TTI_SFPMUL(1, 0, p_sfpu::LCONST_0, 1, 0);
         TTI_SFPMUL(2, 1, p_sfpu::LCONST_0, 2, 0);

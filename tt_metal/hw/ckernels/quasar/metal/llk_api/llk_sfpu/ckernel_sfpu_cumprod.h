@@ -11,7 +11,7 @@ namespace sfpu {
 // cumprod_tile fails to build.
 [[gnu::error("cumprod_tile is not supported on Quasar")]] void cumprod_tile_is_not_supported_on_quasar();
 
-template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_cumprod([[maybe_unused]] const bool first) {
     cumprod_tile_is_not_supported_on_quasar();
 }

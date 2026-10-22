@@ -476,8 +476,8 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to bf16. The
-    // bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to the output
+    // format. A bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
     // SrcA would cut an fp32 input to tf32, so that one is unpacked straight into Dest.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (input_dataformat == DataFormat::Float32) {

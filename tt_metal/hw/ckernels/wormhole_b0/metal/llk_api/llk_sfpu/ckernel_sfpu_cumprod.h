@@ -8,8 +8,11 @@
 
 namespace ckernel::sfpu {
 
+// cumprod_init records an SFPMUL and an SFPNOP for each LREG: 8 instructions per pass.
+constexpr std::uint32_t cumprod_step = 8;
+
 // The cumsum tile walk, replaying the product chain that cumprod_init records.
-template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_cumprod(const bool first) {
     if (first) {
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 4, 0);
@@ -17,13 +20,13 @@ inline void calculate_cumprod(const bool first) {
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 6, 0);
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 7, 0);
     }
-    scan_tile_columns();
+    scan_tile_columns<cumprod_step>();
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumprod_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    lltt::record(0, 16);
+    lltt::record(0, 2 * cumprod_step);
     TTI_SFPMUL(0, 7, p_sfpu::LCONST_0, 0, 0);
     TTI_SFPNOP;
     TTI_SFPMUL(1, 0, p_sfpu::LCONST_0, 1, 0);
