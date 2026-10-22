@@ -17,6 +17,8 @@ in it: agent rule 17; FIX.8 deleted the emulation). Per chip (r, c) the input is
                                   exact fp32 on the SFPU; the wkv rows (and kv_norm weight) of the rope dims are
                                   permuted at load to [even | odd] so the pairs are tile-aligned blocks
     bf16 cast                     (ATTN_GLUE=on: the rope's last ops write bf16, re-interleaved by a PairPerm matmul)
+    ROPE_IMPL=on (P.17, default)  kv_norm writes bf16, then ONE stock rotary_embedding_indexed (tt/rope.rope_stock) on
+                                  the 64-dim tail in place; wkv / kv_norm in checkpoint order (no permutation)
 
 Output: window KV [1, 1, S/SP, 512] bf16 TILE, rows split over axis 0 (mesh row r = positions [start + r S/SP, ...)),
 replicated over axis 1. The served-cache write (all_gather over axis 0, the owner chip's slice_write of
@@ -24,7 +26,7 @@ replicated over axis 1. The served-cache write (all_gather over axis 0, the owne
 brings (BREADCRUMBS C.swa.kv). No host work in __call__ / from_proj.
 
 Component deviation (components.yaml named rotary_embedding_llama): the SFPU composition (tt/rope.py) predates F128;
-replacing it with the stock op is the precision-debt report's pick J3.
+ROPE_IMPL=on (P.17, the precision-debt report's pick J3) replaces it with the stock rotary_embedding_indexed.
 """
 
 from __future__ import annotations
@@ -36,14 +38,14 @@ import ttnn
 from .common import DRAM, cast
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
-from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16
+from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16, rope_stock, stock
 
 
 def attn_in_weights(ck, cfg, layer: int) -> dict[str, torch.Tensor]:
     """The fused attention-input projection's weights {wq_a, wkv} (fp32 [out, H]); wkv's rope rows in the
-    de-interleaved order TtWindowKv expects (q_a slices only wq_a's columns)."""
+    de-interleaved order TtWindowKv expects (q_a slices only wq_a's columns; ROPE_IMPL=on: checkpoint order)."""
     p = f"layers.{layer}.attn."
-    perm = deinterleave_perm(cfg.head_dim, cfg.rope_dim)
+    perm = torch.arange(cfg.head_dim) if stock() else deinterleave_perm(cfg.head_dim, cfg.rope_dim)
     return {
         "wq_a": ck.weight(p + "wq_a.weight", torch.float32),
         "wkv": ck.weight(p + "wkv.weight", torch.float32)[perm].contiguous(),
@@ -60,8 +62,11 @@ class TtWindowKv:
         self.k0, self.k1 = proj.cols["wkv"]
         width = self.k1 - self.k0
         assert kv_norm.numel() == width and rope.half * 2 == rope_dim, (kv_norm.shape, width, rope.half, rope_dim)
-        perm = deinterleave_perm(width, rope_dim)
-        self.norm = TtDistributedRmsNorm(mesh, kv_norm.float()[perm], eps, split=False)
+        # ROPE_IMPL=on (P.17): checkpoint order, kv_norm writing the bf16 the stock rope reads
+        self.stock = rope.stock
+        perm = torch.arange(width) if self.stock else deinterleave_perm(width, rope_dim)
+        dtype = ttnn.bfloat16 if self.stock else None
+        self.norm = TtDistributedRmsNorm(mesh, kv_norm.float()[perm], eps, split=False, dtype=dtype)
 
     def from_proj(self, p: ttnn.Tensor, start: int) -> ttnn.Tensor:
         rows = p.shape[-2]
@@ -69,6 +74,11 @@ class TtWindowKv:
         kn = self.norm(kv)
         ttnn.deallocate(kv)
         cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
+        if self.stock:  # ROPE_IMPL=on (P.17): one stock rotary op on the bf16 norm output
+            out = rope_stock(kn, cos, sin, self.rope.trans)
+            ttnn.deallocate(kn)
+            self.rope.free(cos, sin)
+            return out
         if self.rope.pairs is not None:
             # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul
             out = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)

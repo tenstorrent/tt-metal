@@ -114,6 +114,21 @@ TABLE = {
         "213.7; host-bound now), worst layer L03 0.99489 (P.14: 0.99488). Window attention L0 out path vs float64: "
         "rel 0.00736 off and on (HiFi4 + the fork high_precision sdpa 0.00136 both)",
     ),
+    "ROPE_IMPL": Setting(
+        "on",
+        ("on", "off"),
+        "P.17 (owner comparison 2026-10-22, precision-debt report J3, fusion report item 1): RoPE at the 34 sites a "
+        "chunk (attention q and output inverse, indexer q, window kv, compressor ckv / k). on = ONE stock "
+        "ttnn.experimental.deepseek_prefill.rotary_embedding_indexed per site on bf16 heads (tt/rope.rope_stock: Meta "
+        "pair order with the rotation trans-mat, so every weight stays in checkpoint order; the 64-dim tail roped in "
+        "place by rotary_offset, or the q nope prepended by concat_prefix; bf16 cos / sin [rows, 64] from the load-time "
+        "table sliced per start (the op refuses fp32 cos / sin); inverse = the transposed trans-mat; kv_actual_global 0 "
+        "on pre-sliced rows; the op's default HiFi4 + fp32 DEST); the attention q's 512^-0.5 folded into its bf16 input "
+        "cast, wq_b / indexer wq_b writing bf16, kv_norm / k_norm writing bf16. off = the P.16 path (fp32 SFPU rope "
+        "chains on de-interleaved weight rows, PairPerm at HiFi4). Requires ATTN_GLUE=on. Probe ds41_rope_stock/"
+        "probe_002 (2x2, [1, 16, 1024, 512] bf16, tail vs float64): rel 0.0037 (one bf16 rounding 0.0017; HiFi2 "
+        "0.0052), 0.09-0.10 ms a call",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",
