@@ -5,7 +5,8 @@
 // MM-8 quasar_cache / quasar_cache_perf port on a CCE hart's own TL1 data area. The hart's uncached-alias read is the
 // primary observer. Host readback is a second observer: the MM-8 probe showed the host does not see cached stores
 // before a flush, so a case that expects the old values asserts the host still sees them. MimirDmCachePerf ports the
-// cache_perf write paths as correctness checks over a wider size range, with no timing asserts.
+// cache_perf write paths as correctness checks over a wider size range, with no timing asserts. Every store case also
+// checks that the hart's own cached read sees the stores, so an expect-old case cannot pass on stores that never ran.
 
 #include <gtest/gtest.h>
 
@@ -106,10 +107,12 @@ std::vector<std::vector<uint32_t>> run_program(IDevice* device, const std::vecto
 
 std::string status_detail(const std::vector<uint32_t>& status) {
     return fmt::format(
-        "kernel code {}, uncached before {}, stale before {}, matches {} (first other word {} observed 0x{:08x}), "
-        "flag {}, {} cycles",
+        "kernel code {}, cached before {}, uncached before {}, warm old {}, stale before {}, matches {} (first other "
+        "word {} observed 0x{:08x}), flag {}, {} cycles",
         code_name(status[abi::kStatusCode]),
+        status[abi::kStatusCachedBefore],
         status[abi::kStatusUncachedBefore],
+        status[abi::kStatusWarmOld],
         status[abi::kStatusStaleBefore],
         status[abi::kStatusMatches],
         status[abi::kStatusFirstMismatchWord],
@@ -149,7 +152,9 @@ enum class CacheCase : uint32_t {
     L2FlushFull,
     L2InvalidateLine,
     InvalidateFreshRead,
-    HartToHart,
+    HartToHartCoherent,
+    L1InvalidateFull,
+    L2InvalidateFreshRead,
 };
 
 struct CacheCaseSpec {
@@ -169,17 +174,23 @@ CacheCaseSpec spec_of(CacheCase cache_case) {
         case CacheCase::L2FlushFull: return {"L2FlushFull", abi::kModeL2FlushFull, true};
         case CacheCase::L2InvalidateLine: return {"L2InvalidateLine", abi::kModeL2InvalidateLine, false};
         case CacheCase::InvalidateFreshRead: return {"InvalidateFreshRead", abi::kModeInvalidateFreshRead, true};
-        case CacheCase::HartToHart: return {"HartToHart", abi::kModeProducer, true};
+        case CacheCase::HartToHartCoherent: return {"HartToHartCoherent", abi::kModeProducer, true};
+        case CacheCase::L1InvalidateFull: return {"L1InvalidateFull", abi::kModeL1InvalidateFull, false};
+        case CacheCase::L2InvalidateFreshRead: return {"L2InvalidateFreshRead", abi::kModeL2InvalidateFreshRead, true};
     }
     return {"Unknown", abi::kNumModes, false};
 }
 
 std::string cache_case_name(const ::testing::TestParamInfo<CacheCase>& info) { return spec_of(info.param).name; }
 
+bool is_fresh_read(CacheCase cache_case) {
+    return cache_case == CacheCase::InvalidateFreshRead || cache_case == CacheCase::L2InvalidateFreshRead;
+}
+
 void run_hart_to_hart(IDevice* device, uint32_t value) {
     const uint64_t data_offset = tl1_data(kProducerHart);
     const uint64_t flag_offset = data_offset + kCacheWords * sizeof(uint32_t) + kGuardBytes;
-    const uint32_t tag = static_cast<uint32_t>(CacheCase::HartToHart) + 1;
+    const uint32_t tag = static_cast<uint32_t>(CacheCase::HartToHartCoherent) + 1;
     prefill(device, data_offset, kCacheWords, tag);
     write_cce_tl1(device, kCce, flag_offset, std::vector<uint32_t>(abi::kLineBytes / sizeof(uint32_t), 0));
     const std::vector<HartLaunch> launches = {
@@ -197,7 +208,8 @@ void run_hart_to_hart(IDevice* device, uint32_t value) {
          .flag_offset = flag_offset},
     };
     const std::string label = fmt::format(
-        "HartToHart on CCE{}: hart {} stores and flushes, hart {} invalidates and reads, TL1 0x{:x}, {} words",
+        "HartToHartCoherent on CCE{}: hart {} stores and flushes, hart {} reads warm, then invalidates and reads, TL1 "
+        "0x{:x}, {} words",
         kCce,
         kProducerHart,
         kConsumerHart,
@@ -213,8 +225,14 @@ void run_hart_to_hart(IDevice* device, uint32_t value) {
         tt::LogTest, "MM8 cache {}: producer {}; consumer {}", label, status_detail(producer), status_detail(consumer));
     ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label;
     ASSERT_EQ(consumer[abi::kStatusCode], abi::kCodeDone) << label;
+    EXPECT_EQ(producer[abi::kStatusCachedBefore], kCacheWords) << label << ": producer cached view after its stores";
     EXPECT_EQ(producer[abi::kStatusUncachedBefore], 0u) << label << ": cached stores visible before the flush";
     EXPECT_EQ(producer[abi::kStatusMatches], kCacheWords) << label << ": producer uncached view after the flush";
+    EXPECT_EQ(consumer[abi::kStatusWarmOld], kCacheWords) << label << ": consumer warm read before the stores";
+    EXPECT_EQ(consumer[abi::kStatusStaleBefore], 0u)
+        << label
+        << ": consumer cached read after the flush, before its invalidate, still old (risc_common.h says DM "
+           "cores are coherent)";
     EXPECT_EQ(consumer[abi::kStatusMatches], kCacheWords) << label << ": consumer cached view after invalidate";
     expect_host_data(device, data_offset, pattern_words(value, kCacheWords), tag, label);
 }
@@ -234,7 +252,7 @@ TEST_P(MimirDmCache, Op) {
 
     const CacheCaseSpec spec = spec_of(cache_case);
     const uint32_t value = 0xCA000000u | (static_cast<uint32_t>(cache_case) << 16);
-    if (cache_case == CacheCase::HartToHart) {
+    if (cache_case == CacheCase::HartToHartCoherent) {
         run_hart_to_hart(device, value);
         return;
     }
@@ -257,9 +275,10 @@ TEST_P(MimirDmCache, Op) {
     const std::vector<uint32_t>& status = statuses[0];
     log_info(tt::LogTest, "MM8 cache {}: {}", label, status_detail(status));
     ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << status_detail(status);
-    if (cache_case == CacheCase::InvalidateFreshRead) {
+    if (is_fresh_read(cache_case)) {
         EXPECT_EQ(status[abi::kStatusStaleBefore], kCacheWords) << label << ": cached re-read before the invalidate";
     } else {
+        EXPECT_EQ(status[abi::kStatusCachedBefore], kCacheWords) << label << ": cached view after the stores";
         EXPECT_EQ(status[abi::kStatusUncachedBefore], 0u) << label << ": cached stores visible before any flush";
     }
     EXPECT_EQ(status[abi::kStatusMatches], spec.expect_new ? kCacheWords : 0u)
@@ -280,7 +299,9 @@ INSTANTIATE_TEST_SUITE_P(
         CacheCase::L2FlushFull,
         CacheCase::L2InvalidateLine,
         CacheCase::InvalidateFreshRead,
-        CacheCase::HartToHart),
+        CacheCase::HartToHartCoherent,
+        CacheCase::L1InvalidateFull,
+        CacheCase::L2InvalidateFreshRead),
     cache_case_name);
 
 enum class WritePath : uint32_t { Uncached1B, Uncached8B, CachedRangeFlush, CachedFastFlush };
