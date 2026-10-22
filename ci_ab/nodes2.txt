@@ -1,0 +1,5 @@
+ci_ab/test_rbc_ab.py::test_sdpa[sdpa_2k_d128-hifi2nf]
+ci_ab/test_rbc_ab.py::test_norm_sharded[lnsh_plain-hifi2]
+ci_ab/test_rbc_ab.py::test_norm_sharded[lnsh_1k-hifi2]
+ci_ab/test_rbc_ab.py::test_sdpa[sdpa_4k_d128-hifi2nf]
+ci_ab/test_rbc_ab.py::test_norm_sharded[rmssh_2k-hifi2]
