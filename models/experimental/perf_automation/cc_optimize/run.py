@@ -572,6 +572,32 @@ def _reset_fullpipe_baselines(head_sha: str = "") -> None:
     pins, the lever attempts, the gate verdicts and the knob memory all stay."""
     p = state_dir() / _fullpipe_1cq_name()
     forced = str(os.environ.get("PERF_MCP_FORCE_REBASELINE", "")).lower() in ("1", "true", "yes")
+    # A PENDING READING FROM ANOTHER TREE IS NOT A READING EITHER. perf_mcp._record_fullpipe_candidate
+    # stashes every measurement beside the bar as <bar>.pending.json, stamped with HEAD, and
+    # perf_mcp._promote_fullpipe_if_committed promotes it into the bar as soon as HEAD differs from
+    # that stamp -- which a relaunch from a new commit satisfies before it has measured anything.
+    # Devstral 2026-10-22: run 7 died after its last reading (prefill 933 ms at 024f03283e0); the image
+    # e2e fix then restored precision (prefill 1293 ms at cb33ed02ef5). The bar below was dropped as
+    # stale, but the first measurement of the new run would have promoted the 933 ms reading into the
+    # empty bar and graded the new tree's own BEFORE a 38% regression for the rest of the run. Same
+    # rule as the bar: a reading survives only while its commit is the commit the run starts at.
+    pend = p.with_suffix(".pending.json")  # perf_mcp._fullpipe_pending_path(): the same file
+    try:
+        was = str(json.loads(pend.read_text()).get("sha") or "")
+        if forced or (was and head_sha and was != head_sha):
+            print(
+                "  [optimize/cc] pending full-pipeline reading dropped (%s): it would otherwise be promoted "
+                "into the bar on this run's first measurement"
+                % (
+                    "PERF_MCP_FORCE_REBASELINE"
+                    if forced
+                    else "measured at %s, this run starts at %s" % (was[:11], head_sha[:11])
+                ),
+                flush=True,
+            )
+            pend.unlink()
+    except Exception:  # noqa: BLE001
+        pass
     if not forced:
         try:
             doc = json.loads(p.read_text())

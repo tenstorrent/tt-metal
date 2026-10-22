@@ -177,3 +177,83 @@ def test_the_call_site_hands_the_reset_the_commit_the_run_starts_at():
     src = (Path(__file__).resolve().parent.parent / "cc_optimize" / "run.py").read_text()
     assert 'start_sha = _git(repo_root, "rev-parse", "HEAD")' in src
     assert "_reset_fullpipe_baselines(start_sha)" in src
+
+
+# ---------------------------------------------------------------- a pending reading from another tree is not a reading
+
+
+def _pending_path(run):
+    return _bar_path(run).with_suffix(".pending.json")
+
+
+def _write_pending(run, ms, sha, stages=None):
+    _pending_path(run).write_text(
+        json.dumps({"full_pipeline_ms": ms, "mode": "trace+1cq", "method": "trace", "sha": sha, "stages": stages or {}})
+    )
+
+
+_OLD = "024f03283e0aea5a844cc0c8fb83c9116517ff01"
+_NEW = "cb33ed02ef5000000000000000000000000000000"
+
+
+def test_a_pending_reading_from_another_tree_is_dropped_with_the_bar(run, capsys):
+    """Devstral 2026-10-22: run 7's last reading (prefill 933 ms) sat pending at 024f03283e0 when the
+    image e2e fix moved HEAD and prefill to 1293 ms. Both files describe code that is gone."""
+    _write_bar(run, 13.017, sha="f279226bc0c53a882db2641254a91301bc68aeae")
+    _write_pending(run, 13.0155, _OLD, {"prefill": 933.143})
+    run._reset_fullpipe_baselines(_NEW)
+    assert not _bar_path(run).exists()
+    assert not _pending_path(run).exists()
+    out = capsys.readouterr().out
+    assert "pending full-pipeline reading dropped" in out and "024f03283e0" in out and "cb33ed02ef5" in out
+
+
+def test_a_pending_reading_at_the_commit_the_run_starts_from_is_kept(run):
+    """The plain --persist relaunch: the reading was taken on this very tree; a commit will promote it."""
+    _write_bar(run, 13.017, sha=_NEW)
+    _write_pending(run, 13.0155, _NEW)
+    run._reset_fullpipe_baselines(_NEW)
+    assert _bar_path(run).exists() and _pending_path(run).exists()
+
+
+def test_a_pending_reading_without_a_stamp_or_without_a_head_is_kept(run):
+    """Nothing to compare: the conservative choice, as for the bar."""
+    _write_pending(run, 13.0155, "")
+    run._reset_fullpipe_baselines(_NEW)
+    assert _pending_path(run).exists()
+    _write_pending(run, 13.0155, _OLD)
+    run._reset_fullpipe_baselines("")
+    assert _pending_path(run).exists()
+
+
+def test_force_rebaseline_drops_the_pending_reading_too(run, monkeypatch):
+    monkeypatch.setenv("PERF_MCP_FORCE_REBASELINE", "1")
+    _write_pending(run, 13.0155, _NEW)
+    run._reset_fullpipe_baselines(_NEW)
+    assert not _pending_path(run).exists()
+
+
+def test_perf_mcp_cannot_promote_a_stale_pending_reading_after_the_reset(run, monkeypatch):
+    """The leak, end to end: perf_mcp promotes a pending reading whenever HEAD differs from its stamp,
+    which a relaunch from a new commit satisfies before measuring anything. Without the reset the
+    933 ms reading becomes the bar; with it there is nothing left to promote."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "perf_mcp_pending_leak", str(Path(__file__).resolve().parents[1] / "cc_optimize" / "perf_mcp.py")
+    )
+    perf_mcp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(perf_mcp)
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", _bar_path(run))
+    monkeypatch.setattr(perf_mcp, "_head_sha_quiet", lambda: _NEW)
+    assert perf_mcp._fullpipe_pending_path() == _pending_path(run), "run.py and perf_mcp must name the same file"
+
+    _write_pending(run, 13.0155, _OLD, {"prefill": 933.143})
+    assert perf_mcp._promote_fullpipe_if_committed() is True, "the leak this reset guards against"
+    assert json.loads(_bar_path(run).read_text())["stages"]["prefill"] == 933.143
+    _bar_path(run).unlink()
+
+    _write_pending(run, 13.0155, _OLD, {"prefill": 933.143})
+    run._reset_fullpipe_baselines(_NEW)
+    assert perf_mcp._promote_fullpipe_if_committed() is False
+    assert not _bar_path(run).exists()
