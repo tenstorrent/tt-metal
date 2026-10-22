@@ -1,0 +1,416 @@
+[
+  {
+    "group": "p2880-c1024",
+    "launch": {
+      "pid": 1111026,
+      "pgid": 1111026,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T06:21:49.552666+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c1024/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 06:24:39.137 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 06:38:19.483 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 06:38:19.483 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
+      "2026-10-22 06:38:19.808 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p2880-c16384",
+    "launch": {
+      "pid": 755615,
+      "pgid": 755615,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:37:02.425058+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c16384/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:40:18.489 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:47:38.535 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:47:38.535 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
+      "2026-10-22 04:47:38.887 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p2880-c32768",
+    "launch": {
+      "pid": 661213,
+      "pgid": 661213,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:10:21.747891+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c32768/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:13:54.436 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:19:50.598 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:19:50.598 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
+      "2026-10-22 04:19:50.933 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p2880-c4096",
+    "launch": {
+      "pid": 990835,
+      "pgid": 990835,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T05:45:59.250592+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c4096/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 05:48:38.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 05:57:59.269 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 05:57:59.269 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
+      "2026-10-22 05:57:59.614 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p2880-c65536",
+    "launch": {
+      "pid": 103710,
+      "pgid": 103710,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T00:59:18.952752+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c65536/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 01:12:07.660 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 02:09:33.299 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 02:09:33.299 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
+      "2026-10-22 02:09:33.650 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p2880-c8192",
+    "launch": {
+      "pid": 856294,
+      "pgid": 856294,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T05:06:35.354378+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p2880-c8192/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 05:09:26.184 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 05:26:03.015 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 05:26:03.015 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",
+      "2026-10-22 05:26:03.355 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c1024",
+    "launch": {
+      "pid": 1173400,
+      "pgid": 1173400,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T06:38:49.724921+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c1024/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 06:40:54.907 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 06:54:12.136 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 06:54:12.136 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
+      "2026-10-22 06:54:12.479 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c16384",
+    "launch": {
+      "pid": 796570,
+      "pgid": 796570,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:48:07.510320+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c16384/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:50:27.003 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:56:41.592 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:56:41.592 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
+      "2026-10-22 04:56:41.925 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c32768",
+    "launch": {
+      "pid": 696878,
+      "pgid": 696878,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:20:19.819777+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c32768/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:22:21.935 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:28:26.373 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:28:26.373 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
+      "2026-10-22 04:28:26.699 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c4096",
+    "launch": {
+      "pid": 1035983,
+      "pgid": 1035983,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T05:58:28.834157+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c4096/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 06:00:25.548 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 06:09:35.070 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 06:09:35.070 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
+      "2026-10-22 06:09:35.406 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c65536",
+    "launch": {
+      "pid": 307109,
+      "pgid": 307109,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T02:10:01.247006+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c65536/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 02:12:46.678 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 03:52:54.567 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 03:52:54.567 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
+      "2026-10-22 03:52:54.911 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p4352-c8192",
+    "launch": {
+      "pid": 925695,
+      "pgid": 925695,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T05:26:32.284055+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p4352-c8192/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 05:28:28.418 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 05:35:40.898 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 05:35:40.898 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",
+      "2026-10-22 05:35:41.241 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c1024",
+    "launch": {
+      "pid": 1230402,
+      "pgid": 1230402,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T06:54:41.462370+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c1024/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 06:56:50.532 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 07:10:57.491 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 07:10:57.491 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
+      "2026-10-22 07:10:57.823 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c16384",
+    "launch": {
+      "pid": 827792,
+      "pgid": 827792,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:57:10.632037+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c16384/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:59:46.087 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 05:06:05.332 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 05:06:05.332 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
+      "2026-10-22 05:06:05.668 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c32768",
+    "launch": {
+      "pid": 726647,
+      "pgid": 726647,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T04:28:55.569302+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c32768/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 04:30:55.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:36:32.579 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:36:32.579 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
+      "2026-10-22 04:36:32.927 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c4096",
+    "launch": {
+      "pid": 1069969,
+      "pgid": 1069969,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T06:10:05.450383+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c4096/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 06:12:15.207 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 06:21:19.837 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 06:21:19.837 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
+      "2026-10-22 06:21:20.178 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c65536",
+    "launch": {
+      "pid": 604717,
+      "pgid": 604717,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T03:53:24.079553+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c65536/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 03:56:01.493 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 04:09:52.519 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 04:09:52.519 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
+      "2026-10-22 04:09:52.880 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  },
+  {
+    "group": "p8704-c8192",
+    "launch": {
+      "pid": 961949,
+      "pgid": 961949,
+      "host": "bh-glx-120-b09u02",
+      "job": 142547,
+      "utc": "2026-10-22T05:36:09.990150+00:00",
+      "command": [
+        "bash",
+        "/data/divanovic/gptoss-b3b5e13-pd-20261022/runtime/p8704-c8192/start-prefill-owner.sh"
+      ]
+    },
+    "readiness_lines": [
+      "2026-10-22 05:38:07.524 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
+      "2026-10-22 05:45:29.756 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+    ],
+    "closure_lines": [
+      "2026-10-22 05:45:29.756 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",
+      "2026-10-22 05:45:30.093 | INFO     | models.demos.common.prefill.runners.prefill_runner:main:679 - [pp rank 0] shutdown complete"
+    ],
+    "exit": "0"
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "b3b5-status.json": {
+    "file": "full-b3b5-status.json.gz",
+    "sha256": "4821a131481c74f8aae0ea5cf4535cdbbe786b10db9418bf31f25be92dc285bc",
+    "compressed_sha256": "b070901522bff93105002900869500253387272e6174ae49edbf38fcb1969849",
+    "bytes": 2393755,
+    "compressed_bytes": 263199
+  },
+  "baseline.json": {
+    "file": "baseline.json.gz",
+    "sha256": "93973bc249c60e441b7a8abf90a500e2fd94f280982468fe792f4528737d467d",
+    "compressed_sha256": "f99a4eab41fc25a674f89f6f2255b90728da16a7063e654194202d910c332932",
+    "bytes": 1069192,
+    "compressed_bytes": 120972
+  },
+  "raw-request-inventory.json": {
+    "file": "raw-request-inventory.json.gz",
+    "sha256": "950b8973b1480058cf84eb6ccd30fa5a55fe7577e3a7adb9b5346dba0052eda1",
+    "compressed_sha256": "6c5f0ee3970cc02382563706e91755edacc2b05aa1fcdc603cb2f551b706778b",
+    "bytes": 1485836,
+    "compressed_bytes": 378295
+  },
+  "b3b5-runs.csv": {
+    "file": "b3b5-runs.csv.gz",
+    "sha256": "218432db20552c7699db6784750b61801f93504b89ba8f26a06872d07be06c19",
+    "compressed_sha256": "df614f858718348bf0120ba7a48b02ba2dfa0fc6e9fd91df219be0e6d2adcc11",
+    "bytes": 746049,
+    "compressed_bytes": 91765
+  }
+}

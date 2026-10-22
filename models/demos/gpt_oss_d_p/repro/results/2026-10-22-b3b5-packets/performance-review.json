@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-22T07:19:07.706917+00:00",
+  "status": "PASS",
+  "reviewer": "independent final_report_review",
+  "cases": 87,
+  "requests": 348,
+  "mean_variance_fields": 1479,
+  "checks": [
+    "matrix",
+    "warmup/measured separation",
+    "full36 migration",
+    "token reuse and rate denominators",
+    "observed interval accounting",
+    "CSV parity",
+    "seven metric selections/six tables",
+    "baseline matching and provenance"
+  ],
+  "resolved": [
+    "baseline provenance table and frozen hash",
+    "exact TTFT/manager timing boundaries",
+    "explicit derived padded capacity export",
+    "cleanup late-descendant fail-closed check"
+  ],
+  "numerical_accuracy_claim": false,
+  "raw_inventory_files": 8439,
+  "cleanup_guard_tests": 10,
+  "cleanup_helper_sha256": "00577c7a12b73050a0fad70ce37d1ea8993df38791264f04959b5a98bb9eadc7"
+}

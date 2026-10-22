@@ -1,0 +1,29 @@
+{
+  "utc": "2026-10-22T07:21:16.162193+00:00",
+  "status": "SOURCE_PUBLISHED",
+  "branch": "divanovic/gptoss-b3b5-packets-20261022",
+  "measured_commit": "b3b5e13bba59dedaf5134e51faa9a1ef0c5fd4ed",
+  "source_commit": "1dec2641c4a8f54ce22286becf472349ed2bfddf",
+  "remote_verified": true,
+  "source_hashes": {
+    "models/demos/gpt_oss_d_p/repro/make-perf-prompt.py": "ca9045b402579e496dcc6727980f2b4eef76ad2d2fc17f6bad10f56da76bd386",
+    "models/demos/gpt_oss_d_p/repro/measure_pd_request.py": "8fc1ea4f2bd0a82d7fc225ed88e4105dfd32a99259f46553583c37d0c9f90e99",
+    "models/demos/gpt_oss_d_p/repro/perf_analysis.py": "8b73291a4f9996f141b5aabe471011d35722007a041f51f1d8c2eabc60885db5",
+    "models/demos/gpt_oss_d_p/repro/run-prefill-timed.py": "e5dd290f04947daed2187739324f513ff8bbb3d76ea5ed69f2eef69e4649425c",
+    "models/demos/gpt_oss_d_p/repro/run_pd_case.py": "b8fc39f2fcb8ebf0ce48126f926bed1f6cdaf237df20ea282071df0d21f91f97",
+    "models/demos/gpt_oss_d_p/repro/test_perf_analysis.py": "5fcac111aa479e0dba1823f8f6f3b6604aa0b853f28204c0f6c94da24e105b8c"
+  },
+  "hook_command": [
+    "/usr/local/bin/uvx",
+    "pre-commit",
+    "run",
+    "--files",
+    "models/demos/gpt_oss_d_p/repro/make-perf-prompt.py",
+    "models/demos/gpt_oss_d_p/repro/measure_pd_request.py",
+    "models/demos/gpt_oss_d_p/repro/perf_analysis.py",
+    "models/demos/gpt_oss_d_p/repro/run-prefill-timed.py",
+    "models/demos/gpt_oss_d_p/repro/run_pd_case.py",
+    "models/demos/gpt_oss_d_p/repro/test_perf_analysis.py"
+  ],
+  "host_tests": "unittest test_perf_analysis.py"
+}

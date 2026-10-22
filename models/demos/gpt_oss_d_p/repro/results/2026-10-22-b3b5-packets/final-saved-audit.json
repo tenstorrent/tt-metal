@@ -1,0 +1,144 @@
+{
+  "utc": "2026-10-22T07:12:30.618185+00:00",
+  "payloads": {
+    "2880": {
+      "utc": "2026-10-22T07:12:30.514482+00:00",
+      "expected_cases_per_mode": 29,
+      "modes": {
+        "pd": {
+          "done": 29,
+          "failed": [],
+          "started_pending": [],
+          "not_created": 0,
+          "verified_files": [
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/16k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/16k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/16k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/16k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/1k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/2k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/32k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/32k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/32k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/32k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/32k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/4k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/4k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/55k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/55k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/55k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/55k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/55k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/5k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/5k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c64k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/64k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/8k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/8k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p2880/pd/8k-c8k/case.json"
+          ]
+        }
+      },
+      "errors": [],
+      "complete": true
+    },
+    "4352": {
+      "utc": "2026-10-22T07:12:30.545888+00:00",
+      "expected_cases_per_mode": 29,
+      "modes": {
+        "pd": {
+          "done": 29,
+          "failed": [],
+          "started_pending": [],
+          "not_created": 0,
+          "verified_files": [
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/16k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/16k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/16k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/16k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/1k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/2k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/32k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/32k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/32k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/32k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/32k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/4k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/4k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/55k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/55k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/55k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/55k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/55k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/5k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/5k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c64k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/64k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/8k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/8k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p4352/pd/8k-c8k/case.json"
+          ]
+        }
+      },
+      "errors": [],
+      "complete": true
+    },
+    "8704": {
+      "utc": "2026-10-22T07:12:30.576775+00:00",
+      "expected_cases_per_mode": 29,
+      "modes": {
+        "pd": {
+          "done": 29,
+          "failed": [],
+          "started_pending": [],
+          "not_created": 0,
+          "verified_files": [
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/16k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/16k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/16k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/16k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/1k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/2k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/32k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/32k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/32k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/32k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/32k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/4k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/4k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/55k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/55k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/55k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/55k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/55k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/5k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/5k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c16k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c32k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c64k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/64k-c8k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/8k-c1k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/8k-c4k/case.json",
+            "/data/divanovic/gptoss-b3b5e13-pd-20261022/evidence/sweep/p8704/pd/8k-c8k/case.json"
+          ]
+        }
+      },
+      "errors": [],
+      "complete": true
+    }
+  },
+  "expected": 87,
+  "done": 87,
+  "errors": [],
+  "complete": true
+}
