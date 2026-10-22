@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+// The per-tile hand-off of the broadcast multiply reads slower than main with fp32 DEST.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST (!DST_ACCUM_MODE)
 #define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
 
