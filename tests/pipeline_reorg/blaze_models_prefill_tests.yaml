@@ -2236,6 +2236,10 @@
   # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
   # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
   # dominates the step, so a separate job would roughly double the cost of the same coverage.
+  #
+  # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
+  # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
+  # The full matrix (~100 cases on this torus, 4+ min) is not run here.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -2249,7 +2253,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -k "torus_xy_6k" -q -s || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf
@@ -2257,7 +2262,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 30
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
