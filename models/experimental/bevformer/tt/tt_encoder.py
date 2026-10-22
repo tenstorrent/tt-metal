@@ -18,7 +18,8 @@ from typing import Optional, List, Dict, Any
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
 from .tt_common import layer_norm
 from .tt_temporal_self_attention import TTTemporalSelfAttention
-from ..reference.point_sampling_3d_2d import generate_reference_points, point_sampling_3d_to_2d
+from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
+from ..reference.point_sampling_3d_2d import generate_reference_points
 
 try:
     from tracy import signpost
@@ -509,21 +510,15 @@ class TTBEVFormerEncoder:
             # This determines where each BEV query will sample from in each camera view
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
             #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
-            # On the host in float32, as upstream: in bfloat16 the homogeneous divide moves the points
-            # by several pixels and flips some of the mask. The points are then uploaded as bfloat16,
-            # the only dtype build_rebatch_plan's per-camera gather takes.
-            reference_points_cam, bev_mask = point_sampling_3d_to_2d(
+            reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
                 reference_points=reference_points_3d,
                 pc_range=self.pc_range,
                 lidar2img=lidar2img,
                 img_metas=img_metas,
+                device=self.device,
             )
-            reference_points_cam = ttnn.from_torch(
-                reference_points_cam, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            bev_mask = ttnn.from_torch(
-                bev_mask.to(torch.bfloat16), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+            # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
+            reference_points_cam = ttnn.typecast(reference_points_cam, ttnn.bfloat16)
 
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
