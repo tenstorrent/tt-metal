@@ -22,7 +22,9 @@ from pathlib import Path
 RECENT = 24 * 3600
 SKILL = re.compile(r"skills/bringup(?![-\w])")
 SPEC = re.compile(r"models/demos/(\w+)/bringup/spec\.yaml")
-FINISHED = re.compile(r"WAITING FOR A PERSON|nothing left to run|complete with")
+FINISHED = re.compile(
+    r"WAITING FOR A PERSON|nothing left to run|complete with|OVERSEER HOLD"
+)  # HOLD: a stop the overseer chose and told the owner about
 
 
 def alive(run: Path) -> bool:
