@@ -126,7 +126,7 @@ def check_routers(manifest: dict, snapshot: dict, raw_path: pathlib.Path) -> lis
                 problems.append(f"{router.path}.core_registers.{name} is {value:#x}, not {expected:#x}")
         for stream_id, names in entry["streams"].items():
             for name, values in names.items():
-                address = streams["base"] + int(stream_id) * streams["stride"] + streams["register_offsets"][name]
+                address = streams["base"] + int(stream_id) * streams["stride"] + streams["registers"][name]["offset"]
                 if values != {"before": address, "after": address}:
                     problems.append(f"{router.path}.streams.{stream_id}.{name} is {values}, not {address:#x}")
 

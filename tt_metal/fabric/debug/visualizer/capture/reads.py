@@ -67,27 +67,32 @@ class _StreamRegisters:
     base: int
     stride: int
     count: int
-    register_offsets: dict[str, int]
+    # Each register's byte offset in a stream's block, by name (ie. {"buf_space_available": 256, "remote_src": 0})
+    offsets: dict[str, int]
 
     def read(self, stream_id: int, register: str, where: str) -> RegisterRead:
         """The register a stream reference at `where` names."""
         # ttexalens's safe mode reads a past-the-end stream id's address without complaint.
         if not 0 <= stream_id < self.count:
             raise ManifestError(f"{where}.stream_id is {stream_id}; {self.where}.count is {self.count}")
-        if register not in self.register_offsets:
+        if register not in self.offsets:
             raise ManifestError(
-                f"{where}.register is {register!r}; {self.where}.register_offsets names {sorted(self.register_offsets)}"
+                f"{where}.register is {register!r}; {self.where}.registers names {sorted(self.offsets)}"
             )
-        return RegisterRead(self.base + stream_id * self.stride + self.register_offsets[register])
+        return RegisterRead(self.base + stream_id * self.stride + self.offsets[register])
 
 
 def _get_stream_registers(manifest: dict, where: str) -> _StreamRegisters:
+    registers = lookup(manifest, f"{where}.registers", "object", of="object")
     return _StreamRegisters(
         where=where,
         base=lookup(manifest, f"{where}.base", "integer"),
         stride=lookup(manifest, f"{where}.stride", "integer"),
         count=lookup(manifest, f"{where}.count", "integer"),
-        register_offsets=lookup(manifest, f"{where}.register_offsets", "object", of="integer"),
+        offsets={
+            name: lookup(register, "offset", "integer", where=f"{where}.registers.{name}")
+            for name, register in registers.items()
+        },
     )
 
 
