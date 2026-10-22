@@ -12,8 +12,10 @@ float8_e8m0fnu [8] scales, ~101 GB per layer in the shard) packed for ``V41Engra
 ``V41EngramTable`` packs a whole table in one torch pass, which needs the raw table, its scales and the packed
 output resident at once (~224 GB per layer). Here the table is packed in row chunks straight from the safetensors
 shard (``safe_open().get_slice``) into a file under ``TT_V41_WEIGHT_CACHE/engram/`` (one pass per layer, done
-once), and that file is read back into host RAM on every later run (``np.fromfile``, ~123 GB per layer, at NVMe
-speed). The host table is then exactly the branch's ``V41EngramTable`` with a prepacked ``rows`` tensor
+once), and that file is read back into host RAM on every later run (``read_direct``: O_DIRECT reads on a few
+threads straight into the tensor, ~123 GB per layer at the NVMe's rate, 7 GB/s here; ``np.fromfile`` went
+through the page cache, whose reclaim under a full host slowed the second table 6 to 10x).
+The host table is then exactly the branch's ``V41EngramTable`` with a prepacked ``rows`` tensor
 (``V41EngramTable.from_packed``); per chunk the transformer gathers the rows the prompt hashes to and uploads them
 (``TtV41Engram.prepare_host``). ``TT_V41_ENGRAM_MMAP=1`` maps the file instead of reading it (lazy page-ins on a
 host short of RAM; slower first gathers).
@@ -22,6 +24,7 @@ host short of RAM; slower first gathers).
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +37,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import Dee
 from models.demos.deepseek_v3_d_p.tt.v41.engram import PACKED_WIDTH, SCALE_BLOCK, V41EngramTable, pack_rows
 from models.demos.deepseek_v3_d_p.tt.v41.weights import CHECKPOINT_REVISION, V41Checkpoint, dequant_fp8_block
 
+READ_THREADS = "TT_V41_ENGRAM_READ_THREADS"  # O_DIRECT reader threads of ``read_direct`` (default 8; 0: np.fromfile)
+READ_SLICE = 32 << 20  # bytes per preadv
 ROWS_PER_CHUNK = 1 << 21  # 2M rows: 512 MB of fp8 + 16 MB of scales in, 640 MB packed out, per step
 PACKED_DIR = Path(os.environ.get("TT_V41_WEIGHT_CACHE", Path.home() / ".cache" / "tt-v41-weights")) / "engram"
 
@@ -99,21 +104,77 @@ def pack_table_to_file(ckpt: V41Checkpoint, layer: int, path: Path, rows_per_chu
     return path
 
 
+def read_direct(path: Path, threads: int | None = None) -> torch.Tensor:
+    """The whole file as a uint8 tensor, read with O_DIRECT on ``threads`` threads (``TT_V41_ENGRAM_READ_THREADS``,
+    default 8) in ``READ_SLICE`` pieces straight into page-aligned memory: no page-cache copy, so a host whose RAM
+    is nearly full does not reclaim for every page read. A trailing piece short of the block size is read
+    buffered. Files whose filesystem refuses O_DIRECT (tmpfs) are read buffered the same way."""
+    threads = int(os.environ.get(READ_THREADS, "8")) if threads is None else threads
+    size = path.stat().st_size
+    base = torch.empty(size + 4096, dtype=torch.uint8)
+    offset = (-base.data_ptr()) % 4096
+    out = base[offset : offset + size]
+    buf = memoryview(out.numpy())
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+        os.close(fd)
+        direct = True
+    except OSError:
+        direct = False
+    aligned = size // 4096 * 4096 if direct else size
+    pieces = list(range(0, aligned, READ_SLICE))
+    lock = threading.Lock()
+    errors: list[BaseException] = []
+
+    def worker():
+        fd = os.open(path, os.O_RDONLY | (os.O_DIRECT if direct else 0))
+        try:
+            while True:
+                with lock:
+                    if not pieces or errors:
+                        return
+                    start = pieces.pop()
+                end = min(start + READ_SLICE, aligned)
+                while start < end:
+                    n = os.preadv(fd, [buf[start:end]], start)
+                    if n <= 0:
+                        raise OSError(f"{path}: short read at {start}")
+                    start += n
+        except BaseException as e:
+            errors.append(e)
+        finally:
+            os.close(fd)
+
+    workers = [threading.Thread(target=worker, name=f"engram-read-{i}", daemon=True) for i in range(max(1, threads))]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+    if errors:
+        raise errors[0]
+    if aligned < size:
+        with open(path, "rb") as f:
+            f.seek(aligned)
+            tail = f.read(size - aligned)
+        buf[aligned:size] = tail
+    return out
+
+
 def load_packed_table(path: Path, rows: int, resident: bool | None = None) -> torch.Tensor:
-    """uint16 ``[rows, PACKED_WIDTH]`` from a packed table file: read into RAM (``resident``, the default), or
-    mapped (``TT_V41_ENGRAM_MMAP=1``)."""
+    """uint16 ``[rows, PACKED_WIDTH]`` from a packed table file: read into RAM (``resident``, the default; O_DIRECT
+    unless ``TT_V41_ENGRAM_READ_THREADS=0``), or mapped (``TT_V41_ENGRAM_MMAP=1``)."""
     if resident is None:
         resident = os.environ.get("TT_V41_ENGRAM_MMAP", "0") != "1"
     expected = rows * PACKED_WIDTH * 2
     assert path.stat().st_size == expected, f"{path}: {path.stat().st_size} bytes, expected {expected}"
     started = time.time()
-    if resident:
-        arr = np.fromfile(path, dtype=np.int16)
+    if resident and int(os.environ.get(READ_THREADS, "8")) > 0:
+        t = read_direct(path).view(torch.uint16).view(rows, PACKED_WIDTH)
     else:
-        arr = np.memmap(path, dtype=np.int16, mode="r")
-    t = torch.from_numpy(arr).view(rows, PACKED_WIDTH).view(torch.uint16)
-    how = "read" if resident else "mapped"
-    logger.info(f"engram table {path.name}: {how} {expected / 1e9:.1f} GB in {time.time() - started:.0f} s")
+        arr = np.fromfile(path, dtype=np.int16) if resident else np.memmap(path, dtype=np.int16, mode="r")
+        t = torch.from_numpy(arr).view(rows, PACKED_WIDTH).view(torch.uint16)
+    how = ("read direct" if int(os.environ.get(READ_THREADS, "8")) > 0 else "read") if resident else "mapped"
+    logger.info(f"engram table {path.name}: {how} {expected / 1e9:.1f} GB in {time.time() - started:.1f} s")
     return t
 
 
