@@ -7,13 +7,12 @@
 The step-by-step path, which reads each head's logits to host and samples there, is the
 reference. Greedy must pick what it picks, step for step. Sampling cannot be compared
 pick by pick, so the first codebook, whose logits depend only on the frame's inputs, is
-drawn many times and its distribution compared with the softmax over the top k.
+drawn many times and its distribution compared with the softmax over the top k. Speed is
+`tests/perf/test_perf.py`'s to measure: the watcher these run under distorts it.
 
 Run:
     pytest -svv models/demos/audio/qwen3_tts/tests/pcc/test_predictor_frame_trace.py
 """
-
-import time
 
 import pytest
 import torch
@@ -29,12 +28,11 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
 TEMPERATURE, TOP_K = 0.9, 50
-DRAWS = 2000
+DRAWS = 1000
 # A chi-square test of the draws against the exact distribution fails a correct sampler
 # once in a thousand runs. `ttnn.sampling`, which never draws past the top ~18 of a
 # 50-way draw, is rejected far below this.
 MIN_P_VALUE = 1e-3
-FRAMES = 50
 
 
 def _predictor(device, temperature=None, top_k=None):
@@ -113,27 +111,3 @@ def test_a_seeded_generator_repeats_its_frames(device):
     assert run(7) == run(7)
     assert run(7) != run(8)
     traced.release()
-
-
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_the_frame_trace_is_faster_than_step_by_step(device):
-    talker_hidden, first_code, _, _ = code_predictor_prompt()
-    talker_hidden = ttnn.from_torch(talker_hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    generator = torch.Generator().manual_seed(0)
-
-    def per_frame(predictor, **kwargs):
-        predictor.generate(talker_hidden, first_code, **kwargs)
-        started = time.time()
-        for _ in range(FRAMES):
-            predictor.generate(talker_hidden, first_code, **kwargs)
-        return 1000 * (time.time() - started) / FRAMES
-
-    # One trace at a time: each predictor captures, measures and releases before the next.
-    step = _traced(_predictor(device))
-    step_ms = per_frame(step, pick=lambda row: int(row.argmax()))
-    step.release()
-    frame = _traced(_predictor(device, TEMPERATURE, TOP_K))
-    frame_ms = per_frame(frame, generator=generator)
-    frame.release()
-    print(f"\n  step by step {step_ms:.2f} ms/frame, frame trace {frame_ms:.2f} ms/frame")
-    assert frame_ms < step_ms

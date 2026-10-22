@@ -208,6 +208,7 @@ class TtCodePredictorCachedDecoder:
 
         self.trace_id = None
         self._out = None
+        self._warmed = False
         # Set by `sample_on_device`: the frame trace's sampling settings and its inputs.
         self._device_sampling = None
 
@@ -400,7 +401,13 @@ class TtCodePredictorCachedDecoder:
         while another trace exists is corrupt once that trace runs unless released first.
         Warms at the last cache slot, which no real decode reaches, and leaves the cache
         alone so this can follow `prefill`.
+
+        Once is enough: the programs stay in the device's program cache when the trace is
+        released, so this does nothing again until `forget_programs`. A frame's warmup is
+        a whole eager frame, about 65 ms.
         """
+        if self._warmed:
+            return
         if self._device_sampling is not None:
             self._frame_ops()
         else:
@@ -415,8 +422,7 @@ class TtCodePredictorCachedDecoder:
         Every trace must be captured before any of them executes. Capturing a second trace
         after the first has run hangs the device: measured, and it took a board reset.
         """
-        if not getattr(self, "_warmed", False):
-            self.warmup()  # a trace cannot compile new programs
+        self.warmup()  # a trace cannot compile new programs
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._out = self._frame_ops() if self._device_sampling is not None else self._step_ops(self._in)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
@@ -432,7 +438,10 @@ class TtCodePredictorCachedDecoder:
         if self.trace_id is not None:
             ttnn.release_trace(self.device, self.trace_id)
             self.trace_id = None
-            self._warmed = False
+
+    def forget_programs(self):
+        """Note that the device's program cache was cleared, so the next capture warms again."""
+        self._warmed = False
 
     def reset(self):
         """Clear the caches without allocating."""
