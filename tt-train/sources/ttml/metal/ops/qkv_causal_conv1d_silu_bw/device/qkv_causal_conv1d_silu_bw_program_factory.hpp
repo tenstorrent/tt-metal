@@ -16,7 +16,6 @@
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
 inline constexpr uint32_t qkv_conv_bw_tap_count = 4;
-inline constexpr uint32_t qkv_conv_bw_dst_tiles = 4;
 inline constexpr uint32_t qkv_conv_bw_window_rows =
     tt::constants::TILE_HEIGHT + qkv_conv_bw_tap_count - 1;  // 3 rows above + 32
 
@@ -37,8 +36,11 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
         {"weights", 8 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block], x2 to prefetch
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
-        // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits
-        {"sigmoid", qkv_conv_bw_dst_tiles, fp32},
+        // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits. One block, so
+        // every step ends on the buffer boundary: silu_bw works in DST-sized batches and the last one is short
+        // when channel_tiles_per_block is not a multiple of 4, which with a 4-tile buffer made the next batch
+        // straddle the end.
+        {"sigmoid", channel_tiles_per_block, fp32},
         {"dc_tile", channel_tiles_per_block, bf16},
         {"dc_rm", 2 * channel_tiles_per_block, bf16},
         {"partial", 4 * channel_tiles_per_block, fp32},  // grad_w partial [4][channel_tiles], packer adds in place

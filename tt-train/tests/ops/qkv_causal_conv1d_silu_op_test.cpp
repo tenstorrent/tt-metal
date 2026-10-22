@@ -168,7 +168,9 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{32, 32, 32, 32}, 32, 1},
         MetalCase{{64, 96, 64, 32}, 32, 1},
         MetalCase{{64, 96, 64, 32}, 64, 2},
-        MetalCase{{96, 96, 64, 32}, 192, 2},
+        MetalCase{{96, 96, 64, 32}, 192, 2},  // 6 tiles per block: the sigmoid batches are 4 + 2
+        MetalCase{{96, 96, 64, 32}, 96, 2},   // 3
+        MetalCase{{64, 96, 32, 32}, 160, 2},  // 5
         MetalCase{{96, 32, 32, 32}, 96, 3},
         MetalCase{{256, 128, 64, 64}, 128, 1},
         MetalCase{{256, 128, 64, 64}, 256, 8},
