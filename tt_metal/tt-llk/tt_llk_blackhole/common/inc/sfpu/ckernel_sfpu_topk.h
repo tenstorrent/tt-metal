@@ -2752,7 +2752,9 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                 default:
                     std::uint32_t num_steps               = ph + 1;
                     std::uint32_t sorted_seq_length       = 1 << num_steps;
-                    std::uint32_t total_datums_to_compare = 64;
+                    // At K 32 the second tile is dead after the distance 32 step, so its sort is skipped.
+                    const bool first_half_only            = (skip_second & 0x1) && logk == 5;
+                    std::uint32_t total_datums_to_compare = first_half_only ? 32 : 64;
                     if constexpr (STRAIGHT_LINE)
                     {
                         // Steps N to 6 at distance 32, step 5 at distance 16; the direction is chosen once per step
@@ -2769,7 +2771,18 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                             }
                         }
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                        if (idir)
+                        if (first_half_only)
+                        {
+                            if (idir)
+                            {
+                                bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, 32>(sorted_seq_length);
+                            }
+                            else
+                            {
+                                bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false, 32>(sorted_seq_length);
+                            }
+                        }
+                        else if (idir)
                         {
                             bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, 64>(sorted_seq_length);
                         }
