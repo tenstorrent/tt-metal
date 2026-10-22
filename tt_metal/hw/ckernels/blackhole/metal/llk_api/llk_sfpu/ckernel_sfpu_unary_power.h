@@ -162,7 +162,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // Same double-float core as the binary path (ckernel_sfpu_pow_df.h).
     sfpi::vFloat z_hi, z_lo;
     _sfpu_pow_z_df_(sfpi::abs(base), pow, z_hi, z_lo);
-    sfpi::vFloat y = _sfpu_pow2_df_(z_hi, z_lo);
+    sfpi::vFloat y = _sfpu_pow2_df_<false>(z_hi, z_lo);  // pow is finite, see _sfpu_unary_power_fp32_
     // |base| is recomputed here rather than kept live across the core.
     sfpi::vFloat abs_base = sfpi::abs(base);
 
@@ -228,8 +228,10 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
 
 template <int ITERATIONS>
 inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
+    // Convert exponent to float. An infinite exponent goes in as +-FLT_MAX (its bits minus one): every base gives
+    // the same result with both, and the core then needs no per-row check for an infinite pow.
+    const bool pow_is_inf = (exponent & 0x7fffffffu) == 0x7f800000u;
+    const float pow_scalar = Converter::as_float(pow_is_inf ? exponent - 1 : exponent);
     const sfpi::vFloat pow = pow_scalar;
 
     if (pow_scalar >= 0.0f) {

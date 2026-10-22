@@ -779,6 +779,27 @@ def test_pow_fp32_huge_exponent(base, exponent, expected, binary, device):
     assert (result == expected).all(), f"pow({base}, {exponent}) = {result.flatten()[0].item()}, expected {expected}"
 
 
+# y = +-inf: 0 or +inf for a base other than 1, as IEEE 754 pow. Splitting y left inf - inf, and the clamps
+# turned the sign of that NaN into the result: 2**inf gave 0 on Wormhole and 2**-inf gave inf on both
+# architectures. The unary cases reach the float kernel as the huge exponents above do.
+@pytest.mark.parametrize("mode", ["binary", "unary", "rpow"])
+@pytest.mark.parametrize("base", [2.0, 0.5, 10.0, 0.9])
+@pytest.mark.parametrize("exponent", [float("inf"), float("-inf")])
+def test_pow_fp32_infinite_exponent(base, exponent, mode, device):
+    expected = math.pow(base, exponent)
+    torch_base = torch.full((32, 32), base, dtype=torch.float32)
+    torch_exp = torch.full((32, 32), exponent, dtype=torch.float32)
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if mode == "binary":
+        result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+    elif mode == "unary":
+        result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+    else:
+        result = ttnn.to_torch(ttnn.rpow(tt_exp, base))
+    assert (result == expected).all(), f"pow({base}, {exponent}) = {result.flatten()[0].item()}, expected {expected}"
+
+
 # A result below the smallest normal fp32 must flush to 0, not wrap to NaN through the exponent
 # field (#57446).
 @pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])

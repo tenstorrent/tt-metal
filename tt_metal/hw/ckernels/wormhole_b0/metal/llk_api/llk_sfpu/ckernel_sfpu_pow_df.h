@@ -148,8 +148,19 @@ sfpi_inline sfpi::vFloat _sfpu_pow_df_exp2_poly_(sfpi::vFloat f) {
 // result came out NaN instead of 0 (pow(0.1, 1000) in the unary path, #57446).
 // Overflow is detected on the exponent about to be written (>= 255), as the binary path already did;
 // it is equivalent to z >= 128, and it also catches z = +inf (k_int > 0, 2^f NaN).
+// Infinite z: for pow = +-inf and |x| != 1, z_hi = yh*th is +-inf with the sign of z, but the split of pow
+// leaves z_lo NaN (h - yh is inf - inf, and h*tl is inf*0 when tl = 0), and s with it. Blackhole returns
+// +NaN and Wormhole a NaN whose sign depends on the operands, so the clamps below turned that sign into
+// the result (2^-inf gave inf on both, 2^inf gave 0 on Wormhole). s is taken from z_hi there; e can stay
+// NaN, the lower clamp clears it and above it 2^f is NaN anyway. The scalar path never has an infinite pow
+// (it sends one as +-FLT_MAX) and skips the check with POW_CAN_BE_INF = false.
+template <bool POW_CAN_BE_INF = true>
 sfpi_inline sfpi::vFloat _sfpu_pow2_df_(sfpi::vFloat z_hi, sfpi::vFloat z_lo) {
     sfpi::vFloat s = z_hi + z_lo;
+    if constexpr (POW_CAN_BE_INF) {
+        v_if(sfpi::exexp(z_hi, sfpi::ExponentMode::Biased) >= 255) { s = z_hi; }
+        v_endif;
+    }
     sfpi::vFloat e = z_lo - (s - z_hi);
     v_if(s < -126.5f) {
         s = -126.5f;

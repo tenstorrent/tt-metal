@@ -17,6 +17,9 @@ the exponent tile comes from DEST.
     underflow          results below the smallest normal give +0, not NaN (#57446),
                        including pow(0.16287974, 48.508072), where y * log2 x sits just
                        below -127.
+    infinite exponents y = +-inf and +-0 for a base other than 1: 0, +inf or 1 as IEEE 754 pow.
+                       inf - inf in the split of y used to leave a NaN whose sign picked the
+                       result (Wormhole 2**inf gave 0, both architectures 2**-inf gave inf).
 
 ULP is helpers.ulp's distance in representable fp32 values, so a wrong sign fails. Only finite
 normal results are counted in the accuracy test: subnormal results flush to zero on store.
@@ -149,6 +152,24 @@ def test_sfpu_binary_pow_fp32_huge_exponent(formats, base):
         assert (_raw_bits(got) == _raw_bits(want)).all(), (
             f"pow({base}, {exponents[i].item():g}) = {got[0].item()!r}, "
             f"expected {want[0].item()!r}"
+        )
+
+
+@parametrize(formats=FORMATS, base=[2.0, 0.5, 10.0, 0.9])
+def test_sfpu_binary_pow_fp32_infinite_exponent(formats, base):
+    """y = +-inf and +-0: 0 or +inf for a base other than 1, and 1 for a zero exponent, as IEEE 754 pow."""
+    values = [math.inf, -math.inf, 0.0, -0.0]
+    exponents = torch.tensor(values, dtype=torch.float32).repeat(
+        ELEMENTS_PER_TILE // len(values)
+    )
+
+    device = _run_rpow(formats, base, exponents)
+    golden = _golden(base, exponents)
+
+    for i in range(len(values)):
+        got, want = device[i :: len(values)], golden[i :: len(values)]
+        assert (_raw_bits(got) == _raw_bits(want)).all(), (
+            f"pow({base}, {values[i]}) = {got[0].item()!r}, expected {want[0].item()!r}"
         )
 
 
