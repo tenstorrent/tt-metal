@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
