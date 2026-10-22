@@ -66,6 +66,13 @@ class SpecInputs:
         b = self.max_batch
         return ttnn.slice(packed, (k * b,), ((k + 1) * b,), output_tensor=out)
 
+    @staticmethod
+    def _into(t, out):
+        """Copy ``t`` into the existing buffer ``out`` and free it: the eltwise binary ops refuse a preallocated
+        output when both inputs are row-major (binary.cpp ``!(output_preallocated && input_a_rm && input_b_rm)``)."""
+        ttnn.copy(t, out)
+        t.deallocate(True)
+
     def _to_uint32(self, t, out):
         """int32 [B] -> the uint32 [1, B] buffer ``out``, bit for bit (the values are non-negative)."""
         row = ttnn.reshape(t, (1, self.max_batch))
@@ -83,9 +90,9 @@ class SpecInputs:
         assert len(serial) == len(self.slot_caps)
         self._to_uint32(self._row(packed, 0), tokens)
         self._row(packed, 1, out=cur_pos)
-        ttnn.minimum(cur_pos, self.own_cap, output_tensor=pos_owned)
+        self._into(ttnn.minimum(cur_pos, self.own_cap), pos_owned)
         for cap, out in zip(self.slot_caps, serial):
-            ttnn.minimum(cur_pos, cap, output_tensor=out)
+            self._into(ttnn.minimum(cur_pos, cap), out)
         if rope:
             self._to_uint32(ttnn.maximum(cur_pos, self.zeros), inputs[9])
         # 1 on the active slots, 0 on the idle ones, row-major; tilized it is padded with zeros like the host mask.
@@ -110,7 +117,7 @@ class SpecInputs:
         self._to_uint32(self._row(packed, 0), tokens)
         self._row(packed, 1, out=fill)
         for cap, out in zip(self.slot_caps, serial):
-            ttnn.minimum(fill, cap, output_tensor=out)
+            self._into(ttnn.minimum(fill, cap), out)
         self._row(packed, 2, out=step2)
         self._row(packed, 3, out=step3)
         for k, out in enumerate(rope_idx or []):
