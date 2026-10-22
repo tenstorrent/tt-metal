@@ -261,6 +261,74 @@ FORCE_INLINE void multiply_by_decay(
     output.push_back(count);
 }
 
+// output[Mt, Nt] = state[Mt, Nt] * decay[Mt] (broadcast across the columns) + a[Mt, Kt] @ b[Kt, Nt]: the decayed
+// state is formed in DST and the product accumulates on top of it, so neither round-trips through a buffer.
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    typename DFBState,
+    typename DFBDecay,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOut>
+FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, DFBA& a, DFBB& b, DFBOut& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    constexpr uint32_t group_columns = Nt <= dst_tiles ? Nt : dst_tiles;
+    static_assert(Nt % group_columns == 0, "column groups must tile an output row");
+    constexpr uint32_t group_rows = Nt <= dst_tiles ? (dst_tiles / Nt < Mt ? dst_tiles / Nt : Mt) : 1;
+    static_assert(Mt % group_rows == 0);
+    const uint32_t state_id = state.get_id();
+    const uint32_t decay_id = decay.get_id();
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t output_id = output.get_id();
+    output.reserve_back(Mt * Nt);
+    for (uint32_t first_row = 0; first_row < Mt; first_row += group_rows) {
+        for (uint32_t first_column = 0; first_column < Nt; first_column += group_columns) {
+            tile_regs_acquire();
+            reconfig_data_format(state_id, decay_id);
+            mul_bcast_cols_init(state_id, decay_id);
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t column = 0; column < group_columns; ++column) {
+                    mul_tiles_bcast_cols(
+                        state_id,
+                        decay_id,
+                        (first_row + row) * Nt + first_column + column,
+                        first_row + row,
+                        row * group_columns + column);
+                }
+            }
+            reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
+            matmul_block_init(a_id, b_id, false, group_columns, 1, Kt);
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t k = 0; k < Kt; ++k) {
+                    matmul_block(
+                        a_id,
+                        b_id,
+                        (first_row + row) * Kt + k,
+                        k * Nt + first_column,
+                        row * group_columns,
+                        false,
+                        group_columns,
+                        1,
+                        Kt);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t column = 0; column < group_columns; ++column) {
+                    pack_tile(row * group_columns + column, output_id, (first_row + row) * Nt + first_column + column);
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    output.push_back(Mt * Nt);
+}
+
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
 // With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
@@ -316,14 +384,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             q_decay.wait_front(chunk_key_tiles);
             matrix_multiply<Ct, Kt, pair_columns>(q_decay, current, query_projection);  // q_decay S
         }
-        multiply_by_decay(current, final_decay, state_temporary, Kt, pair_columns);
         value_new.wait_front(Ct * pair_columns);
         matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
         scratch.wait_front(Ct * pair_columns);
         value_new.pop_front(Ct * pair_columns);
-        state_temporary.wait_front(key_pair_tiles);
-        matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, pair_columns, key_pair_tiles>(
-            k_decay_transposed, scratch, state_temporary, last ? final_state : state_ring);  // dl S + k_dec_t v_new
+        decayed_state_plus_product<Kt, Ct, pair_columns>(
+            current,
+            final_decay,
+            k_decay_transposed,
+            scratch,
+            last ? final_state : state_ring);  // dl S + k_dec_t v_new
         if constexpr (EmitOutputs) {
             intra.wait_front(chunk_chunk_tiles);
             query_projection.wait_front(chunk_pair_tiles);
@@ -334,7 +404,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             intra.pop_front(chunk_chunk_tiles);
             q_decay.pop_front(chunk_key_tiles);
         }
-        state_temporary.pop_front(key_pair_tiles);
         scratch.pop_front(Ct * pair_columns);
         current.pop_front(key_pair_tiles);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
