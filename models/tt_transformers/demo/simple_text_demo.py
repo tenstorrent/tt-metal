@@ -409,7 +409,7 @@ def hf_max_context_len():
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
+        pytest.param(  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -427,8 +427,9 @@ def hf_max_context_len():
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
-        (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
+        pytest.param(  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -446,6 +447,7 @@ def hf_max_context_len():
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -466,7 +468,7 @@ def hf_max_context_len():
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # reasoning-1 - single user, small prompt, long thinking time
+        pytest.param(  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -487,6 +489,7 @@ def hf_max_context_len():
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
