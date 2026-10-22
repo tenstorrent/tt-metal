@@ -282,7 +282,7 @@ GatherPlan build_gather_plan(
     MeshDevice* mesh_device,
     const CoreRangeSet& allowed_core_ranges,
     bool input_interleaved) {
-    const auto mesh_shape = mesh_device->shape();
+    const auto& mesh_shape = mesh_device->shape();
     const uint32_t mesh_rows = mesh_shape[0], mesh_cols = mesh_shape[1];
     const uint32_t num_chips = mesh_rows * mesh_cols;
     GatherPlan plan;
