@@ -194,7 +194,7 @@ static std::uint32_t dyn_calls  = 0;
             if (dyn_status != 1) { DYN_INIT(5); dyn_status = 1; }                                     \
             _llk_math_matmul_<MATH_FIDELITY, 5>(0, CT_DIM, RT_DIM);                                   \
         } else {                                                                                      \
-            if (dyn_status != 0) { DYN_INIT(THROTTLE_LEVEL); dyn_status = 0; }                        \
+            if (dyn_status != 0) { _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, true>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM); matmul_row_mop_dims = 0; matmul_rows_dest_stride = 0; dyn_status = 0; }                        \
             _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(0, CT_DIM, RT_DIM);                      \
         }                                                                                             \
     } while (0)
