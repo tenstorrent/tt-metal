@@ -22,7 +22,6 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.generator_vllm import initialize_vllm_text_transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -179,6 +178,11 @@ class Qwen3ForEmbedding:
             f"Initializing Qwen3-Embedding model: requested batch_size={batch_size}, "
             f"seq_len={sequence_length}, max_seq_len={self.max_seq_len}"
         )
+
+        # Imported here rather than at module level: tt_transformers' generator_vllm imports vllm, which
+        # the models unit-test image does not install, and tests/test_left_align_real_tokens.py imports
+        # this module there.
+        from models.tt_transformers.tt.generator_vllm import initialize_vllm_text_transformer
 
         # Use tt_transformers infrastructure to initialize the model
         # Similar to how generator_vllm.py initializes text transformers
