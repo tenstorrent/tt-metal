@@ -241,8 +241,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, CI run 39456857459 / job 118751643362.
-    (78, 11, 10): [0.416, 0.418, 0.428, 0.421, 0.429, 0.429, 0.426, 0.426, 0.438, 0.443, 0.448],
+    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
+    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
+    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
