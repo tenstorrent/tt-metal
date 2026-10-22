@@ -303,6 +303,9 @@ void MetalContext::initialize(
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
         if (tt_fabric::is_tt_fabric_config(get_fabric_config())) {
+            // The pin reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g. by
+            // initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
+            this->initialize_fabric_config();
             tt_fabric::pin_remote_transfer_cores_to_dispatch_links(this->get_control_plane(), get_cluster());
         }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
