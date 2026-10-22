@@ -4,6 +4,7 @@
 """The orchestrator: runs every step of a bring-up in dependency order and stops only when a person is needed.
 
     python -m models.demos.common.bringup.orchestrator run --spec S [--until ID] [--only ID] [--model M]
+                                                          --until: that task and what it needs, then stop
     python -m models.demos.common.bringup.orchestrator resume --spec S      # STOPPED tasks become runnable again
     python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject|--rerun --spec S
     python -m models.demos.common.bringup.watch --spec S       # the supervisor's wait: returns on the next event
@@ -1783,21 +1784,26 @@ class Orchestrator:
         return HUMAN
 
     def run(self, until: str | None = None, only: str | None = None) -> int:
-        stop_at = set(self.led.downstream(until)[1:]) if until else set()
+        """until (F152): run that task and what it needs, then stop; only: just that task."""
         while True:
             if self.place_fixes():  # F77 / F143: queued fixes are placed first, so `--only FIX.<n>` can name one
                 continue
+            if until and until not in self.led.tasks():
+                self.echo(f"no task {until} (--until)")
+                return STOPPED
+            if until and satisfied(self.led.status(until)):
+                self.echo(f"reached {until}; stopping (--until)")
+                return DONE
+            scope = set(self.led.upstream(until)) if until else set(self.led.tasks())  # deps may change (F126)
             state = self.led.state()
-            runnable = [
-                t for t in self.led.runnable() if state.get(t, {}).get("status") != "STOPPED" and t not in stop_at
-            ]
+            runnable = [t for t in self.led.runnable() if state.get(t, {}).get("status") != "STOPPED" and t in scope]
             if only:
                 runnable = [t for t in runnable if t == only]
             parked = self.parked_waiting(runnable, state)
             if parked and len(parked) < len(runnable):  # F109: a person's decision does not hold up independent work
                 runnable = [t for t in runnable if t not in parked]
             if not runnable:
-                stopped = [t for t in self.led.tasks() if state.get(t, {}).get("status") == "STOPPED"]
+                stopped = [t for t in self.led.tasks() if t in scope and state.get(t, {}).get("status") == "STOPPED"]
                 if stopped:
                     self.echo(f"stopped tasks: {stopped} (fix, then `resume`)")
                     return STOPPED
@@ -1816,7 +1822,7 @@ class Orchestrator:
             stopped_fix = [
                 t
                 for t, x in self.led.tasks().items()
-                if x.get("step") == OV.FIX_STEP and state.get(t, {}).get("status") == "STOPPED"
+                if x.get("step") == OV.FIX_STEP and state.get(t, {}).get("status") == "STOPPED" and t in scope
             ]
             if stopped_fix:
                 self.echo(f"stopped fix tasks: {stopped_fix}; the run waits for them (fix, then `resume`)")
@@ -1832,7 +1838,7 @@ class Orchestrator:
             if rc == HUMAN and not only:
                 state = self.led.state()
                 rest = [t for t in self.led.runnable() if t != tid and state.get(t, {}).get("status") != "STOPPED"]
-                rest = [t for t in rest if t not in stop_at and t not in self.parked_waiting(rest, state)]
+                rest = [t for t in rest if t in scope and t not in self.parked_waiting(rest, state)]
                 if rest and tid in self.parked_waiting([tid], state):
                     self.echo(f"  [{tid}] waits for a person; the run goes on with {rest[0]} (F109)")
                     continue
@@ -1946,7 +1952,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["run", "resume", "pause", "decide", "measure"])
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
-    ap.add_argument("--until", help="stop after this task")
+    ap.add_argument("--until", help="run this task and the tasks it needs, then stop (F152); nothing else runs")
     ap.add_argument("--only", help="run just this task (if runnable)")
     ap.add_argument("--model")
     ap.add_argument("--attempts", type=int, default=None, help="override every role's attempt budget")
