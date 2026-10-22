@@ -64,12 +64,12 @@ and defines it leaves out. [README.md](README.md) explains the shape they fit in
 | Key | Kind | Schema | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
 | `is_injection_channel` | flag |  | flow_control | `SENDER_CH_{}_IS_INJECTION` | Whether the channel injects traffic into the fabric. With deadlock avoidance on, an injection channel uses bubble flow control. |
-| `free_slots` | stream | `u32` in `buf_space_available` | flow_control | `SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID` | The channel's free slots: the producer takes one per packet it writes, and the router returns it once the packet completes. |
+| `free_slots` | stream | `u32` in `buf_space_available` | flow_control | `SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID` | The channel's slots not holding a packet waiting to be sent: the producer takes one per packet it writes, and the router returns it as soon as it sends the packet over Ethernet. The producer gets its credit back later, at the ack or the completion. |
 | `producer_credit_return_noc` | number |  | flow_control | `SENDER_CH_{}_ACK_NOC_ID` | The NoC the router returns the producer's credits on. |
 | `producer_credit_return_cmd_buf` | enum | `enum:NocCmdBuf` | flow_control | `SENDER_CH_{}_ACK_CMD_BUF_ID` | The NoC command buffer it returns them through. |
-| `connection` | l1 | `u32` | control_info | a runtime argument | Where the producer opens and closes its connection. In the router's runtime args. |
+| `connection` | l1 | `enum:ConnectionValue` | control_info | a runtime argument | The state of the producer's connection: the producer writes open and close requested, and the router writes unused once it has torn the connection down. In the router's runtime args. |
 | `conn_info` | l1 | `struct:EDMChannelWorkerLocationInfo` | control_info | `LOCAL_SENDER_CH_{}_CONN_INFO_ADDR` | Where the producer writes where it is, and the router its read counter. |
-| `buffer_index_sem` | l1 | `struct:SenderChannelProducerCursor` | control_info | a runtime argument | Where the producer keeps its write cursor across connections. In the producer's runtime args, from the channel's connection spec. |
+| `buffer_index_sem` | l1 | `struct:SenderChannelProducerCursor` | control_info | a runtime argument | Where the worker channel's producer keeps its write cursor across connections, for the next producer to pick up. In the producer's runtime args, from the channel's connection spec. Null on the other channels, whose producer keeps none. |
 | `static_connection` | flag |  | control_info | `SENDER_CH_{}_WAIT_STATIC_CONNECTION` | Whether a sibling router connects to the channel once, at startup: before its main loop, each ERISC that runs the channel waits for that connection. The builder gives an ERISC that doesn't run it 0. |
 
 ### Receiver channel fields
@@ -85,7 +85,7 @@ and defines it leaves out. [README.md](README.md) explains the shape they fit in
 | `forward_sync_cmd_buf` | enum | `enum:NocCmdBuf` | kernel_params | `RX_CH_{}_FWD_SYNC_CMD_BUF_ID` | The NoC command buffer it sends the credit increment that announces a forwarded packet through. |
 | `local_write_noc` | number |  | kernel_params | `RX_CH_{}_LOCAL_WRITE_NOC_ID` | The NoC the receiver delivers packets to the local chip on. |
 | `local_write_cmd_buf` | enum | `enum:NocCmdBuf` | kernel_params | `RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID` | The NoC command buffer it delivers them through. |
-| `pkts_sent` | stream | `u32` in `buf_space_available` | flow_control | `TO_RECEIVER_{}_PKTS_SENT_ID` | The packets the peer's sender has sent the channel that the receiver has not taken yet: the peer adds one per packet it sends over Ethernet. |
+| `pkts_sent` | stream | `u32` in `buf_space_available` | flow_control | `TO_RECEIVER_{}_PKTS_SENT_ID` | The packets the peer's sender has sent the channel that the receiver has not taken yet: the peer adds one per packet it sends over Ethernet, and the receiver takes one when it acks the packet with first-level ack, or else once it has forwarded or delivered it. |
 
 ### Downstream edge fields
 
@@ -93,7 +93,7 @@ and defines it leaves out. [README.md](README.md) explains the shape they fit in
 
 | Key | Kind | Schema | Category | Fed as | Description |
 | --- | --- | --- | --- | --- | --- |
-| `free_slots` | stream | `u32` in `buf_space_available` | flow_control | `VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID` | The router's view of the free slots in the sender channel the edge lands on: the router takes one per packet it forwards, and the sibling returns it once the packet completes. |
+| `free_slots` | stream | `u32` in `buf_space_available` | flow_control | `VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID` | The router's view of the free slots in the sender channel the edge lands on: the router takes one per packet it forwards, and the sibling returns it when the packet is acked with first-level ack, or else when it completes. |
 | `teardown_sem` | l1 | `u32` | control_info | a runtime argument | Where the sibling acks the router closing the edge's connection at teardown. In the router's runtime args. |
 
 ## Arguments the manifest leaves out
