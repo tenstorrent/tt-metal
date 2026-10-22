@@ -69,7 +69,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    fp32 accumulation unless the packer writes fp32 (owner).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
-   `results/`.
+   `results/`. Time counts (owner): run the full gate once, after your last edit; before re-running anything that
+   takes more than ~10 minutes, check whether a result you already have on the same code answers the question.
 9. Serving contract. When the brief has a "Serving contract" section, build the part exactly as it says (it is how
    the inference server will drive the model, read from the server's code), from the first version. Its contract
    tests are in your gate like any frozen test. Never assume a simpler case than it states (e.g. only chunk-aligned
