@@ -68,7 +68,12 @@ void kernel_main() {
         // -------- Output: (B, H, S, D), heads NOT fused --------
         // Linear index for [B, H, S, D]: ((b * q_heads + h) * Ht + s_tile) * vWt + col
         write_tiles_by_row(
-            cb_output, output_addr_generator, global_first_row * vWt, out_tiles_per_chunk, tile_bytes, out_tiles_per_chunk);
+            cb_output,
+            output_addr_generator,
+            global_first_row * vWt,
+            out_tiles_per_chunk,
+            tile_bytes,
+            out_tiles_per_chunk);
 
 #ifdef RETURN_INTERMEDIATES
         // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile per row: logsumexp --------
