@@ -247,6 +247,16 @@ def rms_norm(x, eps: float, precision: TtTimestralPrecision):
     )
 
 
+def take_slots(x, rows: int, seq: int, start: int, count: int):
+    """Flat ``(1, 1, rows * seq, D)`` -> ``(1, 1, rows * count, D)``: token slots ``[start, start + count)``
+    of every row; ``x`` is borrowed."""
+    import ttnn
+
+    d = x.shape[-1]
+    picked = ttnn.slice(ttnn.reshape(x, (rows, seq, d)), (0, start, 0), (rows, start + count, d))
+    return ttnn.reshape(picked, (1, 1, rows * count, d))
+
+
 def add_residual(x, out):
     """``x + out``; consumes both."""
     import ttnn

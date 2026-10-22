@@ -77,8 +77,9 @@ def _host_inputs(model, rows, *, group_size=1, key_valid=None, first_obs=None) -
     )
 
 
-def _run_on_device(tt, module, x: torch.Tensor, prepared: TimestralHostInputs) -> torch.Tensor:
-    """Host ``(R, S, D)`` -> module on the padded, flat device layout -> host ``(R, S, D)``."""
+def _run_on_device(tt, module, x: torch.Tensor, prepared: TimestralHostInputs, *, decoder=False) -> torch.Tensor:
+    """Host ``(R, S, D)`` -> module on the padded, flat device layout -> host ``(R, S, D)``,
+    or ``(R, h, D)`` when ``decoder`` cuts the module to the decoder slots."""
     import ttnn
 
     from models.experimental.timestral.tt.common import upload
@@ -89,8 +90,12 @@ def _run_on_device(tt, module, x: torch.Tensor, prepared: TimestralHostInputs) -
     padded = torch.zeros(rows, att.padded_seq, d)
     padded[:, :seq] = x
     x_tt = upload(tt.device, padded.reshape(1, 1, -1, d))
-    out = module(x_tt, att)
-    host = ttnn.to_torch(out).float().reshape(rows, att.padded_seq, d)[:, :seq]
+    if decoder:
+        out = module(x_tt, att, decoder=device_inputs.decoder)
+        host = ttnn.to_torch(out).float().reshape(rows, prepared.horizon_patches, d)
+    else:
+        out = module(x_tt, att)
+        host = ttnn.to_torch(out).float().reshape(rows, att.padded_seq, d)[:, :seq]
     ttnn.deallocate(x_tt)
     ttnn.deallocate(out)
     tt.deallocate_inputs(device_inputs)
@@ -194,6 +199,27 @@ def test_transformer_blocks_pcc(mesh_device):
             expected = layer(x, TwoStreamMask(mask=time_mask, enc_len=L), variate_mask, cos, sin)
         got = _run_on_device(tt, tt._layers[i], x, prepared)
         _check_pcc(f"block_{kind}", expected, got, 0.999)
+
+
+@pytest.mark.parametrize("group_size", [1, 2], ids=["univariate", "multivariate"])
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_last_block_decoder_slots_pcc(mesh_device, group_size):
+    """The last block, cut to the decoder slots after its time attention, matches the full block there."""
+    model = tiny_model()
+    tt = _tt_model(mesh_device, model)
+    x = _x(model)
+    key_valid = torch.ones(R, L, dtype=torch.bool)
+    key_valid[1, :2] = False
+    group_ids = torch.arange(R // group_size).repeat_interleave(group_size)
+    time_mask = build_forecast_time_mask(L, H, key_valid, x.device)
+    prepared = _host_inputs(model, R, group_size=group_size, key_valid=key_valid)
+    cos, sin = prepared.cos.expand(R, -1, -1), prepared.sin.expand(R, -1, -1)
+    variate_mask = build_two_stream_variate_mask(group_ids, key_valid, H)
+    layer = model.transformer.layers[-1]
+    with torch.no_grad():
+        expected = layer(x, TwoStreamMask(mask=time_mask, enc_len=L), variate_mask, cos, sin)[:, L:]
+    got = _run_on_device(tt, tt._layers[-1], x, prepared, decoder=True)
+    _check_pcc(f"last_block/{group_size}", expected, got, 0.999)
 
 
 def _normalized(q: torch.Tensor, prepared: TimestralHostInputs) -> torch.Tensor:

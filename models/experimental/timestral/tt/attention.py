@@ -28,6 +28,7 @@ from models.experimental.timestral.tt.common import (
     linear_residual,
     linear_split,
     rms_norm,
+    take_slots,
     upload,
     upload_linear,
 )
@@ -48,6 +49,20 @@ class TtAttentionInputs:
     rows: int  # R
     padded_seq: int  # S_pad
     group_size: int  # V
+
+
+@dataclass(frozen=True)
+class DecoderSlots:
+    """Token slots ``[start, start + count)`` of every row, the only ones the head reads, and the inputs
+    of the sublayers that run on those slots alone."""
+
+    start: int
+    count: int
+    inputs: TtAttentionInputs  # padded_seq = count; no RoPE tables or time mask
+
+    def take(self, x, inputs: TtAttentionInputs):
+        """Flat ``(1, 1, R * S_pad, D)`` laid out by ``inputs`` -> ``(1, 1, R * count, D)``; ``x`` is borrowed."""
+        return take_slots(x, inputs.rows, inputs.padded_seq, self.start, self.count)
 
 
 def pair_rotation(n: int) -> torch.Tensor:
@@ -81,20 +96,24 @@ class TtAttention:
         if weights.is_time:
             self._rope_trans = upload(device, pair_rotation(TILE).reshape(1, 1, TILE, TILE))
 
-    def __call__(self, x, inputs: TtAttentionInputs, residual=None):
+    def __call__(self, x, inputs: TtAttentionInputs, residual=None, decoder: DecoderSlots | None = None):
         """Flat device ``(1, 1, R * S_pad, D)`` -> same shape, plus ``residual`` (added in the wo
-        matmul) when given; ``x`` and ``residual`` are borrowed."""
+        matmul) when given; ``x`` and ``residual`` are borrowed. With ``decoder`` the gate, wo and
+        residual run on the decoder slots only and the output is ``(1, 1, R * count, D)``."""
         import ttnn
 
         p = self.precision
         xn = rms_norm(x, self.eps, p)
+        merged = self._context(xn, inputs)
+        if decoder is not None:
+            # Nothing after the context mixes token slots.
+            full = (merged, xn)
+            merged, xn = decoder.take(merged, inputs), decoder.take(xn, inputs)
+            for t in full:
+                ttnn.deallocate(t)
+            if residual is not None:
+                residual = decoder.take(residual, inputs)
         gate = linear(xn, self._wg, p, activation="sigmoid")
-        if self.is_time:
-            merged = self._time_context(xn, inputs)
-        elif inputs.group_size == 1:
-            merged = linear(xn, self._wv, p)
-        else:
-            merged = self._variate_context(xn, inputs)
         ttnn.deallocate(xn)
         gated = ttnn.mul(merged, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
@@ -103,8 +122,17 @@ class TtAttention:
             out = linear(gated, self._wo, p)
         else:
             out = linear_residual(gated, self._wo, p, residual, self._ones)
+            if decoder is not None:
+                ttnn.deallocate(residual)
         ttnn.deallocate(gated)
         return out
+
+    def _context(self, xn, inputs: TtAttentionInputs):
+        if self.is_time:
+            return self._time_context(xn, inputs)
+        if inputs.group_size == 1:
+            return linear(xn, self._wv, self.precision)
+        return self._variate_context(xn, inputs)
 
     def _split_heads(self, qkv):
         import ttnn

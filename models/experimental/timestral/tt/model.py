@@ -6,8 +6,8 @@
 reference : models/experimental/timestral/reference/src/timestral/model.py (``_predict_context_only``)
     host:   causal per-patch scaling, [values, missing] patch tokens, masks, RoPE tables
     device: x = embed(tokens) * keep + add          # decoder slots become the forecast query
-            x = transformer(x)                      # 24 layers, see tt/transformer.py
-            out = head(RMSNorm(x[:, L : L + h]))    # out_norm's gain folded into the head
+            x = transformer(x)[:, L : L + h]        # 24 layers; the last cuts to the decoder slots
+            out = head(RMSNorm(x))                  # out_norm's gain folded into the head
     host:   monotone quantiles, sinh denormalization
 
 The sequence runs padded to a whole tile with the pad tokens after the decoder tokens:
@@ -25,7 +25,7 @@ import torch
 from torch import Tensor
 
 from models.experimental.timestral.common.timestral_src import require_timestral
-from models.experimental.timestral.tt.attention import TtAttentionInputs
+from models.experimental.timestral.tt.attention import DecoderSlots, TtAttentionInputs
 from models.experimental.timestral.tt.common import (
     TILE,
     TtTimestralPrecision,
@@ -55,6 +55,7 @@ from timestral.scaler import apply_affine_asinh_masked, causal_patch_loc_scale  
 class TtTimestralDeviceInputs:
     tokens: object  # flat (1, 1, R * S_pad, 2 * patch_size) tiles
     attention: TtAttentionInputs
+    decoder: DecoderSlots
     num_context_patches: int
     horizon_patches: int
 
@@ -149,9 +150,13 @@ class TtTimestral:
         if prepared.time_mask is not None:
             # Time attention runs on an (H, R, S_pad, Dh) view, so the per-row masks sit on dim 1.
             time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, padded_seq)).transpose(0, 1))
-        variate_mask = None
+        ll, h = prepared.num_context_patches, prepared.horizon_patches
+        variate_mask = decoder_variate_mask = None
         if prepared.variate_mask is not None:
-            variate_mask = self._upload_small_mask(_additive(_pad_variate_mask(prepared.variate_mask, seq, padded_seq)))
+            slot_major = _additive(_pad_variate_mask(prepared.variate_mask, seq, padded_seq))
+            variate_mask = self._upload_small_mask(slot_major)
+            series = rows // prepared.group_size
+            decoder_variate_mask = self._upload_small_mask(slot_major[ll * series : (ll + h) * series])
         attention = TtAttentionInputs(
             cos=self._upload_rope(prepared.cos, rows, padded_seq, 1.0),
             sin=self._upload_rope(prepared.sin, rows, padded_seq, 0.0),
@@ -169,11 +174,22 @@ class TtTimestral:
             padded_seq=padded_seq,
             group_size=prepared.group_size,
         )
+        decoder_inputs = TtAttentionInputs(
+            cos=None,
+            sin=None,
+            unit_stats=None,
+            time_mask=None,
+            variate_mask=decoder_variate_mask,
+            rows=rows,
+            padded_seq=h,
+            group_size=prepared.group_size,
+        )
         return TtTimestralDeviceInputs(
             tokens=tokens_tt,
             attention=attention,
-            num_context_patches=prepared.num_context_patches,
-            horizon_patches=prepared.horizon_patches,
+            decoder=DecoderSlots(start=ll, count=h, inputs=decoder_inputs),
+            num_context_patches=ll,
+            horizon_patches=h,
         )
 
     def _upload_rope(self, table: Tensor, rows: int, padded_seq: int, identity: float):
@@ -222,18 +238,12 @@ class TtTimestral:
         ttnn.deallocate(kept)
         return ttnn.reshape(x, (1, 1, r * sp, d))
 
-    def head(self, x, inputs: TtTimestralDeviceInputs):
-        """Final hidden states -> head output ``(1, 1, R * h, patch_size * Q)`` for the decoder slots; consumes ``x``."""
+    def head(self, x):
+        """Decoder-slot hidden states ``(1, 1, R * h, D)`` -> head output ``(1, 1, R * h, patch_size * Q)``; consumes ``x``."""
         import ttnn
 
-        att = inputs.attention
-        r, sp, d = att.rows, att.padded_seq, self.config.d_model
-        ll, h = inputs.num_context_patches, inputs.horizon_patches
-        dec = ttnn.slice(ttnn.reshape(x, (r, sp, d)), (0, ll, 0), (r, ll + h, d))
+        normed = rms_norm(x, self.weights.out_norm_eps, self.precision)
         ttnn.deallocate(x)
-        dec = ttnn.reshape(dec, (1, 1, r * h, d))
-        normed = rms_norm(dec, self.weights.out_norm_eps, self.precision)
-        ttnn.deallocate(dec)
         out = self._head(normed)
         ttnn.deallocate(normed)
         return out
@@ -241,9 +251,10 @@ class TtTimestral:
     def forward_device(self, inputs: TtTimestralDeviceInputs):
         """Device inputs -> device head output ``(1, 1, R * h, patch_size * Q)`` in normalized space."""
         x = self.embed(inputs)
-        for layer in self._layers:
+        *body, last = self._layers
+        for layer in body:
             x = layer(x, inputs.attention)
-        return self.head(x, inputs)
+        return self.head(last(x, inputs.attention, decoder=inputs.decoder))
 
     def postprocess(self, output_device, prepared: TimestralHostInputs) -> Tensor:
         """Download the head output -> raw-space quantiles ``(R, h * patch_size, Q)``."""
@@ -257,7 +268,8 @@ class TtTimestral:
         import ttnn
 
         att = inputs.attention
-        for t in (inputs.tokens, att.cos, att.sin, att.unit_stats, att.time_mask, att.variate_mask):
+        tensors = (inputs.tokens, att.cos, att.sin, att.unit_stats, att.time_mask, att.variate_mask)
+        for t in (*tensors, inputs.decoder.inputs.variate_mask):
             if t is not None:
                 ttnn.deallocate(t)
 
