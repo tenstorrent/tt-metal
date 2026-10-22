@@ -2549,3 +2549,49 @@ Gate, run one command per call (overseer re-rendered tests, OV-27):
 Decision: no change to shipped numerics (the brief forbids it; rule 14: a precision gap is reported, not raised).
 The four experts tests need an owner waiver (tests.waivers) for EXPERTS_IMPL=bfp4, or the owner picks bfp8.
 Re-run: the gate, one test file per call; diagnosis lines: `grep "^note err_experts"` in the test output.
+
+## P.17 perf attempt 1 (2026-10-22): ROPE_IMPL=on, one stock rotary op per RoPE site (precision-debt J3)
+
+What: setting ROPE_IMPL (tt/settings.py, default on; off = the P.16 path, kept for the owner's A/B). On: every RoPE
+site (attention q and output inverse, indexer q, window kv, compressor ckv / k: 34 a chunk) is ONE
+`ttnn.experimental.deepseek_prefill.rotary_embedding_indexed` on bf16 heads (tt/rope.py:rope_stock). INDEX.md has no
+bring-up rope fork, so the stock op is first in line (rule 16). K-11: rotary_offset ropes the 64-dim tail of a 512 /
+128 head in place, so no weight row is permuted any more (wq_b, wkv, kv_norm, wo_a, compressor wkv / wgate / norm /
+wk / k_norm, indexer wq_b all in checkpoint order); the Meta pair order with the trans-mat is the reference's
+interleaved order; inverse = the transposed trans-mat.
+Decisions:
+- Rows: the model's layout is natural blocks, not the server's block-cyclic order the op's kv_actual_global math
+  assumes, so each call gets this chip's rows pre-sliced (RopeTable.rows / CompressRope.rows, memoized per start as
+  before) and kv_actual_global 0 (every chip reads from row 0; any 32-aligned start; one cached program).
+- Tables bf16 [max_seq, 64] (each angle twice): the op refuses fp32 cos / sin (DS41-96, probe_001).
+- Compute config: the op's default (HiFi4 + fp32 DEST). DS41-83: the trans-mat product is exact on bf16 only at
+  HiFi3 / HiFi4; probe_002 tail vs float64: HiFi4 0.0037, HiFi2 0.0052 (one bf16 rounding 0.0017), 0.09-0.10 ms.
+- q: the 512^-0.5 scale moved into the input's bf16 cast (multiply writing bf16: still one rounding, one op fewer);
+  wq_b writes bf16 (DS41-84: noise); nlp_create_q_heads_split then rope_stock(tail, concat_prefix=nope). Indexer q
+  likewise (no scale). Output: rope_stock(oh, trans_inv) on the bf16 heads, then the unchanged _out_proj.
+- kv: kv_norm writes bf16 (TtDistributedRmsNorm(dtype=)), then rope_stock. Compressor: ckv = rope_stock of the
+  latent cast to bf16 (wk still reads the fp32 latent); k_norm writes bf16, then rope_stock.
+- Not deleted: PairPerm, the interleave helpers and the fp32 chains stay as the ROPE_IMPL=off path, because the
+  orchestrator measures off as the old side. Once the owner accepts, delete with ROPE_IMPL: tt/rope.py PairPerm,
+  deinterleave_perm, rope_deinterleaved(_bf16), interleave_tail, deinterleave_tail, rope_heads; the off branches in
+  tt/attention.py (_q_glue, _q_heads, _out_glue, _out_heads, the table transform), tt/indexer.py (_query_glue and the
+  permute path), tt/kv.py, tt/compressor.py; then rewrite DS41-15 / DS41-83.
+Measured (2x2, chunk 53248-55296):
+- Quick A/B side on (`measure --task P.17`): chunk wall 153.6 ms (spread 22.4), worst layer L03 pcc 0.99670,
+  host_transfers_per_layer 0; every err_* within its limit: err_layer L00 .0261/.0570, L01 .0347/.0720, L02 .0520/.1077,
+  L03 .0813/.1587, L14 .0605/.1380, L20 .0300/.0507, L21 .0507/.1312, L24 .0281/.0418; window_kv L00 .0042/.0585
+  (FIX.9: .0034), state max .0541.
+- Plain profile (on) vs FIX.5's profile of the same tree with the old path: programs (4 chips) 7800 -> 6140 (-415
+  calls a chunk); device sum 104.33 -> 96.91 ms; attention 40.56 -> 34.50, indexer 12.93 -> 11.85, kv 1.18 -> 0.81,
+  compressor 1.81 -> 1.65 (programs: attention 2244 -> 1476, indexer 376 -> 200, kv 800 -> 384, compressor 964 -> 664).
+- Component steps vs golden, on / off (frozen tests run by hand, not this gate): kv L0 0.00417 / 0.00335 (limit
+  0.0582), window attention L0 0.0214 / 0.0228 (0.0902), compressor L2 0.00361 / 0.00319 (0.217), compressed
+  attention L2 0.0276 / 0.0298 (0.148); indexer overlap equal (L2 miss 0.00577 / 0.00576, L20 0.00340 / 0.00343).
+Gotchas:
+- Pre-existing, on and off alike (not this change): test_c_enc_source_indexer / test_c_dec_candidate_indexer fail
+  their overlap limit (0.00065 / 0.00144); the gate's swap experts tests fail outside the waivers:
+  test_swap_enc_source_14_experts err_swap_out 0.0296 on / 0.0294 off (<= 0.0159), swap_indexer match 0.0015 both,
+  swap_router; test_swap_swa_12_experts err_swap_out 0.0248 on / 0.0267 off (<= 0.0185), swap_router_vs_golden_err
+  0.149 on / 0.151 off (<= 0.142). test_c_swa_experts passes (waived).
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.17`; probe
+`scripts/tt-probe.sh ds41_rope_stock < tests/ttnn/unit_tests/operations/ds41_rope_stock/probes/probe_002.py`.

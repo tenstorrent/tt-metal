@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "K-11",
+   "how": "rotary_embedding_indexed(rotary_dim=64, rotary_offset=W-64) ropes the head tail in place, so every weight stays in checkpoint order (no deinterleave_perm) at all 34 sites",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-83",
+   "how": "kept the rope op's default HiFi4: its 0/+-1 trans-mat product is exact on bf16 only at HiFi3/4 (probe_002: HiFi2 tail rel 0.0052 vs HiFi4 0.0037)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-84",
+   "how": "attention / indexer wq_b write bf16 directly into the stock rope (a bf16-out matmul differs from fp32 + typecast only at noise level; bit-identity no criterion)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-87",
+   "how": "profiled with the plain profile only (8 min), no per-op mode",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "tt-probe left only probes/probe_NNN.py under tests/ttnn/unit_tests/operations/ds41_rope_stock",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-15",
+   "evidence": "Out of date: its Fix ('avoided', fp32 SFPU chains + de-interleaved weights) is no longer the path; ROPE_IMPL=on (stock rotary_embedding_indexed on bf16, tt/rope.py:rope_stock) passes every ladder-last limit (runs/run1/ab/P.17/new/side.json: err_layer L00 .0261/.0570 ... L24 .0281/.0418, window_kv L00 .0042/.0585). The fp8 q-dq it cites was deleted in FIX.8. Rewrite once the owner accepts P.17.",
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "evidence": "Fix text ('tt/exact_mm.py, setting ATTN_IN_MM') points at code FIX.8 deleted (already noted inline); no RoPE consequence any more.",
+   "cited": false
+  }
+ ],
+ "missing": [
+  "rotary_embedding_indexed on a natural-block (non block-cyclic) layout: pre-slice each chip's cos / sin rows and pass kv_actual_global 0 (now DS41-96)",
+  "rotary_embedding_indexed refuses fp32 cos / sin (metal2 unpack_modes TT_FATAL): bf16 tables only (now DS41-96)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-96"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.17",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T09:02:35",
+  "head": "6d185b6cc40",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.17.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

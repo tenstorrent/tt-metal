@@ -28,6 +28,9 @@ a chip row and no group is pending at a chunk start (serving_contract.md "Compre
         positions r j) -> ckv bf16
     (b) ttnn.linear wk^T [512 -> 128] (replicated, bf16 as stored, HiFi4, fp32 acc) -> k_norm (fp32) -> RoPE ->
         k bf16
+ROPE_IMPL=on (P.17, the default): (a) / (b) through ONE stock rotary_embedding_indexed each (tt/rope.rope_stock) on
+bf16 (the latent cast once; k_norm writes bf16), every weight in checkpoint order; the paragraph below is the off
+path.
 The rope dims of every producing weight (wkv / wgate rows, compressor.norm, wk's input columns, wk's rows and
 k_norm for the key) are permuted at load to [even | odd] (tt/rope.deinterleave_perm), so RoPE is the exact fp32
 SFPU composition and returns the reference's interleaved order (DS41-15). The latent stays fp32 up to the bf16
@@ -53,7 +56,19 @@ import ttnn
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, tp_sum
 from .norm import TtDistributedRmsNorm
-from .rope import PairPerm, RowsMemo, deinterleave_perm, glue, indexer_glue, rope_deinterleaved, rope_deinterleaved_bf16
+from .rope import (
+    PairPerm,
+    RowsMemo,
+    deinterleave_perm,
+    glue,
+    indexer_glue,
+    pair_table,
+    rope_deinterleaved,
+    rope_deinterleaved_bf16,
+    rope_stock,
+    rot_mats,
+    stock,
+)
 from .served import CacheSlab, alloc_served
 from .settings import settings
 
@@ -74,8 +89,8 @@ def _upload(mesh, t, dtype, layout, dims=None):
 
 
 class CompressRope:
-    """cos / sin of the compressed rows' positions r j for j in [0, max_seq / r): [1, 1, J, R/2] fp32 ROW_MAJOR,
-    replicated, built once at load (the reference's own fp32 table: torch.polar of fp32(pos x freq)). ``rows(g0,
+    """cos / sin of the compressed rows' positions r j for j in [0, max_seq / r): [1, 1, J, R/2] fp32 ROW_MAJOR
+    (ROPE_IMPL=on: [1, 1, J, R] bf16 in the Meta pair order, tt/rope.pair_table, + the trans-mat), replicated, built once at load (the reference's own fp32 table: torch.polar of fp32(pos x freq)). ``rows(g0,
     n)`` slices compressed rows [g0, g0 + n) on the device (any offset: ROW_MAJOR), tiles them and splits them over
     the SP axis, so mesh row r gets the groups of its natural token block."""
 
@@ -86,9 +101,19 @@ class CompressRope:
         rot = rope_table(freqs.float(), torch.arange(j) * ratio)  # complex64 [J, R/2]
         self.mesh, self.rows_max, self.half, self.ratio = mesh, j, freqs.numel(), ratio
         assert self.half % 32 == 0, f"rope half width {self.half} is not a tile multiple"
-        self.cos = _upload(mesh, rot.real.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
-        self.sin = _upload(mesh, rot.imag.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
-        self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
+        self.stock = stock()  # ROPE_IMPL=on (P.17): [J, R] bf16 pair tables for tt/rope.rope_stock
+        if self.stock:
+            c2, s2 = pair_table(rot)
+            self.width = 2 * self.half
+            self.cos = _upload(mesh, c2.reshape(1, 1, j, self.width), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            self.sin = _upload(mesh, s2.reshape(1, 1, j, self.width), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            self.trans, _ = rot_mats(mesh)
+            self.pairs = None
+        else:
+            self.width = self.half
+            self.cos = _upload(mesh, rot.real.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+            self.sin = _upload(mesh, rot.imag.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+            self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
         self.memo = RowsMemo(indexer_glue())  # INDEXER_GLUE=on (P.16): once per (g0, n) for every source layer
 
     def free(self, *ts) -> None:
@@ -104,7 +129,7 @@ class CompressRope:
         assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(t, [0, 0, g0, 0], [1, 1, g0 + n, self.half], memory_config=DRAM)
+            sl = ttnn.slice(t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM)
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
             ttnn.deallocate(sl)
             if sp > 1:
@@ -271,7 +296,12 @@ class TtCompressor:
         self.mesh, self.ratio, self.rope, self.tables = mesh, ratio, rope, tables
         self.hd, self.idx, rd = cfg.head_dim, cfg.index_dim, cfg.rope_dim
         assert ratio in (1, 2), ratio
-        perm, permk = deinterleave_perm(self.hd, rd), deinterleave_perm(self.idx, rd)
+        # ROPE_IMPL=on (P.17): every weight in checkpoint order (the stock rope reads interleaved pairs)
+        self.stock = rope.stock
+        if self.stock:
+            perm, permk = torch.arange(self.hd), torch.arange(self.idx)
+        else:
+            perm, permk = deinterleave_perm(self.hd, rd), deinterleave_perm(self.idx, rd)
         tp = mesh.shape[TP_AXIS]
         self.ckc = attn_compute_config(mesh)  # [wkv | wgate] and wk: ATTN_FIDELITY (P.7)
         blocks = [w["wkv"].float()[perm]] + ([w["wgate"].float()[perm]] if ratio > 1 else [])
@@ -285,7 +315,9 @@ class TtCompressor:
         wk = w["wk"].float()[permk][:, perm].t().contiguous()  # [512 (latent, de-interleaved), 128]
         assert torch.equal(wk.bfloat16().float(), wk), "wk must be bf16-exact (as stored)"
         self.wk = _upload(mesh, wk.reshape(1, 1, self.hd, self.idx), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-        self.k_norm = TtDistributedRmsNorm(mesh, w["k_norm"].float()[permk], cfg.eps, split=False)
+        # ROPE_IMPL=on: k_norm writes the bf16 the stock rope reads (its last multiply's packer rounds once)
+        kdt = ttnn.bfloat16 if self.stock else None
+        self.k_norm = TtDistributedRmsNorm(mesh, w["k_norm"].float()[permk], cfg.eps, split=False, dtype=kdt)
         self.glue_partial = indexer_glue() and settings.get("HC_TP_SUM") == "gather_add"  # P.16 (tt/ccl.tp_sum)
 
     def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
@@ -344,6 +376,8 @@ class TtCompressor:
         ttnn.deallocate(pooled)
         n = rows // r
         cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
+        if self.stock:
+            return self._rope_stock(latent, cos, sin)
         # ATTN_GLUE=on (P.15): the rope's last ops write bf16 and the re-interleave is a PairPerm matmul
         fold = self.rope.pairs is not None
         if fold:
@@ -368,6 +402,21 @@ class TtCompressor:
         k = cast(kr, ttnn.bfloat16)
         if k is not kr:
             ttnn.deallocate(kr)
+        return ckv, k
+
+    def _rope_stock(self, latent: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """ROPE_IMPL=on (P.17): the fp32 latent (consumed) -> (ckv, k) bf16 through tt/rope.rope_stock: ckv = rope of
+        the latent cast to bf16; k = rope of k_norm(latent wk^T) written bf16 (wk reads the fp32 latent, as before)."""
+        lb = ttnn.typecast(latent, ttnn.bfloat16, memory_config=DRAM)
+        ckv = rope_stock(lb, cos, sin, self.rope.trans)
+        ttnn.deallocate(lb)
+        kp = self._mm(latent, self.wk)
+        ttnn.deallocate(latent)
+        kn = self.k_norm(kp)
+        ttnn.deallocate(kp)
+        k = rope_stock(kn, cos, sin, self.rope.trans)
+        ttnn.deallocate(kn)
+        self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return ckv, k
 
     def _gathered(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
