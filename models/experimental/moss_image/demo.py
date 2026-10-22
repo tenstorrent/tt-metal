@@ -149,6 +149,13 @@ def generate(
         report["timings"]["text_encoder_seconds"] = time.perf_counter() - stamp
         del encoder
         gc.collect()
+        if encoder_mesh is not mesh:
+            # Child and parent share physical queues. The supported handoff is
+            # to quiesce the parent hierarchy after child work, as in Metalium's
+            # child/parent workload tests. A Python keep-alive can retain the
+            # child after this local name is dropped; do not close that tracker
+            # before the parent quiesces it.
+            mesh.quiesce_devices()
         del encoder_mesh
         model = TTMossDiT(checkpoint, mesh)
         contexts = {key: model.upload(value) for key, value in contexts.items()}

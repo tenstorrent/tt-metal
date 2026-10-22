@@ -25,6 +25,9 @@ final-image accuracy.
 - MOSS diffusion transformer on one Blackhole p150 or two connected p150 cards
   using head/channel tensor parallelism.
 - FP32 classifier-free guidance and Euler updates on TT.
+- Grouped attention with FP32 scores and softmax, BF16 probabilities and FP32 PV
+  accumulation in both the prompt encoder and DiT. This favors accuracy over
+  the preceding native-SDPA implementation's runtime.
 - FLUX.2 VAE decode on TT; the decoder is replicated on a two-card mesh.
 - CPU tokenization, independently seeded initial Gaussian noise, scheduler/RoPE
   constants, module boundary transfers and image/artifact serialization.

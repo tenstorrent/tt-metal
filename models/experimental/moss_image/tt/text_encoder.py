@@ -67,6 +67,7 @@ class TTTextEncoder:
         import ttnn
 
         from models.experimental.moss_image.tt import precision
+        from models.experimental.moss_image.tt.attention import AccurateAttention
 
         self.precision = precision
         self.ttnn = ttnn
@@ -105,6 +106,8 @@ class TTTextEncoder:
             packer_l1_acc=False,
         )
 
+        self.accurate_attention = AccurateAttention(device, self.compute, head_group_size=6)
+
     def upload(self, tensor, dtype=None, layout=None):
         t = self.ttnn
         return t.from_torch(
@@ -117,12 +120,8 @@ class TTTextEncoder:
 
     def linear(self, x, state, name):
         t = self.ttnn
-        return t.linear(
-            x,
-            self.upload(state[name + ".weight"].T),
-            compute_kernel_config=self.compute,
-            memory_config=t.DRAM_MEMORY_CONFIG,
-        )
+        weight = self.upload(state[name + ".weight"].T)
+        return t.linear(x, weight, compute_kernel_config=self.compute, memory_config=t.DRAM_MEMORY_CONFIG)
 
     def norm(self, x, weight, zero_centered=True):
         t = self.ttnn
@@ -165,21 +164,7 @@ class TTTextEncoder:
         q = self._rope(t.permute(q, (0, 2, 1, 3)))
         k = self._rope(t.permute(k, (0, 2, 1, 3)))
         v = t.permute(v, (0, 2, 1, 3))
-        y = t.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True,
-            scale=256**-0.5,
-            compute_kernel_config=self.compute,
-            memory_config=t.DRAM_MEMORY_CONFIG,
-            program_config=t.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                q_chunk_size=32,
-                k_chunk_size=32,
-                exp_approx_mode=False,
-            ),
-        )
+        y = self.accurate_attention(q, k, v, is_causal=True, scale=256**-0.5)
         y = t.permute(y, (0, 2, 1, 3))
         y = self.precision.multiply(y, self.precision.sigmoid(gate))
         record("attention_gated", y)

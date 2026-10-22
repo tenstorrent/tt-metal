@@ -47,6 +47,7 @@ class TTMossDiT:
     def __init__(self, checkpoint, device):
         import ttnn
         from models.experimental.moss_image.tt import precision
+        from models.experimental.moss_image.tt.attention import AccurateAttention
 
         self.ops = precision
         self.t = ttnn
@@ -69,12 +70,7 @@ class TTMossDiT:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self.sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
-        )
+        self.accurate_attention = AccurateAttention(device, self.compute, head_group_size=6)
         self.metadata_cache = {}
 
     def upload(self, value, *, dtype=None, shard=None):
@@ -188,17 +184,7 @@ class TTMossDiT:
             return y
 
         q, k, v = project("q"), project("k"), project("v")
-        y = t.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=mask,
-            is_causal=False,
-            scale=128**-0.5,
-            compute_kernel_config=self.compute,
-            memory_config=t.DRAM_MEMORY_CONFIG,
-            program_config=self.sdpa_config,
-        )
+        y = self.accurate_attention(q, k, v, attn_mask=mask, is_causal=False, scale=128**-0.5)
         if observe:
             observe("attention", y)
         y = t.reshape(t.permute(y, (0, 2, 1, 3)), (1, padded, heads * 128))
