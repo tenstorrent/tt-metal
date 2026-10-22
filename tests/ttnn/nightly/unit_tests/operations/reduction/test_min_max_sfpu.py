@@ -153,3 +153,28 @@ def test_int32_reduce_row_major_pad_value(device, input_shape, dim, op, base_ran
 
     assert output_tensor.dtype == torch_input.dtype
     assert_equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize("input_shape", [(5, 37), (1, 1, 30, 30), (2, 3, 17, 19), (2, 3, 32, 64)])
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2), 1, None])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_int32_max_slice_all_int32_min(device, input_shape, dim, layout):
+    if dim == 1 and len(input_shape) < 3:
+        pytest.skip("no dim 1 to reduce over in a rank-2 input")
+    torch.manual_seed(0)
+    int32_min = torch.iinfo(torch.int32).min
+    torch_input = torch.randint(-1000, 1000, input_shape, dtype=torch.int32)
+    torch_input[..., 0, :] = int32_min
+    torch_input[..., :, 3] = int32_min
+
+    torch_output = torch.amax(torch_input, dim=dim) if dim is not None else torch.amax(torch_input)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.int32)
+    output_tensor = ttnn.to_torch(ttnn.max(input_tensor, dim=dim))
+    assert_equal(output_tensor.reshape(torch_output.shape), torch_output)
+
+    all_min = torch.full(input_shape, int32_min, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(all_min, layout=layout, device=device, dtype=ttnn.int32)
+    output_tensor = ttnn.to_torch(ttnn.max(input_tensor, dim=dim))
+    expected = torch.amax(all_min, dim=dim) if dim is not None else torch.amax(all_min)
+    assert_equal(output_tensor.reshape(expected.shape), expected)
