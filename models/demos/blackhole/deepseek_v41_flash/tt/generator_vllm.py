@@ -304,6 +304,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             # compile pass of the verify round NOW, before any trace exists: it creates every lazily built persistent tensor (packed inputs, Engram rows, per-T constants); the lazy first use
             # in ``_spec_seed`` ran it after the prefill trace was captured: a persistent tensor allocated under a live trace is clobbered by its replays (hang on the first request)
             sp = generator.spec
+            pm_ = getattr(generator.m, "prefill_model", None)
+            if pm_ is not None and os.environ.get("DSV41_VLLM_EARLY_TEARDOWN", "1") == "1":
+                # the build-time prefill state (~401 MiB/bank at 1M) is released by ``warm_serving`` anyway before the chunk trace is captured: free it BEFORE the verify compile pass, whose 16 MiB/bank
+                # temporaries otherwise do not fit next to a bf16 KV pool (paged read mode: +161 MiB/bank at B=4 / 1M; "Out of Memory ... 67 MB" in SpecRunner.prepare). A no-op later.
+                pm_.teardown_dyn()
             generator.m._admit_idle()  # every user owns a page (the verify round's pool.ensure grows all of them)
             sp.prepare(torch.zeros(B, sp.n, dtype=torch.long), torch.full((B,), 130, dtype=torch.long))
             generator.spec_buckets = {}
