@@ -107,6 +107,15 @@ def test_a_record_missing_a_required_field_is_refused():
         from_plain(Domain, {"low": 0})
 
 
+@pytest.mark.parametrize("entry", [[151, 128, 128], [151, 128, 128, 3, 0]])
+def test_a_bins_entry_of_the_wrong_length_is_refused(entry):
+    """`bins` is `(binade, present, ranked, worst)`: a fixed shape, so three or five
+    values are refused rather than read as a variadic tuple."""
+    record = {"op": "Abs", "key": {}, "worst": 1, "lanes": 1, "bins": [entry]}
+    with refused(Problem.WRONG_SHAPE):
+        from_plain(Measurement, record)
+
+
 @pytest.mark.parametrize(
     "data, problem",
     [

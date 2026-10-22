@@ -176,7 +176,9 @@ def partition(
             runs[-1].last = index
             runs[-1].lanes += lanes
         else:
-            runs.append(_Run(index, index, ranked, past, lanes))
+            runs.append(
+                _Run(first=index, last=index, ranked=ranked, past=past, lanes=lanes)
+            )
     changed = True
     while changed:
         changed = False
@@ -198,11 +200,11 @@ def partition(
             lo, hi = min(i, j), max(i, j)
             runs[lo : hi + 1] = [
                 _Run(
-                    runs[lo].first,
-                    runs[hi].last,
-                    True,
-                    runs[j].past,
-                    runs[lo].lanes + runs[hi].lanes,
+                    first=runs[lo].first,
+                    last=runs[hi].last,
+                    ranked=True,
+                    past=runs[j].past,
+                    lanes=runs[lo].lanes + runs[hi].lanes,
                 )
             ]
             changed = True
@@ -213,7 +215,7 @@ def partition(
             merged[-1].last = r.last
             merged[-1].lanes += r.lanes
         else:
-            merged.append(_Run(r.first, r.last, r.ranked, r.past, r.lanes))
+            merged.append(_Run(**vars(r)))
     # The smallest magnitude any swept lane has: an edge at or below it has nothing
     # between it and zero, and reads as 0.
     smallest = min(

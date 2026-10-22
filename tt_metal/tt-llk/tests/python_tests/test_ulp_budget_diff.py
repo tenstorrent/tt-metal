@@ -280,6 +280,7 @@ def test_diff_exit_status(tmp_path, head, flags, status):
         "<<<<<<< HEAD\nAbs: [\n",
         "Abs:\n- {{measured: 1}}\n",
         "Abs:\n- {input: Float16_b, output: Float16_b, domains: [{low: -.inf}]}\n",
+        b"\xff",
         None,
     ],
     ids=[
@@ -288,16 +289,20 @@ def test_diff_exit_status(tmp_path, head, flags, status):
         "conflict-marker",
         "doubled-braces",
         "entry-without-high",
+        "not-utf-8",
         "missing-file",
     ],
 )
 def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
     """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
     gate, not a table no gate can be read from. A conflict marker, a mapping used as a
-    key and an entry missing a field used to escape as tracebacks with exit 1."""
+    key, an entry missing a field and a file that is not UTF-8 used to escape as
+    tracebacks with exit 1."""
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
     write_table_file(_BASE, base_path)
-    if head_text is not None:
+    if isinstance(head_text, bytes):
+        head_path.write_bytes(head_text)
+    elif head_text is not None:
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
     assert main([*argv, "--allow-raises"]) == 2
@@ -630,5 +635,7 @@ def test_headroom_exit_status(tmp_path):
     for text in ("{\n", '{"op": "Abs", "key": {}}\n'):
         measured.write_text(text)
         assert main(argv) == 2
+    measured.write_bytes(b"\xff")  # not UTF-8: a ValueError, not an OSError
+    assert main(argv) == 2
     measured.write_text(_measured(1).to_json() + "\n")
     assert main(argv[:2] + [str(tmp_path / "absent.yaml")] + argv[3:]) == 2

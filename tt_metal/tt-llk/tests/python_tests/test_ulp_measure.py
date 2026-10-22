@@ -12,6 +12,7 @@ import helpers.sfpu_accuracy_budget as budget
 import helpers.utils as utils
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, MathOperation
 from helpers.sfpu_accuracy_budget import accuracy_contract
@@ -97,13 +98,23 @@ def test_the_recorder_drops_an_ambiguous_or_promoted_variant(rows, monkeypatch):
     assert passed_test(golden, golden.clone(), BF16)
     assert rows() == []
     half = golden.to(torch.float16)
-    _lookup(
+    cell = dict(
         output_format=DataFormat.Float16,
         input_format=BF16,
         dest_acc=DestAccumulation.No,
     )
+    _lookup(**cell)
     assert passed_test(half, half.clone(), DataFormat.Float16)
     assert rows() == []
+    # The promotion is the resolved architecture's, not the process's: Quasar runs the
+    # 16-bit Dest it was asked for, so the same cell resolved for it is filed, under it.
+    accuracy_contract(MathOperation.Abs, arch=ChipArchitecture.QUASAR, **cell)
+    assert passed_test(half, half.clone(), DataFormat.Float16)
+    (row,) = rows()
+    assert (row.key.arch, row.key.dest_acc) == (
+        ChipArchitecture.QUASAR,
+        DestAccumulation.No,
+    )
 
 
 def test_every_comparison_spends_the_query_it_was_resolved_for(rows):
@@ -169,9 +180,17 @@ def test_the_measure_file_is_truncated_at_session_start_or_refused(
 
 
 def test_a_recorder_write_failure_does_not_fail_the_comparison(tmp_path, monkeypatch):
-    """Reporting only: an unwritable path is warned about and otherwise ignored."""
+    """Reporting only: an unwritable path is warned about once (a path that stops
+    taking writes mid-run would otherwise warn on every comparison of every worker)
+    and otherwise ignored."""
     monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(tmp_path))  # a directory
+    monkeypatch.setattr(utils, "_ULP_MEASURE_WARNED", False)
+    warnings = []
+    monkeypatch.setattr(
+        utils.logger, "warning", lambda text, *args: warnings.append(text.format(*args))
+    )
     golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    for _ in range(2):
+    for _ in range(3):
         _lookup(output_format=BF16)
         assert passed_test(golden, golden.clone(), BF16)
+    assert len(warnings) == 1 and "--ulp-measure: cannot write" in warnings[0]

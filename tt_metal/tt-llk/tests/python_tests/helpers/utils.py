@@ -32,8 +32,8 @@ from .ulp import (
     ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
-    ulp_failure_message,
     ulp_stats,
+    ulp_verdict_message,
 )
 
 TEMP_DIR = Path(tempfile.gettempdir())
@@ -542,6 +542,9 @@ _ULP_REPORT: bool = False
 # accuracy_contract lookup in the same test (see _record_ulp_measurement). Reporting
 # only: written after the verdict and never read back into it.
 _ULP_MEASURE_PATH: Optional[str] = None
+# Set by the first failed write: a path that stops taking writes mid-run (disk full, the
+# directory removed) is reported once, not once per comparison per worker.
+_ULP_MEASURE_WARNED: bool = False
 
 
 def _promoted(in_fmt, out_fmt, dest, arch) -> bool:
@@ -619,11 +622,18 @@ def _record_ulp_measurement(
         bins=tuple((int(b), *counts) for b, counts in sorted((bins or {}).items())),
         readings=tuple(readings),
     )
+    global _ULP_MEASURE_WARNED
     try:
         with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
             handle.write(measurement.to_json() + "\n")
     except OSError as exc:
-        logger.warning("--ulp-measure: cannot write {}: {}", _ULP_MEASURE_PATH, exc)
+        if not _ULP_MEASURE_WARNED:
+            _ULP_MEASURE_WARNED = True
+            logger.warning(
+                "--ulp-measure: cannot write {}: {} (not repeated)",
+                _ULP_MEASURE_PATH,
+                exc,
+            )
 
 
 # Per-format params for _mxfp_block_aware_compare:
@@ -934,7 +944,7 @@ def passed_test(
         _record_ulp_measurement(ulp_distances, mask=ranked)
 
         def _ulp_summary():
-            return ulp_failure_message(
+            return ulp_verdict_message(
                 golden_tensor,
                 res_tensor,
                 ulp_distances,
@@ -967,8 +977,16 @@ def passed_test(
         if golden_tensor.shape != res_tensor.shape:
             # `torch.isclose` broadcast these; `ulp_distance` would refuse them.
             logger.warning(
-                "ULP report skipped - golden {} and result {} differ in shape; the "
-                "verdict above compared them broadcast",
+                "{} skipped - golden {} and result {} differ in shape; the verdict "
+                "above compared them broadcast",
+                " and ".join(
+                    name
+                    for name, on in (
+                        ("ULP report", _ULP_REPORT),
+                        ("--ulp-measure", _ULP_MEASURE_PATH),
+                    )
+                    if on
+                ),
                 tuple(golden_tensor.shape),
                 tuple(res_tensor.shape),
             )
@@ -981,7 +999,7 @@ def passed_test(
             if _ULP_REPORT:
                 logger.info(
                     "ULP report - {}",
-                    ulp_failure_message(
+                    ulp_verdict_message(
                         golden_tensor,
                         res_tensor,
                         distances,

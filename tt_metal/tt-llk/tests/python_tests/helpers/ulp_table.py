@@ -145,8 +145,17 @@ class BudgetKey:
 
     def matches(self, query: "BudgetKey") -> bool:
         """Whether this key covers *query*; an unset query dimension matches only a
-        wildcard."""
-        return all(a is None or a == b for a, b in zip(self._values, query._values))
+        wildcard. Spelled out, with `_values` cached: this is `validate_registry`'s hot
+        loop, and a generator over `zip` here costs that host test 1.3 s."""
+        a, i, o, d, r = self._values
+        qa, qi, qo, qd, qr = query._values
+        return (
+            (a is None or a == qa)
+            and (i is None or i == qi)
+            and (o is None or o == qo)
+            and (d is None or d == qd)
+            and (r is None or r == qr)
+        )
 
     @property
     def sort_key(self) -> tuple:
@@ -443,9 +452,14 @@ def _convert(hint: Any, value: Any) -> Any:
         (inner,) = [a for a in get_args(hint) if a is not type(None)]
         return None if value is None else _convert(inner, value)
     if origin is tuple:
+        args = get_args(hint)
         if not isinstance(value, (list, tuple)):
             raise TableError(Problem.WRONG_SHAPE, value)
-        return tuple(_convert(get_args(hint)[0], item) for item in value)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return tuple(_convert(args[0], item) for item in value)
+        if len(args) != len(value):  # a fixed shape, such as a `bins` entry
+            raise TableError(Problem.WRONG_SHAPE, value)
+        return tuple(_convert(a, item) for a, item in zip(args, value))
     if is_dataclass(hint):
         return from_plain(hint, value)
     if isinstance(hint, type) and issubclass(hint, Enum):
@@ -600,7 +614,7 @@ class Measurement:
     unmeasurable: int = 0
     nonfinite: int = 0
     test: str = ""
-    bins: tuple[tuple[int, ...], ...] = ()
+    bins: tuple[tuple[int, int, int, int], ...] = ()
     readings: tuple[Reading, ...] = ()
 
     def to_json(self) -> str:

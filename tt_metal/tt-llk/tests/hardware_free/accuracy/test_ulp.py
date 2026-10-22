@@ -28,8 +28,8 @@ from helpers.ulp import (
     ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
-    ulp_failure_message,
     ulp_stats,
+    ulp_verdict_message,
 )
 
 FLOAT_DTYPES = [torch.bfloat16, torch.float16, torch.float32]
@@ -65,7 +65,7 @@ def _step_down(value, dtype, *, steps=1):
 
 
 def _message(golden, result, fmt=None, **kwargs):
-    return ulp_failure_message(
+    return ulp_verdict_message(
         golden, result, ulp_distance(golden, result), fmt, **kwargs
     )
 

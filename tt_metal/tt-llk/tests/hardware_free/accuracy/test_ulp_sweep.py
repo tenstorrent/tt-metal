@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import helpers.ulp_domains as rule
 import pytest
 import torch
+from conftest import refuses
 from helpers import llk_pytest_plugin, ulp_sweep
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
@@ -29,10 +30,10 @@ from helpers.llk_params import (
     MathOperation,
     format_dict,
 )
+from helpers.stimuli_generator import StimuliSpec
 from helpers.stimuli_generator.strategies.structured import _enumerate_representable
 from helpers.test_config import TestConfig
 from helpers.ulp import has_ulp_gate, ulp_distance, ulp_stats
-from helpers.ulp_budget_diff import draw, read_cells
 from helpers.ulp_domains import Domain
 from helpers.ulp_sweep import (
     _FP32_STRIDE,
@@ -140,6 +141,7 @@ _TABLE = {
         Row(input=F16B, output=F32, measured=9, note="a pair not swept here"),
         Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=44),
         Row(output=F32, measured=0, note="a wildcard"),
+        Row(input=F16, output=F16, dest=D_YES, metric=Metric.TOLERANCE, atol=0.2),
     ),
     MathOperation.Log1p: (Row(input=F16, output=F16B, metric=Metric.TOLERANCE),),
 }
@@ -181,7 +183,8 @@ def _session(exitstatus, testsfailed=0):
 def test_only_the_pairs_this_run_measured_are_replaced(table):
     """Every row a run did not measure stays: the other pair, the other arch's row, the
     wildcard, the op-wide atol anchor (which the emitted tolerance rows fall back to
-    rather than retract), the other op; an op not yet in the table is added."""
+    rather than retract), the pinned `atol` row on the very pair measured (a judgement
+    no measurement re-derives), the other op; an op not yet in the table is added."""
     record(GELU, _CELL, 5)
     record(MathOperation.Sqrt, _CELL, 1)
     _record_grid(GELU, F16B, F16B, 100)  # past bf16's ceiling: a numberless row
@@ -226,7 +229,8 @@ def test_the_emitted_figure_is_the_measurement():
 
 def test_xdist_workers_measurements_merge_worst_lane_first():
     """The controller merges the workers' exports, keeping the worse reading of a cell
-    two workers measured; a floored reading survives the merge."""
+    two workers measured; a floored reading survives the merge, and the same blob
+    merged twice is one reading, not a differing pair that drops its floor."""
     record(GELU, _CELL, 5)
     worker_a = export_measured()
     MEASURED.clear()
@@ -238,6 +242,7 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
     MEASURED.clear()
     merge_measured(worker_a)
     merge_measured(worker_b)
+    merge_measured(worker_b)  # the same reading again, as two workers can send it
     merge_measured(None)  # a worker that recorded nothing
     assert MEASURED == {GELU: {_CELL: 9, other: 2, floored: Floored(_WORST, *_FLOOR)}}
 
@@ -910,6 +915,23 @@ def test_the_float32_walk_is_pinned_end_to_end():
         assert 0.3 < share < 0.7, (hex(b), share)
 
 
+def test_a_16bit_walk_skips_its_offset_before_striding():
+    """`offset` counts in-range values, not strided samples, on every format: the
+    float32 walk jumps to it before striding, and the 16-bit enumeration must too.
+    Applied after the stride, offset 1 at stride 2 picked values 2, 4, 6 for 1, 3, 5."""
+    every = _enumerate_representable(F16B, 1.0, 2.0)
+    picked = _enumerate_representable(F16B, 1.0, 2.0, 3, offset=1, stride=2)
+    assert picked.tolist() == every[1:7:2].tolist()
+
+
+@pytest.mark.parametrize("stride", [0, -1])
+def test_a_sweep_stride_must_be_positive(stride):
+    """Zero divides by zero in the float32 walk and a negative stride gives a negative
+    sample count, so the spec refuses both where they are written."""
+    with refuses("stride must be positive"):
+        StimuliSpec.ulp_sweep(low=-1.0, high=1.0, stride=stride)
+
+
 @pytest.mark.parametrize(
     "fmt, count",
     [
@@ -1181,9 +1203,26 @@ def test_the_tensor_binade_is_the_scalar_one():
     assert _binade_index(x).tolist() == [rule.binade(v) for v in values]
 
 
+def _redrawn(bins, key):
+    """The list the rule draws on a recorded binade profile alone, as a reader of the
+    `--ulp-measure` artifact would: a binade lies wholly inside one entry, so the worst
+    of an entry's binades is the entry's figure."""
+
+    def worst_in(low, high):
+        found = [
+            w
+            for b, (_, r, w) in bins.items()
+            if r and low <= rule.binade_edges(b)[0] < high
+        ]
+        return max(found) if found else None
+
+    ceiling = rule.usable_budget_ceiling(key.output_format)
+    return rule.entries_of(rule.partition(bins, ceiling), worst_in)
+
+
 def test_a_worst_lane_on_a_negative_edge_is_figured_on_the_side_its_entry_holds():
-    """-1 belongs to the entry that opens at -1; the emitter and the offline view
-    (`ulp_budget_diff.draw`) draw the same list from the same profile."""
+    """-1 belongs to the entry that opens at -1; the emitter, on the lanes, and a reader
+    of the recorded profile draw the same list."""
     n = 2048  # each run of lanes is a domain of its own at DOMAIN_MIN_LANES
     x = torch.tensor([-1.5] * n + [-1.0] * n + [-0.75] * n, dtype=torch.float64)
     distance = torch.tensor([1] * n + [9] * n + [9] * n)
@@ -1198,15 +1237,16 @@ def test_a_worst_lane_on_a_negative_edge_is_figured_on_the_side_its_entry_holds(
     )
     assert drawn == (Domain(-_INF, -1, 1), Domain(-1, _INF, 9))
     key = cell_key(F16B, F16B, NO, D_NO)
-    record_of = Measurement(
-        op=MathOperation.Tanh,
-        key=key,
-        worst=9,
-        lanes=3 * n,
-        bins=tuple((b, *counts) for b, counts in sorted(bins.items())),
+    recorded = Measurement.from_json(
+        Measurement(
+            op=MathOperation.Tanh,
+            key=key,
+            worst=9,
+            lanes=3 * n,
+            bins=tuple((b, *counts) for b, counts in sorted(bins.items())),
+        ).to_json()
     )
-    (reading,) = read_cells([record_of]).values()
-    assert draw(reading, key) == drawn
+    assert _redrawn({b: tuple(counts) for b, *counts in recorded.bins}, key) == drawn
 
 
 def test_a_cell_with_no_ranked_span_writes_no_list():
