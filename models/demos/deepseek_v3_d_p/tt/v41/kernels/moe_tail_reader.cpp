@@ -11,16 +11,9 @@
 // weight if on, else 0), in tile layout, so the compute kernel MACs them with a column broadcast: the tiles are
 // zeroed by the NoC and only the rows that are on are read from DRAM and copied in.
 //
-// The program starts with a barrier on the first grid row, the line the combine op runs on: a core only runs this
-// program after it ran its part of the combine (the launch order of one core), but the dispatcher has been seen to
-// launch this program on the other cores while the combine's sender core was still at work,
-// so each row-0 core signals the collector (sem GATE), and the collector, once every row-0 core has, multicasts GO
-// to every core; a core reads the combine buffer only after GO.
-//
-// compile_time_args = [cb_act, cb_score, cb_scratch, T, K, TPC, table words, GATES, SEM_GATE, SEM_GO,
+// compile_time_args = [cb_act, cb_score, cb_scratch, T, K, TPC, table words,
 //                      TensorAccessorArgs(combine)..., (scores)..., (indices)..., (table)...]
-// runtime args = [combine_addr, scores_addr, indices_addr, table_addr, j0, role (0 plain, 1 gate, 2 collector),
-//                      collector noc x, y, then for the collector: ranges, then (x0, y0, x1, y1, n) per range]
+// runtime args      = [combine_addr, scores_addr, indices_addr, table_addr, j0]
 
 #include <cstdint>
 
@@ -33,9 +26,6 @@ void kernel_main() {
     const uint32_t indices_addr = get_arg_val<uint32_t>(2);
     const uint32_t table_addr = get_arg_val<uint32_t>(3);
     const uint32_t j0 = get_arg_val<uint32_t>(4);
-    const uint32_t role = get_arg_val<uint32_t>(5);
-    const uint32_t coll_x = get_arg_val<uint32_t>(6);
-    const uint32_t coll_y = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_act = get_compile_time_arg_val(0);
     constexpr uint32_t cb_score = get_compile_time_arg_val(1);
@@ -44,10 +34,7 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(4);
     constexpr uint32_t TPC = get_compile_time_arg_val(5);
     constexpr uint32_t TABLE_WORDS = get_compile_time_arg_val(6);
-    constexpr uint32_t GATES = get_compile_time_arg_val(7);
-    constexpr uint32_t SEM_GATE = get_compile_time_arg_val(8);
-    constexpr uint32_t SEM_GO = get_compile_time_arg_val(9);
-    constexpr auto combine_args = TensorAccessorArgs<10>();
+    constexpr auto combine_args = TensorAccessorArgs<7>();
     constexpr auto scores_args = TensorAccessorArgs<combine_args.next_compile_time_args_offset()>();
     constexpr auto indices_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -58,31 +45,6 @@ void kernel_main() {
     constexpr uint32_t OFF_IDX = OFF_SC + 32 * STRIDE;
     constexpr uint32_t OFF_TABLE = OFF_IDX + 32 * STRIDE;
     constexpr uint32_t OFF_ROWS = OFF_TABLE + ((TABLE_WORDS * 4 + 63) & ~63u);
-
-#ifdef TAIL_DELAY_LOOPS  // a bisection aid: idle before reading, as the slow op this replaces would
-    for (volatile uint32_t i = 0; i < TAIL_DELAY_LOOPS; ++i) {
-    }
-#endif
-    // the barrier
-    volatile tt_l1_ptr uint32_t* gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATE));
-    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GO));
-    if (role >= 1) {
-        noc_semaphore_inc(get_noc_addr(coll_x, coll_y, get_semaphore(SEM_GATE)), 1);
-    }
-    if (role == 2) {
-        noc_semaphore_wait(gate, GATES);
-        *go = 1;
-        const uint32_t ranges = get_arg_val<uint32_t>(8);
-        for (uint32_t r = 0; r < ranges; ++r) {
-            const uint32_t x0 = get_arg_val<uint32_t>(9 + r * 5), y0 = get_arg_val<uint32_t>(10 + r * 5);
-            const uint32_t x1 = get_arg_val<uint32_t>(11 + r * 5), y1 = get_arg_val<uint32_t>(12 + r * 5);
-            const uint32_t n = get_arg_val<uint32_t>(13 + r * 5);
-            noc_semaphore_set_multicast_loopback_src(
-                get_semaphore(SEM_GO), get_noc_multicast_addr(x0, y0, x1, y1, get_semaphore(SEM_GO)), n);
-        }
-        noc_async_write_barrier();
-    }
-    noc_semaphore_wait(go, 1);
 
     const auto combine = TensorAccessor(combine_args, combine_addr);
     const auto scores = TensorAccessor(scores_args, scores_addr);

@@ -2,17 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 decode routing: the gate's selection and the dispatch's routing setup shaped for one tile of users.
+"""DeepSeek-V4.1 decode routing: the gate's selection and the dispatch's routing setup shaped for one tile of
+users.
 
 The batched decode step (``tt/v41/batch_decode.py``) runs the prefill MoE (``TtMoe``) on a tile whose first
-``users_per_rank`` rows are real. Its gate and routing setup are chunk-shaped: ``moe_grouped_topk`` sorts a tile
-row's 384 columns on one core (~80 us), ``masked_bincount`` histograms the rows on a 64-core grid and wants a multiple
-of 64 of them (~90 us), ``offset_cumsum`` all-gathers the histogram over the SP column and prefix-sums it on one core
+``users_per_rank`` rows are real. Its gate and routing setup are chunk-shaped: ``moe_grouped_topk`` sorts a
+tile
+row's 384 columns on one core (~80 us), ``masked_bincount`` histograms the rows on a 64-core grid and wants a
+multiple
+of 64 of them (~90 us), ``offset_cumsum`` all-gathers the histogram over the SP column and prefix-sums it on
+one core
 (~85 us): ~250 us a layer for 4 tokens a chip. This module replaces them with the same results from two small
 programs and one tile's all-gather:
 
-* :func:`router_select`: one core per token row, exact fp32 top-k of ``score + bias`` and the normalised, scaled
-  weights of the unbiased scores (``kernels/router_select.cpp``, after ``ssinghal/dsv4p1``'s router); the pad rows
+* :func:`router_select`: one core per token row, exact fp32 top-k of ``score + bias`` and the normalised,
+scaled
+  weights of the unbiased scores (``kernels/router_select.cpp``, after ``ssinghal/dsv4p1``'s router); the pad
+  rows
   of the tile get the sentinel index. The scores are ``sqrt(softplus(logits))`` on the SFPU as the gate kernel
   computes them (``softplus_tile(1, 1, 20)``, ``sqrt_tile``), done by one fused eltwise op before the program.
 * :func:`route_offsets`: the index tiles of the SP column's chips, all-gathered (one 2 KB page a chip), to the
@@ -20,9 +26,12 @@ programs and one tile's all-gather:
   (``kernels/route_offsets.cpp``); the chip's position in the column comes from a per-chip pin page.
 
 :func:`install_decode_routing` swaps a ``TtV41Moe``'s gate and routing setup for :class:`DecodeGate` and
-:class:`DecodeRoutingSetup`, which keep ``TtMoe.forward``'s contract (weights row-major bf16 ``[T, K]``, indices
-uint16 TILE ``[T, K]``, three ``[1, E]`` uint32 row-major pages), so the dispatch, experts, combine and reduce run
-unchanged. The tile needs no 64-row padding any more: ``tt/v41/decode.py`` sets ``MOE_ROWS`` to the decode tile's
+:class:`DecodeRoutingSetup`, which keep ``TtMoe.forward``'s contract (weights row-major bf16 ``[T, K]``,
+indices
+uint16 TILE ``[T, K]``, three ``[1, E]`` uint32 row-major pages), so the dispatch, experts, combine and reduce
+run
+unchanged. The tile needs no 64-row padding any more: ``tt/v41/decode.py`` sets ``MOE_ROWS`` to the decode
+tile's
 32 rows when the path is on (``V41_DECODE_ROUTING=1``).
 """
 
@@ -38,9 +47,10 @@ from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS
 
 _KERNELS = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
 _TILE = 32
-# the index tile is gathered repeated: ``ttnn.all_gather`` of one or two pages a chip hangs the traced step now and
-# then; four pages (two a link) have not. The knobs are for bisecting it.
-_GATHER_TILES = int(os.environ.get("V41_DECODE_ROUTING_GATHER_TILES", 4))
+# the index tile is gathered once; repeating it (``V41_DECODE_ROUTING_GATHER_TILES``) and pinning the links
+# were knobs
+# for bisecting the traced step's hang, which was a NoC-counter race in another kernel
+_GATHER_TILES = int(os.environ.get("V41_DECODE_ROUTING_GATHER_TILES", 1))
 _GATHER_LINKS = int(os.environ.get("V41_DECODE_ROUTING_GATHER_LINKS", 0))  # 0: the fabric's links
 
 
@@ -61,9 +71,12 @@ def _cb(index: int, size: int, cores, dtype=ttnn.uint32) -> ttnn.CBDescriptor:
 
 
 def router_select(rank, score, k: int, eps: float, scale: float, real_rows: int):
-    """``rank``, ``score``: fp32 TILE ``[T, E]`` DRAM (``T <= 32``, ``E % 32 == 0``; ``rank`` = ``score`` + bias).
-    Rows below ``real_rows`` get the exact top-``k`` of ``rank`` (lowest index first on a tie) and bf16 weights
-    ``score[idx] / (sum + eps) * scale``; the rows after get weight 0 and index ``E``, the gate's padding sentinel.
+    """``rank``, ``score``: fp32 TILE ``[T, E]`` DRAM (``T <= 32``, ``E % 32 == 0``; ``rank`` = ``score`` +
+    bias).
+    Rows below ``real_rows`` get the exact top-``k`` of ``rank`` (lowest index first on a tie) and bf16
+    weights
+    ``score[idx] / (sum + eps) * scale``; the rows after get weight 0 and index ``E``, the gate's padding
+    sentinel.
     Returns ``(weights, indices)``: row-major bf16 ``[T, k]`` and uint16 TILE ``[T, k]``, DRAM."""
     T, E = int(rank.shape[-2]), int(rank.shape[-1])
     assert len(rank.shape) == 2 and tuple(score.shape) == (T, E), (tuple(rank.shape), tuple(score.shape))
@@ -103,9 +116,12 @@ def router_select(rank, score, k: int, eps: float, scale: float, real_rows: int)
 
 def route_offsets(gathered, mask, pin, num_experts: int, k: int, real_rows: int, experts_per_chip: int, rows: int):
     """``gathered``: uint16 TILE ``[1, 1, H * T, k]`` DRAM (``T`` a multiple of 32), the SP all-gather of the
-    column's index tiles (pages ``h * T / 32 ..`` = chip ``h``'s; rows below ``real_rows`` of each chip real). ``mask``: int32 row-major ``[1, E]`` or ``[1, E + 1]``
-    (this group's row of the expert dispatch table). ``pin``: uint32 row-major ``[1, 1, 1, 8]`` per chip, element 0
-    the chip's position in the column. Returns ``(offsets, totals, region)``, uint32 row-major ``[1, E]`` DRAM, as
+    column's index tiles (pages ``h * T / 32 ..`` = chip ``h``'s; rows below ``real_rows`` of each chip real).
+    ``mask``: int32 row-major ``[1, E]`` or ``[1, E + 1]``
+    (this group's row of the expert dispatch table). ``pin``: uint32 row-major ``[1, 1, 1, 8]`` per chip,
+    element 0
+    the chip's position in the column. Returns ``(offsets, totals, region)``, uint32 row-major ``[1, E]``
+    DRAM, as
     ``offset_cumsum`` returns them."""
     E = num_experts
     tpc = -(-rows // _TILE)  # index tiles per chip
@@ -152,7 +168,8 @@ def route_offsets(gathered, mask, pin, num_experts: int, k: int, real_rows: int,
 
 
 class DecodeGate:
-    """``TtMoEGatePrefill`` for the decode tile: its gate matmul and TP all-reduce, then the scores on the SFPU
+    """``TtMoEGatePrefill`` for the decode tile: its gate matmul and TP all-reduce, then the scores on the
+    SFPU
     and :func:`router_select`. ``real_rows``: the tile's real rows when a padding config is given (the batched
     step's ``users_per_rank``; every row is real without one). Everything else is the wrapped gate's."""
 
@@ -216,10 +233,12 @@ class DecodeGate:
 
 class DecodeRoutingSetup:
     """``TtMoERoutingSetup`` for the decode tile: the index tile all-gathered over the SP column and
-    :func:`route_offsets`. The fourth return (the chip's own histogram) is None: ``TtMoe.forward`` discards it."""
+    :func:`route_offsets`. The fourth return (the chip's own histogram) is None: ``TtMoe.forward`` discards
+    it."""
 
     def __init__(self, setup, mesh_device, tokens: int, k: int, real_rows: int | None):
-        """``tokens``, ``k``: the index tile's rows (the MoE's tokens per chip) and columns (experts per token)."""
+        """``tokens``, ``k``: the index tile's rows (the MoE's tokens per chip) and columns (experts per
+        token)."""
         self._setup = setup
         self._real_rows = real_rows
         sp = tuple(mesh_device.shape)[SP_AXIS]
@@ -234,9 +253,12 @@ class DecodeRoutingSetup:
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
         )
         self._num_links = fabric_num_links()
-        # the all-gather keeps two semaphores in main L1 per program-cache entry, placed when the entry is first
-        # built: built inside a decode step (under the step's transient L1) they land low and the routed experts'
-        # CBs, which take nearly all of L1, clash with them at 40 layers; so the entry is built here, on an empty L1,
+        # the all-gather keeps two semaphores in main L1 per program-cache entry, placed when the entry is
+        # first
+        # built: built inside a decode step (under the step's transient L1) they land low and the routed
+        # experts'
+        # CBs, which take nearly all of L1, clash with them at 40 layers; so the entry is built here, on an
+        # empty L1,
         # with a tile of the step's shape (offset_cumsum's gather has the prefill's shape and is built there)
         warm = ttnn.from_torch(
             torch.zeros(1, 1, tokens, k, dtype=torch.int32),
@@ -271,8 +293,10 @@ class DecodeRoutingSetup:
         T, K = int(indices.shape[-2]), int(indices.shape[-1])
         assert (T <= _TILE or T % _TILE == 0) and K == num_experts_per_tok, (T, K, num_experts_per_tok)
         rows = self._real_rows or T
-        # ``ttnn.all_gather`` as ``offset_cumsum`` gathers its histogram (its own resident semaphores, see __init__);
-        # on ``TtCCL``'s two cycled ``all_gather_async`` semaphore pairs of the SP axis, which the sampler's gather
+        # ``ttnn.all_gather`` as ``offset_cumsum`` gathers its histogram (its own resident semaphores, see
+        # __init__);
+        # on ``TtCCL``'s two cycled ``all_gather_async`` semaphore pairs of the SP axis, which the sampler's
+        # gather
         # shares, 40 of these a step hung the captured step's back-to-back replays at 40 layers
         gathered = self._gather(ttnn.reshape(indices, (1, 1, T, K)))
         offsets, totals, region = route_offsets(
@@ -292,7 +316,8 @@ class DecodeRoutingSetup:
 
 
 def install_decode_routing(v41_moe, real_rows: int | None) -> None:
-    """Swap ``v41_moe.moe``'s gate and routing setup for the decode-shaped ones. ``real_rows``: the tile's real
+    """Swap ``v41_moe.moe``'s gate and routing setup for the decode-shaped ones. ``real_rows``: the tile's
+    real
     rows under the batched step's padding config (``users_per_rank``); None when every row is real."""
     moe = v41_moe.moe
     if isinstance(moe.gate, DecodeGate):

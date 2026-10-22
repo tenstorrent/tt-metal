@@ -68,46 +68,25 @@ def moe_tail(combine, scores, indices, table, n_cores: int = 80):
     )
     coords, cores = _cores(device, n_cores)
     assert len(coords) == n_cores, (len(coords), n_cores)
-    # the barrier on the grid's first row (the combine's line; see the reader): the row-0 cores are the gates, (0, 0)
-    # the collector, and the collector multicasts GO over the program's core ranges (physical corners)
-    grid = device.compute_with_storage_grid_size()
-    gates = [(cx, cy) for cx, cy in coords if cy == 0]
-    assert gates and gates[0] == (0, 0) and len(gates) == min(n_cores, grid.x), (gates, n_cores)
-    phys = lambda x, y: device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
-    collector = phys(0, 0)
-    ranges = []
-    for rng in cores.ranges():
-        a, b = phys(rng.start.x, rng.start.y), phys(rng.end.x, rng.end.y)
-        n = (rng.end.x - rng.start.x + 1) * (rng.end.y - rng.start.y + 1)
-        ranges += [a.x, a.y, b.x, b.y, n]
     reader_args, writer_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(coords):
-        role = 2 if (cx, cy) == (0, 0) else 1 if cy == 0 else 0
         reader_args[cx][cy] = [
             combine.buffer_address(),
             scores.buffer_address(),
             indices.buffer_address(),
             table.buffer_address(),
             i * tpc,
-            role,
-            collector.x,
-            collector.y,
-        ] + ([len(cores.ranges())] + ranges if role == 2 else [])
+        ]
         writer_args[cx][cy] = [out.buffer_address(), i * tpc]
     table_words = int(table.shape[-1])
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNELS}/moe_tail_reader.cpp",
             core_ranges=cores,
-            compile_time_args=[_CB_ACT, _CB_SCORE, _CB_SCRATCH, T, K, tpc, table_words, len(gates), 0, 1]
+            compile_time_args=[_CB_ACT, _CB_SCORE, _CB_SCRATCH, T, K, tpc, table_words]
             + _accessors(combine, scores, indices, table),
             runtime_args=reader_args,
             config=ttnn.ReaderConfigDescriptor(),
-            defines=(
-                [("TAIL_DELAY_LOOPS", os.environ["V41_TAIL_DELAY_LOOPS"])]
-                if "V41_TAIL_DELAY_LOOPS" in os.environ
-                else []
-            ),
         ),
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNELS}/moe_tail_writer.cpp",
@@ -133,13 +112,9 @@ def moe_tail(combine, scores, indices, table, n_cores: int = 80):
         _cb(_CB_SCRATCH, scratch, cores, scratch, ttnn.uint32),
         _cb(_CB_OUT, tpc * _TILE_BYTES, cores, _TILE_BYTES),
     ]
-    semaphores = [
-        ttnn.SemaphoreDescriptor(id=0, core_ranges=cores, initial_value=0),  # GATE: the row-0 cores' arrivals
-        ttnn.SemaphoreDescriptor(id=1, core_ranges=cores, initial_value=0),  # GO: the collector's release
-    ]
     ttnn.generic_op(
         [combine, scores, indices, table, out],
-        ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs),
+        ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
     return out
 
