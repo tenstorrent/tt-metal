@@ -421,6 +421,8 @@ def test_reshape_codegen_tile_routing(device, case, in_shape, out_shape, dtype, 
 # Row-major bf16 pages of this many bytes, the L1 alignment, so the hog sets free L1 to the alignment.
 _HOG_PAGE_BYTES = 16
 _CLASH = "clash with L1 buffers"
+# Native's row-major factory raises this when free L1 holds not even a one-slot destination ring.
+_NO_STAGING = "RM reshape dest staging does not fit in L1"
 
 
 def _l1_hog_leaving_exact(device, free_bytes_per_bank):
@@ -439,16 +441,19 @@ def _l1_hog_leaving_exact(device, free_bytes_per_bank):
 
 def _native_runs_with(device, x, out_shape, free_bytes):
     hog = _l1_hog_leaving_exact(device, free_bytes)
-    logger.info(f'[EXPECTED_ERROR BEGIN] RuntimeError message="{_CLASH}"')
+    logger.info(f'[EXPECTED_ERROR BEGIN] RuntimeError message="{_CLASH}" or "{_NO_STAGING}"')
     try:
+        # Native's program hash omits the ring depth it picks from free L1, so a cached program would hold the depth
+        # of an earlier, larger probe.
+        device.clear_program_cache()
         ttnn.deallocate(_force_native(x, out_shape, memory_config=_DRAM))
         return True
     except RuntimeError as error:
-        if _CLASH not in str(error):
+        if _CLASH not in str(error) and _NO_STAGING not in str(error):
             raise
         return False
     finally:
-        logger.info(f'[EXPECTED_ERROR END] RuntimeError message="{_CLASH}"')
+        logger.info(f'[EXPECTED_ERROR END] RuntimeError message="{_CLASH}" or "{_NO_STAGING}"')
         ttnn.deallocate(hog)
 
 
