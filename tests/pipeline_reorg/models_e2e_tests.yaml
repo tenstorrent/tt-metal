@@ -1653,7 +1653,7 @@
     bh_sc4:
       timeout: 80
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
   budget_type: e2e
@@ -1696,7 +1696,7 @@
     bh_sc4:
       timeout: 80
       tier: 1
-      release_ready: true
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
   budget_type: e2e
