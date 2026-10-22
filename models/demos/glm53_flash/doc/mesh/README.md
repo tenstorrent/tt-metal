@@ -1,5 +1,20 @@
 # GLM-5.3-Flash Phase 2: multi-chip decoder (work in progress, 2026-10-20)
 
+## Status (2026-10-22 morning)
+
+| area | state | where |
+|---|---|---|
+| layout | TP4 x DP8, hybrid experts (72 per chip, intermediate over the 8 rows), user-partitioned DSA cache (heads2users), prefill: blocks <= 4 K positions, regions above (auto default) | this doc; `tt/mesh_model.py` |
+| accuracy | logits PCC 0.994 / top-1 90 % / top-5 94 % vs HF on natural text; 128-token first token == HF; needles 32/32 at 1 M, 64/64 at 512 K, 128/128 at 256 K, 256/256 at 128 K; greedy == HF at 16 K / 64 K | `tests/test_mesh_model_logits.py`, README |
+| envelope | 32 x 1 M, 64 x 512 K, 128 x 256 K, 256 x 128 K users measured (1.1-2.0 GiB spare) | README table, `tt/memory_plan.py` |
+| decode | 12.5 tok/s (batch 1) / 12.0 (32 users) / 8.7 (256); long context 6.7 (1 M) ... 5.0 (256 x 128 K); targets 60 / 33 / 19 | README; ledger `_agents/decode_ledger/` |
+| TTFT | 265 ms traced at 128 tokens; 2.2-2.4 K tok/s chunked prefill (27 s at 64 K, 460 s at 1 M, per prompt) | README |
+| open accuracy items | EP32 prefill first token wrong (experimental layout); slot-3 near-tie divergence in degenerate 1 M regime (parked) | ledger entries below |
+| optimization queue | A3/A4 mHC norm + Sinkhorn, B7 TP all-reduce as gather + reduce, C1 rs combine for 4 users/row (agents, code only, 2026-10-22), then A1 after its NOC audit, B5 DSA decode fusion; MTP steps 3-5 in progress; prefill: incremental prefix copy + scorer fusion | `_agents/*/STATUS.md` |
+| serving | vLLM generator drafted (no device yet) | `_agents/vllm_glm53/` |
+| PP | design study: no decode gain at equal batch, ~1.3-1.5x users at 1 M and 2-4x prefill ceiling; second-phase layout | `pp_design.md` |
+
+
 Design of record: `~/ashai/GLM_5.3_DESIGN.md` sections 4-5 (columns = TP group of a row, rows = DP
 user groups and the expert-TP axis). Code: `tt/mesh.py` (`GLMMesh`, placement helpers,
 collectives) threaded through every stage-1 module with a `mesh=` keyword; a `(1, 1)` mesh keeps
