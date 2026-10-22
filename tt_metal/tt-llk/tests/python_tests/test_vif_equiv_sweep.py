@@ -96,11 +96,11 @@ _FACE_ELEMENTS = 16 * 16
 #
 # relu_min / relu_max are deliberately absent, and not for a harness reason:
 # every float relu entry point in tt_metal/hw/inc/api/compute/eltwise_unary/relu.h
-# passes _relu_min_/_relu_max_ to SFPU_UNARY_CALL, i.e. tt-llk's own kernels in
-# tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h. The metal
-# sfpu::relu_min / sfpu::relu_max in llk_sfpu/ckernel_sfpu_relu.h have no caller
-# at all, so there is nothing here for a sweep to cover. sfpu_operations.h routes
-# MathOperation.ReluMin/ReluMax to the same tt-llk pair, which is what
+# passes _relu_min_/_relu_max_ to SFPU_UNARY_CALL, i.e. the kernels that came
+# from tt-llk and now sit in llk_sfpu/ckernel_sfpu_relu.h. The
+# sfpu::relu_min / sfpu::relu_max in the same file have no caller at all, so
+# there is nothing here for a sweep to cover. sfpu_operations.h routes
+# MathOperation.ReluMin/ReluMax to the same _relu_min_/_relu_max_ pair, which is what
 # test_eltwise_unary_sfpu already exercises.
 # ─────────────────────────────────────────────────────────────────────────────
 
