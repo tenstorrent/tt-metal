@@ -215,6 +215,12 @@ def unpacks_to_dest(
     return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
+def dest_acc_for(data_format: DataFormat) -> DestAccumulation:
+    """The Dest width *data_format* needs: ``Yes`` for a 32-bit format, so its datums
+    are not truncated to 16 bits in Dest, otherwise ``No``."""
+    return DestAccumulation.Yes if data_format.is_32_bit() else DestAccumulation.No
+
+
 _2X_L1_FORMAT = {
     DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
     DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
