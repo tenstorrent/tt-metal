@@ -560,15 +560,18 @@ changes to cases that were ties.
 **The built-in table.** `default_port_type_preference()` lives in a new
 `tt_metal/fabric/port_type_preference.hpp`, the one place that orders cable types. Nothing in
 the codebase ranks port types today (`link_health` records `medium` but doesn't order it), so
-the order needs a sign-off from the hardware and scaleout owners. A starting proposal, by
-fewest connectors and shortest reach, to be confirmed:
+the order needs a sign-off from the hardware and scaleout owners. The starting proposal follows
+the order in [#36425](https://github.com/tenstorrent/tt-metal/issues/36425): TRACE first (same
+host), then WARP400 (400G), then QSFP-DD (400G, lower priority than WARP400), then WARP100
+(100G). The issue leaves the linking boards "based on their context"; they are placed after
+TRACE here, to be confirmed:
 
 ```cpp
 inline std::vector<PortType> default_port_type_preference() {
     return {PortType::TRACE,
             PortType::LINKING_BOARD_1, PortType::LINKING_BOARD_2, PortType::LINKING_BOARD_3,
-            PortType::WARP400, PortType::WARP100,
-            PortType::QSFP_DD};
+            PortType::WARP400, PortType::QSFP_DD,
+            PortType::WARP100};
     // UNKNOWN is never listed: it always ranks last.
 }
 ```
@@ -1250,8 +1253,8 @@ counts change the global edge multiplicities and class counts, and the per-seat 
    (proposed), or define an MGD-owned enum so the MGD schema doesn't depend on the PSD's?
 9. **Tiers or weights.** Lexicographic tiers (proposed), or integer costs per type for cases
    such as "two QSFP-DD links are as good as one WARP400"?
-10. **Built-in cable order.** Who signs off on `default_port_type_preference()`, and is
-    "fewest connectors, shortest reach" the right rule? Does it need to depend on arch or
+10. **Built-in cable order.** Who signs off on `default_port_type_preference()`? Is the
+    #36425 order right, and where do the linking boards go? Does it need to depend on arch or
     cluster type?
 11. **Cable tiers versus node hits.** Today preferred node hits outrank realized edges
     (section 11.5), so keeping today's results puts both cable strengths below node hits.

@@ -800,8 +800,8 @@ function ImplicitCableSection() {
           </Callout>
           <Text size="small" tone="tertiary">
             Nothing in the codebase ranks port types today (link_health records medium but doesn't order it), so the order
-            needs a sign-off from the hardware and scaleout owners. The proposal is fewest connectors and shortest reach first,
-            to be confirmed.
+            needs a sign-off from the hardware and scaleout owners. The proposal follows tt-metal#36425: TRACE (same host), then
+            WARP400 (400G), then QSFP-DD (400G, below WARP400), then WARP100 (100G). Linking boards go after TRACE, to be confirmed.
           </Text>
         </Stack>
         <CodeCard
@@ -811,8 +811,8 @@ function ImplicitCableSection() {
 inline std::vector<PortType> default_port_type_preference() {
     return {PortType::TRACE,
             PortType::LINKING_BOARD_1, PortType::LINKING_BOARD_2, PortType::LINKING_BOARD_3,
-            PortType::WARP400, PortType::WARP100,
-            PortType::QSFP_DD};
+            PortType::WARP400, PortType::QSFP_DD,
+            PortType::WARP100};
     // UNKNOWN is never listed: it always ranks last.
 }`}
         />
@@ -1575,7 +1575,7 @@ function PlanTab() {
           ["7", "Channel count ranks above cable tier. Should a preferred cable type win over more channels instead, or be configurable?"],
           ["8", "Import PortType from physical_system_descriptor.proto (proposed), or define an MGD-owned enum?"],
           ["9", "Lexicographic tiers (proposed), or integer costs per type, e.g. two QSFP-DD links as good as one WARP400?"],
-          ["10", "Who signs off on default_port_type_preference(), and is fewest connectors / shortest reach the right rule? Per arch or cluster type?"],
+          ["10", "Who signs off on default_port_type_preference()? Is the #36425 order right, and where do the linking boards go? Per arch or cluster type?"],
           ["11", "Today node hits outrank realized edges, so keeping today's results puts both cable strengths below node hits. Keep that (proposed), or move node hits below realized edges so an explicit MGD cable preference can outrank a PGD-preferred layout, changing soft solves with pinnings?"],
           ["12", "The candidate table lives on rank 0, where the pairing runs. Also send it with the chip-info broadcast so every rank can log or dump it, or keep it rank-0 only (proposed)?"],
           ["13", "Stretch goal (part 11), if picked up: is the per-seat filter enough to keep binding rejections rare on SC16 / SC20 and the dual- and quad-galaxy systems, or does it need capacity per exit chip from the start?"],
