@@ -430,7 +430,8 @@ def test_head_se3(mesh_device, device_params):
             glu=glu,
             MT=int(os.environ.get("SE_MT", "2")),
             KB=int(os.environ.get("SE_KB", "0")) or None,
-            rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter)
+            rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter:)
+            rs_mode=os.environ.get("SE_RS") or "fused",  # (fused: in this program; mrs: the ported op on h, the bar)
         )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
@@ -462,7 +463,7 @@ def test_head_se3(mesh_device, device_params):
                 tot = sum(refs[r * C + cc] for cc in range(C))
                 ps.append(pcc(ys[d], torch.chunk(tot, C, dim=head.rs_dim)[c].reshape(-1)))
         logger.info(
-            f"HSE3 {name}{' +RS' if head.rs_dim else ''} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
+            f"HSE3 {name}{' +RS ' + head.rs_mode if head.rs_dim else ''} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
             f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
         )
         assert os.environ.get("SE_PROBE") or min(ps) > 0.999, ps

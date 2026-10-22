@@ -133,10 +133,11 @@ _PARAMS = [
         (R, C),
         fabric2d_device_params(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
         name,
-        5120,
-        id=f"{name}-5120",
+        chunk,
+        id=f"{name}-{chunk}",
     )
     for name, m in MODELS.items()
+    for chunk in (5120, 1280)  # (1280: the Galaxy's per-chip load, 640 rows a mesh row)
 ]
 
 

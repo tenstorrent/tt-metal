@@ -219,9 +219,12 @@ class HeadSE3:
         num_links=2,
         fidelity=ttnn.MathFidelity.HiFi2,
         rs_dim=None,
+        rs_mode="fused",
     ):
-        """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter by the
-        matmul_reduce_scatter op on h (the engine stops at h); None: the engine's own down, y the chip's partial."""
+        """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
+        in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
+        adds there, y the chip's reduced block - the only DRAM write); "mrs": (the bar) the engine stops at h in DRAM
+        and the ported matmul_reduce_scatter op runs on it. None: the engine's own down, y the chip's partial."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -233,9 +236,25 @@ class HeadSE3:
         G = tuple(mesh_device.shape)[1]
         klt = H // 32 // G
         self.mesh, self.rs_dim, self.num_links = mesh_device, rs_dim, num_links
+        self.rs_mode = rs_mode if rs_dim is not None else None
         self.xg = None
-        if rs_dim is not None:
+        self.plan = None
+        if self.rs_mode == "mrs":
             self._warm_rs(rows, H, I)
+        elif self.rs_mode == "fused":
+            from models.demos.moe_block.tt.se_rs import RsPlan
+
+            self.plan = RsPlan(
+                G=G,
+                ring=self._ring(),
+                GX=GX,
+                GY=GY,
+                MT=MT,
+                NTH=H // 32,
+                scatter=rs_dim,
+                nv=num_links,
+                pwmax=8 // MT,
+            )
         for kb in (
             [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
         ):
@@ -252,7 +271,8 @@ class HeadSE3:
                     KB=kb,
                     fidelity=fidelity,
                     shards=G,
-                    down=rs_dim is None,
+                    down=self.rs_mode != "mrs",
+                    rs=self.plan,
                 )
                 break
             except ValueError:
@@ -260,7 +280,7 @@ class HeadSE3:
         else:
             raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows")
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-        if rs_dim is not None:
+        if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
         self.xg = XGather3(
             mesh_device,
@@ -269,15 +289,37 @@ class HeadSE3:
             sub_core_grid=movers,
             placement="simple" if grid.x - GX < 4 else "auto",
         )
-        if rs_dim is not None:  # (the gather's semaphores above the arena too: the arena is freed every call)
+        if self.rs_mode == "mrs":  # (the gather's semaphores above the arena too: the arena is freed every call)
             self.eng.alloc_arena()
+        if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
+            cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
+            crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
+            words = GX * GY * 4
+            self.mbox = ttnn.from_torch(
+                torch.zeros(len(cores), words, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            self.arr_sems = [ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(2)]
+            ttnn.synchronize_device(mesh_device)
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.state = dict(key=None)
 
     def upload(self, w_gu, w_down):
         """w_gu / w_down per device (row-major mesh order). With rs_dim: (engine weights, W_down [I, H] bf8 a chip)."""
-        if self.rs_dim is None:
-            return self.eng.upload(w_gu, w_down)
+        if self.rs_mode != "mrs":
+            pos = None
+            if self.rs_mode == "fused":
+                R, C = tuple(self.mesh.shape)
+                pos = [self.xg.chips[(d // C, d % C)]["rings"][0]["p"] for d in range(R * C)]
+            return self.eng.upload(w_gu, w_down, pos=pos)
         R, C = tuple(self.mesh.shape)
         glob = torch.cat([torch.cat(list(w_down[r * C : (r + 1) * C]), dim=1) for r in range(R)], dim=0)
         wd = ttnn.from_torch(
@@ -327,7 +369,12 @@ class HeadSE3:
         )
 
     def run(self, x, w):
-        if self.rs_dim is not None:
+        if self.rs_mode == "fused":
+            G = self.plan.G
+            return self._run(
+                x, w, self.H // G if self.rs_dim == -1 else self.H, self.rows // G if self.rs_dim == -2 else self.rows
+            )
+        if self.rs_mode == "mrs":
             w, wd = w
             if not self.eng.arena.is_allocated():  # (the arena is call scratch: freed for the op's CBs below)
                 self.eng.alloc_arena()
@@ -339,11 +386,15 @@ class HeadSE3:
             return out
         return self._run(x, w, self.H)
 
-    def _run(self, x, w, width):
+    def _run(self, x, w, width, rows=None):
         from models.demos.moe_block.tt.se_engine3 import XREADY
 
         y = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.rows, width]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([1, 1, rows or self.rows, width]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
         key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), id(self.eng.arena))
         if self.state["key"] != key:
@@ -351,8 +402,25 @@ class HeadSE3:
             e = self.eng
             for coord in self.xg.chips:
                 prog = ttnn.ProgramDescriptor()
-                c0, k0 = self.xg.pieces(coord, prog, x, XREADY)
                 p = self.xg.chips[coord]["rings"][0]["p"]
+                rsx, rse = None, {}
+                if self.rs_mode == "fused":
+                    virt = self.mesh.worker_core_from_logical_core
+                    pc = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
+                    mbox = int(self.mbox.buffer_address())
+                    arr = tuple(int(ttnn.get_global_semaphore_address(s_)) for s_ in self.arr_sems)
+                    rsx = dict(
+                        plan=self.plan,
+                        p=p,
+                        finb=e.base + e.off["finb"],
+                        mbox=mbox,
+                        zone=(e.base + e.off["arrf"], e.base + e.off["arrb"]),
+                        arr=arr,
+                    )
+                    rse = dict(
+                        rs_pos=p, rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y), rs_mbox=mbox, rs_arr=arr
+                    )
+                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx)
                 c1, k1, sems = e.pieces(
                     x,
                     w,
@@ -363,6 +431,7 @@ class HeadSE3:
                     ports=self.xg.port_cores(coord),
                     xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
+                    **rse,
                 )
                 prog.cbs, prog.semaphores = c0 + c1, sems
                 e.attach_mcast(prog)

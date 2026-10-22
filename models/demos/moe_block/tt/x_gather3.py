@@ -20,6 +20,7 @@ import ttnn
 
 INC_EVERY = 8
 CB = 0
+DIRS_I = {"fwd": 0, "bwd": 1}
 
 _CT = r"""
 constexpr uint32_t KB = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), SPS = get_compile_time_arg_val(2);
@@ -64,11 +65,117 @@ FORCE_INLINE Dst dst_of(uint32_t T, uint32_t xown, uint32_t m, uint32_t R, uint3
 }
 """
 
+_RS_READER = r"""
+// (down + reduce-scatter) gather my units: per unit (entry e, block b, halves), per core of my link in the unit's
+// halves holding tiles of b: wait its hand-off on my mailbox word of it, NoC-read its bf16 sub-block from its FINB
+// (compact in the chip's entry order) in chunks of RP tiles; a batch ends at a multiple of GROUP chunks, at the end
+// of a unit and before a blocking wait (matmul_reduce_scatter's port reader). At the end my mailbox words re-armed.
+// args at r0: nu, (e | b << 8 | mask << 16, slot0 | slot1 << 16) x nu, nc, (x | y << 8 | half << 16 | k << 20,
+// counts (8 bits a block)) x nc, the chip's entry order [G], FINB address, mailbox address
+FORCE_INLINE void rs_gather(uint32_t r0) {
+    const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
+    if (nu == 0) return;
+    const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
+    const uint32_t finb = get_arg_val<uint32_t>(en0 + G), mbox = get_arg_val<uint32_t>(en0 + G + 1);
+    uint32_t seen[128];
+    for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
+    uint32_t pos = 0, c = 0, need = 0, wptr = 0;
+    auto flush = [&]() {
+        noc_async_read_barrier();
+        cb_push_back(0, c * RP);
+        pos += c;
+        c = 0;
+    };
+    for (uint32_t un = 0; un < nu; ++un) {
+        const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), e = w0 & 0xFF, b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
+            const uint32_t cnt = (cnts >> (8 * b)) & 0xFF;
+            if (!((mask >> ((cw >> 16) & 1)) & 1) || cnt == 0) continue;
+            uint32_t fo = 0;  // (the sub-block's FINB offset: the core's tiles of the entries before e)
+            for (uint32_t e2 = 0; e2 < e; ++e2) fo += (cnts >> (8 * get_arg_val<uint32_t>(en0 + e2))) & 0xFF;
+            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (cw >> 20));
+            const uint32_t target = ++seen[i];
+            invalidate_l1_cache();
+            if (*mb < target && c > 0) flush();  // (never hold reads while blocked on a producer)
+            noc_semaphore_wait_min(mb, target);
+            const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finb + fo * 2048);
+            for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                if (c == 0) {
+                    need = GROUP - pos % GROUP;
+                    cb_reserve_back(0, need * RP);
+                    wptr = get_write_ptr(0);
+                }
+                const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
+                noc_async_read(src + t0 * 2048, wptr + c * RP * 2048, n * 2048);
+                if (++c == need) flush();
+            }
+        }
+        if (c > 0) flush();
+    }
+    for (uint32_t i = 0; i < nc; ++i)  // (re-arm: every hand-off of the call was waited for)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
+}
+"""
+
+_RS_SENDER = r"""
+// (down + reduce-scatter) my units' chunks, the reader's walk: one fabric packet each into the downstream chip's same
+// core, its zone slot of this direction (slot by the core's half); a core's last chunk carries the fused increment of
+// its arrival counter. Pops at the reader's batch boundaries. args at r0: as the reader's, then the zone base, the
+// arrival counter's address, P (zone slot tiles)
+template <typename C, typename H>
+FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs) {
+    const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
+    if (nu == 0) return;
+    const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
+    const uint32_t zb = get_arg_val<uint32_t>(en0 + G + 2), actr = get_arg_val<uint32_t>(en0 + G + 3);
+    const uint32_t P = get_arg_val<uint32_t>(en0 + G + 4);
+    uint32_t rpos = 0, u = 0, lim = GROUP, h = 0;
+    auto pop_batch = [&]() {
+        noc_async_writes_flushed();
+        cb_pop_front(0, u * RP);
+        rpos += u;
+        u = 0;
+        lim = GROUP - rpos % GROUP;
+    };
+    for (uint32_t un = 0; un < nu; ++un) {
+        const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), w1 = get_arg_val<uint32_t>(u0 + 2 * un + 1);
+        const uint32_t b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
+            const uint32_t cnt = (cnts >> (8 * b)) & 0xFF, hf = (cw >> 16) & 1;
+            if (!((mask >> hf) & 1) || cnt == 0) continue;
+            const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
+            const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
+            const uint64_t ctr = get_noc_addr(x, y, actr);
+            for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                cb_wait_front(0, RP * (u + 1));
+                const uint32_t src = get_read_ptr(0) + u * RP * 2048;
+                const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
+                const uint64_t dst = get_noc_addr(x, y, dst0 + t0 * 2048);
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+                h = h + 1 == GROUP ? 0 : h + 1;
+                if (t0 + RP >= cnt) {
+                    hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, n * 2048);
+                } else {
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
+                }
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(src, n * 2048, reinterpret_cast<uint32_t>(hdr));
+                if (++u == lim) pop_batch();
+            }
+        }
+        if (u > 0) pop_batch();
+    }
+}
+"""
+
 _READER = (
     '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n'
     + _CT
     + "constexpr auto x_args = TensorAccessorArgs<15>();\n"
     + _WALK
+    + _RS_READER
     + r"""
 void kernel_main() {
     size_t a = 0;
@@ -119,6 +226,7 @@ void kernel_main() {
     noc_semaphore_wait_min(xloaded, xl_need);  // (re-arm: every engine core counted itself on every port)
     noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(xloaded)), 0u - xl_need);
     noc_async_atomic_barrier();
+    rs_gather(xl0 + 2);
 }
 """
 )
@@ -135,6 +243,7 @@ using namespace tt::tt_fabric;
 """
     + _CT
     + _WALK
+    + _RS_SENDER
     + r"""
 void kernel_main() {
     size_t a = 0;
@@ -147,8 +256,10 @@ void kernel_main() {
     const uint32_t wx = get_arg_val<uint32_t>(a++), wy = get_arg_val<uint32_t>(a++), watch = get_arg_val<uint32_t>(a++);
     const uint32_t n = get_arg_val<uint32_t>(a++);
     const uint32_t ent = a, T = ent + 3 * n;  // entries (q, part, packets a chunk); tables
-    a = T + G + S0 + S1 + 3 * GX + GY;  // (past the tables: the fabric connection)
-    if (n > 0 || send_ready) {
+    a = T + G + S0 + S1 + 3 * GX + GY;  // (past the tables: the RS units, then the fabric connection)
+    const uint32_t rs0 = a, rnu = get_arg_val<uint32_t>(rs0), rnc = get_arg_val<uint32_t>(rs0 + 1 + 2 * rnu);
+    a = rs0 + 2 + 2 * rnu + 2 * rnc + G + 5;
+    if (n > 0 || send_ready || rnu > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -199,6 +310,7 @@ void kernel_main() {
                 conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
             }
         }
+        rs_send(rs0, conn, hdrs);
         conn.close();
     }
     if (expect_in > 0) {  // everything from upstream landed; re-arm for the next call
@@ -370,8 +482,24 @@ class XGather3:
         vy = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0, cy)).y for cy in range(e.GY)]
         return self.ranks(coord) + list(e.fam0) + list(e.fam1) + per + vx + vy
 
-    def pieces(self, coord, prog, x, xready_sem):
-        """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM."""
+    def rs_block(self, rs, d, v):
+        """A port's down + reduce-scatter args (se_rs): units, its link's cores, the entry order, FINB / mailbox,
+        the downstream zone of direction d, its arrival counter, P. rs: dict(plan, p, finb, mbox, zone, arr)."""
+        plan, p, e = rs["plan"], rs["p"], self.eng
+        virt = lambda cx, cy: self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0 + cx, cy))  # noqa: E731
+        units = plan.port_units(p, d) if plan.down(p, d) is not None else []
+        cores = plan.port_cores(v) if units else []
+        out = [len(units)] + [w for eu, b, m, s0, s1 in units for w in (eu | b << 8 | m << 16, s0 | s1 << 16)]
+        out += [len(cores)]
+        for cx, cy in cores:
+            c, k = virt(cx, cy), plan.k(cx, cy)
+            out += [c.x | c.y << 8 | plan.half(k) << 16 | k << 20, plan.counts_word(cx, cy)]
+        i = DIRS_I[d]
+        return out + plan.entries(p) + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
+
+    def pieces(self, coord, prog, x, xready_sem, rs=None):
+        """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM.
+        rs: the down + reduce-scatter phase's (rs_block)."""
         mesh, chips, e = self.mesh, self.chips, self.eng
         virt = lambda c: mesh.worker_core_from_logical_core(c)  # noqa: E731
         node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
@@ -406,7 +534,10 @@ class XGather3:
                 + ent_r
                 + T
                 + [self.xloaded, e.GX * e.GY]
+                + (self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5))
             )
+            rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5)
+            assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
             if peer is not None and rg.get(f"{d}_links"):
                 pp = {(dd, ll): cc for (_, dd, ll), cc in chips[peer]["ports"].items()}
@@ -428,10 +559,12 @@ class XGather3:
                     ]
                     + ent_s
                     + self.tables(peer)
+                    + rsb
                 )
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][v], prog, core))
             else:
-                args += [0] * 10 + [0] + T
+                assert rsb[0] == 0
+                args += [0] * 10 + [0] + T + rsb
             sd_rt[core.x][core.y] = args
         ct = [
             e.KB,

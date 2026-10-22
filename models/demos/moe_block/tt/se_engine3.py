@@ -32,6 +32,7 @@ HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_
 NSEM_OWN = 2 + 2 * NWS
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
+RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12)  # (down + reduce-scatter CBs)
 ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
 
 _BRISC = r"""
@@ -163,6 +164,17 @@ void kernel_main() {
         cb_pop_front(CB_HOWN, MT * POMAX);
 #endif
     }
+#ifdef SE_RS
+    {  // (down + reduce-scatter) each finished sub-block's hand-off: +1 on its port's mailbox word of mine
+        DeviceZoneScopedN("SE-HAND");
+        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), r0 = np0 + 4 + 2 * nports;
+        const uint32_t nh = get_arg_val<uint32_t>(r0), mbox = get_arg_val<uint32_t>(r0 + 1);
+        for (uint32_t j = 0; j < nh; ++j) {
+            cb_wait_front(SE_FINC, j + 1);
+            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(r0 + 2 + 2 * j), get_arg_val<uint32_t>(r0 + 3 + 2 * j), mbox), 1);
+        }
+    }
+#endif
     noc_async_atomic_barrier();
 }
 """
@@ -240,9 +252,49 @@ void kernel_main() {
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
+#ifdef SE_RS
+    // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (P pages pushed) once my
+    // arrival counter reached its threshold (0: nothing comes - a block I hold no tile of); the fin sub-block to y
+    const uint32_t t0r = ord0 + get_arg_val<uint32_t>(ys0 + GY + 2);
+    const uint32_t q0 = t0r + 3 + 2 * get_arg_val<uint32_t>(t0r);  // (past the tail)
+    const uint32_t naf = get_arg_val<uint32_t>(q0), af0 = q0 + 1, nab = get_arg_val<uint32_t>(af0 + naf), ab0 = af0 + naf + 1;
+    const uint32_t f0 = ab0 + nab;
+    const uint32_t fcount = get_arg_val<uint32_t>(f0), fy0 = get_arg_val<uint32_t>(f0 + 1);
+    const uint32_t fstride = get_arg_val<uint32_t>(f0 + 2), fw = get_arg_val<uint32_t>(f0 + 3);
+    volatile tt_l1_ptr uint32_t* arrf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(f0 + 4));
+    volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(f0 + 5));
+    uint32_t af = 0, ab = 0, fo = 0;
+    const uint32_t NPY = 0;  // (no plain y writes: the fin sub-block is the output)
+    while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount) {
+        invalidate_l1_cache();
+        if (af < naf) {
+            const uint32_t thr = get_arg_val<uint32_t>(af0 + af);
+            if (thr == 0 || *arrf >= thr) {
+                cb_reserve_back(SE_ARRF, SE_P);
+                cb_push_back(SE_ARRF, SE_P);
+                ++af;
+            }
+        }
+        if (ab < nab) {
+            const uint32_t thr = get_arg_val<uint32_t>(ab0 + ab);
+            if (thr == 0 || *arrb >= thr) {
+                cb_reserve_back(SE_ARRB, SE_P);
+                cb_push_back(SE_ARRB, SE_P);
+                ++ab;
+            }
+        }
+        if (fo < fcount && cb_pages_available_at_front(SE_OUTF, 1)) {
+            cb_wait_front(SE_OUTF, 1);
+            noc_async_write(get_read_ptr(SE_OUTF), yg.get_noc_addr(fy0 + (fo / fw) * fstride + fo % fw), 2048);
+            noc_async_write_barrier();
+            cb_pop_front(SE_OUTF, 1);
+            ++fo;
+        }
+#else
     const uint32_t NPY = NCH * NPD;
     while (ws < NR || wr < NR || wc < NR || p < NPY) {
         invalidate_l1_cache();
+#endif
         if (wi < NB) prefetch(0);  // (keep the window full)
         if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
@@ -291,6 +343,15 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+#ifdef SE_RS
+    {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)
+        uint32_t nf = 0, nb = 0;
+        for (uint32_t i = 0; i < naf; ++i) nf = get_arg_val<uint32_t>(af0 + i) > nf ? get_arg_val<uint32_t>(af0 + i) : nf;
+        for (uint32_t i = 0; i < nab; ++i) nb = get_arg_val<uint32_t>(ab0 + i) > nb ? get_arg_val<uint32_t>(ab0 + i) : nb;
+        if (nf) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - nf);
+        if (nb) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrb)), 0u - nb);
+    }
+#endif
     noc_async_atomic_barrier();
 }
 """
@@ -303,6 +364,7 @@ _COMPUTE = r"""
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_binary.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
@@ -392,7 +454,94 @@ void kernel_main() {
         }
         cb_push_back(HOWN, MT * POMAX);
         }
-#ifndef SE_NODOWN
+#ifdef SE_RS
+        {
+        DeviceZoneScopedN("SE-DOWNRS");
+        // (down + reduce-scatter) the host's program: pass i - all of K in DEST over h-all and the streamed W_down;
+        // row r's tiles packed at base_r: into HOLD (fp32: an entry that adds an arrival here) or FINB (bf16: a start
+        // entry, exchanged as is); hand e - entry e's start sub-block is complete (a FINC page: the BRISC's hand-off);
+        // fin e - HOLD + the arrival(s) in fp32 DEST, packed bf16 into FINB (relay: handed off) or OUTF (fin: y).
+        // Partials accumulate fp32 in L1; only the exchanged sub-blocks are bf16 (matmul_reduce_scatter's rule).
+        const uint32_t r0 = NPG + NPD + GX + 1, nops = get_arg_val<uint32_t>(r0), pt0 = r0 + 1 + nops;
+        const uint32_t et0 = pt0 + NPD * (1 + MT);
+        cb_wait_front(HALL, HA);
+        uint32_t npass = 0;
+        for (uint32_t o = 0; o < nops; ++o) {
+            const uint32_t op = get_arg_val<uint32_t>(r0 + 1 + o), kind = op & 0xFF, idx = op >> 8;
+            if (kind == 0) {
+                const uint32_t pd = idx, pw = get_arg_val<uint32_t>(pt0 + pd * (1 + MT));
+                reconfig_data_format(WIN, HALL);
+                matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);
+                uint32_t c = 0;
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < NSD; ++i) {
+                    cb_wait_front(WIN, WSLOT);
+                    for (uint32_t k = 0; k < KBD; ++k) {
+                        const uint32_t kt = i * KBD + k;
+                        while (kt >= get_arg_val<uint32_t>(NPG + NPD + c + 1)) ++c;
+                        const uint32_t a0 = c * MT * POMAX + kt - get_arg_val<uint32_t>(NPG + NPD + c);
+#ifndef SE_PROBE_NOMATH
+                        matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
+#endif
+                    }
+                    cb_pop_front(WIN, WSLOT);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t r = 0; r < MT; ++r) {
+                    const uint32_t bw = get_arg_val<uint32_t>(pt0 + pd * (1 + MT) + 1 + r);
+                    const uint32_t ocb = (bw >> 31) ? SE_HOLD : SE_FINB, base = bw & 0x7FFFFFFF;
+                    pack_reconfig_data_format(ocb);
+                    for (uint32_t t = 0; t < pw; ++t) pack_tile<true>(r * pw + t, ocb, base + t);
+                }
+                tile_regs_release();
+                cb_reserve_back(SE_PSYNC, 1);  // (pass done: the UNPACK of a later finish may read its HOLD tiles)
+                cb_push_back(SE_PSYNC, 1);
+                ++npass;
+            } else if (kind == 1) {
+                cb_reserve_back(SE_FINC, 1);
+                cb_push_back(SE_FINC, 1);
+            } else {
+                const uint32_t e6 = et0 + 6 * idx, cnt = get_arg_val<uint32_t>(e6), mode = get_arg_val<uint32_t>(e6 + 1);
+                const uint32_t sf = get_arg_val<uint32_t>(e6 + 2), sb = get_arg_val<uint32_t>(e6 + 3);
+                const uint32_t ho = get_arg_val<uint32_t>(e6 + 4), fbo = get_arg_val<uint32_t>(e6 + 5);
+                cb_wait_front(SE_PSYNC, npass);
+                if (mode & 1) cb_wait_front(SE_ARRF, (sf + 1) * SE_P);
+                if (mode & 2) cb_wait_front(SE_ARRB, (sb + 1) * SE_P);
+                const uint32_t a1 = (mode & 1) ? SE_ARRF : SE_ARRB, s1 = ((mode & 1) ? sf : sb) * SE_P;
+                const uint32_t ocb = (mode & 4) ? SE_OUTF : SE_FINB;
+                pack_reconfig_data_format(ocb);
+                for (uint32_t i0 = 0; i0 < cnt; i0 += 8) {
+                    const uint32_t n = cnt - i0 < 8 ? cnt - i0 : 8;
+                    tile_regs_acquire();
+                    reconfig_data_format(SE_HOLD, a1);
+                    add_init(SE_HOLD, a1);
+                    for (uint32_t j = 0; j < n; ++j) add_tiles(SE_HOLD, a1, ho + i0 + j, s1 + i0 + j, j);
+                    if ((mode & 3) == 3) {  // (the second arrival: DEST -> srcA at fp32 width, + the bwd tile)
+                        reconfig_data_format(SE_HOLD, SE_ARRB);
+                        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(SE_ARRB);
+                        for (uint32_t j = 0; j < n; ++j)
+                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(SE_ARRB, sb * SE_P + i0 + j, j);
+                    }
+                    tile_regs_commit();
+                    if (mode & 4) cb_reserve_back(SE_OUTF, n);
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < n; ++j) {
+                        if (mode & 4) pack_tile(j, SE_OUTF);
+                        else pack_tile<true>(j, SE_FINB, fbo + i0 + j);
+                    }
+                    tile_regs_release();
+                    if (mode & 4) cb_push_back(SE_OUTF, n);
+                }
+                if (!(mode & 4)) {
+                    cb_reserve_back(SE_FINC, 1);
+                    cb_push_back(SE_FINC, 1);
+                }
+            }
+        }
+        cb_pop_front(HALL, HA);
+        }
+#elif !defined(SE_NODOWN)
         DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
         cb_wait_front(HALL, HA);
@@ -471,8 +620,10 @@ class SeEngine3:
         w_dtype=ttnn.bfloat8_b,
         shards=1,
         down=True,
+        rs=None,
     ):
-        """down False: no down here - h [rows, I] goes to DRAM (y) for the down + reduce-scatter stage.
+        """rs (se_rs.RsPlan): down + the SE reduce-scatter in this program (tiling, schedule; the ports are the
+        gather's movers) - y is then this chip's reduced block. down False: no down here - h [rows, I] goes to DRAM (y) for the down + reduce-scatter stage.
         shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
         self.mesh = mesh_device
         self.shards = shards
@@ -508,6 +659,12 @@ class SeEngine3:
         self.down = down
         self.NPD = max(-(-p // self.PWDMAX) for p in pnd) if down else 0
         self.wd = [_split(p, self.NPD, 1) if down else [] for p in pnd]
+        self.rs = rs
+        if rs is not None:  # (the column's down passes: the plan's, widths the same on every chip)
+            assert down and rs.pwmax == self.PWDMAX and rs.MT == MT and rs.GX == GX and rs.GY == GY and self.NCH == 1
+            self.wd = [[pw for _, pw, _ in rs.column_passes(0, c)] for c in range(GX)]
+            self.NPD = len(self.wd[0])
+            assert all(len(wd) == self.NPD for wd in self.wd)
         self.KBD = KBD
         assert self.HT % KBD == 0
         self.NSD = self.HT // KBD if down else 0
@@ -540,9 +697,9 @@ class SeEngine3:
             ("hown", MT * self.POMAX * 2048),
             ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
             ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
-            ("out", NOUT * MT * self.PWDMAX * 2048 if down else 0),
+            ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
             ("words", 256),
-        ]:
+        ] + (self._rs_regions() if rs is not None else []):
             off[k], o = o, al(o + v)
         self.off, self.arena_bytes = off, o
         if o > ARENA_MAX:
@@ -553,6 +710,22 @@ class SeEngine3:
         self.groups = {}
         for c in range(GX):
             self.groups.setdefault((tuple(self.wg[c]), tuple(self.wd[c])), []).append(c)
+
+    def _rs_regions(self):
+        rs, G = self.rs, self.rs.G
+        cores = [(cx, cy) for cx in range(self.GX) for cy in range(self.GY)]
+        hold = max(rs.hold_offs(p, cx, cy)[1] for p in range(G) for cx, cy in cores)
+        finb = max(rs.finb_tiles(cx, cy) for cx, cy in cores)
+        self.rs_sizes = dict(
+            hold=max(1, hold) * 4096,
+            finb=max(1, finb) * 2048,
+            arrf=rs.zone_tiles("fwd") * 2048,
+            arrb=rs.zone_tiles("bwd") * 2048,
+            outf=8 * 2048,
+            finc=16 * 8,
+            psync=16 * max(8, self.NPD),
+        )
+        return list(self.rs_sizes.items())
 
     def alloc_arena(self):
         """The arena (call scratch: x, the weights, every CB) as an L1 tensor; base its address (the programs bake it)."""
@@ -572,7 +745,7 @@ class SeEngine3:
         w = (self.KT * 2 * self.HT + self.HT * self.NTH) * self.wtb
         return dict(w=w, x=self.rows * self.H * 2, y=self.rows * self.H * 2)
 
-    def upload(self, w_gu, w_down):
+    def upload(self, w_gu, w_down, pos=None):
         """Per device (row-major mesh order): w_gu [H, 2 I] (glu_weight tile pairs), w_down [I, H] -> one bf8 tensor
         a chip, per-bank: core (c, cy)'s W-own (its column's blocks b = cy, cy + GY, .. of a chunk's stream order:
         gate / up [KB x pass width] pass-major, then down [KBD x pass width]) one contiguous region, region c GY + cy in
@@ -581,7 +754,7 @@ class SeEngine3:
 
         KB, KBD, NSG, GX, GY = self.KB, self.KBD, self.NSG, self.GX, self.GY
         devs = []
-        for wgt, wdt in zip(w_gu, w_down):
+        for dev, (wgt, wdt) in enumerate(zip(w_gu, w_down)):
             regions = []
             for c in range(GX):
                 blocks = []
@@ -593,6 +766,8 @@ class SeEngine3:
                         blocks.append(blk.reshape(KB, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
                 for pd, pw in enumerate(self.wd[c]):
                     c0 = self.n0d[c] + sum(self.wd[c][:pd])
+                    if self.rs is not None:  # (the plan's passes, in this chip's entry order: pos[dev] its position)
+                        c0 = self.rs.column_passes(pos[dev], c)[pd][0]
                     for i in range(self.NSD):
                         blk = wdt[i * KBD * 32 : (i + 1) * KBD * 32, c0 * 32 : (c0 + pw) * 32]
                         blocks.append(blk.reshape(KBD, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
@@ -610,11 +785,29 @@ class SeEngine3:
         fam, S = (self.fam1, self.S1) if f else (self.fam0, self.S0)
         return fam[(j // 2) % S], f, (j // 2) % S
 
-    def pieces(self, x, w, y, *, x_k0=0, x_ct=None, shard_order=None, extra_sem_cores=(), ports=(), xloaded=0):
+    def pieces(
+        self,
+        x,
+        w,
+        y,
+        *,
+        x_k0=0,
+        x_ct=None,
+        shard_order=None,
+        extra_sem_cores=(),
+        ports=(),
+        xloaded=0,
+        rs_pos=None,
+        rs_port=None,
+        rs_mbox=0,
+        rs_arr=(0, 0),
+    ):
         """(CBs, kernels, semaphores) of the engine on one chip (the kernel_lib families attached by the caller via
         attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). shard_order: this
         chip's K shards in processing order (own first, then by arrival; XREADY = m (G - 1) + rank once chunk m's shard
-        of that rank is in); None: one shard (all of K, already there)."""
+        of that rank is in); None: one shard (all of K, already there). With an RsPlan: rs_pos this chip's position on
+        the TP axis, rs_port(d, l) the NoC (x, y) of its port (direction, link), rs_mbox the ports' mailbox address,
+        rs_arr the arrival counters (fwd, bwd)."""
         x_ct, x_k0 = int(self.KT if x_ct is None else x_ct), int(x_k0)
         so = [int(q) for q in shard_order] if shard_order is not None else [0]
         assert self.NSG % len(so) == 0
@@ -639,7 +832,15 @@ class SeEngine3:
         cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
         if self.down:
             cb(HALL, "hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
+        if self.down and self.rs is None:
             cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
+        if self.rs is not None:
+            z = self.rs_sizes
+            cb(RS_CB["hold"], "hold", z["hold"], ttnn.float32, 4096)
+            for k in ("finb", "arrf", "arrb", "outf"):
+                cb(RS_CB[k], k, z[k], ttnn.bfloat16, 2048)
+            for k in ("finc", "psync"):
+                cb(RS_CB[k], k, z[k], ttnn.bfloat16, 16)
         cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -672,6 +873,7 @@ class SeEngine3:
                     + sor
                     + tail
                     + [int(y.buffer_address())]
+                    + self._rs_brisc(rs_pos, rs_port, rs_mbox, c, cy)
                 )
                 n_rt[cx0 + c][cy] = (
                     [
@@ -693,6 +895,7 @@ class SeEngine3:
                     + [(c * GY + cy) % self.nbank]
                     + sor
                     + tail
+                    + self._rs_ncrisc(rs_pos, rs_arr, c, cy)
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -736,6 +939,9 @@ class SeEngine3:
             NOUT,
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
+        if self.rs is not None:
+            nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
+            nd += f"#define SE_P {self.rs.P}\n"
         self.brisc = ttnn.KernelDescriptor(
             kernel_source=nd + _probes() + _BRISC,
             source_type=st,
@@ -747,7 +953,7 @@ class SeEngine3:
         kernels = [
             self.brisc,
             ttnn.KernelDescriptor(
-                kernel_source=_probes() + _NCRISC,
+                kernel_source=nd + _probes() + _NCRISC,
                 source_type=st,
                 core_ranges=allc,
                 compile_time_args=nct + w_ct + y_ct,
@@ -771,10 +977,16 @@ class SeEngine3:
             c_rt = ttnn.RuntimeArgs()
             for c in cols:
                 for cy in range(GY):
-                    c_rt[cx0 + c][cy] = list(wg) + list(wd) + list(self.h0) + [self.HT]  # (+ the h column offsets)
+                    c_rt[cx0 + c][cy] = (
+                        list(wg)
+                        + list(wd)
+                        + list(self.h0)
+                        + [self.HT]  # (+ the h column offsets)
+                        + (self.rs.compute_args(rs_pos, c, cy) if self.rs is not None else [])
+                    )
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,
+                    kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,  # noqa
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[
@@ -805,6 +1017,30 @@ class SeEngine3:
         )
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=semc, initial_value=0) for i in range(NSEM_OWN)]
         return cbs, kernels, sems
+
+    def _rs_brisc(self, p, port, mbox, cx, cy):
+        """The BRISC's hand-offs: [count, my mailbox word] + per hand-off its port's NoC (x, y)."""
+        if self.rs is None:
+            return []
+        rs = self.rs
+        k = rs.k(cx, cy)
+        hs = rs.handoffs(p, cx, cy)
+        return [len(hs), mbox + 16 * k] + [v for _, d in hs for v in port(d, rs.link(k))]
+
+    def _rs_ncrisc(self, p, arr, cx, cy):
+        """The NCRISC's arrival credits (per direction, slot order: thresholds) and the fin sub-block's y map."""
+        if self.rs is None:
+            return []
+        rs = self.rs
+        a = rs.arrivals(p, cx, cy)
+        y0, stride, w = rs.fin_map(p, cx, cy)
+        return (
+            [len(a["fwd"])]
+            + [t for _, _, t in a["fwd"]]
+            + [len(a["bwd"])]
+            + [t for _, _, t in a["bwd"]]
+            + [rs.count(cx, cy, p), y0, stride, w, arr[0], arr[1]]
+        )
 
     def attach_mcast(self, prog):
         """The kernel_lib families (x slots 0 / 1, h; the BRISC's NOC0) attached to prog's BRISC kernel (after prog.semaphores is set:
