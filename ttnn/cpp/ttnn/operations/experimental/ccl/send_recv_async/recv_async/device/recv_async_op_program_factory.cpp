@@ -89,6 +89,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
 
     const auto& mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args;
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_async");
 
