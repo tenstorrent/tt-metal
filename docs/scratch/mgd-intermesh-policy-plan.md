@@ -22,17 +22,24 @@ The design carries the policy per connection, end to end:
 1. **MGD.** Each mesh pair gets a channel demand `{strict, relaxed}`, summed over the
    connections on that pair. Mixing is allowed.
 2. **Solver.** The policy becomes a **constraint on a target edge**, like the existing
-   node constraints: `add_required_edge_constraint` (STRICT) and
-   `add_preferred_edge_constraint` (RELAXED). The SAT encoding already has a per-edge
-   "realized" literal; today it is created for every edge or none, and it is created only for
-   RELAXED edges. `ConnectionValidationMode` and `allow_unmatched_target_edges` stay only as
-   defaults for edges with no edge constraint.
-3. **Mapper and control plane.** Exit-node constraints, intermesh binding and validation look
+   node constraints, and every edge resolves to one `EdgeDemand { required, preferred }`.
+   A caller sets it per edge (`add_required_edge_constraint`,
+   `add_preferred_edge_constraint`, `set_edge_policy`) or for the **whole solve**
+   (`set_default_edge_policy`). The default lives in `MappingConstraints`, so
+   `solve_topology_mapping` no longer takes a `ConnectionValidationMode`, and
+   `allow_unmatched_target_edges` becomes one value of the default. The SAT encoding already
+   has a per-edge "realized" literal; today it is created for every edge or none, and it is
+   created only for edges with `required == 0`.
+3. **Both solves use it.** The intra-mesh solve sets its mesh's policy as the default edge
+   policy; the inter-mesh seat solve sets per-pair demands. Neither passes a mode to the
+   solver (section 3.4).
+4. **Mapper and control plane.** Exit-node constraints, intermesh binding and validation look
    up each mesh pair's demand instead of the global mode.
 
-So yes, STRICT / RELAXED can be a required constraint instead of a solver argument. The MGD
-side and the solver side should land together (section 8): the per-pair demand is useless
-until the solver can encode it, and the solver change has no caller until the MGD supplies it.
+So yes, STRICT / RELAXED can be a required constraint instead of a solver argument, for the
+whole solve or per edge. The MGD side and the solver side should land together (section 8):
+the per-pair demand is useless until the solver can encode it, and the solver change has no
+caller until the MGD supplies it.
 
 ## 1. How the policy flows today
 
@@ -86,44 +93,112 @@ two more are wanted, and the pair is never zero-link. Device-level connections a
 
 ## 3. The solver: policy as a constraint, not an argument
 
-### 3.1 API
+### 3.1 One structure per edge
 
-`MappingConstraints<TargetNode, GlobalNode>` already has node constraints (required,
-preferred, forbidden, cardinality). It gains edge constraints:
+Every target edge with `c` channels in the target graph resolves to one demand:
 
 ```cpp
-// The target edge (a, b) must map onto a global edge with at least min_channels channels.
-// Calls on the same edge add up. Returns false if a or b is not a target node.
-bool add_required_edge_constraint(TargetNode a, TargetNode b, std::size_t min_channels = 1);
-
-// The target edge (a, b) is best effort: realized when the placement allows, preferring up to
-// `channels` channels on top of any required minimum. Zero is allowed. Calls add up.
-void add_preferred_edge_constraint(TargetNode a, TargetNode b, std::size_t channels);
-
-// Per-edge demand, for the backends and for validation.
 struct EdgeDemand {
     std::size_t required = 0;   // hard minimum; > 0 means the edge must exist
-    std::size_t preferred = 0;  // soft extra on top of `required`
+    std::size_t preferred = 0;  // soft extra on top of `required`; required + preferred == c
 };
-const std::map<std::pair<TargetNode, TargetNode>, EdgeDemand>& edge_demands() const;
 ```
 
-A target edge with no edge constraint keeps today's behaviour, chosen by the solve's
-`ConnectionValidationMode` and `allow_unmatched_target_edges`. Both stay, as the default for
-unconstrained edges, so every existing caller is unchanged. A caller that gives every edge a
-constraint never reads them.
+Today's two solver arguments are three points on that scale, so one policy enum names all
+three:
 
-### 3.2 SAT encoding (`topology_solver_sat.cpp`)
+| `EdgePolicy` | `required` | `preferred` | Today |
+|---|---|---|---|
+| `STRICT` | `c` | 0 | `ConnectionValidationMode::STRICT` |
+| `RELAXED` | 1 | `c - 1` | `ConnectionValidationMode::RELAXED`: the edge must exist, its channel count is best effort |
+| `BEST_EFFORT` | 0 | `c` | `RELAXED` plus `allow_unmatched_target_edges` (#56762): the edge may have zero links |
+
+The MGD word RELAXED already means two different things: an intra-mesh RELAXED mesh still
+needs every link (solver `RELAXED`), and an inter-mesh RELAXED connection tolerates zero
+links (solver `BEST_EFFORT`). Naming the three by effect keeps the solver unambiguous.
+
+### 3.2 API: the whole-solve default is a constraint too
+
+`MappingConstraints<TargetNode, GlobalNode>` already has node constraints (required,
+preferred, forbidden, cardinality). It gains edge constraints at three scopes:
+
+```cpp
+enum class EdgePolicy { STRICT, RELAXED, BEST_EFFORT };
+
+// Whole solve: every target edge with no per-edge constraint. Unset means RELAXED, today's
+// default argument, so a caller that sets nothing is unchanged.
+void set_default_edge_policy(EdgePolicy policy);
+std::optional<EdgePolicy> default_edge_policy() const;
+
+// One edge, sized from that edge's channel count in the target graph.
+bool set_edge_policy(TargetNode a, TargetNode b, EdgePolicy policy);
+
+// One edge, explicit numbers (an inter-mesh pair's {strict, relaxed} demand).
+// Calls on the same edge add up. Return false if a or b is not a target node.
+bool add_required_edge_constraint(TargetNode a, TargetNode b, std::size_t min_channels = 1);
+bool add_preferred_edge_constraint(TargetNode a, TargetNode b, std::size_t channels);
+
+// For the backends and the validator: one demand per target edge.
+std::map<std::pair<TargetNode, TargetNode>, EdgeDemand> resolve_edge_demands(
+    const AdjacencyGraph<TargetNode>& target_graph) const;
+```
+
+Rules:
+
+- **Precedence:** explicit numbers, then `set_edge_policy`, then the default. Using both
+  explicit numbers and `set_edge_policy` on one edge is rejected (the call returns false).
+- **Counts:** for an edge with explicit numbers, `required + preferred` must equal the target
+  edge's channel count, so the target graph stays the one source of counts. A mismatch fails
+  the solve with a message naming the edge.
+- **`merge`:** explicit numbers add up; two different defaults or two different
+  `set_edge_policy` values on one edge are rejected, like conflicting same-rank partitions.
+- **`allow_unmatched_target_edges`:** `set_allow_unmatched_target_edges(true)` becomes a
+  deprecated alias for `set_default_edge_policy(BEST_EFFORT)`. Every caller that sets it today
+  also solves in RELAXED mode (`physical_grouping_descriptor_matching.cpp:3254, 3276`), so the
+  alias loses nothing.
+
+**The solver call no longer takes a mode.** `solve_topology_mapping`,
+`solve_topology_mapping_n`, `solve_topology_mapping_all` and the
+`TopologyMappingEnumerationSession` constructor get overloads without
+`ConnectionValidationMode`:
+
+```cpp
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+```
+
+The old signatures stay, deprecated, with the mode made a required argument. They copy the
+constraints and set the mode as the default edge policy when none is set; if the constraints
+already set a different default, the solve fails. A three-argument call resolves to the new
+overload, and since an `enum class` and `bool` don't convert into each other, no call is
+ambiguous. About 190 uses of `ConnectionValidationMode::` in 13 files (127 in
+`test_topology_solver.cpp`) move over in the same stack or later; nothing forces them.
+
+Inside the backends, `ConnectionValidationMode` disappears from the SAT encoder, the DFS
+search and `MappingValidator`; they read the resolved `EdgeDemand` per edge.
+
+### 3.3 SAT encoding (`topology_solver_sat.cpp`)
+
+"Required edge" below means `required > 0`; "preferred-only edge" means `required == 0`.
 
 | Step | Today | Per edge |
 |---|---|---|
 | 1. Domain degree filter (`:856`) | skipped for every target when soft | a global must have at least as many neighbours as the target has **required** edges |
-| 2. AC-3 (`:887`) | skipped for the whole problem when soft | runs over required arcs only |
+| 2. AC-3 (`:887`) | skipped for the whole problem when soft; STRICT also checks channel counts (`:902, 918`) | runs over required arcs; an arc checks channels against its `required` minimum |
 | 3b. `prune_active_lit` (`:1364`) | guards the hard domains of a soft encoding | the same, built from the required-only domains |
-| 6. Adjacency support (`:1121`) | every edge hard, or every edge guarded by a realized literal | required edge: unguarded support clauses, channel-compatible with its `required` minimum. Preferred-only edge: guarded by its realized literal |
+| 6. Adjacency support (`:1121`) | every edge hard, or every edge guarded by a realized literal; STRICT supports need the full count (`:1155`) | required edge: unguarded support clauses on global edges with at least `required` channels. Preferred-only edge: guarded by its realized literal |
 | Channel thresholds (`:1564`) | RELAXED: levels 1..count on every edge | levels `required+1 .. required+preferred`, only on edges with `preferred > 0` |
 | Realized-edge objective (`:1867`, binary search at `:2033`) | over every edge when soft | over preferred-only edges |
-| Seam toggle (`set_allow_unmatched_target_edges`, `:1926`) | assume every realized literal | assume the preferred-only edges' realized literals; required edges are hard in both modes |
+| Seam toggle (`set_allow_unmatched_target_edges`, `:1926`) | assume every realized literal | `set_best_effort_edges_required(bool)`: assume the preferred-only edges' realized literals, so `BEST_EFFORT` edges act as `RELAXED`; required edges are hard in both modes |
+
+A uniform `STRICT` or `RELAXED` default produces exactly today's encoding for that mode, and a
+uniform `BEST_EFFORT` default produces today's soft encoding. That is the property test in
+section 8.
 
 The objective order is unchanged: host cap and host objective, then the number of realized
 preferred edges, then channel thresholds, then preferred node hits.
@@ -140,15 +215,36 @@ may end with zero links needs the SAT engine, as `allow_unmatched_target_edges` 
 switches off the degree filter and AC-3 for the whole master solve. Per edge, those prunings
 stay on for STRICT edges.
 
-### 3.3 The seat solve's ladder
+### 3.4 Both solves use the same structure
+
+| Solve | Where | Today | Per edge |
+|---|---|---|---|
+| Intra-mesh (fabric node to ASIC) | `complete_intra_mesh_for_placement` (`topology_mapper_utils.cpp:1459-1468`) | `determine_intra_mesh_validation_mode` picks STRICT / RELAXED per mesh and passes it to `solve_topology_mapping`; a `TT_FATAL` forbids `allow_unmatched_target_edges` | `intra_mesh_constraints.set_default_edge_policy(...)` from the mesh's policy (`STRICT` or `RELAXED`), then the new overload. The fatal becomes: no intra-mesh edge may resolve to `required == 0` |
+| Intra-mesh candidate pools in the seat solve | `CandidatePool`, `create_sat_placement_pools` (`physical_grouping_descriptor_matching.cpp:2211, 2558`) | `sat_intra_mesh_mode_by_mesh_` (`:3126, 3157`) holds a mode per mesh; it is part of the pool hash | the map holds an `EdgePolicy`; each pool sets it as the default on its constraints; the hash uses the policy |
+| PGD grouping matches | `physical_grouping_descriptor_matching.cpp:586, 1361, 1698, 1779` | mode argument (STRICT, or the instance's intra policy at `:1779`) | default edge policy on the constraints they already build |
+| Inter-mesh seat solve | `SatPlacementEnumerationSession` | RELAXED or STRICT argument plus the soft-seam bool | explicit numbers per mesh pair from the demand table (section 5); default `STRICT` |
+| Single-mesh fallback | `topology_mapper.cpp:1746` | RELAXED argument | `set_default_edge_policy(RELAXED)` |
+
+`TopologyMappingConfig::mesh_validation_modes` keeps its type for now; the mapper translates
+each entry to an `EdgePolicy` (`STRICT` to `STRICT`, `RELAXED` to `RELAXED`). Intra-mesh
+`BEST_EFFORT` stays forbidden: a missing link inside a mesh breaks routing, and nothing in the
+MGD can ask for it.
+
+**Per-connection intra-mesh policy** is not expressible in the MGD today: a mesh has one
+`channels { count policy }`, and express links inherit it (`mesh_graph_descriptor.proto:246`,
+"there is no per-pattern override"). The solver side would support it with `set_edge_policy`
+per edge; giving `ExpressConnection` / `ExpressLink` their own `channels` is a separate proto
+change (open question 5).
+
+### 3.5 The seat solve's ladder
 
 `kSolveLadder` (`physical_grouping_descriptor_matching.cpp:2953`) tries hard seams first, then
 soft seams, each with and without the host cap. Under the per-edge design:
 
 - The soft-seam rungs run only if some mesh pair has `strict == 0` and `relaxed > 0`.
   This replaces `relaxed_inter_mesh_policy_`.
-- "Hard seams" means every preferred-only edge is realized; STRICT edges are hard in every
-  rung.
+- "Hard seams" means `set_best_effort_edges_required(true)`: every preferred-only edge must
+  be realized. STRICT edges are hard in every rung.
 - The rung order and the zero-link warning stay as they are.
 
 ## 4. MGD and MeshGraph
@@ -188,11 +284,14 @@ soft seams, each with and without the host cap. Under the per-edge design:
 1. **Seat solve.** `SatPlacementEnumerationSession` turns each mesh pair's demand into edge
    constraints on its `MappingConstraints<MeshId, ...>`: `add_required_edge_constraint(a, b,
    strict)` when `strict > 0`, and `add_preferred_edge_constraint(a, b, relaxed)` when
-   `relaxed > 0`.
+   `relaxed > 0`. Every mesh pair has a demand, so the default edge policy is never read; it
+   is set to `STRICT` so that a missing demand fails loudly instead of going soft.
 2. **Exit nodes.** `add_exit_node_constraints` reads each pair's demand. It applies the STRICT
    pair math to `strict` channels and the capped RELAXED math to `relaxed`. A pair may skip its
    constraint with a zero-link warning only when `strict == 0`.
-3. **`complete_intra_mesh_for_placement`** takes the demand table instead of one mode.
+3. **`complete_intra_mesh_for_placement`** takes the demand table instead of one inter-mesh
+   mode (for the exit nodes), and sets the mesh's intra-mesh policy as the default edge
+   policy instead of passing it to the solver (section 3.4).
 4. **Config.** `TopologyMappingConfig::inter_mesh_validation_mode` becomes an override for
    tools and tests ("treat every inter-mesh connection as X"). It is unset by default, and the
    MGD's demands are used.
@@ -227,6 +326,8 @@ soft seams, each with and without the host cap. Under the per-edge design:
 | Existing MGDs | Unchanged. Every connection in a graph shares one policy today, so the demands produce the same constraints; goldens pin it |
 | Newly accepted | MGDs that mix policies (rejected at parse today), merged parts that disagree (rejected at merge today), and device-level plus mesh-level connections in one MGD (rejected by the control plane today) |
 | Hierarchical MGDs | The compatibility check is per graph, so two graphs may already differ, and the first FABRIC connection silently wins. After this change each is honoured. That is a behaviour change: list the MGDs it affects before landing |
+| Solver API | The mode argument and `allow_unmatched_target_edges` become one constraint, `set_default_edge_policy`. Old signatures keep working, deprecated; about 190 uses in 13 files can move later |
+| Intra-mesh | Same behaviour, now expressed as the default edge policy; ready for per-edge intra-mesh policy if the MGD ever gets it |
 | Solve time | Mixed MGDs solve faster than all-RELAXED ones, because STRICT edges keep their pruning. Uniform MGDs are unchanged |
 | Symmetry | `unique_shapes` must be off when policies mix (section 5) |
 | Warnings | Zero-link and shortfall warnings name the connection and its policy |
@@ -239,21 +340,30 @@ until the last PR, so no MGD is accepted before every consumer can handle it.
 
 | PR | Contents | Behaviour change |
 |---|---|---|
-| A. Solver edge constraints | `add_required_edge_constraint`, `add_preferred_edge_constraint`, `EdgeDemand`; SAT steps from 3.2; validator per edge; DFS rejects zero-link preferred edges | none: no caller sets edge constraints yet |
+| A1. Solver edge constraints | `EdgePolicy`, `EdgeDemand`, `set_default_edge_policy`, `set_edge_policy`, `add_required_edge_constraint`, `add_preferred_edge_constraint`, `resolve_edge_demands`, `merge`; SAT steps from 3.3; validator and DFS per edge; the old mode argument becomes the default edge policy inside the solver | none: the old signatures resolve to the same demands |
+| A2. Solver call without a mode | overloads without `ConnectionValidationMode`; old ones deprecated; `set_allow_unmatched_target_edges` becomes an alias; session `set_best_effort_edges_required` | none |
+| A3. Intra-mesh callers | `complete_intra_mesh_for_placement`, candidate pools, PGD grouping matches, `topology_mapper.cpp:1746` set the default edge policy (section 3.4) | none: same policy, now as a constraint |
 | B. MGD demand tables | `InterMeshChannelDemand`, `get_inter_mesh_channel_demand`, `has_relaxed_inter_mesh_connection`; requested maps carry policy; sum instead of overwrite | none for valid MGDs, except the overwrite fix |
-| C. Mapper | seat solve and exit nodes read demands (sections 3.3, 5); config override; `unique_shapes` gate; drop the merge-agreement fatals | merged parts with different policies are accepted |
+| C. Mapper | seat solve and exit nodes read demands (sections 3.5, 5); config override; `unique_shapes` gate; drop the merge-agreement fatals | merged parts with different policies are accepted |
 | D. Control plane | sections 6.1-6.5 (#49960) | device-level and mesh-level connections may coexist |
 | E. Allow mixing | drop the MGD 1.0 "Cannot mix" check; proto and `MGD_README.md` comments; deprecate `is_inter_mesh_policy_relaxed` | MGDs may mix policies |
 
-A and B are independent and can be reviewed in parallel. C needs both; D and E need C.
+A1, A2, A3 go in that order; the A series and B are independent and can be reviewed in
+parallel. C needs A1 and B; D and E need C. The test suites can move off the mode argument
+after A2, in any order.
 
 ### Tests
 
-- **Solver (A).** A required edge with no global edge is UNSAT. A preferred edge with no
+- **Solver (A1, A2).** A required edge with no global edge is UNSAT. A preferred edge with no
   global edge solves with a warning, and is realized when a placement allows it. A
   required-plus-preferred edge meets its minimum and prefers the total. Degree and AC-3
-  pruning still apply to required edges when other edges are preferred. Uniform demands give
-  the same mappings as the global modes (property test over the existing solver suites).
+  pruning still apply to required edges when other edges are preferred. Property test over
+  the existing solver suites: a uniform default of `STRICT`, `RELAXED` or `BEST_EFFORT` gives
+  the same mappings and warnings as the matching mode argument (and `allow_unmatched` for
+  `BEST_EFFORT`). Precedence, the count check, conflicting defaults in `merge`, and a mode
+  argument that disagrees with the default all fail as section 3.2 says.
+- **Intra-mesh (A3).** Every intra-mesh golden in `TopologyMapperUtilsTest` and the PGD suites
+  is unchanged; a mesh whose default would resolve an edge to `required == 0` fails.
 - **MGD (B).** A pair with a device-level STRICT 1 and a mesh-level RELAXED 2 gives demand
   `{1, 2}`. Two mesh-level connections on one pair sum. Each existing textproto gives the same
   demands as its global policy.
@@ -276,3 +386,8 @@ A and B are independent and can be reviewed in parallel. C needs both; D and E n
    hard-seam rungs for their interplay with the host cap, or drop them?
 4. **Override lifetime.** How long should `TopologyMappingConfig::inter_mesh_validation_mode`
    stay as a forcing override?
+5. **Per-connection intra-mesh policy.** Give express links (or device-topology dimensions)
+   their own `channels { count policy }` so the intra-mesh solve gets per-edge policies, or
+   keep one policy per mesh?
+6. **Unset default.** An unset default edge policy means `RELAXED`, today's default argument.
+   Flip it to `STRICT`, matching the MGD default, once every caller sets it explicitly?
