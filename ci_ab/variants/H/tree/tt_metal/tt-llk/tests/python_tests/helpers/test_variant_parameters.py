@@ -197,7 +197,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             MATMUL_FORM_KEYS(
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
-                0 < max(ct_dim, rt_dim) <= 8,
+                0 < max(ct_dim, rt_dim) <= 7,
             )
         ]
 
