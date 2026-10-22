@@ -325,14 +325,20 @@ struct ArchAreas {
     std::optional<content::L1> base_fw_postcode;
 };
 
+// Where a register is in a stream's block, and how many of its low bits hold its value.
+struct StreamRegisterLayout {
+    // In bytes.
+    uint32_t offset = 0;
+    uint32_t bits = 0;
+};
+
 // Where a router core's stream registers are.
 struct StreamRegisters {
     uint32_t base = 0;
     uint32_t stride = 0;
     // Stream ids are below count.
     uint32_t count = 0;
-    // Each register's byte offset in a stream's block.
-    std::vector<std::pair<StreamRegister, uint32_t>> register_offsets;
+    std::vector<std::pair<StreamRegister, StreamRegisterLayout>> registers;
 };
 
 // The addresses of a router core's soft reset and wall clock registers.
