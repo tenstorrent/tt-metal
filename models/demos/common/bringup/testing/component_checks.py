@@ -99,7 +99,9 @@ def output_kind(t: torch.Tensor) -> str:
 
 def limits(s) -> dict:
     """The calib and the structural probe factors (F138: no fixed accuracy number, no spec override)."""
-    return dict(COMPONENT_DEFAULTS)
+    out = dict(COMPONENT_DEFAULTS)
+    out["component_col_factor"] = out["struct_col_factor"]  # F146: the pre-F138 name frozen tests read (structural)
+    return out
 
 
 # ---------------------------------------------------------------- the precision model
