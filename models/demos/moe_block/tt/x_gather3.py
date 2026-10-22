@@ -533,7 +533,19 @@ def shard_order(chips, coord, *, CR, nv, sps, kb, rp):
 class XGather3:
     """The row-chunk-major x all-gather into an SeEngine3's x-own (module docstring); movers on sub_core_grid."""
 
-    def __init__(self, mesh_device, engine, *, num_links=2, group=4, ring=None, sub_core_grid=None, placement="auto"):
+    def __init__(
+        self,
+        mesh_device,
+        engine,
+        *,
+        num_links=2,
+        group=4,
+        ring=None,
+        sub_core_grid=None,
+        placement="auto",
+        watcher=None,
+    ):
+        """watcher: the watcher's logical core (default: the plan's first copy core)."""
         self.mesh, self.eng = mesh_device, engine
         e = engine
         G = self.G = tuple(mesh_device.shape)[1]
@@ -560,7 +572,11 @@ class XGather3:
         for ch in self.chips.values():
             for d in ("fwd", "bwd"):
                 assert all(part == 0 for _, part in ch["rings"][0][d][:-1]), "a relay's upstream entry must be whole"
-        cores = sorted({(c.x, c.y) for ch in self.chips.values() for c in list(ch["ports"].values()) + ch["copy"][:1]})
+        self._watcher = watcher
+        cores = sorted(
+            {(c.x, c.y) for ch in self.chips.values() for c in ch["ports"].values()}
+            | {(self.watcher_core(k).x, self.watcher_core(k).y) for k in self.chips}
+        )
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
         self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3 + 2 * num_links)]
         addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
@@ -581,7 +597,7 @@ class XGather3:
         return [(virt(c).x, virt(c).y) for c in self.chips[coord]["ports"].values()]
 
     def watcher_core(self, coord):
-        return self.chips[coord]["copy"][0]
+        return self._watcher if self._watcher is not None else self.chips[coord]["copy"][0]
 
     def order(self, coord):
         """(this chip's shards in the engine's order, per remote shard its carrying streams): shard_order."""

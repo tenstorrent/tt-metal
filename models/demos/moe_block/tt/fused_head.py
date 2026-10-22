@@ -301,12 +301,17 @@ class HeadSE3:
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
+        # (the mover column: ports at the top; with the router chain the watcher sits right below them and the router
+        # cores take the rest as one rectangle - their W_r goes out by a column multicast)
+        nrt = rows // 32 // G
+        watcher = ttnn.CoreCoord(GX, grid.y - nrt - 1) if router is not None else None
         self.xg = XGather3(
             mesh_device,
             self.eng,
             num_links=num_links,
             sub_core_grid=movers,
             placement="simple" if grid.x - GX < 4 else "auto",
+            watcher=watcher,
         )
         if self.rs_mode == "mrs":  # (the gather's semaphores above the arena too: the arena is freed every call)
             self.eng.alloc_arena()
@@ -335,7 +340,8 @@ class HeadSE3:
             used = {(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()}
             wset = {(self.xg.watcher_core(k).x, self.xg.watcher_core(k).y) for k in self.xg.chips}
             used |= wset
-            free = [ttnn.CoreCoord(cx, cy) for cx in range(GX, grid.x) for cy in range(grid.y) if (cx, cy) not in used]
+            free = [ttnn.CoreCoord(GX, cy) for cy in range(grid.y - nrt, grid.y)]
+            assert not {(c.x, c.y) for c in free} & used, "the router cores' rectangle overlaps the movers"
             assert self.rs_mode == "fused"
             ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)
             self.eng.alloc_arena(extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)])
@@ -513,6 +519,8 @@ class HeadSE3:
                 )
                 prog.cbs, prog.semaphores = c0 + c1, sems
                 e.attach_mcast(prog)
+                if self.router is not None:
+                    self.router.attach_mcast(prog)
                 prog.kernels = k0 + k1
                 r, c = coord
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog

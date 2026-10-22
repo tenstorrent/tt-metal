@@ -84,6 +84,8 @@ inline void topk_rows(uint32_t sc, uint32_t bias, uint32_t o_l1, uint32_t rb, ui
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+using namespace dataflow_kernel_lib;
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
 constexpr uint32_t KBR = get_compile_time_arg_val(3);
 constexpr auto x_args = TensorAccessorArgs<5>();
@@ -109,6 +111,12 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(BIAS, ET);
     uint32_t af = 0, ab = 0;
+    // W_r is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
+    // column into every core's WR slot (the kernel_lib family's handshake: a core is ready once its slot is reserved)
+    constexpr auto mw = McastArgs<get_named_compile_time_arg_val("rw_ct_offset"), get_named_compile_time_arg_val("rw_rt_offset")>();
+    Noc noc;
+    auto sw = mw.optional_sender(noc);
+    auto rw = mw.optional_receiver(noc);
     for (uint32_t kb = 0; kb < KT / KBR; ++kb) {  // K block kb: my G rows' x [G][KBR] and W_r [KBR][ET]
         cb_reserve_back(XR, G * KBR);
         cb_reserve_back(WR, KBR * ET);
@@ -117,7 +125,13 @@ void kernel_main() {
             const uint32_t R = get_arg_val<uint32_t>(r0 + e);
             for (uint32_t k = 0; k < KBR; ++k) noc_async_read(xg.get_noc_addr(R * KT + kb * KBR + k), xl + (e * KBR + k) * 2048, 2048);
         }
-        for (uint32_t i = 0; i < KBR * ET; ++i) noc_async_read(wg.get_noc_addr(kb * KBR * ET + i), l1 + i * 2048, 2048);
+        if (mw.should_send(kb)) {
+            for (uint32_t i = 0; i < KBR * ET; ++i) noc_async_read(wg.get_noc_addr(kb * KBR * ET + i), l1 + i * 2048, 2048);
+            noc_async_read_barrier();
+            sw->send(l1, l1, KBR * ET * 2048);
+        } else {
+            rw->receive(kb);
+        }
         noc_async_read_barrier();
         cb_push_back(XR, G * KBR);
         cb_push_back(WR, KBR * ET);
@@ -474,6 +488,20 @@ class RouterStream:
         zone = self.base + self.off["arrf" if d == "fwd" else "arrb"]
         return out + [self.pbase, self.words, zone, self.arr[DIRS.index(d)], self.ET, rpl]
 
+    def attach_mcast(self, prog):
+        """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
+        lo, hi = self.cores[0], self.cores[-1]
+        assert lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores), "the router cores must be one column rectangle"
+        rect = ttnn.CoreRangeSet([ttnn.CoreRange(lo, hi)])
+        mc = ttnn.Mcast1D(
+            self.mesh,
+            rect,
+            ttnn.Mcast1DShape.PerColumn,
+            ttnn.Mcast1DRotatingSenderConfig(),
+            ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
+        )
+        mc.attach(prog, "rw", [self.ncrisc])
+
     def pieces(self, coord, x, w, b, out):
         """(CBs, kernels) of the router cores on chip coord. x: the own shard [rows, H / TP] (DRAM)."""
         plan, G, ET, RB, K = self.plan, self.G, self.ET, self.RB, self.K
@@ -551,15 +579,16 @@ class RouterStream:
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+        self.ncrisc = ttnn.KernelDescriptor(
+            kernel_source=_NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _SCAN, 1),
+            source_type=st,
+            core_ranges=self.crs,
+            compile_time_args=ct + acc(x) + acc(w) + acc(b),
+            runtime_args=n_rt,
+            config=dm("RISCV_1", ttnn.NOC.NOC_0),
+        )
         kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=_NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _SCAN, 1),
-                source_type=st,
-                core_ranges=self.crs,
-                compile_time_args=ct + acc(x) + acc(w) + acc(b),
-                runtime_args=n_rt,
-                config=dm("RISCV_1", ttnn.NOC.NOC_0),
-            ),
+            self.ncrisc,
             ttnn.KernelDescriptor(
                 kernel_source=_COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _SCAN, 1),
                 source_type=st,
