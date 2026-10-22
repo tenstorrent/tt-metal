@@ -1686,3 +1686,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   task's step (step_command), so a unit's command is exactly gate_command(source task); fixes already placed in a live
   tasks.yaml are covered at run time (no rewrite needed). Component tasks keep their precompile pass, as their own gates
   do. Selftest: test_overseer.py::test_a_fix_job_runs_its_gate_tasks_commands_exactly.
+- F152 (owner, 2026-10-22): `orchestrator run|resume --until X` runs X and what X needs (Ledger.upstream: X and its
+  transitive deps, recomputed each step since a placed fix may become a dep, F126), then stops ("reached X"); an
+  unknown X stops at once. Was F143's note: it excluded only X's downstream tasks, so every independent task still ran
+  (DeepSeek-V4.1: FIX.5's 70 min gate ran after `resume --until FIX.7`). STOPPED tasks and stopped fix jobs outside
+  that set no longer hold the run. Selftest: test_overseer.py::test_until_runs_the_task_and_what_it_needs_then_stops.
