@@ -17,11 +17,16 @@ the Base (voice clone) fields and builds the prompt with this directory's own bu
     x_vector_only_mode [bool], clone from the voice alone
     non_streaming_mode [bool], default False for Base: the text streams a token per frame
     instruct           ["..."], x-vector cloning only
+    _qwen3_tts_ref_audio_cache_key  ["..."], the server's name for the clip; once a request
+                       carrying the clip and this key completes, later requests for that
+                       clip carry the key alone (see `ReferenceCache`)
 
 The server sizes the prompt before the model sees it, from an estimate, and the model fills
 exactly that many positions: short prompts pad with `tts_pad`, long ones are cut. That is
 vLLM-Omni's own talker behaviour, kept so positions line up with the scheduler's.
 """
+
+from collections import OrderedDict
 
 import torch
 
@@ -108,6 +113,42 @@ def clone_reference(info, device=None):
 
         audio = torch.from_numpy(librosa.resample(y=audio.numpy(), orig_sr=int(rate), target_sr=expected)).float()
     return build_clone_reference(device, audio, text, x_vector_only=not in_context)
+
+
+REF_AUDIO_CACHE_KEY = "_qwen3_tts_ref_audio_cache_key"
+
+
+class ReferenceCache:
+    """Encoded clips by the key vLLM-Omni's speech server names each one with.
+
+    The server sends a clip's audio until a request carrying it completes, then only its key,
+    and expects the model to have kept what it encoded: vLLM-Omni's own talker keeps the same
+    cache. The voice and the codes are kept, per cloning mode; the transcript comes from each
+    request.
+    """
+
+    def __init__(self, max_entries=1024):
+        self.max_entries = max_entries
+        self._entries = OrderedDict()
+
+    def reference(self, info, device=None):
+        """The request's `CloneReference`, encoded from its clip or recalled by its key."""
+        key = first(info, REF_AUDIO_CACHE_KEY)
+        slot = (key, clone_mode(info))
+        carries_clip = voice_clone_prompt(info) is not None or first(info, "ref_audio") is not None
+        if not key or carries_clip:
+            reference = clone_reference(info, device)
+            if key:
+                self._entries[slot] = (reference.codes, reference.speaker_embedding)
+                self._entries.move_to_end(slot)
+                while len(self._entries) > self.max_entries:
+                    self._entries.popitem(last=False)
+            return reference
+        if slot not in self._entries:
+            raise ValueError(f"a Base request names clip {key!r} without its ref_audio, and no such clip was encoded")
+        self._entries.move_to_end(slot)
+        codes, voice = self._entries[slot]
+        return CloneReference(codes, voice, first(info, "ref_text"))
 
 
 def build_stage_prefill(info, reference, prompt_len, tables):

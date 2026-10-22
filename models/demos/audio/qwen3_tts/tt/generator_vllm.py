@@ -57,6 +57,7 @@ class Qwen3TTSTalkerForConditionalGeneration:
         self.pipeline = None  # built with the KV cache, which the plugin allocates later
         self.request = None
         self.reference = None
+        self._references = stage.ReferenceCache()
         self._frames = []
 
     @classmethod
@@ -125,7 +126,7 @@ class Qwen3TTSTalkerForConditionalGeneration:
 
         # The encoders run eagerly, and nothing eager may run beside a live trace.
         self.pipeline.release()
-        self.reference = stage.clone_reference(info, self.device)
+        self.reference = self._references.reference(info, self.device)
         embeddings, feed = stage.build_stage_prefill(info, self.reference, prompt_lens[0], self.pipeline.tables)
         self.pipeline.talker.set_page_table(torch.as_tensor(page_table)[0])
         # vLLM ends the request by the context length, which bounds the frames this prefill

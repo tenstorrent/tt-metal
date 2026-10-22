@@ -159,3 +159,50 @@ def test_a_clip_to_encode_needs_the_device(expect_error):
 def test_a_request_without_any_clip_is_refused(expect_error):
     with expect_error(ValueError, "needs ref_audio"):
         stage_inputs.clone_reference({"task_type": ["Base"], "ref_text": [REFERENCE_TEXT]})
+
+
+# ── the server's clip cache ─────────────────────────────────────────────────
+
+
+def _named(info, key="clip-a"):
+    return {**info, stage_inputs.REF_AUDIO_CACHE_KEY: [key]}
+
+
+def _by_key_only(info, key="clip-a"):
+    """What the server sends once a request carrying the clip has completed."""
+    return {name: value for name, value in _named(info, key).items() if name != "voice_clone_prompt"}
+
+
+def test_a_clip_named_once_is_recalled_by_its_key(encoded):
+    cache = stage_inputs.ReferenceCache()
+    first = cache.reference(_named(_info(encoded)))
+
+    recalled = cache.reference(_by_key_only(_info(encoded)))
+
+    assert torch.equal(recalled.codes, first.codes)
+    assert torch.equal(recalled.speaker_embedding, first.speaker_embedding)
+    assert recalled.text == REFERENCE_TEXT
+
+
+def test_each_cloning_mode_keeps_its_own_entry(encoded, expect_error):
+    cache = stage_inputs.ReferenceCache()
+    cache.reference(_named(_info(encoded, prompt={"icl_mode": False})))
+
+    assert cache.reference(_by_key_only(_info(encoded), key="clip-a") | {"x_vector_only_mode": [True]}).codes is None
+    with expect_error(ValueError, "no such clip was encoded"):
+        cache.reference(_by_key_only(_info(encoded)))
+
+
+def test_a_key_the_cache_never_saw_is_refused(encoded, expect_error):
+    with expect_error(ValueError, "no such clip was encoded"):
+        stage_inputs.ReferenceCache().reference(_by_key_only(_info(encoded), key="never-sent"))
+
+
+def test_the_oldest_clip_is_dropped_past_the_bound(encoded, expect_error):
+    cache = stage_inputs.ReferenceCache(max_entries=2)
+    for key in ("a", "b", "c"):
+        cache.reference(_named(_info(encoded), key))
+
+    cache.reference(_by_key_only(_info(encoded), "c"))
+    with expect_error(ValueError, "no such clip was encoded"):
+        cache.reference(_by_key_only(_info(encoded), "a"))
