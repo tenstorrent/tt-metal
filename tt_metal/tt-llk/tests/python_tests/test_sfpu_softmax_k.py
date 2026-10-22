@@ -56,6 +56,7 @@ compile-and-structure check on two different kernels rather than as a numeric on
 import pytest
 import torch
 from conftest import skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -113,8 +114,7 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
     k=ALL_K,
 )
 def test_sfpu_softmax_k(formats, dest_acc, k):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if dest_acc == DestAccumulation.Yes and k < FACE_DIM:
         # The padding predication only works on a 16-bit DEST -- see module docstring.
