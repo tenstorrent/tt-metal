@@ -40,6 +40,9 @@ def cap_torch_threads_to_half_the_cpus() -> Iterator[None]:
     Only ever lowers the count, so a caller that chose fewer threads (a single-threaded server worker)
     is left alone. The mask is read on every entry. Also usable as a decorator:
     ``@cap_torch_threads_to_half_the_cpus()``.
+
+    torch's thread count is process-wide, so capped blocks running at the same time on different Python
+    threads can restore each other's count.
     """
     prev = torch.get_num_threads()
     cap = half_of_affinity_mask()
