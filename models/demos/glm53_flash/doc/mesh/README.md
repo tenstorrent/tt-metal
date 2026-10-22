@@ -950,3 +950,10 @@ traced prefill works through the regions path (128 tokens: traced 345 ms, eager 
 because the scheduler did not lower it (every other e2e run uses 0.5). The 8x4 comparison of auto (regions + stacked
 copy) against the blocks default on the 32-user short-prompt row is queued (`sched_auto_8x4.sh`); the default
 flips if TTFT and decode are at least equal and the first token still matches.
+
+**Ledger validation (03:21-03:40):** rectangular core ranges: 25 kda_decode / paged_pool_gather / core_ranges unit
+tests pass on chip 0 (`ledger_unit_chip0.log`); reduce-scatter EP combine (`GLM53_EP_COMBINE=rs`): block EP MoE vs HF
+0.999923 (= the op path, `ep_combine_rs_moe_vs_hf.log`); 8x4 EP32 e2e at 256 users with distinct tokens: **123.4 ms**
+per step (8.1 tok/s per user, 2075 aggregate; op combine 139.2, a2a 126.3; hybrid dense 115.5), in the ledger's
+predicted range. `rs` is now the EP combine default (T % 32 == 0; 4 users/row stays on the op until the down writer's
+row stride remap). The hybrid 32-user run with the rectangular ranges (B6) follows.

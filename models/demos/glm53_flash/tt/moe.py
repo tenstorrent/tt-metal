@@ -1389,7 +1389,9 @@ class TtEPExperts(LightweightModule):
         # op's 2-core per-token scan (340-890 us on the 8x4 at 32 users/row: _agents/ep32_combine/ANALYSIS.md). It
         # also drops the slot clone, the out untilize and the slot tilize. The generic a2a splits the tile-row dim in
         # 16-row multiples only, so T % 16 != 0 (4 users/row) stays on the op.
-        self.combine_mode = os.environ.get("GLM53_EP_COMBINE", "op")
+        self.combine_mode = os.environ.get(
+            "GLM53_EP_COMBINE", "rs"
+        )  # rs default since 2026-10-22 (exact; 139 -> 123 ms at 256 users)
         # rs: the combine as ONE reduce-scatter along the rows of the zero-padded expert output (row r*T+t = this
         # chip's weighted contribution to token t of row r): summing over the senders and handing row r its chunk IS
         # the combine; the hybrid layout runs the same collective on the same [1,1,rows*T,H] shape in ~130 us (the
