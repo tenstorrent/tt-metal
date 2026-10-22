@@ -32,6 +32,38 @@ LOGITS_AFTER_GATHER = {"glm": False, "k3": True}
 FREQ = 1350.0
 
 
+# ---- Galaxy floors from first principles (a chip of the 8x4: TP ring of 4, 640 rows a mesh row, 160 owned) ----
+LINK = 2 * 23.6e3  # (B/us a direction of a TP neighbour: 2 links)
+PEAK_HIFI2 = 110 * 1024 * 2 * 1350  # (FLOP/us: 110 engine cores, 2048 MAC/cycle LoFi halved at HiFi2)
+DIMS = {  # rows a mesh row, H, the chip's I slice x 2 (gate / up), latent (K3), experts, K
+    "glm": dict(rows=640, H=4096, N=1024, I=512, lat=0, E=288, K=8),
+    "k3": dict(rows=640, H=7168, N=3072, I=1536, lat=3584, E=448, K=16),
+}
+# the routing chain's per-step minimums (us): router matmul on the 10 mover-column cores at 75% of their HiFi3 peak;
+# top-K (SFPU, measured after the K-run folds); joint rows / route words (4 RISCs); planner before / after the
+# exchange (measured phases with the N = 32 growth, 10 RISCs); exchange path (watcher + Y transit + 2 X hops)
+CHAIN_STEPS = {
+    "glm": dict(topk=14, rows=5, plan_pre=5, path=10, plan_post=15),
+    "k3": dict(topk=20, rows=8, plan_pre=6, path=10, plan_post=20),
+}
+
+
+def floors(model):
+    d, G = DIMS[model], 4
+    shard = d["rows"] * d["H"] // G * 2  # (an x shard / an RS block, bf16)
+    owned = d["rows"] // G
+    logit = owned * d["E"] * 4  # (one owner's partial logits, fp32)
+    latb = owned * d["lat"] // G * 2  # (one latent block, bf16)
+    # ring of 4 a direction: gather 1.5 shards, RS 1.5 blocks, each all-to-all (logits, latent) 2 blocks
+    links = (1.5 * shard + 1.5 * shard + 2 * logit + 2 * latb) / LINK
+    flops = 2 * d["rows"] * d["H"] * d["N"] + 2 * d["rows"] * d["I"] * d["H"] + 2 * d["rows"] * d["H"] * d["lat"] // G
+    compute = flops / PEAK_HIFI2
+    router = 2 * d["rows"] * d["H"] // G * d["E"] / (10 * 1024 * 2 * 1350 * 2 / 3 * 0.75)  # (HiFi3, 10 cores)
+    st = CHAIN_STEPS[model]
+    chain = router + 2 * logit / LINK + 1.3 + st["topk"] + st["rows"] + st["plan_pre"] + st["path"] + st["plan_post"]
+    return dict(links=links, compute=compute, chain=chain, head=max(links, compute, chain))
+
+
 def zones(path):
     rows = list(csv.reader(open(path)))[2:]
     out = {}
@@ -69,4 +101,10 @@ if __name__ == "__main__":
     print(
         f"Galaxy-projected head: {max(max(se, ch) for *_, se, ch in res):.0f} us "
         f"(SE path {max(se for *_, se, _ in res):.0f}, routing chain {max(ch for *_, ch in res):.0f})"
+    )
+    f = floors(sys.argv[2])
+    head = max(max(se, ch) for *_, se, ch in res)
+    print(
+        f"Galaxy floors: links {f['links']:.0f} us, compute {f['compute']:.0f}, routing chain {f['chain']:.0f} -> head "
+        f"{f['head']:.0f} us; projected / floor {head / f['head']:.2f}x"
     )
