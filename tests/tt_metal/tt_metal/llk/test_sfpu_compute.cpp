@@ -277,6 +277,9 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
 //                       acquire/release section. By convention LHS lives at
 //                       DST[0] and RHS at DST[1]; the result is written back
 //                       to DST[0] so the packer reads from there.
+//   * SFPU_OUT_DST    — optional; the DST index the packer reads instead of 0,
+//                       for ops that write their result elsewhere (reshuffle_rows
+//                       accumulates into DST[1]).
 //
 // To add a new binary SFPU op: add an entry here, add a matching arm in
 // sfpu_binary_function() or get_binary_int_operation_result() for golden compute,
@@ -2208,7 +2211,8 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     return ok;
 }
 
-/// Int32 unary SFPU ops: Int8 L1 (non-negative) -> 32-bit Dest -> Int32 L1, compared exactly.
+/// Int32 unary SFPU ops: Int8 L1 -> 32-bit Dest -> Int32 L1, compared exactly. Inputs are non-negative,
+/// except for the signed ops (is_signed_int32_unary_op), which get every other nonzero value negated.
 bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t numel = test_config.num_tiles * 1024;
     const int seed = sfpu_test_seed;
@@ -2427,7 +2431,7 @@ bool run_sfpu_ema(distributed::MeshDevice& mesh_device, const SfpuConfig& test_c
     // One bf16 ulp of the output (2^-7 relative), plus the 16-bit Dest's rounding of the input.
     return is_close_packed_vectors<bfloat16, uint32_t>(
         out, pack_vector<uint32_t, bfloat16>(golden), [](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b, 0.02f, 0.02f);
+            return is_close(a, b, /*rtol=*/0.02f, /*atol=*/0.02f);
         });
 }
 
@@ -2559,8 +2563,10 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     sfpu_defines["SFPU_BINARY_OP"] = "1";
     std::shared_ptr<distributed::MeshBuffer> reshuffle_mask_buffer;
     if (test_config.sfpu_op == "reshuffle_rows") {
+        // Mirrors RESHUFFLE_MASK_HEADER_BYTES in ckernel_sfpu_reshuffle_rows.h, which the host cannot include.
+        constexpr uint32_t reshuffle_mask_header_bytes = 16;
         // The kernel reads its row mask from L1, at an address it takes as an argument: reserve L1 for it,
-        // write the mask to this core's bank, and pass that address less the 16-byte header the kernel skips.
+        // write the mask to this core's bank, and pass that address less the header the kernel skips.
         const auto mask = sfpu_util::reshuffle_rows_mask();
         std::vector<uint32_t> packed_mask(mask.size() / sizeof(uint32_t));
         std::memcpy(packed_mask.data(), mask.data(), mask.size());
@@ -2573,7 +2579,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         const uint32_t mask_addr =
             reshuffle_mask_buffer->address() + mesh_device.allocator()->get_bank_offset(BufferType::L1, bank_id);
         slow_dispatch::WriteToL1(mesh_device, core, mask_addr, packed_mask);
-        sfpu_defines["SFPU_OP_CHAIN_0"] = fmt::format("reshuffle_rows_tile(0, {:#x}u);", mask_addr - 16);
+        sfpu_defines["SFPU_OP_CHAIN_0"] =
+            fmt::format("reshuffle_rows_tile(0, {:#x}u);", mask_addr - reshuffle_mask_header_bytes);
     }
 
     const auto node = extract_single_core_node(test_config, "Metal 2.0 binary SFPU path");
@@ -3798,7 +3805,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
     }
 }
 
-// TODO: BinarySFPU ops here can only do 1 tile due to the hardcoding in the macros to indicies (0,1,2)
+// TODO: the binary chains hard-code DST indices (0, 1, 2), so each acquire holds a single tile pair;
+// multi-tile cases loop one pair per acquire rather than packing several tiles into one DEST section.
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuBinaryCompute,
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
