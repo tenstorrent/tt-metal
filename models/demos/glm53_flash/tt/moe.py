@@ -78,12 +78,13 @@ PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
 
 
 def prefill_experts_mode() -> str:
-    """The prefill expert path, read at construction time (``GLM53_PREFILL_EXPERTS``): blocks | batched | dispatch |
-    regions | auto. ``auto`` = the regions path (5x the blocks path's prefill rate, exact) with the stacked expert copy
-    kept for the decode block op whenever the memory planner says it fits; ``GLM53MeshModel`` resolves it from its
-    (users, max_seq_len) before the layers are built (tt/mesh_model.py), a bare layer treats it as ``regions``."""
-    mode = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
-    return "regions" if mode == "auto" else mode
+    """The prefill expert path, read at construction time (``GLM53_PREFILL_EXPERTS``, default ``auto``): blocks |
+    batched | dispatch | regions | auto. ``auto`` (``GLM53MeshModel``, tt/mesh_model.py): the blocks path up to 4 K
+    positions (the traced short-prompt prefill is equally fast either way and a second expert copy costs ~3.5 ms of
+    decode at 32 users), above that the regions path (5x the blocks path's prefill rate, exact) with the stacked expert
+    copy kept for the decode block op whenever the memory planner says it fits; a bare layer treats it as ``blocks``."""
+    mode = os.environ.get("GLM53_PREFILL_EXPERTS", "auto")
+    return "blocks" if mode == "auto" else mode  # a bare layer: the short-prompt path; GLM53MeshModel resolves auto
 
 
 def regions_keep_stacked() -> bool:
