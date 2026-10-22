@@ -15,8 +15,9 @@ token cache. Before anything is written they are checked against the trace itsel
 
 Dry run unless --write. Only adds input_ids.safetensors, readable by all (via a temp file, then os.replace); every
 other file of the trace, metadata.json and SHA256SUMS included, is left as it is, and an existing input_ids.safetensors
-is never overwritten. Traces in the whole-model layout (no golden_schema) are skipped: they have no prefix and no
-embed file to check against.
+is never overwritten. Traces without prefix_ids (the first engine, the whole-model layout) had no prefix. The
+whole-model layout stores no embed file, so its ids (token_cache[:N], as its read_trace_tokens defines them) are
+checked against the token cache's metadata only.
 """
 
 from __future__ import annotations
@@ -64,9 +65,10 @@ def find_traces(root: Path, only: str | None) -> list[Path]:
 
 
 def rebuild(trace: Path, meta: dict) -> tuple[torch.Tensor, dict]:
-    if "golden_schema" not in meta:
-        raise Skip("whole-model layout: no golden_schema")
-    # No prefix_ids: written before the engine had --prefix, so nothing came before the token cache.
+    if "hf_repo" not in meta or "token_cache" not in meta:
+        raise Skip("no hf_repo / token_cache in metadata.json")
+    # No prefix_ids: written before the engine had --prefix (or by the whole-model generator), so nothing came before
+    # the token cache.
     n, prefix_ids = meta["n_tokens"], meta.get("prefix_ids", [])
     cache_path = (trace / meta["token_cache"]).resolve()
     if not cache_path.is_file():
@@ -162,7 +164,10 @@ def main() -> int:
             n = meta.get("n_tokens", "-")
             ids, file_meta = rebuild(trace, meta)
             prefix, first = int(file_meta["n_prefix_tokens"]), " ".join(map(str, ids[:8].tolist()))
-            note = check_embeddings(trace, ids)
+            if (trace / "hidden/embed.safetensors").is_file():
+                note = check_embeddings(trace, ids)
+            else:
+                note = "no embed file: token cache metadata checked only"
             if args.check_tokenizer:
                 check_tokenizer(meta)
             exists = (trace / INPUT_IDS).is_file()
