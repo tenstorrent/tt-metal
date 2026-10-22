@@ -5,23 +5,29 @@
 
 The end-to-end tests drive the vLLM adapter's bookkeeping (verify passes, greedy acceptance, MTP draft positions)
 against a small random fp32 MiMo: speculative greedy decoding must produce exactly the plain greedy tokens, with
-any drafter."""
+any drafter. The multi-layer drafter (one MTP layer per draft) must also draft what a recomputation of every layer
+over the whole committed sequence drafts, after steps of every accepted count: its incremental caches, re-prefill
+and stash are exact."""
 
 import pytest
 import torch
 
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
 from models.experimental.mimo_v2_6_flash.reference.model import ReferenceDecoderLayer, rms_norm
-from models.experimental.mimo_v2_6_flash.reference.mtp import ReferenceMTP
+from models.experimental.mimo_v2_6_flash.reference.mtp import ReferenceMTP, ReferenceMTPDrafter
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     MAX_DRAFTS,
     SPEC_SLOTS,
     DraftSource,
+    MtpStash,
     accept_greedy,
     draft_source,
     mtp_cache_position,
+    mtp_layer_tokens,
+    mtp_stash,
     mtp_table_row,
     plan_mtp,
+    plan_mtp_layers,
     plan_verify_passes,
     serial_positions,
 )
@@ -89,6 +95,58 @@ def test_mtp_after_a_plain_step():
         plan_mtp(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2)
 
 
+def test_mtp_layers_after_a_rejection():
+    # Last draft: rows up to 40 (stash 39, 40). The verify at 41..44 rejected d_1 and committed one token, at 42: two
+    # stash rows re-run before the new row, right-aligned.
+    plan = plan_mtp_layers(DraftSource(row=3, slots=[0, 1, 2, 3]), [42, -1, -1, -1], 1, MtpStash([39, 40]))
+    assert plan.positions == [-1, 39, 40, 41] and plan.reprefill == 2 and plan.anchor == 3
+    assert plan.sources == [None, ("stash", 0), ("stash", 1), ("step", 0)]
+    assert plan.rows == [1, 2, 3]
+    assert mtp_stash(plan) == MtpStash([40, 41])
+
+
+@pytest.mark.parametrize("m, reprefill", [(1, 2), (2, 1), (3, 0), (4, 0)])
+def test_mtp_layers_reprefill_the_rows_later_layers_drafted(m, reprefill):
+    committed = [42 + c for c in range(m)] + [-1] * (4 - m)
+    plan = plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), committed, m, MtpStash([39, 40]))
+    assert plan.reprefill == reprefill
+    rows = plan.rows
+    assert len(rows) == max(3, m) and rows[-1] == plan.anchor == 3
+    assert [plan.positions[s] for s in rows] == list(range(41 - reprefill, 41 + m))
+    assert [plan.sources[s] for s in rows] == [("stash", 2 - reprefill + j) for j in range(reprefill)] + [
+        ("step", c) for c in range(m)
+    ]
+
+
+def test_mtp_layers_reprefill_only_what_the_stash_holds():
+    source = DraftSource(row=0, slots=[0, 1, 2, 3])
+    # The last draft ran one row (its first draft): one stash row.
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([-1, 40]))
+    assert plan.positions == [-1, -1, 40, 41] and plan.reprefill == 1
+    # The last step did not follow a draft of these positions (a step without drafting in between): nothing is stale.
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([30, 31]))
+    assert plan.positions == [-1, -1, -1, 41] and plan.reprefill == 0
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash.empty())
+    assert plan.reprefill == 0
+
+
+def test_mtp_layers_after_a_plain_step():
+    # A step without drafts after a draft: its one slot, and both stash rows (the draft's d_1, d_2 are unverified).
+    plan = plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, -1, -1, -1], 1, MtpStash([14, 15]))
+    assert plan.positions == [-1, 14, 15, 16] and plan.sources[1:] == [("stash", 0), ("stash", 1), ("step", 2)]
+    with pytest.raises(ValueError):
+        plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2, MtpStash([14, 15]))
+    with pytest.raises(ValueError):
+        plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, 19, -1, -1], 2, MtpStash([14, 15]))
+
+
+def test_mtp_layer_tokens_shift_one_per_layer():
+    tokens0, drafts = [10, 11, 12], [20, 21, 22]
+    assert mtp_layer_tokens(tokens0, drafts, 0) == [10, 11, 12]
+    assert mtp_layer_tokens(tokens0, drafts, 1) == [11, 12, 20]
+    assert mtp_layer_tokens(tokens0, drafts, 2) == [12, 20, 21]
+
+
 def test_accept_greedy():
     assert accept_greedy([5, 6, 7, 8], [5, 6, 9], 3) == [5, 6, 7]
     assert accept_greedy([5, 6, 7, 8], [5, 6, 7], 3) == [5, 6, 7, 8]
@@ -154,7 +212,7 @@ def tiny_config():
             "add_swa_attention_sink_bias": True,
             "add_full_attention_sink_bias": False,
             "max_position_embeddings": 512,
-            "num_nextn_predict_layers": 1,
+            "num_nextn_predict_layers": MAX_DRAFTS,
         }
     )
 
@@ -202,55 +260,19 @@ class TinyMiMo:
         return int(torch.argmax(h @ self.lm_head.T)), h
 
 
-class PositionalHistory:
-    """The MTP ring's semantics on the host: K / V kept by position, a later write overwrites (reference.model's
-    KVHistory appends)."""
-
-    def __init__(self):
-        self.entries = {}
-
-    def append(self, k, v, pos):
-        for i, p in enumerate(pos.tolist()):
-            self.entries[p] = (k[:, i], v[:, i])
-        keys = sorted(self.entries)
-        k_all = torch.stack([self.entries[p][0] for p in keys], dim=1)
-        v_all = torch.stack([self.entries[p][1] for p in keys], dim=1)
-        return k_all, v_all, torch.tensor(keys)
-
-
-class MtpDrafter:
-    """The adapter's propose step on the host: the MTP fill over the slots plan_mtp fills, then two steps on the
-    anchor slot, from the slots' committed tokens and the target hidden the last step left in them."""
-
-    def __init__(self, cfg, target, g):
-        w = layer_weights(cfg, cfg.mtp_layer_index(0), g)
-        h = cfg.hidden_size
+def mtp_drafter(cfg, target, g, layers):
+    """A ReferenceMTPDrafter over ``layers`` random MTP layers (1: one-layer drafting)."""
+    h, mtps = cfg.hidden_size, []
+    for i in range(layers):
+        w = layer_weights(cfg, cfg.mtp_layer_index(i), g)
         w["head"] = {
             "eh_proj": torch.randn(h, 2 * h, generator=g) * (2 * h) ** -0.5,
             "enorm": 1 + 0.1 * torch.randn(h, generator=g),
             "hnorm": 1 + 0.1 * torch.randn(h, generator=g),
             "final_layernorm": 1 + 0.1 * torch.randn(h, generator=g),
         }
-        self.mtp = ReferenceMTP(cfg, weights=w)
-        self.target = target
-        self.history = PositionalHistory()
-
-    def draft(self, plan, slot_tokens, slot_hidden):
-        t = self.target
-        fill = [s for s in range(SPEC_SLOTS) if plan.fill[s] >= 0]
-        out = self.mtp(
-            torch.stack([slot_hidden[s] for s in fill]),
-            t.embedding[torch.tensor([slot_tokens[s] for s in fill])],
-            torch.tensor([plan.fill[s] for s in fill]),
-            self.history,
-        )
-        h = out[fill.index(plan.anchor)]
-        drafts = [int(torch.argmax(h @ t.lm_head.T))]
-        for positions in (plan.step2, plan.step3):
-            position = torch.tensor([positions[plan.anchor]])
-            h = self.mtp(h[None], t.embedding[torch.tensor([drafts[-1]])], position, self.history)[0]
-            drafts.append(int(torch.argmax(h @ t.lm_head.T)))
-        return drafts
+        mtps.append(ReferenceMTP(cfg, i, weights=w))
+    return ReferenceMTPDrafter(mtps, target.embedding, target.lm_head)
 
 
 class OracleDrafter:
@@ -262,6 +284,9 @@ class OracleDrafter:
         self.corrupt = corrupt
         self.seq = None
         self.calls = 0
+
+    def plan(self, source, committed_positions, accepted):
+        return plan_mtp(source, committed_positions, accepted)
 
     def draft(self, plan, slot_tokens, slot_hidden):
         seq, out = list(self.seq), []
@@ -285,7 +310,7 @@ def spec_generate(target, drafter, prompt, steps):
     source, slot_tokens, slot_hidden = DraftSource(row=0, slots=[2]), {2: tok}, {2: h}
     committed_positions, accepted, counts = [len(seq) - 1], 1, []
     while len(seq) < len(prompt) + steps:
-        plan = plan_mtp(source, committed_positions + [-1] * MAX_DRAFTS, accepted)
+        plan = drafter.plan(source, committed_positions + [-1] * MAX_DRAFTS, accepted)
         if isinstance(drafter, OracleDrafter):
             drafter.seq = seq
         drafts = drafter.draft(plan, slot_tokens, slot_hidden)
@@ -305,13 +330,13 @@ def spec_generate(target, drafter, prompt, steps):
     return seq[: len(prompt) + steps], source, counts
 
 
-@pytest.mark.parametrize("drafter_kind", ["mtp", "oracle", "partial"])
+@pytest.mark.parametrize("drafter_kind", ["mtp", "mtp_layers", "oracle", "partial"])
 def test_speculative_greedy_equals_plain_greedy(drafter_kind):
     g = torch.Generator().manual_seed(0)
     cfg = tiny_config()
     target = TinyMiMo(cfg, g)
-    if drafter_kind == "mtp":
-        drafter = MtpDrafter(cfg, target, g)
+    if drafter_kind.startswith("mtp"):
+        drafter = mtp_drafter(cfg, target, g, MAX_DRAFTS if drafter_kind == "mtp_layers" else 1)
     else:
         drafter = OracleDrafter(target, corrupt=drafter_kind == "partial")
     prompt, steps = [3, 14, 15, 92, 65, 35, 89, 79, 32, 38], 24
@@ -325,3 +350,92 @@ def test_speculative_greedy_equals_plain_greedy(drafter_kind):
         assert set(counts) == {MAX_DRAFTS + 1}
     if drafter_kind == "partial":
         assert set(counts) == set(range(1, MAX_DRAFTS + 2))
+
+
+# ---------------------------------------------------------------------- multi-layer drafts against a recomputation
+def recompute_drafts(target, mtps, seq, first):
+    """The multi-layer equations without caches: layer i over the rows q = first .. B - 1 of the committed ``seq``
+    (the last at B), row q taking the target hidden h_q and the token x~[q + i + 1] (``seq`` then the drafts so far),
+    at position q; its output at B - 1 gives draft i + 1. Returns the drafts and those outputs."""
+    b = len(seq) - 1
+    hidden = target.hidden(seq)[first:b]
+    positions = torch.arange(first, b)
+    drafts, outputs = [], []
+    for i, mtp in enumerate(mtps):
+        window = list(seq) + drafts
+        tokens = [window[q + i + 1] for q in range(first, b)]
+        h = mtp(hidden, target.embedding[torch.tensor(tokens)], positions)[-1]
+        drafts.append(int(torch.argmax(h @ target.lm_head.T)))
+        outputs.append(h)
+    return drafts, outputs
+
+
+# Accepted counts m per step: every ordered pair of 1 .. 4 (a de Bruijn sequence), and steps without drafts ("plain":
+# one token, from another slot) after a draft.
+SCHEDULE = [1, 1, 2, 1, 3, 1, 4, 2, 2, 3, 2, 4, 3, 3, 4, 4, 1, "plain", 4, "plain", "plain", 3, 1]
+
+
+def drive(target, drafter, prompt, schedule, keep_stash=True):
+    """Serves one request with ``drafter`` after a plain first step; step k commits per ``schedule[k]``: m - 1 of
+    the drafts and then a token that is not the next draft. Yields each draft's plan, the drafter's drafts and
+    outputs, and the recomputation's."""
+    seq = list(prompt)
+    tok, h = target.greedy(seq)
+    seq.append(tok)
+    source, slot_tokens, slot_hidden = DraftSource(row=0, slots=[2]), {2: tok}, {2: h}
+    committed_positions, accepted, first = [len(seq) - 1], 1, None
+    vocab = target.cfg.vocab_size
+    for k, step in enumerate(schedule):
+        plan = drafter.plan(source, committed_positions + [-1] * MAX_DRAFTS, accepted)
+        if first is None:
+            first = min(p for p in plan.positions if p >= 0)
+        drafts = drafter.draft(plan, slot_tokens, slot_hidden)
+        if not keep_stash:
+            drafter.stash = MtpStash.empty(len(drafter.mtps))
+        yield plan, drafts, drafter.outputs, recompute_drafts(target, drafter.mtps, seq, first)
+        # The verify of the last committed token (at p) and the drafts: commit m tokens at p + 1 .. p + m.
+        p = len(seq) - 1
+        if step == "plain":
+            new, slots = [drafts[0] if k % 2 else (drafts[0] + 1) % vocab], [2]
+        else:
+            new, slots = drafts[: step - 1], list(range(SPEC_SLOTS))
+            new.append(target.greedy(seq + new)[0] if step > MAX_DRAFTS else (drafts[step - 1] + 1 + k) % vocab)
+        hidden = target.hidden(seq + new)
+        source = DraftSource(row=0, slots=slots)
+        slot_tokens = {slots[c]: new[c] for c in range(len(new))}
+        slot_hidden = {slots[c]: hidden[p + c] for c in range(len(new))}
+        committed_positions, accepted = list(range(p + 1, p + 1 + len(new))), len(new)
+        seq += new
+
+
+def test_mtp_layers_draft_what_a_recomputation_drafts():
+    g = torch.Generator().manual_seed(1)
+    cfg = tiny_config()
+    target = TinyMiMo(cfg, g)
+    drafter = mtp_drafter(cfg, target, g, MAX_DRAFTS)
+    prompt = [3, 14, 15, 92, 65, 35, 89, 79, 32, 38]
+    rows = set()
+    for plan, drafts, outputs, (want_drafts, want_outputs) in drive(target, drafter, prompt, SCHEDULE):
+        rows.add((plan.reprefill, len(plan.rows)))
+        assert drafts == want_drafts
+        for got, want in zip(outputs, want_outputs):
+            torch.testing.assert_close(got, want, atol=1e-5, rtol=1e-5)
+    # Re-prefills of 2, 1 and 0 rows, and every row count a pass takes: 1 for the first draft (after the plain step),
+    # 2 for the next (its stash holds one row), then 3, or 4 after all 3 drafts were accepted.
+    assert rows == {(0, 1), (1, 2), (2, 3), (1, 3), (0, 3), (0, 4)}
+
+
+def test_without_reprefill_later_layers_draft_from_stale_entries():
+    """The recomputation test's power: dropping the stash (no re-prefill) leaves rejected drafts in the later layers'
+    caches, and their outputs drift from the recomputation."""
+    g = torch.Generator().manual_seed(1)
+    cfg = tiny_config()
+    target = TinyMiMo(cfg, g)
+    drafter = mtp_drafter(cfg, target, g, MAX_DRAFTS)
+    prompt = [3, 14, 15, 92, 65, 35, 89, 79, 32, 38]
+    worst = [0.0] * MAX_DRAFTS
+    for _, _, outputs, (_, want_outputs) in drive(target, drafter, prompt, SCHEDULE, keep_stash=False):
+        for i, (got, want) in enumerate(zip(outputs, want_outputs)):
+            worst[i] = max(worst[i], float((got - want).abs().max()))
+    assert worst[0] < 1e-5  # layer 0 never drafts into its cache
+    assert worst[1] > 0.1 and worst[2] > 0.1
