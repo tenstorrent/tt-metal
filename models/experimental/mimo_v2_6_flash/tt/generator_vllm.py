@@ -45,11 +45,17 @@ with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin
 last step, and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
 with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
 rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. A verify answers the
-plugin's argmax ids when every request of the step is greedy, else its logits: the plugin then walks acceptance on
-the host with each request's own sampling (temperature, top-p, ...), so sampled requests speculate losslessly. A verify
-and a draft each copy one packed int32 tensor of their tokens and positions (plus the RoPE cos / sin when there are no
-device RoPE tables); their traces derive every other input from it on device (tt/spec_inputs.py). A step that
-verifies nothing decodes as above, a sampled request's on the sampled decode trace.
+plugin's argmax ids when every request of the step is greedy. A step with a sampled request is accepted on device
+(``fused_sample``, tt/verify_sampler.py) when every request's sampling is one the device sampler serves (the plugin
+decides from ``max_device_top_k`` and ``supports_device_top_p_without_top_k``, and sends no penalties, logprobs,
+grammar or token filters there): the plugin sends the requests' temperature / top_k / top_p and the uniforms it drew
+from their generators, the device runs the plugin's accept walk on each slot's candidates, and the step returns each
+request's committed tokens and count, 128 bytes per pass. Otherwise the verify returns its logits and the plugin walks
+acceptance on the host with each request's own sampling (temperature, top-p, penalties, ...). Either way sampled
+requests speculate losslessly. A verify and a draft each copy one packed int32 tensor of their tokens and positions
+(plus the RoPE cos / sin when there are no device RoPE tables); their traces derive every other input from it on
+device (tt/spec_inputs.py). A step that verifies nothing decodes as above, a sampled request's on the sampled decode
+trace.
 """
 
 import math
@@ -64,6 +70,7 @@ import ttnn
 
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
+from ..reference.sample_verify import commit_pass, pass_inputs
 from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource, draft_source, plan_mtp, plan_verify_passes
 from .attention import page_table_width
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
@@ -236,9 +243,10 @@ class MiMoV2ForCausalLM:
             # The MTP ring cache is per lane, not per request; its weights are the replica's.
             extra_bytes_per_seq=0,
             extra_bytes_per_token=0,
-            # argmax_ids for all-greedy steps; logits when a sampled request shares the step (the plugin's host
+            # argmax_ids for all-greedy steps; fused_sample (acceptance on device) when a sampled request shares
+            # the step and the device sampler serves every request's sampling; logits otherwise (the plugin's host
             # accept walk then samples losslessly, ``_verify``).
-            accept_modes=("argmax_ids", "logits"),
+            accept_modes=("argmax_ids", "logits", "fused_sample"),
             drafter_state="internal",
             supports_narrow_decode=True,
         )
@@ -541,7 +549,17 @@ class MiMoV2ForCausalLM:
         if kwargs.get("defer_device_sampling"):
             raise ValueError("MiMo has no deferred device sampling (no device grammar)")
         if spec_mode is not None:
-            return self._verify(tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode)
+            return self._verify(
+                tokens,
+                start_pos,
+                page_table,
+                page_tables_per_layer,
+                num_valid_drafts,
+                spec_mode,
+                kwargs.pop("spec_sampling", None),
+            )
+        if kwargs.get("spec_sampling") is not None:
+            raise ValueError("spec_sampling comes with a fused_sample verify; got it on a plain decode")
         if reload_inputs and reload_page_table:
             raise ValueError("reload_inputs already copies the page tables; got reload_page_table too")
         if reset_sampling_state and not reload_inputs:
@@ -631,21 +649,32 @@ class MiMoV2ForCausalLM:
         self._timing = stats
 
     # ------------------------------------------------------------------ speculative decoding
-    def _verify(self, tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode):
+    def _verify(
+        self, tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode, spec_sampling=None
+    ):
         """A verify of the plugin's candidate block tokens / start_pos [B, 1 + K] (-1: no position): each lane's
         active rows packed into verify passes (reference.spec_decode.plan_verify_passes), a lane's passes one after
         another, the lanes side by side. Returns argmax_ids [B, 1 + K] (column j the target's greedy token after
         column j, unused columns 0), or with ``spec_mode`` "logits" the fp32 logits [B, 1 + K, vocab] of the same
         cells for the plugin's host accept walk: every answered cell holds its slot's full logit row; the others
-        (gap rows, columns past a row's drafts) are never read and keep a finite earlier value (``_spec_logits``)."""
+        (gap rows, columns past a row's drafts) are never read and keep a finite earlier value (``_spec_logits``).
+
+        With "fused_sample" each pass's acceptance runs on device right after it (VerifySampler; its inputs from
+        reference.sample_verify.pass_inputs) and the verify returns accepted_token_ids [B, 1 + K] int32 (each row's
+        committed tokens, -1 past its count) and accepted_counts [B] int32 in [1, 1 + K]; a row without a position (a
+        gap) commits token 0 with count 1, what its argmax_ids answer commits. ``spec_sampling`` (``_check_spec_sampling``) carries the sampled rows'
+        parameters and the uniforms the plugin drew; None: every row greedy."""
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         t0 = time.perf_counter()
         self._verify_tables_s = 0.0
-        if spec_mode not in ("argmax_ids", "logits"):
-            raise ValueError(f"MiMo verifies argmax ids or logits; got spec_mode {spec_mode!r}")
+        if spec_mode not in ("argmax_ids", "logits", "fused_sample"):
+            raise ValueError(f"MiMo verifies argmax ids, logits or fused_sample; got spec_mode {spec_mode!r}")
         if any(model.verify_trace is None for model in self.models):
             raise RuntimeError("a verify before warmup_model_decode captured the verify traces (MIMO_SPEC_DECODE=mtp)")
+        fused = spec_mode == "fused_sample"
+        if spec_sampling is not None and not fused:
+            raise ValueError(f"spec_sampling is only valid with spec_mode 'fused_sample', got {spec_mode!r}")
         tables = self._layer_tables(page_table, page_tables_per_layer)
         tokens = torch.as_tensor(tokens).to(torch.int64)
         positions = torch.as_tensor(start_pos).to(torch.int64)
@@ -655,6 +684,12 @@ class MiMoV2ForCausalLM:
             raise ValueError(f"{rows} verify rows > {self.dp} lanes x {self.per_lane} slots")
         argmax = torch.zeros(tokens.shape, dtype=torch.int32)
         logits = self._spec_logits(tuple(tokens.shape)) if spec_mode == "logits" else None
+        if fused:
+            spec_sampling = self._check_spec_sampling(spec_sampling, rows, tokens.shape[1] - 1)
+            # A row no pass answers (a gap) keeps token 0 and count 1, its argmax_ids answer.
+            committed = torch.full(tokens.shape, -1, dtype=torch.int32)
+            committed[:, 0] = 0
+            accepted_counts = torch.ones(rows, dtype=torch.int32)
         lanes = []
         for lane in range(self.dp):
             first, last = lane * self.per_lane, min((lane + 1) * self.per_lane, rows)
@@ -670,13 +705,22 @@ class MiMoV2ForCausalLM:
             self.decode_positions[lane] = None
         waited = 0.0
         for k in range(max(map(len, lanes))):
-            pending = [
-                (lane, p[k], self._enqueue_verify_pass(lane, p[k], tables))
-                for lane, p in enumerate(lanes)
-                if k < len(p)
-            ]
+            pending = []
+            for lane, p in enumerate(lanes):
+                if k >= len(p):
+                    continue
+                handle = self._enqueue_verify_pass(lane, p[k], tables)
+                if fused:
+                    model = self.models[lane]
+                    model.verify_accept_enqueue(model.verify_sampler.host_inputs(*pass_inputs(p[k], spec_sampling)))
+                pending.append((lane, p[k], handle))
             for lane, vp, handle in pending:
                 t = time.perf_counter()
+                if fused:
+                    accepted = self.models[lane].verify_sampler.read()
+                    waited += time.perf_counter() - t
+                    commit_pass(vp, accepted, committed, accepted_counts)
+                    continue
                 out = self.models[lane].read_next_tokens(handle)
                 rows = self.models[lane].decode_read_rows(handle) if logits is not None else None
                 waited += time.perf_counter() - t
@@ -686,9 +730,62 @@ class MiMoV2ForCausalLM:
                         logits[row, col] = rows[s]
         if TIMING:
             self._spec_timing("verify", t0, waited, sum(map(len, lanes)), self._verify_tables_s)
+        if fused:
+            self._log_fused()
+            return VerifyOutput(spec_mode="fused_sample", accepted_token_ids=committed, accepted_counts=accepted_counts)
         if logits is not None:
             return VerifyOutput(spec_mode="logits", logits=logits)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=argmax)
+
+    def _check_spec_sampling(self, spec_sampling, rows, num_drafts):
+        """The plugin's ``spec_sampling`` of a fused_sample verify (vllm-tt-plugin docs/SPEC_DECODE_CONTRACT.md):
+        host tensors over the block's B rows: temperature fp32 [B] (0: greedy), top_k int32 [B] (below 1 or at least
+        the vocabulary: none), top_p fp32 [B], greedy bool [B], uniforms fp32 [B, K + 2] in [0, 1) (column 0 the
+        bonus, 1..K the accept draws, K + 1 the correction). None: every row greedy. A sampled row must be one the
+        device sampler serves, as the plugin routes it (``model_capabilities``)."""
+        if spec_sampling is None:
+            return None
+        want = {
+            "temperature": ((rows,), torch.float32),
+            "top_k": ((rows,), torch.int32),
+            "top_p": ((rows,), torch.float32),
+            "greedy": ((rows,), torch.bool),
+            "uniforms": ((rows, num_drafts + 2), torch.float32),
+        }
+        if set(spec_sampling) != set(want):
+            raise ValueError(f"spec_sampling keys {sorted(spec_sampling)} != {sorted(want)}")
+        for name, (shape, dtype) in want.items():
+            t = spec_sampling[name]
+            if not isinstance(t, torch.Tensor) or tuple(t.shape) != shape or t.dtype != dtype:
+                got = (tuple(t.shape), t.dtype) if isinstance(t, torch.Tensor) else type(t).__name__
+                raise ValueError(f"spec_sampling[{name!r}] must be a {dtype} tensor of shape {shape}, got {got}")
+        u = spec_sampling["uniforms"]
+        if bool(((u < 0) | (u >= 1.0)).any()):
+            raise ValueError("spec_sampling['uniforms'] must lie in [0, 1)")
+        vocab = self.gen.cfg.vocab_size
+        max_k = self.model_capabilities["max_device_top_k"]
+        for r in torch.nonzero(~spec_sampling["greedy"]).reshape(-1).tolist():
+            t = float(spec_sampling["temperature"][r])
+            k, p = int(spec_sampling["top_k"][r]), float(spec_sampling["top_p"][r])
+            unbounded = k < 1 or k >= vocab
+            if t <= 0.0 or (not unbounded and k > max_k) or (unbounded and p >= 1.0):
+                raise ValueError(
+                    f"row {r}: device acceptance takes a temperature > 0 with top_k <= {max_k}, or none with "
+                    f"top_p < 1; got temperature {t}, top_k {k}, top_p {p}"
+                )
+        return spec_sampling
+
+    def _log_fused(self):
+        """Every 1024 fused verifies: the requests accepted on device, and how many of them on truncated candidates
+        (a nucleus reaching past the candidates: accepted on them, as the decode sampler draws)."""
+        self._fused_steps = getattr(self, "_fused_steps", 0) + 1
+        if self._fused_steps % 1024 == 0:
+            groups = sum(m.verify_sampler.groups for m in self.models)
+            truncated = sum(m.verify_sampler.truncated for m in self.models)
+            logger.info(
+                f"MiMo vLLM fused accept: {self._fused_steps} verifies, {groups} requests accepted on device, "
+                f"{truncated} on truncated candidates"
+            )
 
     def _spec_logits(self, shape):
         """The host buffer a logits verify of candidate block ``shape`` [B, 1 + K] fills, kept across steps: a

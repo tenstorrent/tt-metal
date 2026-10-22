@@ -255,12 +255,15 @@ class DeviceSampler:
         return checked, exact, bad
 
     # ------------------------------------------------------------------ device side (trace-capturable)
-    def _scan(self, logits):
+    def _scan(self, logits, params=None):
+        """Step 1. ``params``: the per-row parameters to read (default ``self.params``; a verify passes its own,
+        tt/verify_sampler.py)."""
+        params = self.params if params is None else params
         cores, crs = self.scan_cores, _ranges(self.scan_cores)
         params_bytes = self.max_batch * PARAM_WORDS * 4
         block_bytes = 4 * self.k * 8
         reader_args = [
-            [logits.buffer_address(), self.partials.buffer_address(), self.params.buffer_address(), b, e, i]
+            [logits.buffer_address(), self.partials.buffer_address(), params.buffer_address(), b, e, i]
             for i, (b, e) in enumerate(self.ranges)
         ]
         reader = _kernel(
@@ -301,14 +304,16 @@ class DeviceSampler:
             _cb(CB_READY, 16, crs),
         ]
         prog = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
-        ttnn.generic_op([logits, self.partials, self.sums, self.params], prog)
+        ttnn.generic_op([logits, self.partials, self.sums, params], prog)
 
-    def _chip_merge(self):
+    def _chip_merge(self, params=None):
+        """Step 2, with ``params`` as ``_scan``."""
+        params = self.params if params is None else params
         cores, crs = self.merge_cores, _ranges(self.merge_cores)
         addrs = [
             self.partials.buffer_address(),
             self.sums.buffer_address(),
-            self.params.buffer_address(),
+            params.buffer_address(),
             self.chip_cands.buffer_address(),
         ]
         scratch = self.num_scan * (self.k * 8 + 32) + self.max_batch * PARAM_WORDS * 4 + self.k * 8 + 16
@@ -321,7 +326,7 @@ class DeviceSampler:
             ttnn.ReaderConfigDescriptor(),
         )
         prog = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, crs)])
-        ttnn.generic_op([self.partials, self.sums, self.params, self.chip_cands], prog)
+        ttnn.generic_op([self.partials, self.sums, params, self.chip_cands], prog)
 
     def _merge(self, cands, token_input):
         tp = self.plan.tp
