@@ -459,6 +459,7 @@ NEGATIVE_BASE_LARGE_EXPONENT_CASES = {
         (-1.0, 8388607.5),
         (-2.0, 3.0),
         (-2.0, 2.0),
+        (-2.0, -0.0),
         # A -0 base keeps its sign through an odd integer pow.
         (-0.0, 40001.0),
         (-0.0, -40001.0),
@@ -483,6 +484,7 @@ NEGATIVE_BASE_LARGE_EXPONENT_CASES = {
         (-0.5, 32768.0),
         (-1.0, 2.5),
         (-2.0, 3.0),
+        (-2.0, -0.0),
         (-1.0, float("nan")),
         (-2.0, float("nan")),
         (-2.0, float("inf")),
