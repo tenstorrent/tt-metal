@@ -492,7 +492,8 @@ inline constexpr auto k_sender_channel_fields = [] {
             .category = CONTROL_INFO,
             .content = content::Flag{},
             .description = "Whether a sibling router connects to the channel once, at startup: before its main loop, "
-                           "the router waits for that connection.",
+                           "each ERISC that runs the channel waits for that connection. The builder gives an ERISC "
+                           "that doesn't run it 0.",
         },
     };
 }();
