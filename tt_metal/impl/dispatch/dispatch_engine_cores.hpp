@@ -11,9 +11,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
-#include <umd/device/types/core_coordinates.hpp>         // CoreType
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // tt::ChipId
+#include <tt-umd/types/core_coordinates.hpp>         // CoreType
 
 namespace tt::tt_metal::experimental::quasar {
 struct QuasarDataMovementConfig;
