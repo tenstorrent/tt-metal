@@ -15,37 +15,41 @@
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
+
+namespace mrs = matmul_reduce_scatter;
 
 void kernel_main() {
-    constexpr uint32_t cb_finished = get_compile_time_arg_val(0);
-    constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t num_waves = get_compile_time_arg_val(2);  // entry e is wave e mod num_waves
-    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t depth_handoff = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(6);  // G x num_waves
-    constexpr uint32_t cb_zero = get_compile_time_arg_val(7);  // compute's fused-finish zero tile (filled here once)
+    constexpr uint32_t cb_finished = get_compile_time_arg_val(mrs::writer_ct::CB_FINISHED);
+    constexpr uint32_t P = get_compile_time_arg_val(mrs::writer_ct::P);
+    // entry e is wave e mod num_waves
+    constexpr uint32_t num_waves = get_compile_time_arg_val(mrs::writer_ct::NUM_WAVES);
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(mrs::writer_ct::OUT_N_TILES);
+    constexpr uint32_t depth_handoff = get_compile_time_arg_val(mrs::writer_ct::DEPTH_HANDOFF);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(mrs::writer_ct::TILE_BYTES);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(mrs::writer_ct::NUM_ENTRIES);  // G x num_waves
+    // compute's fused-finish zero tile (filled here once)
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(mrs::writer_ct::CB_ZERO);
     // chunks: the entry walk runs once per output chunk; chunk c covers the tiles at (i_m * chunk_m, i_n * chunk_n)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
-    constexpr uint32_t n_inner = get_compile_time_arg_val(9);
-    constexpr bool m_outer = get_compile_time_arg_val(10) != 0;
-    constexpr uint32_t chunk_m = get_compile_time_arg_val(11);
-    constexpr uint32_t chunk_n = get_compile_time_arg_val(12);
-    constexpr uint32_t block_m = get_compile_time_arg_val(13);
-    constexpr uint32_t block_n = get_compile_time_arg_val(14);
-    constexpr auto out_args = TensorAccessorArgs<15>();
-    constexpr uint32_t KIND_FWD = 0, KIND_BWD = 1, KIND_FIN = 2;
-    constexpr uint32_t consumed_fwd_id = 0, consumed_bwd_id = 1;
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(mrs::writer_ct::NUM_CHUNKS);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(mrs::writer_ct::N_INNER);
+    constexpr bool m_outer = get_compile_time_arg_val(mrs::writer_ct::M_OUTER) != 0;
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(mrs::writer_ct::CHUNK_M);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(mrs::writer_ct::CHUNK_N);
+    constexpr uint32_t block_m = get_compile_time_arg_val(mrs::writer_ct::BLOCK_M);
+    constexpr uint32_t block_n = get_compile_time_arg_val(mrs::writer_ct::BLOCK_N);
+    constexpr auto out_args = TensorAccessorArgs<mrs::writer_ct::COUNT>();
 
-    uint32_t arg = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // chunk-local origin of my per-core block
-    const uint32_t col0 = get_arg_val<uint32_t>(arg++);
-    const uint32_t fwd_port_xy = get_arg_val<uint32_t>(arg++);
-    const uint32_t bwd_port_xy = get_arg_val<uint32_t>(arg++);
-    const uint32_t mailbox_slot_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t waves_idx = arg;  // per wave: row_off | col_off << 8 | rows << 16 | cols << 24
-    const uint32_t kinds_idx = waves_idx + num_waves;
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(mrs::writer_common::OUT_ADDR);
+    // chunk-local origin of my per-core block
+    const uint32_t row0 = get_arg_val<uint32_t>(mrs::writer_rt::ROW0);
+    const uint32_t col0 = get_arg_val<uint32_t>(mrs::writer_rt::COL0);
+    const uint32_t fwd_port_xy = get_arg_val<uint32_t>(mrs::writer_rt::FWD_PORT_XY);
+    const uint32_t bwd_port_xy = get_arg_val<uint32_t>(mrs::writer_rt::BWD_PORT_XY);
+    const uint32_t mailbox_slot_addr = get_arg_val<uint32_t>(mrs::writer_rt::MAILBOX_SLOT_ADDR);
+    // common, per wave: row_off | col_off << 8 | rows << 16 | cols << 24
+    constexpr uint32_t waves_idx = mrs::writer_common::WAVES;
+    constexpr uint32_t kinds_idx = mrs::writer_rt::KINDS;
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
@@ -66,9 +70,9 @@ void kernel_main() {
     }
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     volatile tt_l1_ptr uint32_t* consumed_fwd =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(consumed_fwd_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mrs::sem::CONSUMED_FWD));
     volatile tt_l1_ptr uint32_t* consumed_bwd =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(consumed_bwd_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mrs::sem::CONSUMED_BWD));
     const uint64_t fwd_mailbox = get_noc_addr(fwd_port_xy & 0xFFFF, fwd_port_xy >> 16, mailbox_slot_addr);
     const uint64_t bwd_mailbox = get_noc_addr(bwd_port_xy & 0xFFFF, bwd_port_xy >> 16, mailbox_slot_addr);
     const uint32_t finished_base = get_read_ptr(cb_finished);  // slot 0 (read pointer is at the base at launch)
@@ -79,9 +83,9 @@ void kernel_main() {
         MaybeDeviceZoneScope("ACK_WAIT");
         const uint32_t kind = queue[head];
         head = head + 1 == depth_handoff ? 0 : head + 1;
-        if (kind == KIND_FWD) {
+        if (kind == mrs::kind::FWD) {
             noc_semaphore_wait_min(consumed_fwd, ++acked_fwd);
-        } else if (kind == KIND_BWD) {
+        } else if (kind == mrs::kind::BWD) {
             noc_semaphore_wait_min(consumed_bwd, ++acked_bwd);
         }
         cb_pop_front(cb_finished, P);
@@ -92,13 +96,13 @@ void kernel_main() {
         const uint32_t e = eg % num_entries;
         const uint32_t kind = get_arg_val<uint32_t>(kinds_idx + e);
         const uint32_t slot = finished_base + (eg % depth_handoff) * P * tile_bytes;
-        if (kind == KIND_FIN) {
+        if (kind == mrs::kind::FIN) {
             // stream the output: write each valid tile as soon as the finish has packed it, so the DRAM writes of
             // every core overlap the finish adds instead of all landing after them (the call's tail)
             const uint32_t c = eg / num_entries;
             const uint32_t im = m_outer ? c / n_inner : c % n_inner;
             const uint32_t in = m_outer ? c % n_inner : c / n_inner;
-            const uint32_t wave = get_arg_val<uint32_t>(waves_idx + e % num_waves);
+            const uint32_t wave = get_common_arg_val<uint32_t>(waves_idx + e % num_waves);
             const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
             const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
             const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
@@ -120,7 +124,7 @@ void kernel_main() {
                 MaybeDeviceZoneScope("FIN_WAIT");
                 cb_wait_front(cb_finished, (outstanding + 1) * P);
             }
-            noc_semaphore_inc(kind == KIND_FWD ? fwd_mailbox : bwd_mailbox, 1);
+            noc_semaphore_inc(kind == mrs::kind::FWD ? fwd_mailbox : bwd_mailbox, 1);
         }
         queue[(head + outstanding) % depth_handoff] = kind;
         ++outstanding;
