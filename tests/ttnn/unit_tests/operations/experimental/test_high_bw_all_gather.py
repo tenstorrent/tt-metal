@@ -121,11 +121,14 @@ _CI_PERF_TEST_CASES = [
     ("bfloat8_tiled", ttnn.bfloat8_b, 576, ttnn.TILE_LAYOUT, 1088),
 ]
 
-# These floors are specific to a physical four-chip QuietBox. The 55K gate measured 85--90 GB/s across every
-# supported payload on the local QuietBox; the floor still catches a lost wraparound path (about 64--67 GB/s).
-_QUIETBOX_CI_PERF_GLOBAL_ROWS = (55_000,)
+# These floors are specific to a physical four-chip QuietBox.  The 55K and
+# 512K gates measured 85--90 GB/s and 119--121 GB/s respectively across every
+# supported payload on the local QuietBox. CI hardware measures about 103--104
+# GB/s at 512K, so retain enough headroom while still catching a lost
+# wraparound path (which falls to about 64--67 GB/s).
 _QUIETBOX_CI_MIN_BANDWIDTH_GBPS = {
     55_000: 70.0,
+    512 * 1024: 100.0,
 }
 
 # Galaxy uses one 8-rank KV ring after initializing the full 8x4 XY torus.
@@ -1329,7 +1332,7 @@ def test_high_bw_all_gather_galaxy_8x4_axis_ring_regression(mesh_device):
 )
 @pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
 def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
-    """QuietBox perf gate: 4x1 ring and 2D torus at the 55K target."""
+    """QuietBox perf gate: 4x1 ring and 2D torus at 55K and 512K targets."""
     if not _is_physical_quietbox(mesh_device):
         pytest.skip(
             "QuietBox perf gate requires the complete physical 4x1, four-device mesh; "
@@ -1340,7 +1343,6 @@ def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
         mesh_device,
         cluster_axis=0,
         min_bandwidth_gbps=_QUIETBOX_CI_MIN_BANDWIDTH_GBPS,
-        global_rows_cases=_QUIETBOX_CI_PERF_GLOBAL_ROWS,
     )
 
 
