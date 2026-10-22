@@ -575,10 +575,13 @@ void kernel_main() {
         has_logical_length_tensor ? logical_n_args.next_compile_time_args_offset() : logical_n_args_offset;
     constexpr auto logical_l_args = TensorAccessorArgs<logical_l_args_offset>();
 
+    // Tensor addresses are the same on every core, so the factory passes them as the first common runtime args.
+    constexpr uint32_t address_common_arg_count = 3;
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t joint_out_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t stats_addr = get_common_arg_val<uint32_t>(2);
+
     uint32_t argidx = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
@@ -650,9 +653,10 @@ void kernel_main() {
 
     Noc noc;
 
-    // Common runtime args: kv_actual_isl slot first when present, then the logical-length pair.
+    // Common runtime args after the addresses: kv_actual_isl slot first when present, then the logical-length pair.
+    constexpr uint32_t metadata_common_arg_base = address_common_arg_count;
     constexpr uint32_t logical_length_common_arg_base =
-        kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0;
+        metadata_common_arg_base + (kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0);
     // kv_valid_end is validated incompatible with the logical_n / logical_l tensors, so its arg directly
     // follows the kv_actual_isl slot.
     static_assert(!has_kv_valid_end || !has_logical_length_tensor);
@@ -712,7 +716,7 @@ void kernel_main() {
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
         uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
+            noc, meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base), cb_meta_scratch.get_write_ptr());
         if constexpr (has_sliding_window) {
             kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                 kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);

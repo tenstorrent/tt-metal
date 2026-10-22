@@ -244,9 +244,8 @@ std::vector<uint32_t> multicast_origin_rows(
 
 // Runtime-arg offsets used by cache-hit patching. Descriptor construction appends the same slots through
 // CheckedRuntimeArgList, so future layout edits fail on program creation instead of corrupting cache hits.
-// Q, K, V, gathered K, gathered V, and attention sink (nullable).
-constexpr uint32_t kReaderBaseBufferArgCount = 6;
-constexpr uint32_t kReaderJointBufferArgCount = 3;
+// Buffer addresses are common runtime args (see the reader/writer kernel descriptors), so per-core args start
+// with the Q work range.
 constexpr uint32_t kReaderQWorkArgCount = 3;
 constexpr uint32_t kRingJointChainConfigArgCount = ring_joint::kChainConfigRuntimeArgCount;
 constexpr uint32_t kRingJointChainCompileArgCount = ring_joint::kChainCompileArgCount;
@@ -254,7 +253,8 @@ constexpr uint32_t kRingJointChainSemaphoreCompileArgCount = ring_joint::kChainS
 constexpr uint32_t kRingJointChainMcastEnabledCompileArgOffset = ring_joint::kChainMcastEnabledCompileArgOffset;
 constexpr uint32_t kReaderBatchChainExtraArgCount = 1;
 constexpr uint32_t kReaderGQAChainExtraArgCount = 1;
-constexpr uint32_t kWriterBaseArgCount = 5;
+// global_q_start, global_q_end.
+constexpr uint32_t kWriterBaseArgCount = 2;
 constexpr uint32_t kComputeRingSequencerArgCount = 6;
 
 struct CheckedRuntimeArgList {
@@ -538,7 +538,6 @@ RingJointRuntimePlan build_runtime_plan(
 RingJointRuntimeArgLayout get_runtime_arg_layout(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
     const auto& k_shape = tensor_args.gathered_k.logical_shape();
-    const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
@@ -550,9 +549,6 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     layout.grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                        : tensor_args.input_q.device()->compute_with_storage_grid_size();
 
-    const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
-    // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
-    const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
@@ -560,9 +556,8 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
-    layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+    layout.reader_kv_cache_batch_idx = 2;
+    layout.reader_logical_nt = kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -3114,10 +3109,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    // Layout: metadata block first (when present), then the logical-length pair, so the kernel's base index
-    // is ring_joint::kReaderMetadataCommonArgCount (or kWriterMetadataCommonArgCount) when its metadata block
-    // is present, else 0. Both slots are emplaced whenever either tensor is present. Passed as Buffer* (not
-    // ->address()) so a program-cache hit re-patches them if the tensor was reallocated.
+    // Layout: the tensor addresses first, then the metadata block (when present), then the logical-length pair,
+    // so the kernel's metadata base index is its address count. The addresses are the same on every core, so a
+    // program-cache hit re-patches one common slot per kernel instead of one per-core arg per core. Both
+    // logical-length slots are emplaced whenever either tensor is present. Passed as Buffer* (not ->address()) so
+    // a program-cache hit re-patches them if the tensor was reallocated.
     const bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     const auto append_logical_length_common_args = [&](KernelDescriptor::RTArgList& into) {
         if (!has_logical_length_tensor) {
@@ -3131,11 +3127,26 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
     };
-    if (slot_from_metadata || has_logical_length_tensor) {
+    {
         KernelDescriptor::RTArgList reader_common_args;
+        reader_common_args.push_back(q_buf);
+        reader_common_args.push_back(k_buf);
+        reader_common_args.push_back(v_buf);
+        reader_common_args.push_back(gathered_k_buf);
+        reader_common_args.push_back(gathered_v_buf);
+        if (L != 0) {
+            reader_common_args.push_back(joint_tensor_q->buffer());
+            reader_common_args.push_back(joint_tensor_k->buffer());
+            reader_common_args.push_back(joint_tensor_v->buffer());
+        }
+        reader_common_args.push_back(attention_sink_buf);
+        if (joint_is_sharded) {
+            reader_common_args.push_back(gathered_joint_tensor_k->buffer());
+            reader_common_args.push_back(gathered_joint_tensor_v->buffer());
+        }
         if (slot_from_metadata) {
             // Bound as buffers so a cache hit with different metadata tensors follows them; the reader takes
-            // these as get_common_arg_val(0..4).
+            // these as the 5 common args after the addresses.
             reader_common_args.push_back(tensor_args.slot_id->buffer());
             reader_common_args.push_back(args.kv_cache_num_layers);
             reader_common_args.push_back(args.kv_cache_layer_idx);
@@ -3160,11 +3171,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    if (kv_pad_from_metadata || has_logical_length_tensor) {
+    {
         KernelDescriptor::RTArgList writer_common_args;
+        writer_common_args.push_back(out_buf);
+        writer_common_args.push_back(joint_out_buf);
+        writer_common_args.push_back(stats_buf);
         if (kv_pad_from_metadata) {
             // Bound as a buffer so a cache hit with a different metadata tensor follows it; the writer takes
-            // it as get_common_arg_val(0).
+            // it as the common arg after the addresses.
             writer_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(writer_common_args);
@@ -3229,22 +3243,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
         CheckedRuntimeArgList reader_args;
-        reader_args.push_back(q_buf);
-        reader_args.push_back(k_buf);
-        reader_args.push_back(v_buf);
-        reader_args.push_back(gathered_k_buf);
-        reader_args.push_back(gathered_v_buf);
-        if (L != 0) {
-            reader_args.push_back(joint_tensor_q->buffer());
-            reader_args.push_back(joint_tensor_k->buffer());
-            reader_args.push_back(joint_tensor_v->buffer());
-        }
-        reader_args.push_back(attention_sink_buf);
-        // Read by the kernel right after attention_sink_addr and before global_q_start.
-        if (joint_is_sharded) {
-            reader_args.push_back(gathered_joint_tensor_k->buffer());
-            reader_args.push_back(gathered_joint_tensor_v->buffer());
-        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
         reader_args.push_checked(
@@ -3319,9 +3317,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         // Writer args
         CheckedRuntimeArgList writer_args;
-        writer_args.push_back(out_buf);
-        writer_args.push_back(joint_out_buf);
-        writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
         writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
@@ -3738,11 +3733,87 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     return desc;
 }
 
+bool same_buffer_bindings(const KernelDescriptor& a, const KernelDescriptor& b) {
+    return std::equal(
+               a.buffer_bindings.begin(),
+               a.buffer_bindings.end(),
+               b.buffer_bindings.begin(),
+               b.buffer_bindings.end(),
+               [](const auto& x, const auto& y) {
+                   return x.core == y.core && x.arg_idx == y.arg_idx && x.buffer == y.buffer;
+               }) &&
+           std::equal(
+               a.common_buffer_bindings.begin(),
+               a.common_buffer_bindings.end(),
+               b.common_buffer_bindings.begin(),
+               b.common_buffer_bindings.end(),
+               [](const auto& x, const auto& y) { return x.arg_idx == y.arg_idx && x.buffer == y.buffer; });
+}
+
+// True when two coordinates' descriptors build the same Program, so one Program can run on both devices.
+bool same_program_descriptor(const ProgramDescriptor& a, const ProgramDescriptor& b) {
+    if (a.custom_program_hash || b.custom_program_hash || a.reload_table || b.reload_table) {
+        return false;
+    }
+    // The hash covers the kernel configs and CB formats, which the field comparisons below skip.
+    if (std::hash<ProgramDescriptor>{}(a) != std::hash<ProgramDescriptor>{}(b) ||
+        a.kernels.size() != b.kernels.size() || a.cbs.size() != b.cbs.size() ||
+        a.semaphores.size() != b.semaphores.size()) {
+        return false;
+    }
+    for (size_t k = 0; k < a.kernels.size(); ++k) {
+        const auto& x = a.kernels[k];
+        const auto& y = b.kernels[k];
+        if (x.kernel_source != y.kernel_source || x.core_ranges != y.core_ranges ||
+            x.compile_time_args != y.compile_time_args || x.named_compile_time_args != y.named_compile_time_args ||
+            x.defines != y.defines || x.runtime_args != y.runtime_args ||
+            x.common_runtime_args != y.common_runtime_args || !x.blaze_named_args.empty() ||
+            !y.blaze_named_args.empty() || !same_buffer_bindings(x, y)) {
+            return false;
+        }
+    }
+    for (size_t c = 0; c < a.cbs.size(); ++c) {
+        const auto& x = a.cbs[c];
+        const auto& y = b.cbs[c];
+        if (x.total_size != y.total_size || x.core_ranges != y.core_ranges || x.buffer != y.buffer ||
+            x.tensor != y.tensor || x.address_offset != y.address_offset ||
+            x.global_circular_buffer != y.global_circular_buffer) {
+            return false;
+        }
+    }
+    for (size_t s = 0; s < a.semaphores.size(); ++s) {
+        const auto& x = a.semaphores[s];
+        const auto& y = b.semaphores[s];
+        if (x.id != y.id || x.core_type != y.core_type || x.core_ranges != y.core_ranges ||
+            x.initial_value != y.initial_value) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// True when coord directly follows range along the last mesh axis, so extending range to coord keeps it contiguous.
+bool extends_along_last_axis(const ttnn::MeshCoordinateRange& range, const ttnn::MeshCoordinate& coord) {
+    const auto& start = range.start_coord();
+    const auto& end = range.end_coord();
+    const size_t dims = coord.dims();
+    if (dims == 0 || end.dims() != dims) {
+        return false;
+    }
+    for (size_t d = 0; d + 1 < dims; ++d) {
+        if (start[d] != coord[d] || end[d] != coord[d]) {
+            return false;
+        }
+    }
+    return coord[dims - 1] == end[dims - 1] + 1;
+}
+
 }  // namespace
 
 // Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
 // transport rank / forward_coord / backward_coord (used by the all-gather portion) all
-// depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
+// depend on the mesh coordinate, so descriptors are only shared by neighbouring coords that
+// build identical programs (create_workload_descriptor). Returning
 // a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
 // its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
 // kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
@@ -3754,10 +3825,22 @@ tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_de
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
+    // Neighbouring coordinates whose descriptors match exactly (e.g. the columns of a mesh whose ring runs along
+    // rows) share one Program, so a cache hit patches and enqueues one program per group instead of one per device.
+    // The scalar cache-hit patch below is computed per coordinate, so share only when it has nothing to patch.
+    const bool share_programs = !args.has_indexed_kv_cache() && !args.has_kv_pad_rotation();
     for (const auto& coord : coords) {
         auto desc = build_ring_joint_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
+        if (share_programs && !wd.programs.empty()) {
+            auto& last = wd.programs.back();
+            if (extends_along_last_axis(last.range, coord) && same_program_descriptor(last.descriptor, desc)) {
+                last.range = ttnn::MeshCoordinateRange(last.range.start_coord(), coord);
+                continue;
+            }
+        }
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
+    log_debug(tt::LogOp, "RingJointSDPA: {} programs for {} coordinates", wd.programs.size(), coords.size());
     return wd;
 }
 
@@ -3779,8 +3862,8 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
-            coord == coordinate_range.end_coord(),
-            "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
+            coord == coordinate_range.end_coord() || (!args.has_indexed_kv_cache() && !args.has_kv_pad_rotation()),
+            "RingJointSDPA programs shared by a coordinate range ({} to {}) cannot take per-coordinate scalar patches",
             coord,
             coordinate_range.end_coord());
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
