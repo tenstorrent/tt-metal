@@ -406,80 +406,222 @@ inline void horizontal_reduce_max() {
 }
 
 /**
- * @brief Row-wise maximum reduction for a single 32x32 tile.
+ * @brief Reciprocal divisor for a row average, carried as two SFPLOADI halves.
  *
- * Processes the tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31.
- * Each face-pair iteration processes 8 rows (two groups of 4 rows each).
+ * A row reduction collapses every column of a row of tiles, so the average divides the row sum by
+ * num_cols = 32 * block_ct_dim columns. The column path always divides by the fixed 32 rows of a
+ * tile and can use the compile-time 1/32 constant the init preloads into the programmable float
+ * const register; the row divisor instead depends on the runtime block_ct_dim. A runtime value
+ * cannot be written into that programmable const register with a plain SFPLOADI (it requires a
+ * config write), so the row path keeps the reciprocal in an ordinary working LREG and multiplies
+ * with it directly. This struct carries the precomputed 16-bit halves so each divide site can
+ * reload the reciprocal into a scratch register.
+ */
+struct RowAvgReciprocal {
+    std::uint16_t high16 = 0;
+    std::uint16_t low16 = 0;
+};
+
+inline RowAvgReciprocal make_row_avg_reciprocal(std::uint32_t num_cols) {
+    const FloatBits bits(1.0f / static_cast<float>(num_cols));
+    return RowAvgReciprocal{bits.high16, bits.low16};
+}
+
+/**
+ * @brief Load the row-average reciprocal into @p scratch_lreg (an SFPLOADI pair).
+ */
+inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgReciprocal recip) {
+    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_UPPER, recip.high16);
+    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
+}
+
+// ============================================================================
+// Merged horizontal reduction of four 4-row accumulators (row SUM/AVG and row MAX/MIN tiles)
+// ============================================================================
+// Every SFPSHFT2 rotate costs two cycles on Blackhole (the next cycle accepts only SFPNOP), and the butterfly
+// above spends 7 of them per accumulator: 28 per 16 rows, more than half of a row SUM tile. Only lane 0
+// (column 0) of a row result is read downstream, so the four accumulators A, B, C, D of a face pair (rows
+// 0-3, 4-7, 8-11, 12-15) can share the rotates. Each merge interleaves two of them lane by lane with a
+// plain SFPSWAP under a column mask, so that one rotate of the swapped partner lines up two partials of the
+// same accumulator in every lane:
+//
+//   merge(A, B) by 1:  odd columns swap  -> keep = A even | B odd, other = B even | A odd;
+//                      keep op= ror1(other) -> even columns: A pair sums, odd columns: B pair sums.
+//   merge(AB, CD) by 2: columns with bit 1 swap; keep op= ror2(other) -> column c holds the 4-column partial
+//                      of A, B, C, D for c % 4 = 0, 1, 2, 3.
+//   fold by 4:         keep op= ror4(keep) -> column c holds the full row result of accumulator c % 4.
+//
+// Column 0 then holds A; ror1 brings D (column 7) to column 0, ror2 C, ror3 B. 11 rotates per 16 rows
+// instead of 28. Column c > 0 of the stored rows holds other rows' results, not a copy of column 0.
+//
+// The column masks live in two programmable constant registers, written once per init by
+// init_row_merge_masks (SFPCONFIG copies lanes 0-7 of LREG0 into every row of the target).
+constexpr std::uint32_t ROW_MERGE_MASK_ODD = p_sfpu::LREG13;   // sign set in odd columns; sfpi::vConstIntPrgm1
+constexpr std::uint32_t ROW_MERGE_MASK_BIT1 = p_sfpu::LREG14;  // sign set in columns with bit 1; vConstIntPrgm2
+
+/**
+ * @brief Write the merge masks into ROW_MERGE_MASK_ODD / ROW_MERGE_MASK_BIT1. LREG15 holds 2 * lane, so a
+ *        column's bit 0 is bit 1 of LREG15 and its bit 1 is bit 2; each is shifted into the sign bit.
+ *        Clobbers LREG0.
+ */
+inline void init_row_merge_masks() {
+    TTI_SFPSHFT(30, p_sfpu::LTILEID, p_sfpu::LREG0, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
+    TTI_SFPCONFIG(0, ROW_MERGE_MASK_ODD, 0);
+    TTI_SFPSHFT(29, p_sfpu::LTILEID, p_sfpu::LREG0, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
+    TTI_SFPCONFIG(0, ROW_MERGE_MASK_BIT1, 0);
+}
+
+enum class RowFold {
+    FloatAdd,
+    IntAdd,
+    MinMax,
+};
+
+/**
+ * @brief dst = dst op src: SFPADD, SFPIADD, or SFPSWAP keeping the extreme in dst (direction from SFPCONFIG bit 8).
+ */
+template <RowFold fold, std::uint32_t dst, std::uint32_t src>
+inline void row_fold() {
+    if constexpr (fold == RowFold::FloatAdd) {
+        TTI_SFPADD(dst, p_sfpu::LCONST_1, src, dst, 0);
+    } else if constexpr (fold == RowFold::IntAdd) {
+        TTI_SFPIADD(0, src, dst, 4);
+    } else {
+        TTI_SFPSWAP(0, dst, src, 1);
+    }
+}
+
+/**
+ * @brief Swap keep and other in the columns whose mask sign is set (plain SFPSWAP under the lane flags).
+ */
+template <std::uint32_t mask, std::uint32_t keep, std::uint32_t other>
+inline void row_merge_select() {
+    TTI_SFPSETCC(0, mask, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPSWAP(0, keep, other, sfpi::SFPSWAP_MOD1_SWAP);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+/**
+ * @brief Row reduce of one face pair (16 rows) of a tile, with the merged horizontal reduce above.
+ *        Stores each 4-row group's result to its own rows; column 0 carries it.
  *
- * For each 8-row group:
- * 1. Load 4 rows from left face (even cols) and 4 rows from right face (odd cols) into LREG0-3
- * 2. Load the next 4 rows into LREG4-7
- * 3. Use vertical SFPSWAP to reduce LREG pairs down (keeping max between left/right face columns)
- * 4. Use horizontal_reduce_max to fold the 8 SFPU columns; every column then holds the row max
- * 5. Store the per-row max, reading column 0
+ * Vertical step: SUM replays the recorded tree-add [0, 6) for A/B (LREG0-7 -> LREG0, LREG4) and issues C/D
+ * inline into LREG4 / LREG1 (LREG0 holds the A/B merge by then); MAX/MIN compare-and-swaps the same way.
+ *
+ * @param face_pair_base First dest row of the face pair.
+ * @param result_store_mode Store mode for the per-group results.
+ * @param divide_now / recip Row AVG of a single column tile: multiply by the reciprocal before storing.
+ */
+template <RowFold fold, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg>
+inline void perform_reduce_row_face_pair(
+    std::uint32_t face_pair_base, std::uint32_t result_store_mode, bool divide_now, RowAvgReciprocal recip) {
+    constexpr bool is_float_add = (fold == RowFold::FloatAdd);
+    const std::uint32_t a = face_pair_base;
+    const std::uint32_t b = face_pair_base + 4;
+    const std::uint32_t c = face_pair_base + 8;
+    const std::uint32_t d = face_pair_base + 12;
+
+    // A (rows 0-3) -> LREG0-3, B (rows 4-7) -> LREG4-7: left face even / odd columns, right face even / odd.
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, a);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, a + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, a + ROWS_PER_FACE);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, a + ROWS_PER_FACE + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, b);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, b + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, b + ROWS_PER_FACE);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, b + ROWS_PER_FACE + 2);
+    if constexpr (fold == RowFold::MinMax) {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+    } else {
+        lltt::replay(0, 6);
+    }
+
+    // merge(A, B) by 1 -> LREG0.
+    row_merge_select<ROW_MERGE_MASK_ODD, p_sfpu::LREG0, p_sfpu::LREG4>();
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    row_fold<fold, p_sfpu::LREG0, p_sfpu::LREG5>();
+
+    // C (rows 8-11) -> LREG4-7 -> LREG4, D (rows 12-15) -> LREG1, LREG2, LREG3, LREG7 -> LREG1. The D loads are
+    // interleaved with the C folds so no fold reads a register written by the instruction just before it.
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, c);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, c + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, c + ROWS_PER_FACE);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, c + ROWS_PER_FACE + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, d);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, d + 2);
+    row_fold<fold, p_sfpu::LREG6, p_sfpu::LREG7>();
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, d + ROWS_PER_FACE);
+    row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG5>();
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, d + ROWS_PER_FACE + 2);
+    row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG2>();
+    row_fold<fold, p_sfpu::LREG3, p_sfpu::LREG7>();
+    row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG6>();
+    row_fold<fold, p_sfpu::LREG1, p_sfpu::LREG3>();
+
+    // merge(C, D) by 1 -> LREG4.
+    row_merge_select<ROW_MERGE_MASK_ODD, p_sfpu::LREG4, p_sfpu::LREG1>();
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    row_fold<fold, p_sfpu::LREG4, p_sfpu::LREG2>();
+
+    // merge(AB, CD) by 2 -> LREG0.
+    row_merge_select<ROW_MERGE_MASK_BIT1, p_sfpu::LREG0, p_sfpu::LREG4>();
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    row_fold<fold, p_sfpu::LREG0, p_sfpu::LREG5>();
+
+    // Fold by 4. The automatic stall does not cover an SFPSHFT2 reading an SFPADD result on the next cycle
+    // (tt-isa SFPMAD.md), so the float add needs one instruction in between: the AVG reciprocal load, or a NOP.
+    if constexpr (is_avg) {
+        if (divide_now) {
+            load_row_avg_reciprocal_into(p_sfpu::LREG2, recip);
+        } else {
+            TTI_SFPNOP;
+        }
+    } else if constexpr (is_float_add) {
+        TTI_SFPNOP;
+    }
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    row_fold<fold, p_sfpu::LREG0, p_sfpu::LREG1>();
+    if constexpr (is_avg) {
+        if (divide_now) {
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        }
+    }
+
+    // Column c holds the result of accumulator c % 4: store A, then rotate D, C, B into column 0. Each store
+    // also separates the preceding add / multiply from the SFPSHFT2 that reads its result.
+    TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, a);
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TT_SFPSTORE(p_sfpu::LREG1, result_store_mode, ADDR_MOD_7, d);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TT_SFPSTORE(p_sfpu::LREG1, result_store_mode, ADDR_MOD_7, c);
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TT_SFPSTORE(p_sfpu::LREG1, result_store_mode, ADDR_MOD_7, b);
+}
+
+/**
+ * @brief Row-wise maximum/minimum reduction for a single 32x32 tile: one perform_reduce_row_face_pair per face
+ *        pair (f0+f1 = tile rows 0-15, f2+f3 = tile rows 16-31). Each row's extreme lands in column 0.
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
  * @param tile_row_offset Base row offset for this tile in the dest register
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
 inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
+    // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the final,
+    // packer-visible result (single column tile); otherwise it is intermediate and stays in the low 16 bits.
 #pragma GCC unroll 2
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
-        std::uint32_t face_pair_base = face_pair * 2 * ROWS_PER_FACE;
-
-#pragma GCC unroll 2
-        for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
-            std::uint32_t row_offset_first = row_group * 8;
-            std::uint32_t row_offset_second = row_offset_first + 4;
-
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG2,
-                INSTRUCTION_MODE,
-                ADDR_MOD_7,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_first);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG3,
-                INSTRUCTION_MODE,
-                ADDR_MOD_7,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_first + 2);
-
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6,
-                INSTRUCTION_MODE,
-                ADDR_MOD_7,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7,
-                INSTRUCTION_MODE,
-                ADDR_MOD_7,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
-
-            // Vertical max: reduce left/right face pairs via compare-and-swap.
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-
-            horizontal_reduce_max();
-
-            // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
-            // final, packer-visible result (single column tile); otherwise it is intermediate and stays
-            // in the low 16 bits.
-            TT_SFPSTORE(
-                p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(
-                p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
-        }
+        perform_reduce_row_face_pair<RowFold::MinMax, INSTRUCTION_MODE, clear_high_bits, false>(
+            tile_row_offset + face_pair * 2 * ROWS_PER_FACE, result_store_mode, false, RowAvgReciprocal{});
     }
 }
 
@@ -778,110 +920,25 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
     }
 }
 
-/**
- * @brief Reciprocal divisor for a row average, carried as two SFPLOADI halves.
- *
- * A row reduction collapses every column of a row of tiles, so the average divides the row sum by
- * num_cols = 32 * block_ct_dim columns. The column path always divides by the fixed 32 rows of a
- * tile and can use the compile-time 1/32 constant the init preloads into the programmable float
- * const register; the row divisor instead depends on the runtime block_ct_dim. A runtime value
- * cannot be written into that programmable const register with a plain SFPLOADI (it requires a
- * config write), so the row path keeps the reciprocal in an ordinary working LREG and multiplies
- * with it directly. This struct carries the precomputed 16-bit halves so each divide site can
- * reload the reciprocal into a scratch register.
- */
-struct RowAvgReciprocal {
-    std::uint16_t high16 = 0;
-    std::uint16_t low16 = 0;
-};
-
-inline RowAvgReciprocal make_row_avg_reciprocal(std::uint32_t num_cols) {
-    const FloatBits bits(1.0f / static_cast<float>(num_cols));
-    return RowAvgReciprocal{bits.high16, bits.low16};
-}
-
-/**
- * @brief Load the row-average reciprocal into @p scratch_lreg (an SFPLOADI pair).
- */
-inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgReciprocal recip) {
-    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_UPPER, recip.high16);
-    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
-}
-
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false>
 inline void perform_reduce_row_sum_tile(
     std::uint32_t tile_row_offset,
     std::uint32_t result_store_mode,
     bool divide_now = false,
     RowAvgReciprocal recip = {}) {
-    // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16);
 
-    // Process tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31
-    // Each face-pair iteration processes 8 rows (two groups of 4 rows each)
+    // One face pair per iteration: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31. For a single-column-tile
+    // AVG (divide_now) the per-tile sum is already the full row sum and is divided before the store; with
+    // block_ct_dim > 1 it is an intermediate and sum_first_columns_across_tiles divides instead. result_store_mode
+    // is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this store is the final, packer-visible result.
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
-        // Base offset for this face pair:
-        // face_pair 0: faces 0+1 (dest indices 0-31)
-        // face_pair 1: faces 2+3 (dest indices 32-63)
-        std::uint32_t face_pair_base = face_pair * 2 * ROWS_PER_FACE;
-
-        for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
-            // Within each face, process rows in groups of 8 (two sub-groups of 4)
-            std::uint32_t row_offset_first = row_group * 8;          // 0 or 8
-            std::uint32_t row_offset_second = row_offset_first + 4;  // 4 or 12
-
-            const std::uint32_t group_a_base = tile_row_offset + face_pair_base + row_offset_first;
-            const std::uint32_t group_b_base = tile_row_offset + face_pair_base + row_offset_second;
-
-            // Load 4 rows from face 0 (or 2) and face 1 (or 3)
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base);
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
-
-            // Load next 4 rows from face 0 (or 2) and face 1 (or 3)
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base);
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
-
-            // Perform vertical sum of loaded rows via replay buffer
-            // After this: LREG0 contains sum of first 4 rows, LREG4 contains sum of next 4 rows
-            lltt::replay(0, 6);
-
-            // Horizontal reduction, inline (see the horizontal-reduce section): every column of LREG0 / LREG4
-            // then holds its 4-row group's full row sum.
-            horizontal_reduce<is_integer_mode>();
-
-            // For a single-column-tile AVG the per-tile sum is already the full row sum, so divide it
-            // here (float-only path; row AVG is restricted to float formats). When block_ct_dim > 1 the
-            // per-tile store is an intermediate partial sum and the division is deferred to
-            // sum_first_columns_across_tiles instead. The two results (first/second 4-row group) live in
-            // LREG0/LREG4; LREG2 is free after the horizontal reduce and holds the reciprocal.
-            if constexpr (is_avg) {
-                if (divide_now) {
-                    load_row_avg_reciprocal_into(p_sfpu::LREG2, recip);
-                    // The two SFPMULs cover each other's 2-cycle latency: the LREG4 multiply sits
-                    // between the LREG0 multiply and the LREG0 store, and the first store sits
-                    // between the LREG4 multiply and the LREG4 store, so no extra NOP is needed.
-                    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-                    TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
-                }
-            }
-
-            // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
-            // final, packer-visible result (single column tile); otherwise it is an intermediate store
-            // re-loaded by the cross-tile accumulation and must stay in the low 16 bits.
-            TT_SFPSTORE(
-                p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(
-                p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
-        }
+        perform_reduce_row_face_pair<
+            is_integer_mode ? RowFold::IntAdd : RowFold::FloatAdd,
+            INSTRUCTION_MODE,
+            clear_high_bits,
+            is_avg>(tile_row_offset + face_pair * 2 * ROWS_PER_FACE, result_store_mode, divide_now, recip);
     }
 }
 
@@ -1819,6 +1876,13 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     if constexpr (clear_high_bits) {
         // CLEAR_REG (sfpi::vConstIntPrgm0 / LREG12) holds the mask used by SFPLOAD_EXT to clear high bits.
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    }
+
+    // Column masks for the merged row butterfly (perform_reduce_row_face_pair). init_reduce has no reduce_dim,
+    // so every init that can feed a row SUM/AVG/MAX/MIN writes them; signed Int32 / UInt32 MAX/MIN rows take
+    // their own path.
+    if constexpr (!int32_max_min) {
+        init_row_merge_masks();
     }
 
     // Dispatch to appropriate PoolType init
