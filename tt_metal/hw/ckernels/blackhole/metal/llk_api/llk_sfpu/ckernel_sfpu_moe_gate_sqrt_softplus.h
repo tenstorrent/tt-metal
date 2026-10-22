@@ -79,9 +79,11 @@ sfpi_inline sfpi::vFloat _moe_gate_softplus_(const sfpi::vFloat x) {
 
 inline void moe_gate_sqrt_softplus_init() { sqrt_init<false>(); }
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_moe_gate_sqrt_softplus_add_bias(
     const std::uint32_t dst_index_x, const std::uint32_t dst_index_bias, const std::uint32_t /*dst_index_out*/) {
+    // No bf16 round-to-nearest step: with a 16-bit DEST the score and key would be stored truncated.
+    static_assert(is_fp32_dest_acc_en, "moe_gate_sqrt_softplus_add_bias requires fp32 DEST (fp32_dest_acc_en)");
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[dst_index_x * dst_tile_size_sfpi];
