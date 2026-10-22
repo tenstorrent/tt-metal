@@ -108,7 +108,12 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<scratchpad::token>)
     template <typename Operand>
     [[nodiscard]] Operand operand() const noexcept {
+#ifdef ARCH_QUASAR
+        // Buffer-descriptor base (16B units), as DataflowBuffer::front/back pass it.
+        return Operand{static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4};
+#else
         return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(start_addr_)) >> 4) - 1};
+#endif
     }
 #endif
 
