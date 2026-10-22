@@ -37,7 +37,7 @@ constexpr auto x_args = TensorAccessorArgs<5>();
 constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 constexpr auto i_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(4);
+constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(4), RDY = 12;
 // args: x, W_r^T, bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
 // rows, slot = its source index) and their counter
 void kernel_main() {
@@ -63,6 +63,18 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(BIAS, ET);
     cb_push_back(IDX, ET);
+#ifdef RT_ENG
+    {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
+       // with an increment of this counter a tile): all G x ET in -> the compute (RDY)
+        DeviceZoneScopedN("SE-RENGWAIT");
+        volatile tt_l1_ptr uint32_t* ec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ENG);
+        noc_semaphore_wait_min(ec, G * ET);
+        noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - G * ET);  // (re-arm)
+        noc_async_atomic_barrier();
+        cb_reserve_back(RDY, 1);
+        cb_push_back(RDY, 1);
+    }
+#else
     // W_r^T is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
     // column into every core's WR slot (the kernel_lib family's handshake: a core is ready once its slot is reserved)
     constexpr auto mw = McastArgs<get_named_compile_time_arg_val("rw_ct_offset"), get_named_compile_time_arg_val("rw_rt_offset")>();
@@ -89,6 +101,7 @@ void kernel_main() {
         cb_push_back(XR, G * KBR);
         cb_push_back(WR, KBR * ET);
     }
+#endif
     if (na) {  // every source's partial landed (one fused increment each): the zone's slots for the compute
         {
         DeviceZoneScopedN("SE-RLWAIT");
@@ -166,8 +179,13 @@ inline void rt_key() {
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(WR, XR, HOLD);
     pack_reconfig_data_format(HOLD);
+#ifdef RT_ENG
+    // (the matmul below is the router cores' own path: off here)
+    cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY)
+    if (false)
+#endif
     {
-    DeviceZoneScopedN("SE-RMM");
+    DeviceZoneScopedN("SE-RMMUL");
     for (uint32_t kb = 0; kb < KT / KBR; ++kb) {  // K-outer: every token tile's partial accumulated in L1 (fp32)
         cb_wait_front(XR, G * KBR);
         cb_wait_front(WR, KBR * ET);
@@ -556,6 +574,7 @@ class RouterStream:
         arena,
         words,
         fidelity=ttnn.MathFidelity.HiFi3,
+        on_engine=False,
     ):
         """arena: (tensor, base, bytes) - the engine's arena, also carved on these cores and the ports (lockstep L1);
         words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core)."""
@@ -566,6 +585,7 @@ class RouterStream:
         self.RB, self.KT, self.ET, self.K = CR // G, H // G // 32, E // 32, K
         assert len(cores) >= self.RB and E % 32 == 0 and K % 2 == 0 and 4 * K <= 64
         self.cores = cores[: self.RB]
+        self.on_engine = on_engine  # (the logits computed by the engine cores, se_engine3's SE_RTR: no matmul here)
         self.scale_bits = struct.unpack("<I", struct.pack("<f", route_scale))[0]
         self.prio_first = prio_first
         self.fidelity = fidelity  # (the port sends the logits ahead of the x gather: GLM-type)
@@ -587,6 +607,7 @@ class RouterStream:
                 ("best", 4096),
                 ("finc", 16 * 8),
                 ("psync", 16 * 2),
+                ("rdy", 16 * 2),
                 ("out", 32 * 4 * K),
                 ("words", 128),
                 ("route", 32 * 4 * 2),
@@ -733,8 +754,16 @@ class RouterStream:
             return [self.ra.addr["rows2"], 0]
         return [self.ra.addr["rows2"], self.ra.pbases[q]] + self._ra_pargs(q)
 
+    def engine_args(self):
+        """What the engine needs to put the partial logits in place (se_engine3 pieces(rtr=)): the router cores' NoC,
+        their HOLD, their counter."""
+        virt = self.mesh.worker_core_from_logical_core
+        return dict(cores=[virt(c) for c in self.cores], hold=self.base + self.off["hold"], ctr=self.arr[1])
+
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
+        if self.on_engine:
+            return
         lo, hi = self.cores[0], self.cores[-1]
         assert lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores), "the router cores must be one column rectangle"
         rect = ttnn.CoreRangeSet([ttnn.CoreRange(lo, hi)])
@@ -778,6 +807,8 @@ class RouterStream:
         cb(BEST, "best", 4096, ttnn.float32, 4096)
         cb(FINC, "finc", 16 * 8, ttnn.bfloat16, 16)
         cb(PSYNC, "psync", 16 * 2, ttnn.bfloat16, 16)
+        if self.on_engine:
+            cb(12, "rdy", 16 * 2, ttnn.bfloat16, 16)
         n_rt, c_rt, b_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         tail = [
             b0 + off["words"],
@@ -836,8 +867,10 @@ class RouterStream:
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+        eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
         self.ncrisc = ttnn.KernelDescriptor(
-            kernel_source=self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
+            kernel_source=eng
+            + self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
             + _NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
             source_type=st,
             core_ranges=self.crs,
@@ -863,7 +896,7 @@ class RouterStream:
         kernels = [
             self.ncrisc,
             ttnn.KernelDescriptor(
-                kernel_source=_COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + rt_c, 1),
+                kernel_source=eng + _COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + rt_c, 1),
                 source_type=st,
                 core_ranges=self.crs,
                 compile_time_args=ct,

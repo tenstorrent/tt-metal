@@ -702,3 +702,21 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Galaxy floors in tests/galaxy_projection.py (ring link loads per direction, HiFi2 compute at peak, the routing
   chain's per-step minimums): GLM 91 us (links), K3 170 (links ~ compute 166). Projected / floor: GLM ~3.3x (chain),
   K3 2.74x with logits first on the ring.
+
+### The router's matmul on the engine's cores at the start (RouterSpec(on_engine=True); built, default off)
+- se_engine3 SE_RTR: before gate / up, every engine core computes its expert tiles (ETC = ceil(ET / GX), the same on
+  every core) x its MT rows over the chip's K slice at HiFi3 (matmul's LLK calls with the fidelity fixed); x rows by
+  the row's first core (DRAM -> row multicast), W_r^T expert tiles by the column's first core (DRAM -> column
+  multicast), in K chunks of <= 8 tiles with acks (one buffer each: fits K3's arena, in the tail past the words);
+  the fp32 partials written into the router cores' HOLD with a count (write barrier, then the increment); the router
+  cores skip their matmul (RT_ENG: wait the count). Routing / plans / route words / dispatch rows bit-exact; mock
+  Galaxy builds.
+- Timing: the phase takes 18 us (GLM) / 44 us (K3) on the engine - gate / up starts that much later - and the router
+  cores have the partials at ~42-47 / ~75-78 us (the writes into the mover column: 0.7 / 1.1 MB a chip, the slowest
+  engine cores ~20 us after the median), vs the router cores' own matmul ending at 57-65 / 138-151.
+  GLM: LoudBox 291-295 us (272-278 off), Galaxy-projected 265-273 (296-299 off) - the chain ~25 us earlier, the SE
+  path ~15 us later. K3: LoudBox 519-524 (509 off); its Galaxy chain needs a logits-first profile.
+- Picks: GLM unchanged (99.30%); K3 99.10% vs 99.45% with the router cores' matmul - not fidelity (HiFi4 99.14, LoFi
+  97.54), not the K chunking or accumulating in DEST vs the packer's L1 (both 99.10), not a race (write barrier
+  before the count). Ideal bf16-input routing (host, bf16 x and W, fp32 sums) agrees 99.65% (K3) / 99.69% (GLM)
+  with the fp32 host. Unexplained: default off until it is.

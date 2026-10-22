@@ -208,6 +208,7 @@ class RouterSpec:
     K: int
     route_scale: float = 1.0
     logits_first: bool | None = None
+    on_engine: bool = False  # (the logits' matmul on the engine's cores at the start, else on the router cores)
 
 
 @dataclass(frozen=True)
@@ -308,6 +309,11 @@ class HeadSE3:
                     rs=self.plan,
                     latent=latent // 32 // G if latent else None,
                     prep=bool(routing is not None and routing.prep and self.plan is not None),
+                    router=(
+                        dict(ET=router.E // 32, KTO=H // G // 32)
+                        if router is not None and router.on_engine and self.plan is not None
+                        else None
+                    ),
                 )
                 break
             except ValueError as err:
@@ -376,6 +382,7 @@ class HeadSE3:
                 route_scale=router.route_scale,
                 cores=free,
                 prio_first=self.logits_priority(router, latent),
+                on_engine=router.on_engine,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 16 * GX * GY,
             )
@@ -607,6 +614,11 @@ class HeadSE3:
                     ports=self.xg.port_cores(coord),
                     xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
+                    rtr=(
+                        dict(x=x, w=self.rw[0], **self.router.engine_args())
+                        if self.router is not None and self.router.on_engine
+                        else None
+                    ),
                     prep=(
                         dict(
                             xbuf=self.outputs["xbuf"],
