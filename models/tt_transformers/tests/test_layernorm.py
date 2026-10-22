@@ -11,7 +11,7 @@ import ttnn
 from models.common.layernorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -42,12 +42,17 @@ def torch_layernorm_ref(x, weight, eps):
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize(
+    "norm_types",
+    (LayerNormTypes.PREFILL, LayerNormTypes.RMSNORM),
+)
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_layernorm_inference(
     max_seq_len,
     batch_size,
     mode,
+    norm_types,
     mesh_device,
     reset_seeds,
     ensure_gc,
@@ -72,6 +77,7 @@ def test_layernorm_inference(
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
+        norm_type=norm_types,
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
