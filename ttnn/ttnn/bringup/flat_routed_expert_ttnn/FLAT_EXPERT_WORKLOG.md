@@ -1500,3 +1500,31 @@ Left (largest first): gate/up compute at mid / large M (2-row passes at ~71% of 
 tiles - full sync lost the pack overlap; an x ring deeper than one sub-block needs the row-pass x indexing fixed);
 the DRISC slot spread (~7% of a call, the slowest slot gates the drain); x read twice (~7% of DRAM bytes at M 160+);
 the remaining drain (h hand-off + the last down sub-block).
+
+### Gate/up K loop microbenchmark: where the "~71% of LoFi" goes (2026-10-22)
+`tests/microbench/test_gu_matmul_bench.py`: one Tensix core, x bfp8 [RT x K] and gate/up weights bfp4 [K x CT]
+resident in L1, LoFi, K 192 (GLM-5.3), 32 passes of one RT x CT block over all of K with stock `matmul_block` (one
+call per K tile, as se3_compute), timed on the device wall clock (UNPACK after the inputs are resident -> PACK after
+the last pack; counted as AICLK cycles, us at 1.35 GHz). Peak: 2 x 32^3 FLOP / 4096 FLOP per cycle = 16 cycles a tile
+product. "stream" = CB wait / pop of x and w per K-block (the reader re-pushes resident blocks: the flat op's
+handshakes without data movement); "act" = silu(gate) * up on the PACK thread's SFPU as act_dst. PCC vs torch on the
+quantized inputs: fp32 1.0000, bf16 DEST 0.9989 (0.9967 with act).
+| block | resident | resident + act | stream kblk 8 | stream + act |
+|---|---|---|---|---|
+| 2 x 2 fp32 (GLM gate/up pass) | 17.80 cyc (89.9%) | 18.04 (88.7%) | 19.75 (81.0%) | 20.00 (80.0%) |
+| 1 x 3 fp32 (K3 / M3 / DSv4.1 pass) | 17.36 (92.2%) | 17.69 (90.4%) | 19.56 (81.8%) | 19.87 (80.5%) |
+| 4 x 2 bf16 DEST (8-tile half) | 17.26 (92.7%) | 17.77 (90.0%) | 18.09 (88.4%) | 18.58 (86.1%) |
+K-block size, stream, fp32: 2 x 2 kblk 4 / 8 / 16 / 24: 21.33 / 19.75 / 18.86 / 18.49 (75.0 / 81.0 / 84.8 / 86.5%);
+1 x 3: 20.95 / 19.56 / 18.78 / 18.52. Shapes, resident fp32: 1 x 1 27.24 (58.7%), 1 x 4 17.27, 4 x 1 17.28 (92.6%).
+- The FPU loop itself is ~90-93%: stock matmul_block saturates at ~17.3 cycles a product once 3+ output tiles share
+  an operand (1 x 1 pays ~11 cycles a call). 2 x 2 is 0.5 cycle worse than 1 x 4.
+- The per-K-block CB handshake (wait + pop of x and w) costs ~55-65 cycles a block: at kblk 8 on a 2 x 2 pass that is
+  -9 points (90 -> 81%). Larger K-blocks (24: 86.5%) or larger blocks (4 x 2 bf16: 88.4%) amortize it.
+- The activation on the PACK thread stays hidden (+1-3%).
+- In the op the pass runs at ~22.5 cycles (71%): 17.8 loop + ~2 handshakes + ~2.7 around the loop (x / weight arrival
+  waits, row passes, h hand-off).
+- custom_mm-style loop (variant 4) not built: for full 32x32 tiles the stock LLK already has custom_mm's structure
+  (one operand held in SrcB, in1 streamed through SrcA with CLR_A per tile, a 16-MVMUL replay per tile); what is left is
+  folding the per-tile software step (dest base + MOP run) into one MOP over CT, bounded by the measured ~1.3 cycles a
+  product (<= ~7.5%). custom_mm's other tricks (split accumulation and dense packing in the empty rows of <= 8-row
+  tiles) do not apply to 32-row tiles. Not worth building into se3_compute ahead of the handshakes and the stalls.
