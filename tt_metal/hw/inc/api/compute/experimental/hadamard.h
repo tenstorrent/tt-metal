@@ -22,12 +22,15 @@
 //   h16_cb : single [16, 16] bfloat16 tile. H_16 fills the entire face.
 //            Routed to srcB face (0, 0).
 //
-//   in_cb  : bfloat16. 128 input values contiguous at the tile address,
-//            read as rows [0..8) of srcA face (0, 0). The tile must be a
-//            single face (e.g. [16, 16]) or have one-row faces (e.g.
-//            4x[1, 32] pages). The unpack path zeroes rows
-//            [8..16) itself (ZEROSRC over the full srcA span, see
-//            llk_unpack_hadamard.h), so callers need not pad them.
+//   in_cb  : bfloat16. The input is the first 128 datums at the tile
+//            address, in L1 order, read as rows [0..8) of srcA face (0, 0).
+//            The tile shape is not checked: e.g. face 0 rows [0..8) of a
+//            [16, 16] or [32, 32] tile, or 4x[1, 32] pages (row-major).
+//            Note that for faces of 2..4 rows (e.g. [4, 32]) the 128 datums
+//            are face-major, not the tile's logical row-major order.
+//            The unpack path zeroes rows [8..16) itself (ZEROSRC over the
+//            full srcA span, see llk_unpack_hadamard.h), so callers need
+//            not pad them.
 //            Each hadamard_h128_tile call reads 256 B from in_tile_index,
 //            which may span several pages (4 for bf16 [1, 32] pages). The
 //            caller must wait on and pop 256 B / page_size pages per call,
@@ -89,8 +92,7 @@ ALWI void hadamard_h128_init(const uint32_t in_cb_id, const uint32_t h16_cb_id, 
     // unpacker config is INDEPENDENT of the input CB's tile shape: srcA reads
     // the input data with h16's [16,16] config (a 4x[1,32] feed is read as 8
     // rows of 16), srcB reads h16. Both operands are bf16. in_cb_id is passed
-    // to the init only to check its tile layout and that its format matches
-    // h16's.
+    // to the init only to check that its format matches h16's.
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(h16_cb_id, h16_cb_id)));
     UNPACK((llk_unpack_hadamard_h128_init(h16_cb_id, in_cb_id, /*h16_tile_index=*/0)));
 

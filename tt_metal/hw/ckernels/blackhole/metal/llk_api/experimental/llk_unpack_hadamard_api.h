@@ -13,17 +13,15 @@
 // base with the H_16 tile's L1 address. Call once during init, after
 // llk_unpack_hw_configure. H_16 must stay resident at this address for
 // the program's lifetime. Operand order: operandA = h16, operandB = input.
-// Preconditions: h16 is a single bf16 face; the input has the same format
-// and is single-face or has one-row faces, so its datums are contiguous.
+// Preconditions: h16 is a single bf16 face; the input has the same format.
+// The input's tile shape is not checked: the unpack reads the first
+// HADAMARD_H128_INPUT_DATUMS datums at the input address in L1 order.
 inline void llk_unpack_hadamard_h128_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t h16_tile_index) {
     SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);  // h16
     const std::uint32_t operandB_id = get_operand_id(operandB);  // input
     LLK_ASSERT(get_operand_num_faces(operandA_id) == 1, "Hadamard H128 unpack requires single-face h16 operand");
-    LLK_ASSERT(
-        get_operand_num_faces(operandB_id) == 1 || get_operand_face_r_dim(operandB_id) == 1,
-        "Hadamard H128 unpack requires a single-face or one-row-face input operand");
     LLK_ASSERT(
         get_operand_src_format(operandA_id) == (std::uint32_t)DataFormat::Float16_b,
         "Hadamard H128 math is bf16-only; h16 must be bfloat16");

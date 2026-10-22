@@ -5,6 +5,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -166,18 +167,24 @@ TEST_F(LLKBlackholeSingleCardFixture, HadamardShortInitPreservesDestState) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, HadamardMultiFaceInput) {
-    for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi4}) {
-        for (const bool normalize : {false, true}) {
-            SCOPED_TRACE(
-                ::testing::Message() << "fidelity=" << static_cast<int>(fidelity) << ", normalize=" << normalize);
-            run_hadamard_reconfiguration(
-                *devices_.at(0),
-                fidelity,
-                normalize,
-                /*fp32_dest=*/false,
-                /*full_sync=*/false,
-                Tile({1, 32}),
-                /*input_pages=*/4);
+    // 4x[1, 32] pages hold the vector row-major; a [32, 32] tile holds it in
+    // face 0 rows 0..7, with the rest of the tile filled with non-zero data.
+    const std::array<std::pair<Tile, std::uint32_t>, 2> inputs{{{Tile({1, 32}), 4}, {Tile({32, 32}), 1}}};
+    for (const auto& [input_tile, input_pages] : inputs) {
+        for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi4}) {
+            for (const bool normalize : {false, true}) {
+                SCOPED_TRACE(
+                    ::testing::Message() << "input_tile=" << input_tile.get_height() << "x" << input_tile.get_width()
+                                         << ", fidelity=" << static_cast<int>(fidelity) << ", normalize=" << normalize);
+                run_hadamard_reconfiguration(
+                    *devices_.at(0),
+                    fidelity,
+                    normalize,
+                    /*fp32_dest=*/false,
+                    /*full_sync=*/false,
+                    input_tile,
+                    input_pages);
+            }
         }
     }
 }
