@@ -190,9 +190,9 @@ def _bf16_patterns(width):
     return bits.to(torch.int16).view(torch.bfloat16).reshape(tile_rows * TILE, width * TILE)
 
 
-def _bfp8_raw_tiles(width):
+def _bfp8_raw_tiles(width, min_tile_rows=1):
     # Raw Bfp8_b tiles: 64 exponent bytes, then 1024 sign and mantissa bytes; 64 tiles cover every exponent with every byte.
-    tile_rows = -(-64 // width)
+    tile_rows = max(-(-64 // width), min_tile_rows)
     num_tiles = tile_rows * width
     face_row = torch.arange(num_tiles * 64) % 4096
     exponents = (face_row // 16).to(torch.uint8).reshape(num_tiles, 64)
@@ -200,9 +200,9 @@ def _bfp8_raw_tiles(width):
     return torch.cat([exponents, datums], dim=1), tile_rows * TILE
 
 
-def _bfp4_raw_tiles(width):
+def _bfp4_raw_tiles(width, min_tile_rows=1):
     # Raw Bfp4_b tiles: 64 shared exponent bytes, then 512 bytes of two 4-bit codes; 4 tiles cover every exponent with every code.
-    tile_rows = -(-4 // width)
+    tile_rows = max(-(-4 // width), min_tile_rows)
     num_tiles = tile_rows * width
     face_row = torch.arange(num_tiles * 64)
     exponents = (face_row % 256).to(torch.uint8).reshape(num_tiles, 64)
@@ -219,15 +219,21 @@ def test_fast_and_pack_untilize_match_bf16(device, width):
     _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width)
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 24])
-def test_fast_and_pack_untilize_match_bfp8(device, width):
-    raw, num_rows = _bfp8_raw_tiles(width)
+# Rests of 1 to 8 tiles (17, 18 to 23, 24, 33, 34 to 39, 40) go as a chunk, 9 to 15 as a pass unit; 32 and 256 rows.
+BFP_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, *range(17, 24), 24, 25, 31, 32, 33, *range(34, 40), 40]
+
+
+@pytest.mark.parametrize("tile_rows", [1, 8])
+@pytest.mark.parametrize("width", BFP_WIDTHS)
+def test_fast_and_pack_untilize_match_bfp8(device, width, tile_rows):
+    raw, num_rows = _bfp8_raw_tiles(width, tile_rows)
     tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     _compare(device, tt_in, ttnn.bfloat8_b, num_rows, width)
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 24])
-def test_fast_and_pack_untilize_match_bfp4(device, width):
-    raw, num_rows = _bfp4_raw_tiles(width)
+@pytest.mark.parametrize("tile_rows", [1, 8])
+@pytest.mark.parametrize("width", BFP_WIDTHS)
+def test_fast_and_pack_untilize_match_bfp4(device, width, tile_rows):
+    raw, num_rows = _bfp4_raw_tiles(width, tile_rows)
     tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     _compare(device, tt_in, ttnn.bfloat4_b, num_rows, width)

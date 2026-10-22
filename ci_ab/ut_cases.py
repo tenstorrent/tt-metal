@@ -198,6 +198,46 @@ for _dt in ("bfp8",):
                 reg(_n, lambda dev, _n=_n, _dt=_dt, _hd=_hd, _paged=_paged, _heads=_heads: _paged_fused(dev, _n, _dt, _hd, _paged, _heads))
 
 
+# Rest chunks of 2 to 7 tiles and chunk boundaries of the block-float face-pair path (ct 17..23, 25, 31, 33, 34..39, 40, 41), heights 32 and 256
+RC_CT = [17, 18, 19, 20, 21, 22, 23, 25, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+
+
+def check_native(dev, case, x, dt, mc=None):
+    t = to_tt(dev, x, dt, mc)
+    ref = ttnn.to_torch(t)
+    u = ttnn._ttnn.operations.data_movement.untilize_force_native(t)
+    o = ttnn.to_torch(u)
+    emit(case, 0, "PASS" if torch.equal(o.float(), ref.float()) else "FAIL", o)
+
+
+for _dt, _cts in (("bfp8", RC_CT), ("bf16", (18, 21, 23, 34, 39))):
+    for _ct in _cts:
+        for _h in (32, 256):
+            def _f(dev, _dt=_dt, _ct=_ct, _h=_h):
+                x = wide((1, 1, _h, _ct * TILE), 2000 + _ct, DT[_dt][1])
+                check_native(dev, f"rc_il_{_dt}_ct{_ct}_h{_h}", x, _dt)
+            reg(f"rc_il_{_dt}_ct{_ct}_h{_h}", _f)
+
+for _ct in RC_CT:
+    for _h in (32, 256):
+        if _h == 256 and _ct > 25:
+            continue
+        W = _ct * TILE
+
+        def _hs(dev, _ct=_ct, _h=_h, W=W):
+            x = wide((1, 1, 2 * _h, W), 3000 + _ct, DT["bfp8"][1])
+            mc = sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, grid(2, 1), (_h, W))
+            check_untilize(dev, f"rc_sh_h_bfp8_ct{_ct}_h{_h}", x, "bfp8", mc)
+        reg(f"rc_sh_h_bfp8_ct{_ct}_h{_h}", _hs)
+
+        if _ct in (18, 19, 21, 23, 34, 36, 38):
+            def _ws(dev, _ct=_ct, _h=_h, W=W):
+                x = wide((1, 1, _h, 2 * W), 4000 + _ct, DT["bfp8"][1])
+                mc = sharded_mc(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid(2, 1), (_h, W))
+                check_untilize(dev, f"rc_sh_w_bfp8_ct{_ct}_h{_h}", x, "bfp8", mc)
+            reg(f"rc_sh_w_bfp8_ct{_ct}_h{_h}", _ws)
+
+
 def run_all(dev, names=None):
     ok = 0
     for n, f in CASES.items():
