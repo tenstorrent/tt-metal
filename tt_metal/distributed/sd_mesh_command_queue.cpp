@@ -174,9 +174,6 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
-    // Wait for idle so the programs emitting this data are complete; under emule the drain is what does it.
-    drain_emule_run(mesh_device_, get_target_device_type());
-    wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view =
         device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
@@ -187,6 +184,15 @@ void SDMeshCommandQueue::read_shard_from_device(
     }
 
     tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+}
+
+void SDMeshCommandQueue::prepare_shard_reads() {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // Wait for idle so the programs emitting this data are complete; under emule the drain is what does it.
+    drain_emule_run(mesh_device_, get_target_device_type());
+    wait_for_cores_idle();
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(

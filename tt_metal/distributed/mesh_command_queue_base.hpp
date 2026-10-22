@@ -61,6 +61,8 @@ protected:
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void invalidate_prefetcher_cache_after_pinned_write() {}
+    // Runs on the calling thread before read_shard_from_device calls, which may run on dispatch_thread_pool_ workers.
+    virtual void prepare_shard_reads() {}
 
     tt::TargetDevice get_target_device_type() const;
 
