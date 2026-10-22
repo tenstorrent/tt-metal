@@ -119,6 +119,37 @@ void validate_matmul_in0_column_window(
         a_shape[-1]);
 }
 
+// Output Column Window: output_column_offset writes the N output columns into a tile-aligned column window of a wider
+// interleaved output the caller provides, with the computed output's rows; only the 2D multicast program config
+// supports it.
+void validate_matmul_output_column_window(
+    const MatmulParams& attributes, const Tensor& output, const ttnn::Shape& computed_shape) {
+    const uint64_t offset = *attributes.output_column_offset;
+    const auto& shape = output.logical_shape();
+    const uint32_t tile_w = output.tensor_spec().tile().get_width();
+    TT_FATAL(
+        attributes.program_config.has_value() &&
+            std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                *attributes.program_config),
+        "output_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
+    TT_FATAL(
+        output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "output_column_offset requires an interleaved output, got {}",
+        output.memory_config().memory_layout());
+    TT_FATAL(!attributes.untilize_out, "output_column_offset does not support untilize_out");
+    TT_FATAL(
+        shape.volume() / shape[-1] == computed_shape.volume() / computed_shape[-1],
+        "output_column_offset: the output {} must have the computed output's rows {}",
+        shape,
+        computed_shape);
+    TT_FATAL(
+        offset % tile_w == 0 && computed_shape[-1] % tile_w == 0 && offset + computed_shape[-1] <= shape[-1],
+        "output_column_offset: the tile-aligned window [{}, {}) must fit the output's {} columns",
+        offset,
+        offset + computed_shape[-1],
+        shape[-1]);
+}
+
 // Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
 // and B's width are checked; the other two dims (A's width, B's height) are the K axis,
 // already forced to 32 by the Operand Basics check above, so they can't be < 4.
@@ -210,17 +241,21 @@ void validate_matmul_optional_tensors(
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         const auto computed_shape = operations::matmul::utilities::compute_matmul_output_shape(
             args.input_tensors.at(0), args.input_tensors.at(1), attributes.transpose_a, attributes.transpose_b);
-        const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
-        const bool same_rows =
-            optional_output_tensor_shape[-2] == computed_shape[-2] ||
-            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0);
-        TT_FATAL(
-            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows &&
-                optional_output_tensor_shape.volume() == computed_shape.volume(),
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the volume and the last dimension must "
-            "match, and leading dimensions may only be folded into whole tile rows",
-            optional_output_tensor_shape,
-            computed_shape);
+        if (attributes.output_column_offset.has_value()) {
+            validate_matmul_output_column_window(attributes, *optional_output_tensor_c, computed_shape);
+        } else {
+            const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
+            const bool same_rows =
+                optional_output_tensor_shape[-2] == computed_shape[-2] ||
+                (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0);
+            TT_FATAL(
+                optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows &&
+                    optional_output_tensor_shape.volume() == computed_shape.volume(),
+                "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the volume and the last dimension "
+                "must match, and leading dimensions may only be folded into whole tile rows",
+                optional_output_tensor_shape,
+                computed_shape);
+        }
         TT_FATAL(
             optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
@@ -3305,7 +3340,8 @@ MatmulParams create_matmul_attributes(
         parameters.global_cb,
         parameters.sub_device_id,
         parameters.prefetcher_pipes,
-        parameters.in0_column_offset};
+        parameters.in0_column_offset,
+        parameters.output_column_offset};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(

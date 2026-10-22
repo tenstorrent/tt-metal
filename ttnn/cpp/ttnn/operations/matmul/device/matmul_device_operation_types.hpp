@@ -39,6 +39,10 @@ struct MatmulParams {
     // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
     // Set through ttnn::linear; only the 2D multicast program config (its Metal 2.0 spec factory) supports it.
     std::optional<uint32_t> in0_column_offset = std::nullopt;
+    // Write the N output columns into this tile-aligned column of a wider interleaved output tensor the caller
+    // provides, leaving its other columns as they are. Set through ttnn::linear; only the 2D multicast program config
+    // (its Metal 2.0 spec factory and the CCL-fusion descriptor builder) supports it.
+    std::optional<uint32_t> output_column_offset = std::nullopt;
 };
 
 struct MatmulInputs {

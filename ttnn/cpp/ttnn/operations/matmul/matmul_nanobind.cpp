@@ -922,6 +922,7 @@ void py_module(nb::module_& mod) {
             global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
             prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
             in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig``, an interleaved (DRAM or L1) input_tensor_a and no ``transpose_a``. Defaults to `None`.
+            output_column_offset (int, optional): write the N output columns starting at this tile-aligned column of a wider interleaved optional_output_tensor, whose other columns are left as they are, instead of filling an output of exactly N columns. The output keeps the computed output's rows and needs at least ``output_column_offset + N`` columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig`` and an ``optional_output_tensor``. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -945,7 +946,8 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none(),
             nb::arg("prefetcher_pipes") = PrefetcherPipeList{},
-            nb::arg("in0_column_offset") = nb::none()));
+            nb::arg("in0_column_offset") = nb::none(),
+            nb::arg("output_column_offset") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,

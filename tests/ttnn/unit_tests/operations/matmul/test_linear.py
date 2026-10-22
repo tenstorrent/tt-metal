@@ -1773,3 +1773,159 @@ def test_linear_in0_column_offset_rejects_invalid_window(
     config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
     with expect_error(RuntimeError, message):
         ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
+
+
+@pytest.mark.parametrize("out_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("offset", [0, 96, 256], ids=["offset0", "offset96", "window-at-end"])
+def test_linear_output_column_offset(device, offset, out_memory_config):
+    """A linear written into a column window of a wider output must match the plain linear bit for bit and leave the
+    output's other columns as they were."""
+    M, K, N, width = 256, 256, 256, 512
+    torch.manual_seed(0)
+    activation = torch.randn(1, M, K).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    bias = torch.randn(1, N).bfloat16()
+    background = torch.full((1, M, width), 7.0).bfloat16()
+    to_device = lambda t, memory_config=ttnn.DRAM_MEMORY_CONFIG: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_activation, tt_weight, tt_bias = to_device(activation), to_device(weight), to_device(bias)
+    tt_wide = to_device(background, out_memory_config)
+    # Four K blocks, so the window is written from the last block's reload of the partials.
+    config = _in0_column_window_config(2, 2, 2, ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID))
+    expected = ttnn.to_torch(ttnn.linear(tt_activation, tt_weight, bias=tt_bias, program_config=config))
+    actual = ttnn.linear(
+        tt_activation,
+        tt_weight,
+        bias=tt_bias,
+        program_config=config,
+        memory_config=out_memory_config,
+        optional_output_tensor=tt_wide,
+        output_column_offset=offset,
+    )
+    actual = ttnn.to_torch(actual)
+    assert tuple(actual.shape) == (1, M, width)
+    assert torch.equal(actual[..., offset : offset + N], expected)
+    outside = torch.cat([actual[..., :offset], actual[..., offset + N :]], dim=-1)
+    assert torch.equal(outside, torch.full_like(outside, 7.0))
+
+
+def test_linear_output_column_offset_program_cache(device):
+    """The offset is part of the program: a second offset must not reuse the first offset's program."""
+    M, K, N, width = 128, 64, 256, 512
+    torch.manual_seed(0)
+    activation = torch.randn(1, M, K).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_activation, tt_weight = to_device(activation), to_device(weight)
+    config = _in0_column_window_config(1, 2, 2)
+    expected = activation.float() @ weight.float()
+    for offset in (0, 256, 0):
+        tt_wide = to_device(torch.zeros(1, M, width).bfloat16())
+        actual = ttnn.linear(
+            tt_activation, tt_weight, program_config=config, optional_output_tensor=tt_wide, output_column_offset=offset
+        )
+        assert_with_pcc(expected, ttnn.to_torch(actual)[..., offset : offset + N].float(), 0.999)
+
+
+@pytest.mark.parametrize(
+    "offset,program_config,with_output,message",
+    [
+        (48, "mcast2d", True, "tile-aligned window"),
+        (288, "mcast2d", True, "tile-aligned window"),
+        (0, "none", True, "requires a MatmulMultiCoreReuseMultiCastProgramConfig"),
+        (0, "mcast2d", False, "requires an optional_output_tensor"),
+    ],
+    ids=["unaligned", "window-past-end", "no-program-config", "no-output"],
+)
+def test_linear_output_column_offset_rejects_invalid_window(
+    device, expect_error, offset, program_config, with_output, message
+):
+    M, K, N, width = 64, 128, 256, 512
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    activation = to_device(torch.randn(1, M, K).bfloat16())
+    weight = to_device((torch.randn(K, N) * 0.1).bfloat16())
+    output = to_device(torch.zeros(1, M, width).bfloat16()) if with_output else None
+    config = _in0_column_window_config(1, 2, 4) if program_config == "mcast2d" else None
+    with expect_error(RuntimeError, message):
+        ttnn.linear(
+            activation, weight, program_config=config, optional_output_tensor=output, output_column_offset=offset
+        )
+
+
+@pytest.mark.parametrize(
+    "shape,fuse_batch,transpose_mcast",
+    [((2, 1, 128), False, False), ((1, 1, 256), True, True)],
+    ids=["batched", "transpose-mcast"],
+)
+def test_linear_output_column_offset_layouts(device, shape, fuse_batch, transpose_mcast):
+    """Batched outputs (the output's batch stride) and a transposed multicast grid write the same window."""
+    K, N, width, offset = 128, 256, 512, 128
+    batch, channels, M = shape
+    torch.manual_seed(0)
+    activation = torch.randn(batch, channels, M, K).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_activation, tt_weight = to_device(activation), to_device(weight)
+    tt_wide = to_device(torch.full((batch, channels, M, width), 7.0).bfloat16())
+    # The 4x4 grid splits A's row tiles (per batch unless fused) and B's column tiles four ways.
+    row_tiles = (batch * channels * M if fuse_batch else M) // 32
+    config = _in0_column_window_config(
+        row_tiles // 4, N // 32 // 4, 2, fuse_batch=fuse_batch, transpose_mcast=transpose_mcast
+    )
+    expected = ttnn.to_torch(ttnn.linear(tt_activation, tt_weight, program_config=config))
+    actual = ttnn.to_torch(
+        ttnn.linear(
+            tt_activation, tt_weight, program_config=config, optional_output_tensor=tt_wide, output_column_offset=offset
+        )
+    )
+    assert torch.equal(actual[..., offset : offset + N], expected)
+    outside = torch.cat([actual[..., :offset], actual[..., offset + N :]], dim=-1)
+    assert torch.equal(outside, torch.full_like(outside, 7.0))
+
+
+@pytest.mark.parametrize("program", ["mcast2d", "mcast2d-blocks", "mcast1d"])
+def test_linear_packer_l1_acc_partials(device, program):
+    """Packer L1 accumulation over several K blocks, with the partials packed in place: one or several output blocks
+    per core, multi-tile subblocks and the 1D multicast program."""
+    M, K, N = 256, 512, 512
+    torch.manual_seed(0)
+    activation = torch.randn(1, M, K).bfloat16()
+    weight = (torch.randn(K, N) * 0.05).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    if program == "mcast1d":
+        # 16 cores of 8 x 1 tiles; K in four 4-tile blocks.
+        config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(4, 4),
+            in0_block_w=4,
+            out_subblock_h=4,
+            out_subblock_w=1,
+            per_core_M=8,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        # 4x4 cores of 2 x 4 tiles, as one 2 x 4 block or four 1 x 2 blocks; K in four 4-tile blocks.
+        blocks = program == "mcast2d-blocks"
+        config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            in0_block_w=4,
+            out_subblock_h=1 if blocks else 2,
+            out_subblock_w=2,
+            out_block_h=1 if blocks else 2,
+            out_block_w=2 if blocks else 4,
+            per_core_M=2,
+            per_core_N=4,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    actual = ttnn.linear(
+        to_device(activation), to_device(weight), program_config=config, compute_kernel_config=compute_config
+    )
+    assert_with_pcc(activation.float() @ weight.float(), ttnn.to_torch(actual).float(), 0.9999)
