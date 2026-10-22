@@ -156,8 +156,9 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
         // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
         // would never tell the consumer those pages are there -- and that consumer is the only source of
-        // the credits the producer is now waiting on. Deadlock, and exactly the one CMD_FORWARD_END used
-        // to rule out when a chunk's last page forced a bump.
+        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
+        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
+        // announce is what rules it out instead.
         //
         // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
@@ -220,7 +221,7 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t* fwd_since_bump
     if (cmd == ::cmbf2d::CMD_END) {
         return cmd;
     }
-    const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD || cmd == ::cmbf2d::CMD_FORWARD_END);
+    const bool forwarding = (cmd == ::cmbf2d::CMD_FORWARD);
     const uint32_t payload_bytes = forwarding ? (ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES) : ct.token_size_bytes;
 
     const uint32_t src = ct.ring_addr + slot * ct.slot_stride();
@@ -247,9 +248,9 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t* fwd_since_bump
 
     if (forwarding) {
         // Per channel, because the downstream reader waits on each channel separately -- that is what
-        // lets it serve a channel it can drain while another is blocked. No CMD_FORWARD_END term: with
-        // the region split by movement class a channel has no chunk boundaries to close, so the only
-        // reason to bump early is the batch count.
+        // lets it serve a channel it can drain while another is blocked. No chunk-end term: with the region
+        // split by movement class a channel has no chunk boundaries to close, so the only reason to bump
+        // early is the batch count.
         const uint32_t vc = (uint32_t)metadata->vc;
         fwd_since_bump[vc]++;
         if (fwd_since_bump[vc] >= FWD_BUMP_EVERY) {

@@ -126,7 +126,7 @@ struct L1Layout {
     // An untilizer core's layout, which starts over at the allocator base: it shares no memory with the
     // cores above, and the base is where the framework puts its first circular buffer.
     // Zero where there are no untilizer cores, which is where there is nothing to untilize.
-    uint32_t unt_ring = 0;     // the batch ring, which IS cb_out
+    uint32_t unt_ring = 0;  // the batch ring, which IS cb_out
     uint32_t unt_control = 0;
     // Overlapped only: the collector's per-step count array, at the base of a core that holds nothing else.
     uint32_t collector_counts = 0;  // its own copy of the control tables, past every circular buffer
@@ -338,9 +338,9 @@ inline uint32_t packets_per_token(uint32_t token_size_bytes) {
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
 constexpr uint64_t CMD_FORWARD = 2;
-// A forward that also ends a chunk. The sender bumps the downstream reader's arrival counter right after
-// sending it, because that reader is waiting on exactly this chunk's pages and the residual of a partial
-// bump batch would otherwise sit uncounted until end of stream — which, on a ring, is a deadlock.
-constexpr uint64_t CMD_FORWARD_END = 3;
+// There is no chunk-ending forward. Splitting the region by movement class left a channel with no chunk
+// boundaries to close -- every page of it shares one destination -- so a forward is just a forward, and the
+// residual a chunk end used to flush is handled by announcing before going idle instead. See the wait in
+// sender_combine_fabric2d.cpp. The dispatch op still has its own dspf2d::CMD_FORWARD_END; this is not it.
 
 }  // namespace cmbf2d
