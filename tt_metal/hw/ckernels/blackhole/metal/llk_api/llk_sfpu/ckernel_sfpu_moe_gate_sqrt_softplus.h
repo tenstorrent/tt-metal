@@ -37,15 +37,15 @@ constexpr float MOE_GATE_LOG2E = 1.4426950408889634f;
 
 constexpr float MOE_GATE_EXP2N_C1 = -0.693123996257782f;
 constexpr float MOE_GATE_EXP2N_C2 = 0.24024111032485962f;
-constexpr float MOE_GATE_EXP2N_C3 = -0.055908203125f;  // fp16-exact
+constexpr float MOE_GATE_EXP2N_C3 = -0.055908203125f;   // fp16-exact
 constexpr float MOE_GATE_EXP2N_C4 = 0.00958251953125f;  // fp16-exact
 
 constexpr float MOE_GATE_LOG1P_C1 = -0.4999009072780609f;
 constexpr float MOE_GATE_LOG1P_C2 = 0.33141666650772095f;
-constexpr float MOE_GATE_LOG1P_C3 = -0.2362060546875f;     // fp16-exact
-constexpr float MOE_GATE_LOG1P_C4 = 0.151123046875f;       // fp16-exact
-constexpr float MOE_GATE_LOG1P_C5 = -0.06787109375f;       // fp16-exact
-constexpr float MOE_GATE_LOG1P_C6 = 0.01458740234375f;     // fp16-exact
+constexpr float MOE_GATE_LOG1P_C3 = -0.2362060546875f;  // fp16-exact
+constexpr float MOE_GATE_LOG1P_C4 = 0.151123046875f;    // fp16-exact
+constexpr float MOE_GATE_LOG1P_C5 = -0.06787109375f;    // fp16-exact
+constexpr float MOE_GATE_LOG1P_C6 = 0.01458740234375f;  // fp16-exact
 
 sfpi_inline sfpi::vFloat _moe_gate_softplus_(const sfpi::vFloat x) {
     sfpi::vFloat w = sfpi::setsgn(x, 0) * MOE_GATE_LOG2E;
@@ -77,7 +77,7 @@ sfpi_inline sfpi::vFloat _moe_gate_softplus_(const sfpi::vFloat x) {
     return g * e + sfpi::max(x, 0.0f);
 }
 
-inline void moe_gate_sqrt_softplus_init() { sqrt_init<false>(); }
+inline void moe_gate_sqrt_softplus_init() { sqrt_init<false /*APPROXIMATION_MODE*/>(); }
 
 template <int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_moe_gate_sqrt_softplus_add_bias(
@@ -87,7 +87,8 @@ inline void calculate_moe_gate_sqrt_softplus_add_bias(
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[dst_index_x * dst_tile_size_sfpi];
-        sfpi::vFloat score = _calculate_sqrt_body_<false, false, false>(_moe_gate_softplus_(x));
+        sfpi::vFloat score = _calculate_sqrt_body_<false /*APPROXIMATE*/, false /*RECIPROCAL*/, false /*FAST_APPROX*/>(
+            _moe_gate_softplus_(x));
         sfpi::dst_reg[dst_index_x * dst_tile_size_sfpi] = score;
         sfpi::vFloat bias = sfpi::dst_reg[dst_index_bias * dst_tile_size_sfpi];
         sfpi::dst_reg[dst_index_bias * dst_tile_size_sfpi] = score + bias;
