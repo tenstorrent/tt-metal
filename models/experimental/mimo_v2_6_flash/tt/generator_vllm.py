@@ -70,7 +70,8 @@ DEFAULT_KV_GB_PER_CHIP = 6.0
 # Blocks vLLM's sliding-window groups can hold per request while a prefill chunk of up to 4096 tokens is in flight
 # (SlidingWindowSpec.max_admission_blocks_per_request), in tokens: 5 SWA groups x (127 + 4096 tokens + 1 block).
 SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
-# MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, and decode's host time every 128 steps.
+# MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, decode's host time every 128 steps, and every 128
+# speculative steps where a step's time goes (verify, MTP draft, and the host gap between them; _spec_timing).
 TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
 # MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
@@ -605,6 +606,7 @@ class MiMoV2ForCausalLM:
         column j (unused columns 0)."""
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
+        t0 = time.perf_counter()
         if spec_mode != "argmax_ids":
             raise ValueError(f"MiMo verifies greedy argmax ids; got spec_mode {spec_mode!r}")
         if any(model.verify_trace is None for model in self.models):
@@ -630,6 +632,7 @@ class MiMoV2ForCausalLM:
             self.spec_sources[lane] = draft_source(passes)
             # The decode trace's resident tokens and positions are stale now: the plugin reloads after a verify.
             self.decode_positions[lane] = None
+        waited = 0.0
         for k in range(max(map(len, lanes))):
             pending = [
                 (lane, p[k], self._enqueue_verify_pass(lane, p[k], tables))
@@ -637,9 +640,13 @@ class MiMoV2ForCausalLM:
                 if k < len(p)
             ]
             for lane, vp, handle in pending:
+                t = time.perf_counter()
                 out = self.models[lane].read_next_tokens(handle)
+                waited += time.perf_counter() - t
                 for s, row, col in vp.answers:
                     argmax[row, col] = int(out[s])
+        if TIMING:
+            self._spec_timing("verify", t0, waited, sum(map(len, lanes)))
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=argmax)
 
     def _enqueue_verify_pass(self, lane, vp, tables):
@@ -658,6 +665,7 @@ class MiMoV2ForCausalLM:
         (reference.spec_decode.plan_mtp), from that step's resident final hidden; every other row offers none."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        t0 = time.perf_counter()
         committed_tokens = torch.as_tensor(committed_tokens)
         committed_positions = torch.as_tensor(committed_positions)
         counts = torch.as_tensor(accepted_counts).reshape(-1)
@@ -679,11 +687,72 @@ class MiMoV2ForCausalLM:
                 slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
             mtp.enqueue(slot_tokens, plan)
             jobs.append((lane, r, plan.anchor))
+        waited = 0.0
         for lane, r, anchor in jobs:
+            t = time.perf_counter()
             drafts[r] = torch.tensor(self.models[lane].mtp.read_drafts(anchor)[:num_drafts], dtype=torch.int32)
+            waited += time.perf_counter() - t
             valid[r] = num_drafts
         self.spec_sources = [None] * self.dp
+        if TIMING:
+            self._spec_timing("propose", t0, waited, len(jobs))
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
+
+    def _spec_timing(self, kind, t0, waited, count):
+        """Every 128 verifies: per verify step, the mean host time and the time blocked reading back (the device's
+        share) of the verify and of the MTP draft, the time from a verify's return to the draft (the plugin's accept
+        walk), and the gap from a draft's return to the next verify (the plugin's commit and vLLM's scheduling and
+        output). ``count``: the verify's passes or the lanes drafted."""
+        now = time.perf_counter()
+        stats = getattr(self, "_spec_timing_stats", None) or {
+            "verifies": 0,
+            "passes": 0,
+            "drafts": 0,
+            "verify_host": 0.0,
+            "verify_wait": 0.0,
+            "propose_host": 0.0,
+            "propose_wait": 0.0,
+            "accept": 0.0,
+            "accepts": 0,
+            "gap": 0.0,
+            "gaps": 0,
+            "verified": None,
+            "last": None,
+            "since": t0,
+        }
+        if kind == "verify":
+            if stats["last"] is not None:
+                stats["gap"] += t0 - stats["last"]
+                stats["gaps"] += 1
+            stats["verifies"] += 1
+            stats["passes"] += count
+            stats["verify_host"] += now - t0 - waited
+            stats["verify_wait"] += waited
+            stats["verified"] = now
+        else:
+            if stats["verified"] is not None:
+                stats["accept"] += t0 - stats["verified"]
+                stats["accepts"] += 1
+                stats["verified"] = None
+            stats["drafts"] += count
+            stats["propose_host"] += now - t0 - waited
+            stats["propose_wait"] += waited
+            stats["last"] = now
+        if kind == "propose" and stats["verifies"] >= 128:
+            n = stats["verifies"]
+
+            def ms(key, per=n):
+                return f"{1e3 * stats[key] / max(per, 1):.2f}"
+
+            logger.info(
+                f"MiMo vLLM timing: spec {n} verifies in {1e3 * (now - stats['since']):.0f} ms "
+                f"({1e3 * (now - stats['since']) / n:.2f} ms/step), {stats['passes']} passes, {stats['drafts']} lane "
+                f"drafts; per step: verify host {ms('verify_host')} + wait {ms('verify_wait')} ms, accept "
+                f"{ms('accept', stats['accepts'])} ms, draft host {ms('propose_host')} + wait {ms('propose_wait')} ms, "
+                f"gap {ms('gap', stats['gaps'])} ms"
+            )
+            stats = None
+        self._spec_timing_stats = stats
 
     @staticmethod
     def _check_greedy(sampling_params, first, slots):
