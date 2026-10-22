@@ -508,7 +508,7 @@ def _sparse_attention_host_fn(mesh, module, cfg, layer):
         caches = ctx.extra.get("compress_cache")
         own_c = caches is None
         if own_c:
-            ckv = TtServedRows(mesh, module.tables, max_seq, hd, r, dedup=True)
+            ckv = TtServedRows(mesh, module.tables, max_seq, hd, r, dedup=True, attn_table=True)  # STATIC_TABLES (P.21)
             if own_kv:
                 rows = [prefix["compress_kv"][: start // r].float()] if start else []
                 rows.append(compressed[:, :hd].float())

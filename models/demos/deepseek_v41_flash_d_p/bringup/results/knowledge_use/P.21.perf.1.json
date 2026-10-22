@@ -1,0 +1,58 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "K-52",
+   "how": "ran the model-sized trace test (tt/perf_trace.py) and the ladder with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-99",
+   "how": "the chunk is host-bound: measured the trace ceiling on the layer stack with begin_chunk (engram host input) timed apart",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-17",
+   "how": "the table's window region takes the natural-order replicated kv rows _window_rows already makes for the TP-dedup cache write",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-54",
+   "how": "listed the r2 cache writes' DeviceScalars.at(start) among the per-start host values that block a chunk-to-chunk trace",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "trace capture of a bring-up model: which forward pieces are address-keyed (Python generic_op descriptors passed only on a new address combination) and how many warm runs a capture needs (now DS41-100)"
+ ],
+ "cited_only": [
+  "DS41-100"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.21",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T13:36:03",
+  "head": "03c6826e24d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.21.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_trace.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

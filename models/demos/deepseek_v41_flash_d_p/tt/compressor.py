@@ -141,6 +141,76 @@ class CompressRope:
         return out[0], out[1]
 
 
+WINDOW = 128  # the sparse table's window region: 128 carry rows (tt/attention.WINDOW)
+
+
+def static_tables() -> bool:
+    """STATIC_TABLES=on (P.21): one persistent sparse-attention table per KV source (``AttnTable``)."""
+    return settings.get("STATIC_TABLES") == "on"
+
+
+class AttnTable:
+    """STATIC_TABLES=on (P.21, fusion report item 3): the sparse-attention table of one KV source and slot, allocated
+    once with the source's served compressed cache and kept:
+
+        rows [0, hist)                 the compressed history in natural order: group j at row j (hist = the cache's
+                                       token capacity / r), the same bf16 rows as the served cache
+        rows [base, base + 128 + S)    the window region (base = hist): [carry 128 | chunk S] of the layer running
+                                       its attention (the source's compressed layers run in order and reuse it)
+
+    [1, 1, hist + 128 + S, 512] bf16 ROW_MAJOR, replicated (every chip reads any row). Kept in step with the served
+    cache by ``TtServedRows``: its device ``write`` appends the chunk's rows (the replicated natural-order rows it was
+    given) with one slice_write, its host ``load_host`` writes the loaded rows the same way. A top-k id j is then the
+    table row j as it is, and the window index lists are load-time lists offset by ``base`` (``index``). The shape
+    never changes between chunks."""
+
+    def __init__(self, mesh, tables, hist: int, width: int):
+        g = tables.geo
+        self.mesh, self.width = mesh, width
+        self.hist = self.base = hist
+        self.rows = hist + WINDOW + g.chunk
+        assert self.rows < (1 << 31), self.rows
+        self.buf = ttnn.zeros(
+            [1, 1, self.rows, width], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM
+        )
+        self.index = tables.index_lists(self.base)  # {start class: window ids + base}, chip (r, c) its query rows
+
+    def _put(self, rows_rm: ttnn.Tensor, row0: int) -> None:
+        n = rows_rm.shape[-2]
+        assert rows_rm.shape[-1] == self.width and 0 <= row0 and row0 + n <= self.rows, (rows_rm.shape, row0, self.rows)
+        ttnn.experimental.slice_write(rows_rm, self.buf, [0, 0, row0, 0], [1, 1, row0 + n, self.width], [1, 1, 1, 1])
+
+    def append(self, rows_rm: ttnn.Tensor, g0: int) -> None:
+        """History: compressed rows [g0, g0 + n) = rows_rm [1, 1, n, 512] bf16 ROW_MAJOR, replicated (device)."""
+        assert g0 + rows_rm.shape[-2] <= self.hist, (g0, rows_rm.shape, self.hist)
+        self._put(rows_rm, g0)
+
+    def put_window(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> None:
+        """The window region = [carry 128 | chunk S] (device; both bf16 ROW_MAJOR, replicated, not consumed)."""
+        assert carry.shape[-2] == WINDOW and kv_rm.shape[-2] == self.rows - self.base - WINDOW, (
+            carry.shape,
+            kv_rm.shape,
+        )
+        self._put(carry, self.base)
+        self._put(kv_rm, self.base + WINDOW)
+
+    def load_host(self, rows: torch.Tensor, g0: int) -> None:
+        """Host boundary: compressed rows [n, 512] of groups [g0, g0 + n) (a loaded prefix)."""
+        if not rows.shape[0]:
+            return
+        t = _upload(
+            self.mesh, rows.reshape(1, 1, -1, self.width).to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.append(t, g0)
+        dealloc(t)
+
+    def free(self) -> None:
+        for t in [self.buf, *self.index.values()]:
+            if t.is_allocated():
+                dealloc(t)
+        self.index = {}
+
+
 class TtServedRows:
     """One served compressed-row cache of one layer and slot (``width`` values per compressed row, ``ratio`` tokens
     per row): a slab [1, 1, rows / r, width] bf16 ROW_MAJOR per chip of a served-cache tensor (tt/served.py), ND-sharded
@@ -157,7 +227,17 @@ class TtServedRows:
     refuses; its metadata path (start / valid / slot as 1-element device tensors sliced from load-time tables,
     tt/served.DeviceScalars) works in page rows (DS41-54)."""
 
-    def __init__(self, mesh, tables, max_seq: int, width: int, ratio: int, dedup: bool, slab: CacheSlab | None = None):
+    def __init__(
+        self,
+        mesh,
+        tables,
+        max_seq: int,
+        width: int,
+        ratio: int,
+        dedup: bool,
+        slab: CacheSlab | None = None,
+        attn_table: bool = False,
+    ):
         assert width % ratio == 0 and 32 % ratio == 0, (width, ratio)
         self.mesh, self.tables, self.geo = mesh, tables, tables.geo
         g = self.geo
@@ -173,6 +253,8 @@ class TtServedRows:
         assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
         self.slab = slab
         self.version = 0  # bumped by every write (INDEXER_GLUE=on: tt/sparse_attention.ChunkMemo keys on it)
+        # STATIC_TABLES=on (P.21): a KV source's compressed KV keeps the sparse-attention table of its readers in step
+        self.table = AttnTable(mesh, tables, self.max_seq // ratio, width) if attn_table and static_tables() else None
         if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
             self._pos = tables.scalars(32 // ratio, max_seq // 32 + 1)
             self._slot = tables.scalars(1, slab.slots)
@@ -214,6 +296,8 @@ class TtServedRows:
         self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width])
         self._put(slab, start, end)
+        if self.table is not None:  # STATIC_TABLES=on (P.21): the same rows into the attention table, natural order
+            self.table.append(rows_rm, start // self.ratio)
         view = slab.buffer_address() == rows.buffer_address()  # a reshape may return a view (K-1, DS41-52)
         dealloc(rows)
         if not view:
@@ -257,9 +341,14 @@ class TtServedRows:
             )
             self._put(slab, t0, t0 + m * r)
             dealloc(slab)
+        if self.table is not None:  # STATIC_TABLES=on (P.21): the loaded rows into the attention table too
+            self.table.load_host(rows, p0 // r)
 
     def free(self) -> None:
-        """Frees the tensor only when it is the cache's own (never the engine's)."""
+        """Frees the tensor only when it is the cache's own (never the engine's); the attention table always."""
+        if self.table is not None:
+            self.table.free()
+            self.table = None
         self.slab.free()
 
 
@@ -276,7 +365,9 @@ class TtCompressCaches:
         self.ratio = ratio
         self.names = config_names(ratio)
         slabs = slabs or {}
-        self.ckv = TtServedRows(mesh, tables, max_seq, head_dim, ratio, dedup=True, slab=slabs.get(self.names[0]))
+        self.ckv = TtServedRows(
+            mesh, tables, max_seq, head_dim, ratio, dedup=True, slab=slabs.get(self.names[0]), attn_table=True
+        )
         self.index_k = TtServedRows(mesh, tables, max_seq, index_dim, ratio, dedup=False, slab=slabs.get(self.names[1]))
 
     def by_config(self) -> dict:

@@ -35,6 +35,15 @@ TtWindowAttention's load-time list; the top-k's sentinels are already a tail (in
 0xFFFFFFFF; the reference: ascending ids, -1 past the visible ones).
 
 No host work per chunk: the per-chunk inputs are integers (start, end) picking load-time tables and scalars.
+
+STATIC_TABLES=on (P.21, the default): the table above is not rebuilt per chunk. Each KV source keeps ONE persistent
+table per slot (tt/compressor.AttnTable, made with its served compressed cache): [the history in natural order, group
+j at row j, max_seq / r rows | window region 128 + S at base = max_seq / r]. The compressor appends the chunk's
+groups with one slice_write (the replicated natural-order rows it writes into the served cache), a host load of the
+served cache writes the same rows; each compressed layer slice_writes its [carry | chunk] into the window region (the
+source's layers run in order on one queue and reuse it). The index list is [window ids + base (load-time) | the top-k
+ids as they are]: mesh_partition + concat, + the same compaction gather for starts < 128. No history gather, no
+[window | history] concat, no fp32 id remap, and the table has one shape in every chunk.
 """
 
 from __future__ import annotations
@@ -47,6 +56,7 @@ from . import ccl
 from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
+from .compressor import AttnTable, static_tables
 from .rope import RopeTable
 
 TOPK_LIMIT = 1 << 24  # ids (and table rows) are exact in fp32 below this
@@ -126,6 +136,7 @@ class TtSparseAttention(TtWindowAttention):
     def __init__(self, mesh, cfg, w: dict, rope: RopeTable, tables: WindowTables, sparse: SparseIndexTables):
         super().__init__(mesh, cfg, w, rope, tables)
         self.sparse = sparse
+        self.static = static_tables()  # STATIC_TABLES=on (P.21): the KV source's persistent table (``_static``)
 
     # ------------------------------------------------------------------ parts
     def _gather_mesh(self, t: ttnn.Tensor, dedup: bool) -> ttnn.Tensor:
@@ -224,6 +235,52 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(src)
         return out
 
+    def _index_static(self, topk: ttnn.Tensor, table: AttnTable, start: int) -> ttnn.Tensor:
+        """STATIC_TABLES=on: the chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [window ids + base |
+        the top-k group ids as they are] (group j is table row j; 0xFFFFFFFF stays the sentinel), compacted for
+        starts < 128 as ``_index``."""
+        g = self.geo
+        assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
+        mine = topk if g.tp == 1 else ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+        cls = g.start_class(start)
+        src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM)
+        if mine is not topk:
+            dealloc(mine)
+        if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
+            return src
+        out = ttnn.gather(src, -1, self.sparse.perm[cls])
+        dealloc(src)
+        return out
+
+    def _static(self, q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources) -> ttnn.Tensor:
+        """STATIC_TABLES=on (P.21): the attention over the KV source's persistent table (tt/compressor.AttnTable):
+        this layer's [carry | chunk] window rows slice_written into its window region, the history already there
+        (the compressor appended this chunk's groups, a host load the prefix)."""
+        g = self.geo
+        table = ckv_cache.table
+        assert self.INTERLEAVED, "the table holds the rows as stored (interleaved rope tail)"
+        assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
+        cos, sin = self.rope.rows(start, g.chunk)
+        carry, kv_rm = self._window_rows(kv, start, end, cache)
+        table.put_window(carry, kv_rm)
+        self._release_window(carry, kv_rm, cache, start, end)
+        shared = memo is not None and sources is not None
+        ikey = (start, id(ckv_cache), ckv_cache.version)
+        index = memo.get(("index", sources[1]), ikey) if shared else None
+        if index is None:
+            index = self._index_static(topk, table, start)
+            if shared:
+                memo.put(("index", sources[1]), ikey, index)
+        q_rm = self._q(q_resid, cos, sin)
+        o = self._sdpa(q_rm, table.buf, index)
+        dealloc(q_rm)
+        if not shared:
+            dealloc(index)
+        out = self._out(o, cos, sin)
+        dealloc(o)
+        self.rope.free(cos, sin)
+        return out
+
     def __call__(
         self,
         q_resid,
@@ -243,6 +300,8 @@ class TtSparseAttention(TtWindowAttention):
         s = q_resid.shape[-2] * g.sp
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
+        if self.static:
+            return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
         cos, sin = self.rope.rows(start, s)
         window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
         shared = memo is not None and sources is not None

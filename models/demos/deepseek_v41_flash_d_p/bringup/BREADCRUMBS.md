@@ -2705,3 +2705,58 @@ Gotchas:
 Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.19`; fork tests
 `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_partials.py`,
 `.../mhc_post_ttnn/tests/unit/test_mhc_post_mixes.py`, `.../fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_program_hash.py`.
+
+## P.21 perf attempt 1 (2026-10-22): STATIC_TABLES=on, one persistent attention table per KV source; trace ceiling
+
+What: setting STATIC_TABLES (tt/settings.py, default on; off = the P.19 path, kept for the owner's A/B). Fusion report
+item 3. On:
+- tt/compressor.AttnTable: per KV source and slot (allocated with the source's served compressed KV, `TtServedRows(
+  attn_table=True)`; TtCompressCaches passes it, so the device model, the hybrid and the serving runtime all get one)
+  ONE replicated bf16 ROW_MAJOR buffer [hist + 128 + S, 512], hist = the cache's token capacity / r: the history in
+  natural order (group j at row j), then the window region at base = hist.
+- TtServedRows.write also slice_writes the replicated natural-order rows it was given (the compressor's `rm`) at row
+  start / r: one `ttnn.experimental.slice_write` a source a chunk; TtServedRows.load_host (golden prefix, migrated
+  prefix, hybrid) writes the loaded rows the same way, so the table follows the served cache on every write path.
+- TtSparseAttention._static: the layer's [carry | chunk] window rows slice_written into the region (2 slice_writes;
+  the source's layers run in order on one queue and reuse it), index list = [WindowTables.index_lists(base)[class] |
+  the top-k as it is] (mesh_partition + concat, + the same compaction gather at starts < 128), memoized for the
+  shared top-k as before. Gone per chunk: the history slice + to_layout + 2 all_gathers + to_layout (56 MiB at r1),
+  the [window | history] concat, the 27-op fp32 id remap (`_topk_rows`). The table's shape is the same in every
+  chunk (no program-cache misses as the history grows).
+Decisions:
+- History first, window region after it: top-k ids need no transform (0xFFFFFFFF stays the sentinel); only the
+  load-time window ids carry the offset, built per state at state creation (index_lists(base), 5 small lists).
+- The table is kept in step by the served cache's own writers instead of being rebuilt from the cache: the cache has
+  no other writer on a prefill node (serving_contract.md "Input": a follow-up remounts its own slot; migrated prefixes
+  come in through state.load_served -> load_host).
+- Window-only layers (L0, L1) keep their [carry | chunk] concat (2 MiB, already one shape per chunk).
+- Stock ops only (slice_write, concat, gather, mesh_partition): no INDEX entry lists them (rule 16).
+Measured (2x2, chunk 53248-55296):
+- Final `measure --task P.21` (quick A/B side on, rc 0): chunk wall 103.5 ms (spread 6.1; P.19 on: 118.8, spread
+  39.1), host_transfers_per_layer 0, worst layer L03 pcc 0.99680, pcc_chunk_out 0.99960; every err_* within its limit
+  and equal to P.19: err_layer L00 .0250/.0570, L01 .0337/.0720, L02 .0508/.1077, L03 .0800/.1587, L14 .0605/.1380,
+  L20 .0301/.0507, L21 .0510/.1312, L24 .0282/.0418; worst state window_kv_L21 .0458/.1118.
+- Ladder s4096 by hand (on; chunk 0 at start 0 takes the compaction path, chunk 1 a grown history): pass, err_layer
+  L00 .0267/.0561, L01 .0353/.0734, L02 .0541/.1071, L03 .0823/.1558, L14 .0551/.1204, L20 .0303/.0519, L21
+  .0508/.1265, L24 .0305/.0449 (P.19: L00 .0267 .. L03 .0823).
+- Trace ceiling (owner; tt/perf_trace.py, standalone, not the model's path; STATIC_TABLES=on): the 8-layer stack at
+  start 53248, inputs made before the capture: traced replay 87.0 ms a chunk (10 replays 87.0-87.1), untraced
+  layer stack median 103.7 ms (87.9-199.0), begin_chunk (engram host input) 38-40 ms warm outside it; replay output
+  vs untraced PCC 1.000000, vs golden 0.999605 (= untraced). The forward captures as it is; what blocked the first
+  capture: the flat expert's address-keyed descriptor (DS41-100: settle until no new key, 6 runs).
+- Not run: the plain profile (the orchestrator runs it with the change on and off).
+Memory (rule 15): a replicated copy of each source's compressed KV per slot. 2x2 at 57,344: r2 28 MiB (L2, L14), r1
+56 MiB (L20) + 2.1 MiB of window region each a chip. Full model: 4 sources (L2, L8, L14 r2, L20 r1): per chip per
+slot 1.25 GiB at 524,288 and 2.5 GiB at 1,048,576 on every box (replicated: the chip count does not divide it;
+the served caches themselves are 384 + 256 MiB at 1M before dedup).
+What still blocks a chunk-to-chunk trace (code reading, printed by perf_trace.py): host per-start values baked into
+the commands (rope row slices, srv_row / update_padded_kv_cache scalars / DeviceScalars.at, the window carry slices,
+pad-mask scalar and start class, the ring score's chunk_start_idx / kv length and the candidate widths, the top-k /
+candidate stores keyed by start), the address-keyed flat-op / planner descriptors (DS41-100), and the per-chunk
+engram rows / ids uploads into new tensors.
+Gotchas:
+- K-52: ran perf_trace.py with --no-precompile (a model-sized test).
+- When the owner accepts: delete STATIC_TABLES=off (sparse_attention._compressed, _topk_rows, _index, TOPK_LIMIT,
+  the ChunkMemo "comp" slot and model.memo_last's ("comp", src) entries, the [window | comp] concat).
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.21`; trace ceiling
+`PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_trace.py`.
