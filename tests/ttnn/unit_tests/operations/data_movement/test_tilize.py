@@ -759,6 +759,116 @@ def test_tilize_fp32_lossless_via_to_layout(device):
     assert torch.equal(input_tensor, output_tensor)
 
 
+def _make_int32_precision_tensor(shape):
+    """Full-range int32 values, with the extremes and values wider than 24 bits in the first row."""
+    torch.manual_seed(35303)
+    t = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch.int32)
+    precision_values = torch.tensor(
+        [
+            2**31 - 1,
+            -(2**31),
+            -(2**31) + 1,
+            2**24 + 1,  # not representable in a 24-bit mantissa
+            -(2**24 + 1),
+            0x12345678,
+            -0x12345678,
+            1,
+            -1,
+            0,
+        ],
+        dtype=torch.int32,
+    )
+    n = min(precision_values.numel(), t.shape[-1])
+    t.view(-1, t.shape[-1])[0, :n] = precision_values[:n]
+    return t
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (64, 128), (64, 1280)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_int32_lossless(device, shape, use_multicore):
+    """Tilize must preserve int32 values exactly."""
+    input_tensor = _make_int32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_val_padding_int32_lossless(device, shape, use_multicore):
+    """tilize_with_val_padding must preserve the int32 data region exactly."""
+    input_tensor = _make_int32_precision_tensor(shape)
+    H, W = shape
+    padded_H = math.ceil(H / 32) * 32
+    padded_W = math.ceil(W / 32) * 32
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [padded_H, padded_W], 7, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+def test_tilize_int32_lossless_via_to_layout(device):
+    """to_layout (host→device tilize path) must be bit-exact for int32."""
+    input_tensor = _make_int32_precision_tensor((64, 128))
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "memory_layout, tensor_shape, grid_shape",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [1, 1, 128, 64], (4, 1)),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [1, 1, 32, 128], (1, 4)),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, [1, 1, 128, 128], (2, 2)),
+    ],
+)
+def test_tilize_sharded_int32_lossless(device, memory_layout, tensor_shape, grid_shape):
+    """Sharded tilize must preserve int32 values exactly."""
+    n_y, n_x = grid_shape
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+    H, W = tensor_shape[-2], tensor_shape[-1]
+    shard_shape = [H // n_y, W // n_x]
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    input_tensor = _make_int32_precision_tensor(tensor_shape)
+
+    tt_input = ttnn.from_torch(
+        input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg)
+
+    assert torch.equal(input_tensor, ttnn.to_torch(tt_output))
+
+
+def test_tilize_with_val_padding_width_sharded_int32_lossless(device):
+    """WIDTH_SHARDED tilize_with_val_padding (the sharded factory) must preserve the int32 data region exactly."""
+    num_cores = 2
+    height_in, height_out, width = 50, 64, 128
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    input_shard_spec = ttnn.ShardSpec(shard_grid, (height_in, width // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(shard_grid, (height_out, width // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    input_tensor = _make_int32_precision_tensor((1, height_in, width))
+
+    tt_input = ttnn.from_torch(
+        input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_cfg
+    )
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [1, height_out, width], 7, memory_config=output_mem_cfg)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:, :height_in, :])
+
+
 @pytest.mark.parametrize(
     "memory_layout, tensor_shape, grid_shape",
     [
