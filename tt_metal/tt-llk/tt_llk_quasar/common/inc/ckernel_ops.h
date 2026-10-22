@@ -8,6 +8,7 @@
 #if __clang__
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+extern "C" void __builtin_rvtt_ttreplay(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
 #define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
 #define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
@@ -476,12 +477,16 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_OP_RDCFG(GprAddress, CfgReg) TT_OP(0xb1, (((GprAddress) << 16) + ((CfgReg) << 0)))
 #define TT_RDCFG(GprAddress, CfgReg)                                    TT_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
 #define TTI_RDCFG(GprAddress, CfgReg)                                   TTI_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
+
 #define TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((last) << 3) + ((set_mutex) << 2) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
+#define TT_IP_REPLAY(IP, start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
+    __builtin_rvtt_ttreplay((IP), ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode), (last), (set_mutex))
 #define TT_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TT_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
+    TT_IP_REPLAY(::ckernel::instrn_buffer, start_idx, len, last, set_mutex, execute_while_loading, load_mode)
 #define TTI_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TTI_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
+    TT_IP_REPLAY(nullptr, start_idx, len, last, set_mutex, execute_while_loading, load_mode)
+
 #define TT_OP_RESOURCEDECL(linger_time, resources, op_class) TT_OP(0x05, (((linger_time) << 15) + ((resources) << 5) + ((op_class) << 0)))
 #define TT_RESOURCEDECL(linger_time, resources, op_class)    TT_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))
 #define TTI_RESOURCEDECL(linger_time, resources, op_class)   TTI_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))

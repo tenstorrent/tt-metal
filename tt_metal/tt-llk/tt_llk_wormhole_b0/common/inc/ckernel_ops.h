@@ -8,6 +8,7 @@
 #if __clang__
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+extern "C" void __builtin_rvtt_ttreplay(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
 #define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
 #define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
@@ -383,8 +384,12 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
 #define TT_REPLAY_VALID(start_idx, len, execute_while_loading, load_mode) \
     (ckernel::is_valid(start_idx, 10) && ckernel::is_valid(len, 10) && ckernel::is_valid(execute_while_loading, 3) && ckernel::is_valid(load_mode, 1))
-#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)  TT_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
-#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TTI_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
+#define TT_IP_REPLAY(IP, start_idx, len, execute_while_loading, load_mode) \
+    __builtin_rvtt_ttreplay((IP), ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode))
+#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    TT_IP_REPLAY(::ckernel::instrn_buffer, start_idx, len, execute_while_loading, load_mode)
+#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    TT_IP_REPLAY(nullptr, start_idx, len, execute_while_loading, load_mode)
 
 #define TT_OP_RMWCIB0(Mask, Data, CfgRegAddr)    TT_OP(0xb3, (((Mask) << 16) + ((Data) << 8) + ((CfgRegAddr) << 0)))
 #define TT_RMWCIB0_VALID(Mask, Data, CfgRegAddr) (ckernel::is_valid(Mask, 8) && ckernel::is_valid(Data, 8) && ckernel::is_valid(CfgRegAddr, 8))
