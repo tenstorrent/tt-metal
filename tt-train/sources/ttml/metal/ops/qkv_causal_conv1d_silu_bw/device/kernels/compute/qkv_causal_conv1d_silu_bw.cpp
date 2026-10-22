@@ -194,8 +194,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
 
+    // The reader pushes the taps once per channel block (see reader.cpp); they are popped when the block changes.
+    constexpr uint32_t no_block = ~0U;
+    uint32_t current_block = no_block;
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
+        const uint32_t channel_block = work / row_splits;
         const uint32_t split = work % row_splits;
         const uint32_t first_tile_row = split * tile_rows / row_splits;
         const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
@@ -203,7 +207,13 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
         const bool has_halo = end_tile_row < tile_rows;
         const uint32_t step_count = own_steps + (has_halo ? 1 : 0);
 
-        weights.wait_front(tap_count * channel_tiles_per_block);
+        if (channel_block != current_block) {
+            if (current_block != no_block) {
+                weights.pop_front(tap_count * channel_tiles_per_block);
+            }
+            weights.wait_front(tap_count * channel_tiles_per_block);
+            current_block = channel_block;
+        }
         if (item == 0) {
             ones.wait_front(1);
         }
@@ -232,6 +242,8 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
         if (!has_halo) {
             grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);
         }
+    }
+    if (current_block != no_block) {
         weights.pop_front(tap_count * channel_tiles_per_block);
     }
 }

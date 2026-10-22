@@ -34,7 +34,7 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
     return {{
         {"rainbow_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
         {"rainbow_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
-        {"weights", 4 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block]
+        {"weights", 8 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block], x2 to prefetch
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
         // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits

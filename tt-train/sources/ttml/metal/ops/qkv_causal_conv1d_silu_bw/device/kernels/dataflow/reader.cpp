@@ -61,6 +61,10 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     }
     ones.push_back(1);
 
+    // Items are numbered channel block major, so consecutive items on a core usually share their taps: the taps are
+    // pushed once per block, and compute pops them when its block changes.
+    constexpr uint32_t no_block = ~0U;
+    uint32_t loaded_block = no_block;
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
         const uint32_t channel_block = work / row_splits;
@@ -71,31 +75,35 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
         const uint32_t step_count = end_tile_row - first_tile_row + (end_tile_row < tile_rows ? 1 : 0);
 
-        weights.reserve_back(tap_count * channel_tiles_per_block);
-        for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
-            const uint32_t page = first_tile_column + tile_column;
-            noc.async_read(tap0, weights, tile_bytes, {.page_id = page}, {.offset_bytes = tile_column * tile_bytes});
-            noc.async_read(
-                tap1,
-                weights,
-                tile_bytes,
-                {.page_id = page},
-                {.offset_bytes = (channel_tiles_per_block + tile_column) * tile_bytes});
-            noc.async_read(
-                tap2,
-                weights,
-                tile_bytes,
-                {.page_id = page},
-                {.offset_bytes = (2 * channel_tiles_per_block + tile_column) * tile_bytes});
-            noc.async_read(
-                tap3,
-                weights,
-                tile_bytes,
-                {.page_id = page},
-                {.offset_bytes = (3 * channel_tiles_per_block + tile_column) * tile_bytes});
+        if (channel_block != loaded_block) {
+            weights.reserve_back(tap_count * channel_tiles_per_block);
+            for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
+                const uint32_t page = first_tile_column + tile_column;
+                noc.async_read(
+                    tap0, weights, tile_bytes, {.page_id = page}, {.offset_bytes = tile_column * tile_bytes});
+                noc.async_read(
+                    tap1,
+                    weights,
+                    tile_bytes,
+                    {.page_id = page},
+                    {.offset_bytes = (channel_tiles_per_block + tile_column) * tile_bytes});
+                noc.async_read(
+                    tap2,
+                    weights,
+                    tile_bytes,
+                    {.page_id = page},
+                    {.offset_bytes = (2 * channel_tiles_per_block + tile_column) * tile_bytes});
+                noc.async_read(
+                    tap3,
+                    weights,
+                    tile_bytes,
+                    {.page_id = page},
+                    {.offset_bytes = (3 * channel_tiles_per_block + tile_column) * tile_bytes});
+            }
+            noc.async_read_barrier();
+            weights.push_back(tap_count * channel_tiles_per_block);
+            loaded_block = channel_block;
         }
-        noc.async_read_barrier();
-        weights.push_back(tap_count * channel_tiles_per_block);
 
         for (uint32_t step = 0; step < step_count; ++step) {
             const uint32_t tile_row = first_tile_row + step;
