@@ -62,9 +62,9 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
             runtime.validate_chunk(*chunk)
 
 
-@pytest.mark.parametrize("chunk_size, step", [(2048, 256), (4096, 512), (8192, 32)])
+@pytest.mark.parametrize("chunk_size, step", [(2048, 256), (4096, 512), (8192, 1024)])
 def test_mid_chunk_starts(chunk_size, step, expect_error):
-    """A chunk may start at any multiple of the resume granularity, and its padded chunk must fit the slot."""
+    """A chunk may start on any slab boundary (chunk / CP), and its padded chunk must fit the slot."""
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = replace(service_params(), chunk_size=chunk_size)
     start, late = 3 * chunk_size + step, runtime.config.max_seq_len - chunk_size + step
@@ -79,21 +79,17 @@ def test_mid_chunk_starts(chunk_size, step, expect_error):
         runtime.validate_chunk(0, start + step, start + chunk_size)
 
 
-@pytest.mark.parametrize("chunk_size, slots, step", [(2048, 1, 256), (4096, 1, 512), (8192, 2, 32)])
-def test_resume_granularity_follows_the_halo_slots(chunk_size, slots, step):
-    """Two halo slots only where the 1024-token halo fits one slab; the AgentX simulator models the same rule."""
+@pytest.mark.parametrize("chunk_size", [2048, 4096, 8192])
+def test_simulator_resumes_at_the_runtime_granularity(chunk_size):
+    """The AgentX simulator's --align resume rounds to the runtime's granularity."""
     from models.demos.gemma4_d_p.agentx_sim.agentx_sim import resume_step
-    from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
-        resume_granularity,
-        sliding_halo_slots,
-        sliding_halo_tokens,
-    )
 
-    assert sliding_halo_slots(chunk_size // 8, sliding_halo_tokens(1024)) == slots
-    assert resume_granularity(chunk_size, 8, 1024) == step == resume_step(chunk_size, "resume")
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = replace(service_params(), chunk_size=chunk_size)
+    assert runtime.resume_granularity == resume_step(chunk_size, "resume")
 
 
-@pytest.mark.parametrize("start", [16384, 16384 + 3 * 1024, 21536])
+@pytest.mark.parametrize("start", [16384, 16384 + 3 * 1024, 16384 + 7 * 1024])
 def test_chunk_positions_follow_the_rotated_tokens(start):
     """A chunk's staged positions are its tokens' positions after the producer's rotation: natural order at an
     aligned start, rotated at a mid-chunk one."""

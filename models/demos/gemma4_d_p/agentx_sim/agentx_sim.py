@@ -5,7 +5,7 @@
 """Replay AgentX traces through the Gemma4 continuous-batching cost model (host only).
 
     agentx_sim.py --traces .../cc-traces-weka-062126-256k/traces.jsonl --config 8192x8192:fcfs,2048x8192:pack \
-        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,resume,exact] [--mid-cost 0.045] [-j 16] \
+        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,resume,exact] [--mid-cost 0.015] [-j 16] \
         [--json runs.jsonl] [--ttft-out ttft.jsonl]
 
 Every knob but --sessions and --seed takes a comma list; the runs are their product, -j at a time (the traces are
@@ -23,9 +23,9 @@ Prefill:
 - Prefix cache keyed by (session, hash_id), 64-token blocks: infinite or LRU over a token capacity. Lookup at
   arrival, insert when the request's prefill finishes.
 - The request resumes at its cached depth rounded down to the chunk unit (--align chunk), to Gemma4's resume granularity
-  (--align resume: a tile at chunk 8192, a per-rank slab below; ring_prefill.resume_granularity), or exactly (--align
-  exact). Its rows are padded up to whole units. A lane that starts off a unit boundary costs --mid-cost more
-  (measured: +0.015 at 2048, +0.045 at 8192).
+  (--align resume: a per-rank slab, unit / CP; Gemma4PrefillRuntime.resume_granularity), or exactly (--align exact).
+  Its rows are padded up to whole units. A lane that starts off a unit boundary costs --mid-cost more (measured:
+  +0.015 at 2048, +0.02 at 8192).
 - Each step runs budget / unit slots (unbatched: unit == budget). fcfs: admission order, a request keeps its slot until
   done; pack: the requests with the fewest rows left first, each taking every slot it still needs. A request's k slots
   run as k unit-wide lanes (the 2k-lanes runtime).
@@ -266,10 +266,10 @@ class PrefixCache:
 
 
 def resume_step(C, align):
-    """Token multiple a request resumes at: the unit (chunk), Gemma4's resume granularity at window 1024
-    (resume: a tile once the 1024-token halo fits one slab, else a slab; ring_prefill.resume_granularity, which
-    tests/unit/test_prefill_runner.py checks this against), or any token (exact)."""
-    return {"chunk": C, "resume": 32 if C // CP >= 1024 else C // CP, "exact": 1}[align]
+    """Token multiple a request resumes at: the unit (chunk), Gemma4's resume granularity (resume: a per-rank slab;
+    Gemma4PrefillRuntime.resume_granularity, which tests/unit/test_prefill_runner.py checks this against), or any
+    token (exact)."""
+    return {"chunk": C, "resume": C // CP, "exact": 1}[align]
 
 
 def run(

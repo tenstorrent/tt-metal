@@ -5,10 +5,9 @@
 from 0 in whole chunks.
 
 Slot 0 prefills [0, N) in aligned chunks. Slot 1 prefills a first turn [0, T), then resumes at P, T rounded down to
-the chunk size's resume granularity (ring_prefill.resume_granularity), rewriting [P, T). At chunk 2048 P is a slab
-boundary; at 8192 it is a tile inside a slab, so one rank's rows wrap two slabs and need the second sliding halo slot.
-Each chunk is rotated as the producer rotates it. The negative control drops that slot (and the start check) and must
-fail.
+the runtime's resume granularity (a per-rank slab), rewriting [P, T). Each chunk is rotated as the producer rotates it.
+The negative control resumes at a tile inside a slab, so one rank's rows wrap two slabs and need a second sliding halo
+slot the gather buffer doesn't have; it must fail.
 """
 
 import time
@@ -31,7 +30,7 @@ from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 N_CHUNKS = 4
 EARLY_LAYERS = range(16)  # deeper layers drift run to run even without a resume
-# Same model and tokens; only the chunk boundaries differ, which reorders accumulation (0.99984 at 8192).
+# Same model and tokens; only the chunk boundaries differ, which reorders accumulation.
 MIN_PCC = 0.99
 
 
@@ -66,23 +65,20 @@ def _min_head_pcc(caches, n):
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize(
-    "chunk, one_halo_slot",
-    [(2048, False), (4096, False), (8192, False), (8192, True)],
-    ids=["2048", "4096", "8192", "8192-one-halo-slot"],
+    "chunk, inside_slab",
+    [(2048, False), (4096, False), (8192, False), (2048, True)],
+    ids=["2048", "4096", "8192", "2048-inside-slab"],
 )
-def test_mid_chunk_resume(mesh_device, chunk, one_halo_slot, monkeypatch):
+def test_mid_chunk_resume(mesh_device, chunk, inside_slab, monkeypatch):
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()
     n = N_CHUNKS * chunk
     slab = chunk // Gemma4ServiceConfig.MESH_SHAPE[0]
-    step = ring_prefill.resume_granularity(chunk, Gemma4ServiceConfig.MESH_SHAPE[0], hf_config.sliding_window)
+    step = ring_prefill.TILE_HEIGHT if inside_slab else slab
     first_turn = 2 * chunk + 5 * slab + 49
     resume = first_turn // step * step
-    if chunk == 8192:
-        assert resume % slab, "the 8192 case must resume inside a slab"
-    if one_halo_slot:
-        monkeypatch.setattr(ring_prefill, "sliding_halo_slots", lambda *_: 1)
-        monkeypatch.setattr(Gemma4PrefillRuntime, "resume_granularity", ring_prefill.TILE_HEIGHT)
+    if inside_slab:
+        monkeypatch.setattr(Gemma4PrefillRuntime, "resume_granularity", step)  # skip the start check
     monkeypatch.setattr(Gemma4ServiceConfig, "CHUNK_SIZE", chunk)  # read_cache_tensor's chunk
     params = PrefillRunParams(
         mesh_shape=Gemma4ServiceConfig.MESH_SHAPE,
@@ -121,11 +117,11 @@ def test_mid_chunk_resume(mesh_device, chunk, one_halo_slot, monkeypatch):
     runtime.release_trace()
 
     logger.info(
-        f"[resume] chunk={chunk} one_halo_slot={one_halo_slot} resume={resume}: min head PCC {worst:.6f} over "
+        f"[resume] chunk={chunk} inside_slab={inside_slab} resume={resume}: min head PCC {worst:.6f} over "
         f"layers 0-15, {identical}/{heads} heads identical; ms per chunk aligned {[round(t, 1) for t in aligned]}, "
         f"resumed {[round(t, 1) for t in resumed]}"
     )
-    if one_halo_slot:
-        assert worst < MIN_PCC, f"one halo slot should corrupt a wrapping resume, got min head PCC {worst}"
+    if inside_slab:
+        assert worst < MIN_PCC, f"a start inside a slab should corrupt the wrapping rank's KV, got min head PCC {worst}"
     else:
         assert worst >= MIN_PCC, f"resumed KV min head PCC {worst} < {MIN_PCC}"

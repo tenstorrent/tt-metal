@@ -8,9 +8,7 @@ import torch
 import ttnn
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.gemma4_d_p.config import MeshConfig
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import resume_granularity
 from models.demos.gemma4_d_p.tt.common import create_tt_model
-from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 
 
 class Gemma4PrefillRuntime:
@@ -27,9 +25,9 @@ class Gemma4PrefillRuntime:
 
     @property
     def resume_granularity(self):
-        """Token multiple a chunk may start at (ring_prefill.resume_granularity; validate_31b_config pins the
-        window)."""
-        return resume_granularity(self.config.chunk_size, self.config.mesh_shape[0], Gemma4ModelArgs.sliding_window)
+        """Token multiple a chunk may start at: a per-rank slab (chunk / CP). A start inside a slab would give one
+        rank rows from two slabs, each needing its own predecessor halo, and the sliding gather buffer holds one."""
+        return self.config.chunk_size // self.config.mesh_shape[0]
 
     def _host_tokens(self, values):
         return ttnn.from_torch(

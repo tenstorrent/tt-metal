@@ -21,7 +21,6 @@ import ttnn
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM
 
 TILE_HEIGHT = 32
-SLIDING_K_CHUNK = 128
 
 
 @dataclass(frozen=True)
@@ -85,28 +84,6 @@ def ring_cache_seq_len(max_seq_len, cp):
     """Per-rank cache sequence length. Each rank stores 1/cp of every chunk."""
     assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
     return max_seq_len // cp
-
-
-def sliding_halo_tokens(sliding_window_size, k_chunk=SLIDING_K_CHUNK):
-    """Predecessor rows a rank's sliding attention needs: the window rounded up to whole k chunks."""
-    return -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-
-
-def sliding_halo_slots(q_slab_tokens, halo_tokens):
-    """Halo slots in the sliding gather buffer.
-
-    A chunk that starts mid-slab gives one rank rows from two slabs, each with its own predecessor halo. With one
-    slot, ring SDPA attends the second slab as if it had no prefix, without an error. Two slots turn the halo
-    multicast into one send per hop, which is free only when the halo is one hop (fits in one slab).
-    """
-    return 2 if halo_tokens <= q_slab_tokens else 1
-
-
-def resume_granularity(chunk_size, cp, sliding_window_size):
-    """Token multiple a chunk may start at: any tile with two halo slots, otherwise a whole slab, so that no
-    rank's rows wrap."""
-    slab = chunk_size // cp
-    return TILE_HEIGHT if sliding_halo_slots(slab, sliding_halo_tokens(sliding_window_size)) == 2 else slab
 
 
 def init_sliding_ring_kv_cache(
@@ -313,7 +290,7 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, grid=(11, 10), *,
     num_cores = grid[0] * grid[1]
     if sliding:
         q_chunk = 128
-        return q_chunk, SLIDING_K_CHUNK, _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid), False
+        return q_chunk, 128, _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid), False
 
     if use_tuned_configs and num_heads == 8 and tuple(grid) == (11, 10):
         tuned = _load_global_ring_sdpa_configs().get(q_slab_tokens * 8)
@@ -456,9 +433,11 @@ def sliding_ring_prefill_attention(
             mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, k_splits=k_splits
         )
     # Only the predecessor halo is exchanged, and the op requires a compact buffer (gathered rows < cache_seq *
-    # ring): a full-capacity one fails "requires a compact halo buffer". The op infers the slot count from its rows.
-    halo_tokens = sliding_halo_tokens(sliding_window_size, program_config.k_chunk_size)
-    gather_seq = max(halo_tokens, TILE_HEIGHT) * sliding_halo_slots(tt_q.shape[-2], halo_tokens)
+    # ring): a full-capacity one fails "requires a compact halo buffer". The halo is the window rounded up to whole
+    # k chunks.
+    k_chunk = program_config.k_chunk_size
+    halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
+    gather_seq = max(halo_tokens, TILE_HEIGHT)
     buffer_k = ccl_manager.get_ring_gather_buffer(
         (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
