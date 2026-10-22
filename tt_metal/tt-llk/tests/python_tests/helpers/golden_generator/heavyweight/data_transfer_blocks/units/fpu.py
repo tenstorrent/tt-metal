@@ -91,6 +91,32 @@ class Fpu:
         wide = torch.float32 if srcA.dtype.is_floating_point else torch.int64
         return compute(srcA.to(wide), srcB.to(wide))
 
+    def sum_of_products(
+        self, srcB_rows: torch.Tensor, srcA_cols: torch.Tensor
+    ) -> torch.Tensor:
+        """One matrix multiply, accumulated wider than its operands.
+
+        The FPU's sum-of-products network takes products in at the combined
+        width of both significands and sums them in wide fixed point with guard
+        bits, so within a single instruction there is no per-product rounding
+        to model. ``float64`` rather than ``float32`` for exactly that reason:
+        a float32 accumulation would introduce an error the hardware does not
+        have.
+
+        Exact for the integer path too, where the operands reach 2**15 and a
+        32-term sum of their products stays far inside float64's 2**53. The
+        rounding the hardware *does* take, between one instruction and the
+        next, belongs to the Dest write and is modelled by whoever calls this
+        once per pass.
+
+        Operands in register order, which is not the caller's argument order:
+        ``Dest = SrcB * SrcA``. The matrix each register contributes -- which
+        rows, which columns, how a face-ordered register becomes a matrix at
+        all -- is the operation's business, because it is the operation that
+        knows which slice of the inner dimension this instruction covers.
+        """
+        return srcB_rows.double() @ srcA_cols.double()
+
     # ------------------------------------------------------------------
     # The multiplier's fidelity decomposition
     # ------------------------------------------------------------------
