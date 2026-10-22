@@ -42,10 +42,12 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // params, matching the reduce_test.cpp idiom.
 
 // Before the measured op, a poison op unpacks POISON_TILES full 32x32 tiles of
-// 100.0 into every row of both SrcA banks and of 25.0 into both SrcB banks. Both
-// are stored after the input tiles in buffer_A. The op then releases its DEST
-// section with no reduce. The unpackers must zero the rows that a short face
-// leaves stale, or the reduce sums the stale rows.
+// 100.0 into every row of both SrcA banks and POISON_TILES full 32x32 tiles of
+// 25.0 into both SrcB banks. Both are stored after the input tiles in buffer_A.
+// The op then releases its DEST section with no reduce. If the measured op
+// reads the stale rows, the reduce sums them. For faces under 8 rows, the
+// unpack init zeroes both banks of SrcA and SrcB. For 8-row faces, the math MOP
+// never reads rows 8-15.
 static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK

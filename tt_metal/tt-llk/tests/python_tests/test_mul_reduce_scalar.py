@@ -21,9 +21,11 @@ tile (num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny
 tiles" (mirroring the on-silicon MulReduceScalarTinyTile gtest suite), plus
 1x32 to 8x32 tiles with short faces, which the gtest does not cover.
 
-Before the measured op, the kernel unpacks POISON_TILES full tiles of 100.0
-into the SrcA banks and of 25.0 into the SrcB banks. With a short face, the reduce adds those stale
-rows unless the unpacker zeroes them, so the golden check fails.
+Before the measured op, the kernel unpacks POISON_TILES full tiles of
+SRCA_POISON_VALUE into SrcA and POISON_TILES full tiles of SRCB_POISON_VALUE
+into SrcB. If a short-face op reads those stale rows, the reduce adds them and
+the golden check fails. For faces under 8 rows, the unpack init zeroes both
+banks of SrcA and SrcB. For 8-row faces, the math MOP never reads rows 8-15.
 
 The element-wise op is a parameter. ELWADD and ELWSUB pass stale SrcB rows
 through to DEST, so they check that the unpacker also zeroes SrcB. For them,
@@ -67,9 +69,11 @@ FORMATS = [
 # The reduce collapses every element to [0] regardless of tile geometry.
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [1, 32], [2, 32], [4, 32], [8, 32]]
 
-# The kernel unpacks POISON_TILES full 32x32 tiles of 100.0 into SrcA and of 25.0 into SrcB
-# before the measured op. The poison differs so that ELWSUB does not cancel stale rows.
+# Full 32x32 poison tiles that the kernel unpacks into SrcA and SrcB before the measured op.
+# The two values must differ, or ELWSUB cancels the stale rows and hides them.
 POISON_TILES = 2
+SRCA_POISON_VALUE = 100.0
+SRCB_POISON_VALUE = 25.0
 
 
 GOLDEN_OPS = {
@@ -147,7 +151,7 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
     poison = torch.cat(
         [
             torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), value, dtype=src_A.dtype)
-            for value in (100.0, 25.0)
+            for value in (SRCA_POISON_VALUE, SRCB_POISON_VALUE)
         ]
     )
 
