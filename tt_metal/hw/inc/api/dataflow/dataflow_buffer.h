@@ -84,10 +84,10 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// Only UNPACK and PACK have a DFB interface. On MATH and on the SFPU thread a DataflowBuffer
-// is just an id and the sync calls do nothing. Drop ISOLATE_SFPU from this list when the SFPU
-// thread gets its own interface and unpacks from DFBs.
-#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
+// UNPACK, PACK and the SFPU thread (TRISC3) have a DFB interface; each does the sync calls only
+// for DFBs the host assigned to it (tensix_trisc_mask). On MATH a DataflowBuffer is just an id
+// and the sync calls do nothing.
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0

@@ -597,4 +597,98 @@ TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
         });
 }
 
+
+// TRISC3 sanity: DM producer -> dfb_in -> TRISC3 copy -> dfb_out -> DM consumer. Both DFBs put
+// their compute endpoint on TRISC3, so TRISC3 does wait_front/pop_front on dfb_in and
+// reserve_back/push_back on dfb_out. More entries than ring slots, so both rings wrap and stall.
+TEST_F(UnitMeshFixture, DataflowBufferTrisc3Copy) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "TRISC3 is Quasar-only";
+    }
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile
+    constexpr uint32_t ring_entries = 2;
+    constexpr uint32_t num_entries = 8;
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = ring_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+    dfb_in.advanced_options.compute_endpoint_on_trisc3 = true;
+    m2::DataflowBufferSpec dfb_out = dfb_in;
+    dfb_out.unique_id = DFB_OUT;
+
+    auto producer = make_dm_kernel(
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp", 1, {DFB_IN});
+    producer.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER}};
+    producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_trisc3_copy_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        {.dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+    };
+    compute.compile_time_args = {{"num_entries", num_entries}};
+
+    auto consumer = make_dm_kernel(
+        CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", 1, {DFB_OUT});
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = DFB_OUT, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER}};
+    consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
+    consumer.compile_time_args = {
+        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "dfb_trisc3_copy",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    m2::ProgramRunArgs params;
+    const auto dm_args = experimental::MakeRuntimeArgsForSingleNode(
+        node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = PRODUCER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = CONSUMER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 1000000, entry_size * num_entries / sizeof(uint32_t));
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
+
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "TRISC3 DFB copy mismatch";
+}
+
 }  // namespace tt::tt_metal

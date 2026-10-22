@@ -14,6 +14,10 @@
 #ifdef UCK_CHLKC_UNPACK
 #include "llk_io_unpack.h"
 #endif
+#ifdef UCK_CHLKC_ISOLATE_SFPU
+#include "ckernel.h"
+#include "llk_io.h"
+#endif
 #endif
 
 #include "api/kernel_thread_globals.h"
@@ -121,7 +125,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_local_size_bytes() const {
 
 namespace {
 
-#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
+#if !DFB_IS_COMPUTE_MATH
 
 #ifndef COMPILE_FOR_TRISC
 // The stride in entries (the host sends it in bytes).
@@ -227,6 +231,39 @@ inline void dfb_dm_broadcast_advance(LocalDFBInterface& intf, uint32_t n) {
 inline uint32_t dfb_trisc_per_counter(const LocalDFBInterface& intf, uint32_t n) {
     return intf.split_tc ? n / intf.num_tcs_to_rr : n;
 }
+
+// tensix_trisc_mask bit of the TRISC that runs a compute endpoint's ops (host: tensix_trisc_mask).
+constexpr uint8_t DFB_PACK_TRISC_BIT = 1u << 2;
+constexpr uint8_t DFB_TRISC3_BIT = 1u << 3;
+#endif
+
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+// TRISC3 waits poll the tile counter from the RISC (posted reads as tiles available, acked as
+// space available) instead of issuing TT_WAIT_TILES / TT_WAIT_FREE, so there is no Tensix-side
+// stall that needs a TDMA op to resolve it (TEN-4746). One counter per op: no BLOCKED split.
+inline void dfb_trisc3_wait(const LocalDFBInterface& intf, uint32_t n, bool for_space) {
+    ASSERT(!intf.split_tc);
+    const uint8_t tc_id = dfb::get_counter_id(intf.tc_slots[intf.tc_idx].packed_tile_counter);
+    ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= n);
+    volatile ckernel::trisc::tile_counter_t& tc = ckernel::trisc::tile_counters[tc_id].f;
+    while (((for_space ? tc.acked : tc.posted) & 0xFFFFu) < n) {
+    }
+}
+
+// TRISC3 pop/push: issued once this thread's earlier Tensix work and L1 accesses are done, and
+// done itself on return, so the next RISC-side poll sees the new count.
+inline void dfb_trisc3_credit(LocalDFBInterface& intf, uint32_t n, bool push) {
+    auto& slot = intf.tc_slots[intf.tc_idx];
+    const uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
+    ckernel::tensix_sync();
+    if (push) {
+        TT_PUSH_TILES(0, n, tc_id);
+    } else {
+        TT_POP_TILES(0, n, tc_id);
+    }
+    ckernel::tensix_sync();
+    dfb_advance_slot(intf, slot, n);
+}
 #endif
 
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
@@ -239,7 +276,7 @@ inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     return intf.tc_slots[last].limit - intf.tc_slots[0].base_addr;
 #endif
 }
-#endif  // !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
+#endif  // !DFB_IS_COMPUTE_MATH
 
 }  // namespace
 
@@ -355,8 +392,15 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_PACK_TRISC_BIT) == 0) {
+        return;
+    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+    if (local_dfb_interface_.tensix_trisc_mask & DFB_TRISC3_BIT) {
+        dfb_trisc3_wait(local_dfb_interface_, num_entries, /*for_space=*/true);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: every consumer reads every entry, so every counter must have room for all of them.
@@ -381,8 +425,15 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_producer_share() || !share_strict);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_PACK_TRISC_BIT) == 0) {
+        return;
+    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_push_tiles<0x1, Pap, Cap>(logical_dfb_id_, num_entries);
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+    if (local_dfb_interface_.tensix_trisc_mask & DFB_TRISC3_BIT) {
+        dfb_trisc3_credit(local_dfb_interface_, num_entries, /*push=*/true);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: post the full count to every counter (every consumer reads every entry).
@@ -416,6 +467,10 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+    if (local_dfb_interface_.tensix_trisc_mask & DFB_TRISC3_BIT) {
+        dfb_trisc3_wait(local_dfb_interface_, num_entries, /*for_space=*/false);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: the block belongs to every counter, wait for each one's share.
@@ -442,6 +497,10 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_pop_tiles<0x3, Pap, Cap>(logical_dfb_id_, num_entries);
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+    if (local_dfb_interface_.tensix_trisc_mask & DFB_TRISC3_BIT) {
+        dfb_trisc3_credit(local_dfb_interface_, num_entries, /*push=*/false);
+    }
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
@@ -497,15 +556,13 @@ inline void DataflowBuffer<Pap, Cap>::finish_impl() {
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
-#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+#if defined(COMPILE_FOR_TRISC)
             // TRISC drain: finish() must not return until this TC is empty (posted == 0).
             // On TRISC, tile_counters[].f.posted/.acked are live occupancy / free-space
             // (tiles-available / space-available), NOT the cumulative read_posted/read_acked
-            // totals used by the DM overlay path below. The consumer also skips TCs this TRISC
-            // doesn't own via tensix_trisc_mask, which exists only in the UNPACK-side
-            // LocalDFBInterface, so the gate sits under an inner UNPACK guard (the PACK struct
-            // has no such member).
-#ifdef UCK_CHLKC_UNPACK
+            // totals used by the DM overlay path below. UNPACK and TRISC3 skip TCs they don't
+            // own (tensix_trisc_mask); PACK drains every TC, as before.
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
@@ -545,7 +602,7 @@ template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
-#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#elif defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU))
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
@@ -563,7 +620,7 @@ template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
-#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#elif defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU))
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);

@@ -8,7 +8,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 
-#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK))
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
 // Whether an op on this side is split over all of this hart's tile counters (one whole-block op
 // shared by every counter): a BLOCKED producer feeding STRIDED consumers, or a BLOCKED consumer fed
 // by STRIDED producers.

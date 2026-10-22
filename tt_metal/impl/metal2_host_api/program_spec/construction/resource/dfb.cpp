@@ -239,7 +239,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .borrows_memory =
             dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
-        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
+        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+        .compute_endpoint_on_trisc3 = dfb_spec->advanced_options.compute_endpoint_on_trisc3};
 }
 
 }  // namespace

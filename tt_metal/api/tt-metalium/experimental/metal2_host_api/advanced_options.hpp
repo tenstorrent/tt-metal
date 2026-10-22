@@ -273,6 +273,15 @@ struct DFBAdvancedOptions {
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Compute endpoint on TRISC3 (experimental, 2nd-gen (2xx) only)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default a compute kernel's DFB ops run on the UNPACK TRISC (consumer) or the PACK TRISC
+    // (producer). When true they run on TRISC3 (the isolated SFPU TRISC) instead, and UNPACK/PACK
+    // skip them. Not supported for a compute self-loop (intra-Tensix) DFB.
+    bool compute_endpoint_on_trisc3 = false;
 };
 
 struct ProgramAdvancedOptions {

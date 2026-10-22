@@ -64,6 +64,8 @@ struct DataflowBufferConfig {
     // When true, this local DFB is a CrossNode/PrefetcherPipe relay (borrowed ring +
     // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
     bool is_relay = false;
+    // Quasar-only: the compute endpoint's DFB ops run on TRISC3 instead of UNPACK/PACK.
+    bool compute_endpoint_on_trisc3 = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with
