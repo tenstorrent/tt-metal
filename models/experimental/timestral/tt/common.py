@@ -4,16 +4,19 @@
 """Shared TTNN helpers for Timestral: precision, weight upload, per-token linears.
 
 Per-token activations are kept flat, ``(1, 1, rows * padded_seq, D)``, so every linear
-folds the whole batch into M under the default matmul config. They are viewed as
+folds the whole batch into M. They are viewed as
 ``(rows, padded_seq, D)`` only around attention; ``padded_seq`` is tile-aligned, so the
 two views share one buffer.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
+
+from models.experimental.timestral.tt import program_configs
 
 TILE = 32
 
@@ -93,15 +96,45 @@ def upload_bias(device, bias: torch.Tensor | None):
 
 
 def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=None):
+    """``x @ weight (+ bias)``, then ``activation`` ("silu" / "sigmoid"), with an explicit config
+    from ``program_configs`` (DRAM-interleaved, tile-aligned K), else the auto config."""
     import ttnn
 
+    kernel = precision.compute_kernel_config()
+    x_shape, (k, n) = tuple(x.padded_shape), tuple(weight.padded_shape)[-2:]
+    if x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded() or x.shape[-1] % TILE or x_shape[-1] != k:
+        return ttnn.linear(
+            x,
+            weight,
+            bias=bias,
+            activation=activation,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=kernel,
+        )
+    m_tiles, k_tiles, n_tiles = math.prod(x_shape[:-1]) // TILE, k // TILE, n // TILE
+    grid = x.device().compute_with_storage_grid_size()
+    grid = (grid.x, grid.y)
+    max_dest = 4 if precision.fp32_dest_acc_en else 8
+    if activation is None and program_configs.grid_columns(n_tiles, grid[0]) < grid[0]:
+        config = program_configs.minimal_matmul_config(grid, m_tiles, k_tiles, n_tiles, max_dest=max_dest)
+        return ttnn.experimental.minimal_matmul(
+            x,
+            weight,
+            bias_tensor=bias,
+            config=config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=kernel,
+        )
+    config = program_configs.matmul_2d_config(
+        grid,
+        m_tiles,
+        k_tiles,
+        n_tiles,
+        fused_activation=program_configs.fused_activation(activation),
+        max_dest=max_dest,
+    )
     return ttnn.linear(
-        x,
-        weight,
-        bias=bias,
-        activation=activation,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        compute_kernel_config=precision.compute_kernel_config(),
+        x, weight, bias=bias, program_config=config, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=kernel
     )
 
 

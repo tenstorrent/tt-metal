@@ -1,0 +1,306 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "reduced_window": {
+    "device_us": 70640.75900000002,
+    "op_to_op_gap_us": 2115.3620000000005,
+    "ops": 53
+  },
+  "sections": {
+    "embed": {
+      "device_us": 9299.422000000002,
+      "op_to_op_gap_us": 2.846,
+      "ops": 6
+    },
+    "layer_time": {
+      "device_us": 27210.808999999994,
+      "op_to_op_gap_us": 9.032,
+      "ops": 17
+    },
+    "layer_time_variate": {
+      "device_us": 33391.41299999999,
+      "op_to_op_gap_us": 12.195,
+      "ops": 23
+    },
+    "head": {
+      "device_us": 739.1150000000001,
+      "op_to_op_gap_us": 571.221,
+      "ops": 7
+    }
+  },
+  "layer_counts": {
+    "time": 18,
+    "time_variate": 6
+  },
+  "full_model_estimate": {
+    "device_ms": 700.1815769999998,
+    "ops": 457
+  },
+  "measured": {
+    "steady_s": 0.836414460092783,
+    "device_s": 0.7020116280764341,
+    "cold_s": 4.5535405040718615,
+    "pcc_normalized": 0.9999331664893785,
+    "pcc_raw": 0.9999468486492481
+  },
+  "category_percent": {
+    "Compute": 75.67,
+    "Other": 15.52,
+    "TM": 8.799999999999999
+  },
+  "matmul_weighted_flops_percent": 35.86,
+  "stacked": [
+    {
+      "op": "MatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 32.06,
+      "device_us": 22645.3,
+      "count": 13,
+      "category": "Compute"
+    },
+    {
+      "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+      "percent": 23.31,
+      "device_us": 16464.62,
+      "count": 14,
+      "category": "Compute"
+    },
+    {
+      "op": "MinimalMatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 15.52,
+      "device_us": 10964.54,
+      "count": 8,
+      "category": "Other"
+    },
+    {
+      "op": "RotaryEmbeddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 11.3,
+      "device_us": 7984.35,
+      "count": 4,
+      "category": "Compute"
+    },
+    {
+      "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 6.09,
+      "device_us": 4305.0,
+      "count": 2,
+      "category": "TM"
+    },
+    {
+      "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
+      "percent": 5.14,
+      "device_us": 3632.25,
+      "count": 6,
+      "category": "Compute"
+    },
+    {
+      "op": "SDPAOperation (in0:dram_interleaved)",
+      "percent": 3.86,
+      "device_us": 2728.22,
+      "count": 2,
+      "category": "Compute"
+    },
+    {
+      "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 2.04,
+      "device_us": 1442.49,
+      "count": 2,
+      "category": "TM"
+    },
+    {
+      "op": "SliceDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.38,
+      "device_us": 269.58,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "ReshapeViewDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.29,
+      "device_us": 204.41,
+      "count": 1,
+      "category": "TM"
+    }
+  ],
+  "slowest_ops": [
+    {
+      "id": "58",
+      "op": "MatmulDeviceOperation 98304 x 64 x 3072",
+      "device_us": 3010.039,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 40.032438117911425,
+      "flops_percent": 4.222540678447063,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "103",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2048",
+      "device_us": 2791.861,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 38.952082499809265,
+      "flops_percent": 36.42018602276295,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x6"
+    },
+    {
+      "id": "78",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2048",
+      "device_us": 2785.319,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 39.04357095183711,
+      "flops_percent": 36.50572769930373,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x6"
+    },
+    {
+      "id": "105",
+      "op": "BinaryNgDeviceOperation",
+      "device_us": 2708.117,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "80",
+      "op": "BinaryNgDeviceOperation",
+      "device_us": 2705.28,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "59",
+      "op": "MinimalMatmulDeviceOperation 98304 x 3072 x 768",
+      "device_us": 2624.224,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 56.541514748740966,
+      "flops_percent": 58.12009396093681,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "87",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2304",
+      "device_us": 2593.641,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 45.74881411883911,
+      "flops_percent": 44.10406416728802,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x7"
+    },
+    {
+      "id": "68",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2304",
+      "device_us": 2592.429,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 45.7702023854848,
+      "flops_percent": 44.12468348830733,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x7"
+    },
+    {
+      "id": "79",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2048",
+      "device_us": 2285.581,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 47.580374530589815,
+      "flops_percent": 44.48763660955222,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x6"
+    },
+    {
+      "id": "104",
+      "op": "MatmulDeviceOperation 98304 x 768 x 2048",
+      "device_us": 2280.478,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 47.6868446001233,
+      "flops_percent": 44.58718609418594,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x6"
+    },
+    {
+      "id": "88",
+      "op": "NlpCreateHeadsDeviceOperation",
+      "device_us": 2153.483,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "69",
+      "op": "NlpCreateHeadsDeviceOperation",
+      "device_us": 2151.513,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "71",
+      "op": "RotaryEmbeddingDeviceOperation",
+      "device_us": 2004.372,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "90",
+      "op": "RotaryEmbeddingDeviceOperation",
+      "device_us": 1998.791,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "89",
+      "op": "RotaryEmbeddingDeviceOperation",
+      "device_us": 1990.792,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    }
+  ]
+}
