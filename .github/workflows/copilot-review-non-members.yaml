@@ -10,8 +10,10 @@ name: Request Copilot review for non-org-member PRs
 # codeowners-group-analysis PAT (same one auto-approve.yaml uses). That PAT's
 # account must have a Copilot seat for the request to be honored.
 #
-# Security note: pull_request_target is used so the run does not wait for
-# "approve workflows from outside collaborators". It is safe because:
+# Security note: pull_request_target runs the workflow file from the base
+# branch, so a PR author with write access to branches here cannot edit this
+# workflow to exfiltrate the PAT (which is also the account auto-approve.yaml
+# uses to approve PRs). It is safe because:
 #   1. No checkout and no PR code is ever executed — API calls only
 #   2. It only runs for PRs whose head branch lives in this repo
 
