@@ -15,6 +15,7 @@ import sys
 import time
 
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import raise_nproc_limit
 
 ROWS, COLS = 4, 8
 GALAXY_NUM_DEVICES = 32
