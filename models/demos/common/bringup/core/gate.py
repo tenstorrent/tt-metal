@@ -218,8 +218,9 @@ UNIT_TASK = re.compile(r"^BRINGUP_TASK=(\S+)\s+(.*)$", re.S)
 
 def gate_units(task: dict, tasks: dict | None = None) -> list[tuple[str, str]]:
     """F150: the gate as units (unit task, command): a fix job's segments of one source task each (F79's
-    BRINGUP_TASK=<id> prefix, which the runner sets as the unit's BRINGUP_TASK instead), else the whole command."""
-    tid, cmd = task.get("id"), task["gate"]["cmd"]
+    BRINGUP_TASK=<id> prefix, which the runner sets as the unit's BRINGUP_TASK instead), else the whole command.
+    F151: a unit runs as its source task's gate does (that task's step: --no-precompile for a full-model step)."""
+    tid, cmd, tasks = task.get("id"), task["gate"]["cmd"], tasks or {}
     units: list[tuple[str, list[str]]] = []
     for seg in (x.strip() for x in cmd.split("&&")):
         m = UNIT_TASK.match(seg)
@@ -230,7 +231,7 @@ def gate_units(task: dict, tasks: dict | None = None) -> list[tuple[str, str]]:
             units.append((src, [body]))
     if [u for u, _ in units] == [tid]:
         return [(tid, step_command(task.get("step"), cmd))]
-    return [(u, step_command(task.get("step"), " && ".join(b))) for u, b in units]
+    return [(u, step_command((tasks.get(u) or task).get("step"), " && ".join(b))) for u, b in units]
 
 
 def gate_command(task: dict, tasks: dict | None = None) -> str:
