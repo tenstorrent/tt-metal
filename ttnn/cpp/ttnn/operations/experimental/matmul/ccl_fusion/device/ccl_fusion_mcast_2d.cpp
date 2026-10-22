@@ -93,9 +93,17 @@ void create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t out_row_tiles = 0,
+    uint32_t out_column_offset_tiles = 0) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
+
+    // An output column window writes the N output tiles of each row into rows of out_row_tiles tiles, starting at
+    // out_column_offset_tiles.
+    if (out_row_tiles == 0) {
+        out_row_tiles = N;
+    }
 
     ttsl::optional_reference<const tt_metal::MeshTensor> bias_mesh;
     if (bias_tensor.has_value()) {
@@ -516,18 +524,18 @@ void create_program_mcast_in0_in1_descriptor(
 
         // WRITER
         // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        (std::uint32_t)1,                               // out_tensor_stride_w
+        (std::uint32_t)out_row_tiles,                   // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,                  // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * out_row_tiles,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,                     // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * out_row_tiles,     // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)M * out_row_tiles  // MtNt
     };
     if (bias_mesh.has_value()) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
@@ -587,18 +595,18 @@ void create_program_mcast_in0_in1_descriptor(
 
         // WRITER
         // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        (std::uint32_t)1,                               // out_tensor_stride_w
+        (std::uint32_t)out_row_tiles,                   // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,                  // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * out_row_tiles,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,                     // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * out_row_tiles,     // out_tensor_next_h_dim_block_stride
         // out subblock args
         (std::uint32_t)out_subblock_w,                     // out_subblock_w
         (std::uint32_t)out_subblock_h,                     // out_subblock_h
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
-        (std::uint32_t)M * N  // MtNt
+        (std::uint32_t)M * out_row_tiles  // MtNt
     };
     if (bias_mesh.has_value()) {
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
@@ -1334,7 +1342,8 @@ void create_program_mcast_in0_in1_descriptor(
                     // WRITER
                     // out tensor args
                     (std::uint32_t)out_tensor.address(),
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    out_column_offset_tiles + (in1_idx * per_core_N) +
+                        (in0_idx * per_core_M * out_row_tiles)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
@@ -1482,8 +1491,9 @@ void create_program_mcast_in0_in1_descriptor(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),                                // out_tensor_addr
-                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
+                    (std::uint32_t)out_tensor.address(),  // out_tensor_addr
+                    out_column_offset_tiles + (in1_idx * per_core_N) +
+                        (in0_idx * per_core_M * out_row_tiles)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -1831,7 +1841,10 @@ static void matmul_multi_core_reuse_mcast_2d_optimized_descriptor_(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        // With an output column window the output's rows keep their full width (0: N tiles).
+        operation_attributes.output_column_offset.has_value() ? output.padded_shape()[-1] / output_tile.get_width() : 0,
+        operation_attributes.output_column_offset.value_or(0) / output_tile.get_width());
 }
 
 void matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -1844,10 +1857,12 @@ void matmul_multi_core_reuse_mcast_2d_optimized_helper(
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> output_column_offset) {
     auto attributes = ttnn::prim::MatmulParams{.program_config = program_config, .bcast_batch = broadcast_batch};
     attributes.compute_kernel_config = compute_kernel_config;
     attributes.untilize_out = untilize_out;
+    attributes.output_column_offset = output_column_offset;
 
     auto output_tensors = std::vector<ttnn::Tensor>{output_tensor};
     matmul_multi_core_reuse_mcast_2d_optimized_descriptor_(
