@@ -310,6 +310,7 @@ llk:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
     sim_quasar_xl: 30
+    cpu_xlarge: 10
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
@@ -388,7 +389,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 335
+    wh_llmbox: 347  # TT-DiT encoder unit leg 45 -> 60 min (PR #61849)
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65

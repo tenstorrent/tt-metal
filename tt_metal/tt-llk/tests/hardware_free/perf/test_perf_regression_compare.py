@@ -19,7 +19,7 @@ import pytest
 
 # tt-llk holds a hyphen, so `perf` is not an importable package path; add its
 # directory the way both real callers reach it — by filesystem location.
-_PERF = pathlib.Path(__file__).parents[2] / "perf"
+_PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 from regression_compare import (  # noqa: E402
     DEFAULT_MIN_CYCLES,
