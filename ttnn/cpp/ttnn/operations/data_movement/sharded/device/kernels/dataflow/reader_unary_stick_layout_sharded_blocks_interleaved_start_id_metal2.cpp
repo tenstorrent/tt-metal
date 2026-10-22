@@ -57,12 +57,8 @@ void kernel_main() {
     {
         constexpr uint32_t page_stride = I2S_BANK_RUNS_PAGE_STRIDE;
         constexpr uint32_t num_banks = NUM_DRAM_BANKS;
-        const uint32_t scratch_base = scratch_pad.get_base_address();
         const uint32_t pass_sticks = scratch_pad.size_in_bytes() / page_stride;
 
-        UnicastEndpoint self_ep;
-        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
-        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
         uint32_t first[num_banks];
         uint32_t count[num_banks];
         uint32_t stage_off[num_banks];
@@ -84,16 +80,12 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             for (uint32_t b = 0; b < num_banks; ++b) {
-                uint32_t src = scratch_base + stage_off[b];
+                uint32_t src_off = stage_off[b];
                 uint32_t dest_off = (first[b] - start_id) * padded_block_width_bytes;
                 for (uint32_t k = 0; k < count[b]; ++k) {
                     noc.async_read(
-                        self_ep,
-                        dfb_in,
-                        block_width_bytes,
-                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = src},
-                        {.offset_bytes = dest_off});
-                    src += page_stride;
+                        scratch_pad, dfb_in, block_width_bytes, {.offset_bytes = src_off}, {.offset_bytes = dest_off});
+                    src_off += page_stride;
                     dest_off += num_banks * padded_block_width_bytes;
                 }
             }
