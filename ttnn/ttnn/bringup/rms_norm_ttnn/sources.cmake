@@ -6,6 +6,7 @@ set(TTNN_OP_BRINGUP_RMS_NORM_TTNN_API_HEADERS rms_norm_ttnn.hpp)
 set(TTNN_OP_BRINGUP_RMS_NORM_TTNN_SRCS
     device/rms_norm_ttnn_device_operation.cpp
     device/rms_norm_ttnn_program_factory.cpp
+    device/rms_norm_split_device_operation.cpp
     rms_norm_ttnn.cpp
 )
 

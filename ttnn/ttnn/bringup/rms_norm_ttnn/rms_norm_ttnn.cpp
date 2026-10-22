@@ -20,6 +20,7 @@
 
 #include "device/rms_norm_ttnn_device_operation.hpp"
 #include "device/rms_norm_ttnn_device_operation_types.hpp"
+#include "device/rms_norm_split_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::bringup::rms_norm_ttnn {
@@ -577,6 +578,38 @@ ttnn::Tensor rms_norm(
                program_config,
                compute_kernel_config)
         .first;
+}
+
+ttnn::Tensor rms_norm_split_full(
+    const ttnn::Tensor& input_tensor,
+    double epsilon,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ComputeConfigArg>& compute_kernel_config,
+    bool stats_out,
+    const std::optional<const ttnn::Tensor>& partial_stats,
+    int64_t stats_width,
+    const std::optional<std::pair<int64_t, int64_t>>& input_window,
+    const std::optional<tt::tt_metal::DataType>& dtype) {
+    const auto cfg = normalize_compute_kernel_config(compute_kernel_config);
+    const int64_t width = input_tensor.logical_shape()[-1];
+    const auto [c0, c1] = input_window.value_or(std::pair<int64_t, int64_t>{0, width});
+    if (c0 < 0 || c1 <= c0 || c1 > width) {
+        throw ValueErrorCpp(fmt::format("rms_norm_ttnn: input_window ({}, {}) outside [0, {}]", c0, c1, width));
+    }
+    RmsNormSplitParams attrs;
+    attrs.epsilon = static_cast<float>(epsilon);
+    attrs.stats_width = static_cast<uint32_t>(stats_width > 0 ? stats_width : (c1 - c0));
+    attrs.col_start = static_cast<uint32_t>(c0);
+    attrs.col_end = static_cast<uint32_t>(c1);
+    attrs.stats_out = stats_out;
+    attrs.out_dtype = dtype.value_or(input_tensor.dtype());
+    attrs.output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    attrs.math_fidelity = cfg.math_fidelity;
+    attrs.fp32_dest_acc_en = cfg.fp32_dest_acc_en;
+    attrs.math_approx_mode = cfg.math_approx_mode;
+    attrs.dst_full_sync_en = cfg.dst_full_sync_en;
+    return ttnn::prim::bringup::rms_norm_split(input_tensor, as_optional(weight), as_optional(partial_stats), attrs);
 }
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn

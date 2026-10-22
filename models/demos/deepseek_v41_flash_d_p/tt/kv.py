@@ -11,7 +11,8 @@ in it: agent rule 17; FIX.8 deleted the emulation). Per chip (r, c) the input is
     bf16 cast + tt/q_a.TtAttnInProj   attn_norm @ the chip's K rows of wkv^T, ATTN_FIDELITY + fp32 accumulation, the
                                   sum over TP (the q_a exchange: in the assembled model the kv step slices its
                                   columns of the projection q_a already made, ``from_proj``)
-    slice kv [S/SP, 512] -> tt/norm.TtDistributedRmsNorm(split=False) kv_norm (fp32, eps 1e-20, replicated weight)
+    kv [S/SP, 512] = p's wkv columns -> tt/norm.TtDistributedRmsNorm(split=False) kv_norm (eps 1e-20, replicated weight;
+                                  NORM_IMPL=on: ttnn.bringup.rms_norm(input_window=) on p in place, P.18)
     tt/rope.rope_deinterleaved    the last 64 dims at absolute positions (theta 10000 for ratio-0 layers, 160000 +
                                   YaRN for ratio 1 / 2; cos / sin sliced from the load-time table, tt/rope.RopeTable),
                                   exact fp32 on the SFPU; the wkv rows (and kv_norm weight) of the rope dims are
@@ -35,7 +36,7 @@ import torch
 
 import ttnn
 
-from .common import DRAM, cast
+from .common import cast
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
 from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16, rope_stock, stock
@@ -70,9 +71,8 @@ class TtWindowKv:
 
     def from_proj(self, p: ttnn.Tensor, start: int) -> ttnn.Tensor:
         rows = p.shape[-2]
-        kv = ttnn.slice(p, [0, 0, 0, self.k0], [1, 1, rows, self.k1], memory_config=DRAM)
-        kn = self.norm(kv)
-        ttnn.deallocate(kv)
+        # kv_norm on p's wkv columns (NORM_IMPL=on, P.18: read in place by the fork's input_window; off: a slice)
+        kn = self.norm(p, window=(self.k0, self.k1))
         cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
         if self.stock:  # ROPE_IMPL=on (P.17): one stock rotary op on the bf16 norm output
             out = rope_stock(kn, cos, sin, self.rope.trans)
