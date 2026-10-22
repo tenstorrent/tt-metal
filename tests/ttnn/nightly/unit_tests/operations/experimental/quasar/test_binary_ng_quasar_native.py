@@ -17,14 +17,15 @@ test_fallback_factory_is_engaged runs in a process with TTNN_QSR_NATIVE=0. Off Q
 
 Every TTNN_QSR_* tuning knob left unset takes the rule's value (resolve_native_config in
 binary_ng_utils.cpp): 4 compute threads; where the operands move over the NoC, a reader thread per compute
-thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. With every
-operand in L1: batches of 8 tiles in the DM kernels, in rings of 16 entries per thread; in the compute, where each
-compute thread owns one tile counter of each ring, 4 tiles on the SFPU kernel (2 in fp32) and 8 on the FPU kernel at
-1,1,1 only. Beside a DRAM operand: batches of 1, in rings of 2 entries per thread. The tests in this process use DRAM
-tensors. Above ring stride 1 only one tile of each FPU-kernel compute batch comes out right, which is why the rule
-does not batch the FPU kernel there. A set batch still runs, so each test predicts its output from its
-configuration: the tests in this process from the invocation's knobs, the arms from their own. A test that predicts
-wrong output is a strict expected failure, and it passes only on exactly the predicted wrong tiles.
+thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. The batch size is
+the max batch size, the tiles that a DST section holds: 8 on the FPU kernel, 4 on the SFPU kernel (2 in fp32). The
+DM kernels move one batch per barrier, in rings of two batches per thread, and the compute runs batches of that size
+where each compute thread owns one tile counter of each ring: on the SFPU kernel, and on the FPU kernel at 1,1,1
+only. The tests in this process use DRAM tensors. Above ring stride 1 only one tile of each FPU-kernel compute batch
+comes out right, which is why the rule does not batch the FPU kernel there. A set batch still runs, so each test
+predicts its output from its configuration: the tests in this process from the invocation's knobs, the arms from
+their own. A test that predicts wrong output is a strict expected failure, and it passes only on exactly the
+predicted wrong tiles.
 """
 
 import json
@@ -67,7 +68,9 @@ def _native_enabled():
 
 
 # The rule's value of every knob left unset. Mirrors resolve_native_config in binary_ng_utils.cpp: a test whose
-# prediction disagrees with the device is how a change on either side shows up.
+# prediction disagrees with the device is how a change on either side shows up. The DM batch is the max batch size (8
+# on the FPU kernel, 4 and 2 on the SFPU kernel), in rings of twice that; no prediction reads it, and the log test
+# checks it.
 _RULE_COMPUTE_THREADS = 4
 # The FPU kernel's rule batch is 8 at R = C = W = 1 only: above ring stride 1 its batches come out wrong.
 _RULE_TILES_PER_CYCLE = 8
@@ -80,23 +83,20 @@ _USER_DM_CORES = 6
 _CLUSTERS = 32
 
 
-# Where a program's operands are, as (an input moves over the NoC, the output moves over the NoC, an operand is
-# in DRAM): all of them over the NoC and in L1, all of them over the NoC beside a DRAM operand, or all of them
-# borrowed in place. _path gives the others.
-_NOC_L1 = (True, True, False)
-_NOC_DRAM = (True, True, True)
-_BORROWED = (False, False, False)
+# What a program moves, as (an input moves over the NoC, the output moves over the NoC): all of them over the NoC,
+# or all of them borrowed in place. _path gives the others.
+_NOC = (True, True)
+_BORROWED = (False, False)
 
 
 def _resolve(knobs, path, sfpu=False):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
-    `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
-    runs one reader or writer thread whatever is set. Beside a DRAM operand the rule batches nothing. `sfpu` is
-    True for an op on the SFPU kernel, whose rule batch is smaller. An empty value counts as unset, as in
-    native_tuning().
+    `path` is _NOC, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output runs one reader or
+    writer thread whatever is set. `sfpu` is True for an op on the SFPU kernel, whose rule batch is smaller. An empty
+    value counts as unset, as in native_tuning().
     """
-    inputs_move, output_moves, dram = path
+    inputs_move, output_moves = path
 
     def knob(name, rule):
         value = knobs.get(name, "")
@@ -106,14 +106,14 @@ def _resolve(knobs, path, sfpu=False):
     r = knob("TTNN_QSR_READER_THREADS", c) if inputs_move else 1
     w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if output_moves else 1
     fpu_batch = _RULE_TILES_PER_CYCLE if r == c == w == 1 else 1
-    rule_batch = 1 if dram else (_RULE_SFPU_TILES_PER_CYCLE if sfpu else fpu_batch)
+    rule_batch = _RULE_SFPU_TILES_PER_CYCLE if sfpu else fpu_batch
     batch = knob("TTNN_QSR_TILES_PER_CYCLE", rule_batch if r <= c and w <= c else 1)
     return r, c, w, batch
 
 
-def _path(borrowed, dram):
+def _path(borrowed):
     """The path of a program that borrows `borrowed`, a string of the operands "a", "b" and "c" it holds in place."""
-    return ("a" not in borrowed or "b" not in borrowed, "c" not in borrowed, dram)
+    return ("a" not in borrowed or "b" not in borrowed, "c" not in borrowed)
 
 
 def _route(case, knobs):
@@ -243,7 +243,7 @@ def _add_returning_operands(device, h_tiles=32, w_tiles=40, seed=0):
 
 
 # The benchmark shape under the invocation's knobs: 40 tiles per cluster on the NoC path.
-_BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC_DRAM)
+_BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -254,7 +254,8 @@ def test_native_output_matches_the_prediction(device):
     fp32_dest_acc_en is false for bf16 and HiFi4 is fidelity-inert for FPU add, so the device result
     equals torch's bf16 add bit-for-bit. The int16 view is required, not cosmetic: torch.equal on
     floats reports False for NaN vs itself. randn produces no NaN/Inf, so that path stays unexercised.
-    The rule batches nothing beside a DRAM operand, so the output is exact unless the invocation sets a batch.
+    The rule computes one tile at a time on the FPU kernel above ring stride 1, so the output is exact unless the
+    invocation sets a batch.
     """
     out, ta, tb = _add_returning_operands(device)
     golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
@@ -444,7 +445,7 @@ def _add_one_row(device, tiles, seed):
 
 
 def _parent_prediction(tiles):
-    return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC_DRAM)
+    return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC)
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -497,9 +498,9 @@ def test_native_even_and_uneven_share_a_process(device):
 
 
 # How the DM kernels and the compute move tiles in an arm. per-tile runs one tile per transfer and per batch
-# in two-entry rings, so the rings wrap at the low tile counts. batched sets a DM batch of 8, which the rule
-# does not take beside these DRAM tensors, in the 16-entry rings that the rule derives for it, with the
-# compute batch at 1 so the output stays exact at every thread count.
+# in two-entry rings, so the rings wrap at the low tile counts. batched sets the rule's DM batch of 8, in the
+# 16-entry rings that the rule derives for it, with the compute batch at 1 so the output stays exact at every
+# thread count.
 _DM_BATCH_8 = {"TTNN_QSR_DM_BATCH": "8"}
 _BATCHING = {"per-tile": _PER_TILE, "batched": {**_DM_BATCH_8, **_COMPUTE_BATCH_1}}
 
@@ -546,7 +547,7 @@ _DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
 def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
     """A DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
 
-    The batch is set: the rule does not batch beside these DRAM tensors. The rule's depth for it, 16, is the
+    The batch is set, so the arm runs it whatever the rule picks. The rule's depth for it, 16, is the
     smallest legal one: a batch occupies n consecutive slots and the ring wraps only afterwards, so the
     factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so the
     output stays exact at ring stride 4.
@@ -576,7 +577,7 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
 
     The compute kernel splits a thread's share into full chunks of num_tiles_per_cycle and one remainder
     chunk; a truncating divide there once dropped the tail and hung. The tile counts above reach every
-    branch of that split. Both batches are set: the rule does not batch beside these DRAM tensors.
+    branch of that split. Both batches are set, so the arms run them whatever the rule picks.
     both-batches measured 1.81x the throughput of no batching at 1,1,1 on craq-sim (marginal cycles per
     tile), which models no DRAM time.
     """
@@ -605,11 +606,12 @@ def test_native_tiles_per_cycle_above_stride_one():
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_rule_does_not_batch_beside_dram():
-    """With every knob unset and an operand in DRAM, the rule batches nothing, so the output is exact.
+def test_native_rule_beside_dram_is_exact():
+    """With every knob unset and an operand in DRAM, the rule's batches must give exact output.
 
-    The rule keeps the legacy reader's one tile per barrier beside DRAM, and at compute batch 1 the batching
-    defect cannot occur. The shapes are the ones the L1 test above loses tiles on at a compute batch of 8.
+    Beside DRAM the rule batches as in L1: the DM kernels move 8 tiles per barrier, and the FPU kernel computes one
+    tile at a time above ring stride 1. The shapes are the ones the L1 test above loses tiles on at a compute batch
+    of 8.
     """
     p = _run_arm([288, 2080], knobs={}, timeout=900)
     _check_arm(p, "the rule beside DRAM")
@@ -647,13 +649,11 @@ _GUARD_ARMS = [
         "dm_batch=8 (TTNN_QSR_DM_BATCH) must divide entries_per_thread=20 (TTNN_QSR_ENTRIES_PER_THREAD)",
     ),
     (
-        # The rule batches only when every operand is in L1: an L1-interleaved tensor of 5 tiles per bank
-        # takes the NoC path at the rule's 4 compute threads, where the rule's DM batch is 8 and its FPU batch 1.
+        # The rule's DM batch on the FPU kernel is 8, which needs 16 entries per thread; its FPU batch is 1.
         "rule-batch-depth",
         {"TTNN_QSR_ENTRIES_PER_THREAD": "8"},
         "dm_batch=8 (rule) needs entries_per_thread >= 16 for double buffering, "
         "got entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)",
-        [("l1_160", "l1", None, None, (5 * 32, 32 * 32))],
     ),
     (
         "batch-beside-more-readers",
@@ -1260,11 +1260,11 @@ _L1_INTERLEAVED_RULE_SPLITS = {
     "l1_256": (_BORROWED, [8] * 32),
     "l1_128_again": (_BORROWED, [4] * 32),
     "l1_128_in_place": (_BORROWED, [4] * 32),
-    "l1_160": (_NOC_L1, _noc_split(160)),
-    "l1_64": (_NOC_L1, _noc_split(64)),
-    "l1_8_idle": (_NOC_L1, _noc_split(8)),
-    "l1_128_sub_grid": (_NOC_L1, _noc_split(128, clusters=16)),
-    **{name: (_path(borrowed, True), [4] * 32) for name, borrowed in _L1_INTERLEAVED_PARTIAL_BORROWED.items()},
+    "l1_160": (_NOC, _noc_split(160)),
+    "l1_64": (_NOC, _noc_split(64)),
+    "l1_8_idle": (_NOC, _noc_split(8)),
+    "l1_128_sub_grid": (_NOC, _noc_split(128, clusters=16)),
+    **{name: (_path(borrowed), [4] * 32) for name, borrowed in _L1_INTERLEAVED_PARTIAL_BORROWED.items()},
 }
 _L1_INTERLEAVED_RULE_CASES = [
     (entry, *_L1_INTERLEAVED_RULE_SPLITS[entry[0]])
@@ -1352,7 +1352,7 @@ def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
 
 
 _L1_INTERLEAVED_PARTIAL_ROUTES = [
-    (entry, *_route((entry, _path(_L1_INTERLEAVED_PARTIAL_BORROWED[entry[0]], True), [4] * 32), _COMPUTE_BATCH_1))
+    (entry, *_route((entry, _path(_L1_INTERLEAVED_PARTIAL_BORROWED[entry[0]]), [4] * 32), _COMPUTE_BATCH_1))
     for entry in _L1_INTERLEAVED_PARTIAL
 ]
 
@@ -1435,18 +1435,16 @@ _DRAM_SHARDED = [
     ("dram_width_in_place", "dram_width", [4 * 32, 8 * 32], None, (4 * 32, 16 * 32), {"in_place": True}),
 ]
 # A DRAM-sharded operand always moves over the NoC. dram_a_l1_b_dram_out borrows b's slices on the 32 bank
-# clusters; every other case here splits its tiles over the 32 worker clusters, with 4 tiles each. Beside DRAM
-# the rule's program is the per-tile one: one page per transfer, a compute batch of 1, rings of 2 entries per
-# thread. So the per-tile arms run the rule at other thread counts, and the batched arms set a DM batch of 8,
-# which keeps the batched walk tested over DRAM-sharded accessors.
+# clusters; every other case here splits its tiles over the 32 worker clusters, with 4 tiles each. The per-tile
+# arms run one page per transfer, a compute batch of 1 and rings of 2 entries per thread, at two thread counts. The
+# batched arms and the rule run DM batches of 8 over the DRAM-sharded accessors.
 _DRAM_SHARDED_CONFIGS = {
     **{f"R{r}C{c}W{w}-per-tile": {**_threads(r, c, w), **_PER_TILE} for r, c, w in [(1, 1, 1), (1, 4, 1)]},
     "R1C1W1-batched": {**_threads(1, 1, 1), **_DM_BATCH_8, "TTNN_QSR_TILES_PER_CYCLE": "8"},
     "R1C4W1-dm8-n1": {**_threads(1, 4, 1), **_DM_BATCH_8, **_COMPUTE_BATCH_1},
-    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
     "rule": {},
 }
-_DRAM_SHARDED_CASES = [(entry, _NOC_DRAM, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
+_DRAM_SHARDED_CASES = [(entry, _NOC, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -1543,11 +1541,6 @@ def _placement(entry, operand):
     return entry[1:4]
 
 
-def _has_dram(entry):
-    """True when a, b or the output of a _SHARD_ARM_SRC entry is in DRAM, interleaved or sharded."""
-    return any(_placement(entry, operand)[0].startswith("dram") for operand in "abc")
-
-
 def _anchor_split(entry, anchor):
     """Tiles per cluster under `anchor`, pad slots included: "a", "b" or "c" puts one shard of that operand's
     placement on each core that holds one, "slice" puts each L1 bank's reservation on its cluster, and None
@@ -1569,7 +1562,7 @@ def _anchor_split(entry, anchor):
 
 def _anchored(entry, anchor, borrowed):
     """(entry, path, tiles per cluster) of a case whose anchor borrows the operands named in `borrowed`."""
-    return (entry, _path(borrowed, _has_dram(entry)), _anchor_split(entry, anchor))
+    return (entry, _path(borrowed), _anchor_split(entry, anchor))
 
 
 # (entry, anchor, the operands it borrows), as the rule picks them at its compute count of 4; a set count can
@@ -1764,10 +1757,8 @@ _MIXED_PAD_SLOTS = {
 }
 
 # R1C4W1-n1 puts one reader thread on four tile counters, so the shard walk takes the counter-major steps.
-# Beside DRAM the rule batches nothing, so rule-dm8-n1 sets a DM batch of 8 for the cases with a DRAM operand.
 _MIXED_CONFIGS = {
     "rule-n1": _COMPUTE_BATCH_1,
-    "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
     "R1C1W1": _threads(1, 1, 1),
     "R1C4W1-n1": {**_threads(1, 4, 1), **_COMPUTE_BATCH_1},
     "R4C4W2-per-tile": {**_threads(4, 4, 2), **_PER_TILE},
@@ -1887,7 +1878,7 @@ _ACT_CASES = (
         if entry[0] == "B.B.B_partial"
     ]
     + [
-        (_with_act(_with_op(_BLOCK_6, op), act), _NOC_L1, _noc_split(_tensor_tiles(_BLOCK_6)))
+        (_with_act(_with_op(_BLOCK_6, op), act), _NOC, _noc_split(_tensor_tiles(_BLOCK_6)))
         for op in ("add", "multiply")
         for act in ("lhs", "relu")
     ]
@@ -2087,21 +2078,19 @@ def test_native_rule_follows_a_set_compute_count():
     _check_arm(p, "C = 2 on the NoC path")
 
 
-# Each case: the knobs, the values each program shape's part of the settings line must name with their
-# sources, and whether the output must be exact. The line gives five shapes: every operand over the NoC and in
-# L1, the same beside a DRAM operand (where the rule batches nothing), the output borrowed beside an input that
-# moves, the inputs borrowed beside an output that moves, all of them borrowed. With no knob set, the rule runs the
-# FPU kernel at batch 1 above ring stride 1, and the SFPU kernel at 4 and 2. C = 1 alone gives 1,1,1 by the
-# rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the input rings, so the rule's
-# compute batch drops to 1 where the inputs move. That case checks the line only: its output is exact only on
-# craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix side. A hang still
-# fails it.
-_NOC_SHAPE = "the operands move over the NoC, all in L1"
-_DRAM_SHAPE = "an operand is in DRAM"
+# Each case: the knobs, the values each part of the settings line must name with their sources, and whether the
+# output must be exact. The line has five parts: every operand over the NoC, the output borrowed beside an input
+# that moves, the inputs borrowed beside an output that moves, all of them borrowed, and the SFPU kernel over the
+# NoC. With no knob set, the rule runs the FPU kernel at batch 1 above ring stride 1, and the SFPU kernel at 4 and
+# 2. C = 1 alone gives 1,1,1 by the rule. R = 2 beside C = 1 makes each compute thread own two tile counters of
+# the input rings, so the rule's compute batch drops to 1 where the inputs move. That case checks the line only:
+# its output is exact only on craq-sim builds without the defect that corrupts a run whose DM side outnumbers its
+# Tensix side. A hang still fails it.
+_NOC_SHAPE = "the operands move over the NoC"
 _OUTPUT_SHAPE = "the output is borrowed and an input moves"
 _INPUTS_SHAPE = "the inputs are borrowed and the output moves"
 _ALL_SHAPE = "all of them are borrowed"
-_SFPU_SHAPE = "the SFPU kernel runs, all in L1 over the NoC"
+_SFPU_SHAPE = "the SFPU kernel runs over the NoC"
 _LOG_CASES = {
     "W1-n1": (
         {"TTNN_QSR_WRITER_THREADS": "1", **_COMPUTE_BATCH_1},
@@ -2114,7 +2103,6 @@ _LOG_CASES = {
                 "dm_batch=8 (rule)",
                 "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
@@ -2136,11 +2124,13 @@ _LOG_CASES = {
                 "dm_batch=8 (rule)",
                 "tiles_per_cycle=1 (rule)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=4 (rule) tiles_per_cycle=1 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
+            _SFPU_SHAPE: [
+                "entries_per_thread=8 (rule) dm_batch=4 (rule) tiles_per_cycle=4 (rule) in a 16-bit DST",
+                "entries_per_thread=4 (rule) dm_batch=2 (rule) tiles_per_cycle=2 (rule) in a 32-bit DST",
+            ],
         },
         True,
     ),
@@ -2148,7 +2138,6 @@ _LOG_CASES = {
         {"TTNN_QSR_COMPUTE_THREADS": "1"},
         {
             _NOC_SHAPE: ["R=1 (rule)", "C=1 (TTNN_QSR_COMPUTE_THREADS)", "W=1 (rule)", "tiles_per_cycle=8 (rule)"],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
             _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
@@ -2165,7 +2154,6 @@ _LOG_CASES = {
                 "W=1 (rule)",
                 "tiles_per_cycle=1 (rule)",
             ],
-            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
             _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
@@ -2221,7 +2209,7 @@ def test_native_prediction_tables_cover_their_cases():
     """
     cases = _BORROWED_SHARD_CASES + _BATCHED_BORROWED_CASES + _L1_INTERLEAVED_RULE_CASES + _DRAM_SHARDED_CASES
     # A pad slot takes a batch position but is not in the output, so a mixed case with pad slots must be exact in
-    # every configuration: at most one tile per compute thread, or a DRAM operand.
+    # every configuration: none of them batches the FPU kernel above ring stride 1.
     padded = [case for case in _MIXED_CASES if case[0][0] in _MIXED_PAD_SLOTS]
     unknown = _MIXED_PAD_SLOTS - {case[0][0] for case in _MIXED_CASES}
     assert not unknown, f"these cases with pad slots are not in the mixed table: {unknown}"
@@ -2252,8 +2240,6 @@ def test_native_prediction_tables_cover_their_cases():
     assert not racy, f"these in-place cases have a wrong-tile prediction: {racy}"
     uncovered = [entry[0] for entry, _, split in cases if sum(split) != _tensor_tiles(entry)]
     assert not uncovered, f"these splits do not cover their output: {uncovered}"
-    misplaced = [entry[0] for entry, path, _ in cases if path[2] != _has_dram(entry)]
-    assert not misplaced, f"these paths name the wrong DRAM placement: {misplaced}"
     indivisible = [entry[0] for entry in _BORROWED_SHARDS if _shard_tiles(entry) % _RULE_COMPUTE_THREADS] + [
         entry[0]
         for (entry, anchor, _), (_, _, split) in zip(_MIXED, _MIXED_CASES)

@@ -777,16 +777,10 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
     // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. The rule does not batch beside a DRAM operand.
-    const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
-    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
+    // anchor's tile count divides.
     const NativeConfig cfg = resolve_native_config(
         t,
-        {.inputs = !a_borrowed || !b_borrowed,
-         .output = !c_borrowed,
-         .dram = any_dram,
-         .sfpu = is_sfpu,
-         .dst_32bit = fp32_dest_acc_en});
+        {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .sfpu = is_sfpu, .dst_32bit = fp32_dest_acc_en});
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
