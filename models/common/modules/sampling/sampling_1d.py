@@ -461,6 +461,7 @@ class Sampling1D(LightweightModule):
         # vocabulary on one device and established tensor-parallel vocab layouts.
         if self._log_probs_calculator.enable_log_probs:
             log_probs = self._log_probs_calculator.calculate_log_probs(x_bf16, tt_out_tok)
+            log_probs = ttnn.clone(log_probs) if log_probs is not None else None
         else:
             log_probs = None
         return tt_out_tok, log_probs

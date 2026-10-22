@@ -216,6 +216,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
+    return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
+        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+    )
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -756,21 +762,18 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
         # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
-        # Prefill logits are batch-variant on multi-chip Blackhole: the
+        # Prefill logits are batch-variant on Blackhole: the
         # float-reduction order in the prefill matmul/attention depends on the
         # batched-token count, so identical same-seed requests that land in
         # different-sized prefill batches get slightly different logits. Seeded
         # sampling under concurrency then diverges (tt-inference-server#4004,
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
-        # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
-        )
+        self.disable_batched_prefill = disables_batched_prefill(self.base_model_name, self.device_name)
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
+            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4", "Qwen2.5-3B"]
             and self.device_name == "N150"
         ) or (
             self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
@@ -1458,7 +1461,7 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name == "N150"
+                    if self.device_name in ("N150", "P100")
                     and self.base_model_name == "Llama-3.1-8B"
                     and seq_len >= self.prefill_len_cutoff
                     else None
