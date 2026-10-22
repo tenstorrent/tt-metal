@@ -13,7 +13,7 @@ namespace {
 // Broadcast one fp32 value over a whole fp32 tile (slot reserved): plain unrolled stores (the lock flushes on release).
 inline void fill_scalar_tile_fast(DataflowBuffer& dfb, uint32_t value) {
     auto lock = dfb.scoped_write_lock(1);
-    uint32_t* p = reinterpret_cast<uint32_t*>(lock.template get_ptr<uint32_t>().get_address());
+    uint32_t* p = &lock.template get_ptr<uint32_t>()[0];
 #pragma GCC unroll 16
     for (uint32_t i = 0; i < 1024; ++i) {
         p[i] = value;
