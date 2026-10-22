@@ -15,10 +15,15 @@ if not rows or "OP TYPE" not in rows[0]:
     print(f"RAB DEVONLY {arm} {run}")
     sys.exit(0)
 cur, acc, order = None, defaultdict(lambda: [0.0, 0]), []
+import re
+names = [re.sub(r".*case=([A-Za-z0-9_]+).*", r"\1", l.strip()) for l in open(os.environ["AB_NODES_FILE"]) if l.strip()]
+idx = -1
 for r in rows:
     if r["OP TYPE"] == "signpost":
         node, _, k = r["OP CODE"].rpartition("#")
-        cur = (node.split("::")[-1].replace(" ", ""), int(k)) if k.isdigit() else None
+        if k.isdigit() and int(k) == 0:
+            idx += 1
+        cur = (names[idx] if 0 <= idx < len(names) else node, int(k)) if k.isdigit() else None
         continue
     if cur is None:
         continue
