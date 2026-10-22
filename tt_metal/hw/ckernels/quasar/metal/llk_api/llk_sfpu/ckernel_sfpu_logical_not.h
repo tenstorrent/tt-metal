@@ -35,7 +35,7 @@ inline void calculate_logical_not() {
         vType v = sfpi::dst_reg[0].mode<layout>();
         if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
             // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
-            v = sfpi::setsgn(v, 0);
+            v = sfpi::setsgn(v, 0 /* sgn */);
         }
         vType r = 0;
         v_if(v == 0) { r = 1; }
