@@ -165,6 +165,7 @@ class TtK3TokenSplitMoE:
         shared_tp=False,
         shared_axis=1,
         joint_routing=False,
+        combine_auto_cfg=False,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -178,7 +179,9 @@ class TtK3TokenSplitMoE:
         routed(shared=) runs the chip's slice on the row's tokens between the dispatch and the experts, and the combine
         carries the partials to their owners (its shared_rows); the chip's own partial is added to the output.
         joint_routing (routed_only): routed() takes the router's joint rows (combine_rf/router_topk.py's 32-token pages:
-        ids, then weights' bf16 bits) as ids, wts None."""
+        ids, then weights' bf16 bits) as ids, wts None. combine_auto_cfg: the combine's accumulators, port placement and
+        rings from the free cells and the arena (sparse_combine_rf.combine_auto, the close-out sizing) instead of 16
+        accumulators, acc_on_ports and combine_depth."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
@@ -507,6 +510,20 @@ class TtK3TokenSplitMoE:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
         a_rows = int(plan["arena_tiles"]) * 32
+        if (
+            combine_auto_cfg
+        ):  # (the arena takes the L1 left, less the flat program's static CBs: the combine sizes from it)
+            from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
+
+            mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
+            reserve = fused_arena_reserve(int(plan["static_l1_bytes"]), l1=True)
+            if self.sparse_dispatch:  # (the dispatch's manifest rings: allocated per call while the arena is)
+                ms = manifest_spec(mesh_device, S, num_links=2, torus=self.torus)
+                reserve += (int(ms[0][-1]) * 4 + 63) // 64 * 64
+                # (and its static CBs on the port cores, below the manifest: 2 x group rows of row bytes + slack)
+                grp = 8 if 2 * d.latent <= 7168 else 2
+                reserve += 2 * 2 * grp * 2 * d.latent + 8192
+            a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
             ttnn.Shape([grid.x * grid.y * a_rows, 16]),
@@ -602,6 +619,33 @@ class TtK3TokenSplitMoE:
                 ttnn.Shape([self.G * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
             )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
+        copt = dict(n_acc=16, depth=combine_depth)
+        if combine_auto_cfg:  # (the close-out sizing: from the free cells and the arena)
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
+            from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
+
+            chips_, _, _ = mesh_plan(mesh_device, 2, self.torus)
+            port_cells = {(v.x, v.y) for v in place_ports(mesh_device, chips_, self.cells).values()}
+            piece = max(7168, 2 * d.latent)
+            auto = combine_auto(
+                self.N, S, d.latent, len(self.cells), len(port_cells), arena_bytes=a_rows * 64, l1=True, depth=8,
+                piece_max=piece,
+            )  # fmt: skip
+            assert auto[
+                "fits"
+            ], f"combine: does not fit ({len(self.cells)} cells, {a_rows * 64 >> 10} KB): {auto['why']}"
+            acc_on_ports = auto["acc_on_ports"]
+            copt = dict(
+                n_acc=auto["n_acc"], depth=auto["depth"], inj_slots=auto["inj_slots"], local_keep=auto["local_keep"]
+            )
+            from loguru import logger
+
+            lay_ = auto["layout"]
+            logger.info(
+                f"K3 block combine (auto): {len(self.cells)} cells, {len(port_cells)} port cells, accumulators "
+                f"{auto['n_acc']} (on the ports: {acc_on_ports}), landing pool {lay_['PSL']} slots (ring depth {lay_['D']}), "
+                f"injection ring {lay_['QP']}, local ring {lay_['QL']}; arena {a_rows * 64 >> 10} KB"
+            )
         self.combine = sparse_combine_rf_prepare(
             mesh_device,
             S,
@@ -609,8 +653,7 @@ class TtK3TokenSplitMoE:
             {ch: [] for ch in chips},
             num_links=2,
             torus=self.torus,
-            n_acc=16,
-            depth=combine_depth,
+            **copt,
             cells=self.cells,
             arena=self.arena,
             writers=self.writers,
