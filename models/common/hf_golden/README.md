@@ -185,12 +185,16 @@ tolerance on GPU. Run it first on any new machine.
 <root>/<hf-repo>/
   wikitext-2-raw-v1-train.tokens.safetensors   the whole text under this model's tokenizer (built once)
   isl<N>/                                      the first N tokens prefilled
+    input_ids.safetensors                      input_ids [N] int32: the exact prefill ids (prefix + token cache)
     hidden/embed.safetensors                   model.embed_tokens.output
     hidden/layer_XX.safetensors                model.layers.<i>.output (+ sub-layer outputs with --sublayers)
     hidden/final.safetensors                   model.last_hidden_state, logits (last position, fp32)
     cache/layer_XX.safetensors                 past_key_values.layers.<i>.<attr>, routing, indexer top-k, ...
     metadata.json                              revision, versions, dtypes, every stored tensor and what it is
 ```
+
+Read a trace's prefill ids from `input_ids.safetensors`, not from the token cache: the cache holds the wikitext ids
+only, and a model with a prefix (metadata `prefix_ids`) prefilled those first.
 
 `trim_trace.py` copies a trace keeping the layer hidden states of only some layers, always including decoder
 layers 0-4 (embed, final and every layer's cache stay complete), hard-linked when on the same filesystem, with metadata.json's inventory and a `hidden_layers`

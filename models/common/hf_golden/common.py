@@ -30,6 +30,8 @@ TEXT = "wikitext-2-raw-v1-train.txt"
 BLOCK_BYTES = 1 << 20
 # Bumped when the trace layout or key names change, so a reader can fail loudly on a format it does not know.
 GOLDEN_SCHEMA = "1"
+# The exact prefill ids (prefix_ids, then the token cache), written inside each trace dir.
+INPUT_IDS = "input_ids.safetensors"
 # ISL has to suit the device even though nothing here talks to one: the device shards the sequence over sp ranks in
 # 32-row tiles, so a trace at any other ISL can never be graded. Literals, not a spec import: no device stack here.
 ISL_ALIGNMENT = 32 * 8  # ttnn.TILE_SIZE * sp
@@ -38,6 +40,10 @@ ISL_CHUNK_SIZE = 5120  # spec chunk_size; a chunked grade additionally needs thi
 SHARED_HF_CACHE = os.environ.get("HF_GOLDEN_SHARED_CACHE", "/mnt/models/huggingface/hub")
 
 COMMON_NOTES = {
+    "input_ids": (
+        "The exact prefill token ids, int32: metadata prefix_ids (if any), then the first n_tokens - len(prefix_ids) "
+        "ids of the token cache. Nothing past n_tokens."
+    ),
     "model.embed_tokens.output": (
         "Token embeddings of the prefill: metadata prefix_ids (if any), then the first ids of the token cache."
     ),

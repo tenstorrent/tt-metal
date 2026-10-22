@@ -42,6 +42,7 @@ import torch
 from common import (
     COMMON_NOTES,
     GOLDEN_SCHEMA,
+    INPUT_IDS,
     ROOT,
     TEXT,
     TMP,
@@ -410,6 +411,25 @@ class LayerwiseGolden:
             save_file(tensors, str(out / (file.format(i=layer) if layer is not None else file)))
             inventory.add(tensors, file, layer, kinds[layer] if layer is not None else None)
 
+        # The ids fed to the model, in one file: a consumer need not rebuild prefix + token cache itself.
+        prefill_ids = {"input_ids": input_ids[0].to("cpu", torch.int32)}
+        save_file(
+            prefill_ids,
+            str(out / INPUT_IDS),
+            metadata={
+                "hf_repo": args.hf_repo,
+                "n_tokens": str(args.isl),
+                "n_prefix_tokens": str(len(prefix_ids)),
+                "prefix": args.prefix,
+                "token_cache": f"../{tok_path.name}",
+                "tokenizer_sha256": tok_meta.get("tokenizer_sha256") or "",
+                "source": tok_meta["source"],
+                "source_sha256": tok_meta["source_sha256"],
+                "written_by": "engine",
+            },
+        )
+        inventory.add(prefill_ids, INPUT_IDS)
+
         t0 = time.time()
         layer_seconds = []
         args.tmp.mkdir(parents=True, exist_ok=True)
@@ -481,6 +501,7 @@ class LayerwiseGolden:
             # The prefill is prefix_ids + the first n_tokens - len(prefix_ids) ids of the token cache.
             "prefix": args.prefix,
             "prefix_ids": prefix_ids,
+            "input_ids": INPUT_IDS,  # those exact ids, [n_tokens] int32
             "source": tok_meta["source"],
             "source_sha256": tok_meta["source_sha256"],
             "tokenizer_sha256": tok_meta.get("tokenizer_sha256"),
@@ -663,9 +684,12 @@ class LayerwiseGolden:
             got = {}
             for f in trace.rglob("*.safetensors"):
                 got.update(load_file(str(f)))
+            prefilled = got.pop("input_ids", None)
             ref = self.reference(ckpt, ids[:isl], device, getattr(torch, compute), args.attn)
 
         errors = [f"tensor names differ: {sorted(set(got) ^ set(ref))}"] if set(got) != set(ref) else []
+        if prefilled is None or not torch.equal(prefilled, ids[:isl]):
+            errors.append(f"{INPUT_IDS}: missing or not the ids the reference prefilled")
         for k in sorted(set(got) & set(ref)):
             if (e := self.compare(k, got[k], ref[k], exact=device.type == "cpu")) is not None:
                 errors.append(f"{k}: {e}")
