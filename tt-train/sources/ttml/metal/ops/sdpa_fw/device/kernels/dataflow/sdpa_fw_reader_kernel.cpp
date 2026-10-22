@@ -66,19 +66,12 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    // Stage one Q chunk (Sq_chunk_t consecutive query tile-rows of one batch/head) and the
-    // K/V stream it attends to. K and V go in Sk_chunk_t-tile steps (one DMA + one push per
-    // step); every step is read once and serves all Sq_chunk_t rows of the chunk.
-    //
-    // For causal the K-tile count is rounded UP to the next Sk_chunk_t boundary past the
-    // chunk's last row so the diagonal band is fully resident before compute processes it.
-    // Ht is a multiple of both chunk sizes (program factory), so the round-up never reads OOB.
+    // One Q chunk and its K/V stream in Sk_chunk_t-tile steps; causal K count rounds up to a step boundary.
     auto read_q_chunk = [&](const uint32_t global_q_chunk_idx) {
         const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
         const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
         const uint32_t global_first_row = seq_idx * Ht + first_row_tile;
 
-        // Q rows of the chunk are consecutive in DRAM: one read of Sq_chunk_t * qWt tiles.
         read_tiles_by_row(
             cb_query, query_address_generator, global_first_row * qWt, Sq_chunk_t * qWt, tile_bytes, Sq_chunk_t * qWt);
 
@@ -98,16 +91,11 @@ void kernel_main() {
         for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // Lay K out col-major in cb_key (feat outer, seq inner) so `matmul_block`
-            // with transpose=1 can step in1_idx by +Sk_chunk_t per feature, walking the
-            // contraction direction contiguously. K source in DRAM is (Sk_chunk_t × qWt)
-            // row-major; the helper writes tile (n, feat) at CB pos feat*Sk_chunk_t + n.
+            // K col-major in cb_key (feat outer, seq inner) for matmul_block transpose=1.
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
-            // Mask is (1, 1, S, S): the Sq_chunk_t x Sk_chunk_t tiles of this step, row-major
-            // (row r, K tile n at r * Sk_chunk_t + n), staged in one DMA + one push. Each
-            // row's Sk_chunk_t tiles are contiguous along the K axis.
+            // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major.
             {
                 constexpr uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
                 cb_reserve_back(cb_attn_mask, mask_tiles);
@@ -136,9 +124,7 @@ void kernel_main() {
     };
 
 #ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: each unit is a pair of Q chunks of one sequence, the
-    // light chunk (early in the sequence, few K/V steps) with the heavy chunk (late, many
-    // steps), so every core reads roughly the same amount of data. Heavy first (LPT).
+    // Balanced: pairs of Q chunks, heavy first.
     for (uint32_t p = 0; p < num_units; ++p) {
         const uint32_t global_pair_idx = start_unit + p;
         const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
