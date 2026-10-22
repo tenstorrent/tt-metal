@@ -60,9 +60,17 @@ void recip_tile_first_column(uint32_t idst) {
 // positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
 // tile so that masked positions become large negative values that vanish under softmax.
 //
-// Preconditions: DST acquired; the caller has waited for the mask tiles of this step
-// (host mask is staged row-major per step: pass row * Sk_chunk_t + n).
+// Preconditions:
+//   - The DST register buffer must be in acquired state via *acquire_dst*.
+//   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
 //
+// `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply:
+//   - When the writer pre-stages two causal masks in this CB, callers pass 0 for the
+//     diagonal-tile pattern and 1 for the all-masked pattern used past the diagonal.
+//   - When the host provides an arbitrary mask, callers pass the per-chunk tile offset.
+//
+// Scaling by the SDPA scaler factor is NOT done here; it is deferred to after the
+// row-max subtraction for better numerical precision.
 void apply_mask_on_reg(
     uint32_t register_idx,
     uint32_t cb_attn_mask,
