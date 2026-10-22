@@ -22,25 +22,6 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
     std::optional<ttnn::ccl::Topology> topology,
-    bool use_l1_small_for_semaphores) {
-    return all_broadcast(
-        input_tensor,
-        cluster_axis,
-        subdevice_id,
-        memory_config,
-        num_links,
-        topology,
-        use_l1_small_for_semaphores,
-        std::nullopt);
-}
-
-std::vector<ttnn::Tensor> all_broadcast(
-    const ttnn::Tensor& input_tensor,
-    std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<uint32_t> num_links,
-    std::optional<ttnn::ccl::Topology> topology,
     bool use_l1_small_for_semaphores,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Default values for num_links and topology

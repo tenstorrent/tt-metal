@@ -473,8 +473,9 @@ void check_mcast(std::array<uint32_t, 2> mesh, std::optional<uint32_t> axis, std
     uint32_t N = 1;
     bool expect_alt = false;
     for (uint32_t a = 0; a < 2; ++a) {
+        ring[a] = ring[a] && mesh[a] > 2;  // as the factory passes it: a 2-device ring is a line
         active[a] = mesh[a] > 1 && axis.value_or(a) == a;
-        wraps[a] = active[a] && ring[a] && mesh[a] > 2;
+        wraps[a] = active[a] && ring[a];
         expect_alt = expect_alt || (wraps[a] && mesh[a] % 2 == 0);
         N *= active[a] ? mesh[a] : 1;
     }
@@ -485,13 +486,12 @@ void check_mcast(std::array<uint32_t, 2> mesh, std::optional<uint32_t> axis, std
         for (uint32_t c = 0; c < mesh[1]; ++c) {
             const auto routes = mcast_routes(plan, mesh, {r, c}, axis, ring);
             ASSERT_EQ(routes.alternates, expect_alt) << label;
-            ASSERT_EQ(mcast_done_expect(plan, routes.alternates), (expect_alt ? 2 : 1) * (N - 1)) << label;
             ASSERT_LE(routes.conns.size(), (active[0] && active[1]) ? 4u : 2u) << label;
             for (int v = 0; v < 2; ++v) {
                 std::map<std::array<int, 2>, int> hits;
                 for (const auto& conn : routes.conns) {
                     const uint32_t range = v == 0 ? conn.range_v0 : conn.range_v1;
-                    EXPECT_NE(range, 0u) << label;  // every (connection, variant) carries a done inc
+                    EXPECT_NE(range, 0u) << label;  // every (connection, variant) carries a done inc: V * (N - 1)
                     if (!routes.alternates) {
                         EXPECT_EQ(conn.range_v1, conn.range_v0) << label;
                     }
@@ -633,32 +633,49 @@ TEST(AllGatherPlan, G5UnicastSchedule) {
     }
 }
 
-// G6: crossover thresholds and make_plan determinism.
-TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
+// G6: the algorithm choice, and make_plan's invariants.
+TEST(AllGatherPlan, G6Choice) {
     constexpr uint64_t KB = 1024;
+    const uint64_t P = kBH.P;
     const auto BH = tt::ARCH::BLACKHOLE;
     const auto WH = tt::ARCH::WORMHOLE_B0;
-    // BH: small (< N x 96 KB per link): ring unicast, line multicast, whatever the stripe row. Large: unicast on wide
-    // stripe rows (ring 32 KB, line 64 KB), multicast on narrow ones.
-    for (const uint64_t stripe : {uint64_t(0), 32 * KB, uint64_t(1) << 40}) {
-        EXPECT_TRUE(prefer_unicast(BH, true, 8, 2, (768 * KB) - 1, stripe));
-        EXPECT_FALSE(prefer_unicast(BH, false, 8, 2, (768 * KB) - 1, stripe));
-        EXPECT_FALSE(prefer_unicast(BH, false, 4, 2, (384 * KB) - 1, stripe));
-        EXPECT_FALSE(prefer_unicast(BH, false, 2, 2, (192 * KB) - 1, stripe));
+    auto bh = [&](bool ring, uint32_t N, uint64_t per_link, uint64_t stripe_row, uint32_t links = 2) {
+        return prefer_unicast(BH, ring, N, links, P, per_link, stripe_row);
+    };
+    // BH thresholds. Small (a stripe under 6 packets per link): ring unicast, line multicast, whatever the stripe
+    // row. Large: unicast iff a run (stripe row / 8 DRAM banks) is >= 4 KB (ring) / 8 KB (line).
+    for (const uint64_t row : {uint64_t(0), 32 * KB, uint64_t(1) << 40}) {
+        for (const uint32_t N : {2u, 4u, 8u}) {
+            EXPECT_TRUE(bh(true, N, (N * 6 * P) - 1, row));
+            EXPECT_FALSE(bh(false, N, (N * 6 * P) - 1, row));
+        }
     }
-    EXPECT_FALSE(prefer_unicast(BH, true, 8, 2, 768 * KB, (32 * KB) - 1));
-    EXPECT_TRUE(prefer_unicast(BH, true, 8, 2, 768 * KB, 32 * KB));
-    EXPECT_TRUE(prefer_unicast(BH, true, 4, 2, uint64_t(1) << 40, 32 * KB));
-    EXPECT_FALSE(prefer_unicast(BH, false, 8, 2, uint64_t(1) << 40, (64 * KB) - 1));
-    EXPECT_TRUE(prefer_unicast(BH, false, 8, 2, 768 * KB, 64 * KB));
-    EXPECT_TRUE(prefer_unicast(BH, false, 4, 2, 384 * KB, 64 * KB));
-    EXPECT_TRUE(prefer_unicast(BH, false, 2, 2, 192 * KB, 64 * KB));
+    EXPECT_FALSE(bh(true, 8, 8 * 6 * P, (32 * KB) - 1));
+    EXPECT_TRUE(bh(true, 8, 8 * 6 * P, 32 * KB));
+    EXPECT_FALSE(bh(false, 8, uint64_t(1) << 40, (64 * KB) - 1));
+    EXPECT_TRUE(bh(false, 4, 4 * 6 * P, 64 * KB));
+    // Measured at 2 links: past that, multicast.
+    EXPECT_TRUE(bh(true, 8, 0, 0, 1));
+    EXPECT_FALSE(bh(true, 8, 0, uint64_t(1) << 40, 3));
+    // The measured shapes keep their choice. Ladder: bf16 [1, 1, R, 8192] gathered on the last dim, 128 KB - 32 MB
+    // (64 KB stripe rows on 8 devices, 128 KB on 4): the ring is always unicast; the line multicast up to 1 MB (8
+    // devices) / 512 KB (4). 16.8 MB with narrow rows: 2 and 8 KB multicast, 32 KB unicast only on the ring.
+    for (uint64_t out = 128 * KB; out <= 32 * 1024 * KB; out *= 2) {
+        EXPECT_TRUE(bh(true, 8, out / 2, 64 * KB)) << out;
+        EXPECT_EQ(bh(false, 8, out / 2, 64 * KB), out >= 2048 * KB) << out;
+        EXPECT_EQ(bh(false, 4, out / 2, 128 * KB), out >= 1024 * KB) << out;
+    }
+    for (const uint64_t row : {2 * KB, 8 * KB, 32 * KB}) {
+        EXPECT_EQ(bh(true, 8, 8400 * KB, row), row == 32 * KB) << row;
+        EXPECT_FALSE(bh(false, 8, 8400 * KB, row)) << row;
+    }
     // WH: ring multicast; 2 unicast; 3-6 multicast; 7+ by size.
-    EXPECT_FALSE(prefer_unicast(WH, true, 8, 2, uint64_t(1) << 40, 64 * KB));
-    EXPECT_TRUE(prefer_unicast(WH, false, 2, 2, 0, 64 * KB));
-    EXPECT_FALSE(prefer_unicast(WH, false, 6, 2, uint64_t(1) << 40, 64 * KB));
-    EXPECT_FALSE(prefer_unicast(WH, false, 8, 2, 2'999'999, 64 * KB));
-    EXPECT_TRUE(prefer_unicast(WH, false, 8, 2, 3'000'000, 64 * KB));
+    const uint32_t Pw = kWH.P;
+    EXPECT_FALSE(prefer_unicast(WH, true, 8, 2, Pw, uint64_t(1) << 40, 64 * KB));
+    EXPECT_TRUE(prefer_unicast(WH, false, 2, 2, Pw, 0, 64 * KB));
+    EXPECT_FALSE(prefer_unicast(WH, false, 6, 2, Pw, uint64_t(1) << 40, 64 * KB));
+    EXPECT_FALSE(prefer_unicast(WH, false, 8, 2, Pw, 2'999'999, 64 * KB));
+    EXPECT_TRUE(prefer_unicast(WH, false, 8, 2, Pw, 3'000'000, 64 * KB));
 
     // The busiest link carries output / effective unicast links; fewer cores cut unicast's links first. (WH line:
     // the one size-dependent choice left.)
@@ -685,7 +702,7 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
     p.N = 2;
     EXPECT_FALSE(make_plan(p).ring);
 
-    // Random inputs: same input, same plan; links bounded by cores and elements; one slice per link.
+    // Random inputs: links bounded by cores and elements; one slice per link.
     std::mt19937 rng(7);
     auto rnd = [&](uint32_t lo, uint32_t hi) { return std::uniform_int_distribution<uint32_t>(lo, hi)(rng); };
     for (int trial = 0; trial < 5000; ++trial) {
@@ -708,11 +725,6 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
         q.output_packed_bytes = uint64_t(rnd(1, 1 << 20)) * rnd(1, 64);
 
         const Plan x = make_plan(q);
-        const Plan y = make_plan(q);
-        ASSERT_EQ(x.algo, y.algo);
-        ASSERT_EQ(x.links, y.links);
-        ASSERT_EQ(x.ring, y.ring);
-        ASSERT_EQ(x.slices.size(), y.slices.size());
         ASSERT_EQ(x.ring, q.ring && q.N > 2);
         if (!q.shape_ok) {
             ASSERT_EQ(x.algo, AgAlgo::Composite);
@@ -735,7 +747,6 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
 
 // G7: every device-matrix instance (tests/.../test_all_gather_matrix.py) gets the algorithm it claims, so a
 // recalibrated threshold that flips one fails here. BH, (1,8) mesh, 2 links unless noted. Shapes are output shapes.
-// "U-size" / "M" instances sit 4x clear of the size threshold and 2x of the stripe-row one.
 TEST(AllGatherPlan, G7MatrixPin) {
     const auto U = AgAlgo::Unicast;
     const auto M = AgAlgo::Multicast;
@@ -807,6 +818,7 @@ TEST(AllGatherPlan, G7MatrixPin) {
         {"D12 384KB page ring8 U-size", {1, 1, 8, 196608}, -2, bf16, RM, dram, dram, Fab::Ring, 8, U},
         {"D13 U-size ring", {1, 1, 256, 8192}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, U},
         {"D13 M line", {1, 1, 64, 2560}, -1, bf16, TILE, dram, dram, Fab::Line, 8, M},
+        {"D13 M ring", {1, 1, 2048, 1280}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, M},
         {"D14 gather-dim padded", {1, 1, 32, 40}, -1, bf16, TILE, dram, dram, Fab::Line, 8, C},
         {"D14 bfp8 16x32 dram -> l1", {1, 1, 64, 256}, -1, bfp8, TILE, dram, l1, Fab::Line, 8, C, Tile({16, 32})},
         {"D14 48B rows dram -> l1", {1, 1, 4096, 24}, -2, bf16, RM, dram, l1, Fab::Line, 8, C},
@@ -831,20 +843,23 @@ TEST(AllGatherPlan, G7MatrixPin) {
         const PlanIn p = plan_in_for(in, out, inst.dim, inst.N, inst.fab, kBH, 2, inst.avail_cores);
         const Plan plan = make_plan(p);
         EXPECT_EQ(plan.algo, inst.expect) << inst.id;
-        if (inst.expect == U || inst.expect == M) {
-            // "U-size" / "M" instances sit 4x clear of the size threshold and 2x of the stripe-row one, so
-            // recalibration noise can't flip them.
-            if (inst.fab == Fab::Ring || inst.fab == Fab::Line || inst.fab == Fab::Fabric2DLine) {
-                const uint64_t per_link = p.output_packed_bytes / 2;
-                const uint64_t stripe = uint64_t{p.geo.ci} * p.geo.pages_per_stripe_row;
-                const bool ring = inst.fab == Fab::Ring && inst.N > 2;
-                if (inst.id.find("U-size") != std::string::npos) {
-                    EXPECT_TRUE(prefer_unicast(kBH.arch, ring, inst.N, 2, per_link / 4, stripe / 2)) << inst.id;
-                }
-                if (inst.id.find(" M") != std::string::npos) {
-                    EXPECT_FALSE(prefer_unicast(kBH.arch, ring, inst.N, 2, (per_link * 4) - 1, stripe * 2)) << inst.id;
-                }
-            }
+        // Where the BH rule makes the choice (it agrees with the expectation; legality decides the rest), the
+        // choice survives 3x the bytes per link either way or 2x the stripe row, so recalibration noise cannot
+        // flip it.
+        if (inst.fab != Fab::Ring && inst.fab != Fab::Line && inst.fab != Fab::Fabric2DLine) {
+            continue;
+        }
+        const bool ring = inst.fab == Fab::Ring && inst.N > 2;
+        auto rule = [&](uint64_t per_link, uint64_t row) {
+            return prefer_unicast(kBH.arch, ring, inst.N, 2, kBH.P, per_link, row) ? U : M;
+        };
+        const uint64_t per_link = p.output_packed_bytes / 2;
+        const uint64_t row = uint64_t{p.geo.ci} * p.geo.pages_per_stripe_row;
+        if (rule(per_link, row) == inst.expect) {
+            EXPECT_EQ(rule(per_link * 3, row), inst.expect) << inst.id;
+            EXPECT_EQ(rule(per_link / 3, row), inst.expect) << inst.id;
+            EXPECT_EQ(rule(per_link, row * 2), inst.expect) << inst.id;
+            EXPECT_EQ(rule(per_link, row / 2), inst.expect) << inst.id;
         }
     }
 

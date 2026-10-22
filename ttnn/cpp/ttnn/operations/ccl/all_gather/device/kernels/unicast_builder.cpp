@@ -7,8 +7,6 @@
 
 #include <cstdint>
 
-#include "pump.hpp"
-#include "route.hpp"
 #include "slot_io.hpp"
 
 // Store-and-forward builder: fills slots with complete one-hop packets for its pump. Iteration 0 reads this
@@ -31,10 +29,10 @@ void kernel_main() {
     const uint32_t ne = get_arg_val<uint32_t>(idx++);
     const uint32_t last_skip = get_arg_val<uint32_t>(idx++);
     const uint32_t last_take = get_arg_val<uint32_t>(idx++);
-    const uint32_t iter_units = get_arg_val<uint32_t>(idx++);
     const uint32_t recv_units = get_arg_val<uint32_t>(idx++);
     const uint32_t dv_sem = get_arg_val<uint32_t>(idx++);
     const RouteArgs route = RouteArgs::read(idx);
+    const uint32_t iter_units = ne * Ct::E;
 
     // A line endpoint's dead direction sends nothing; it only waits for what arrives.
     if (I > 0) {
@@ -45,8 +43,8 @@ void kernel_main() {
 
         SlotRing ring;
         SlotIo io;
-        SlotPacketizer pk(ring, io, Ct::A, Ct::P, Ct::payload_off);
-        Walk walk(out, WalkGeo{Ct::A, Ct::Uo, Ct::S, Ct::N, Ct::E, Ct::P, Ct::dst_cross, Ct::cross_row});
+        SlotPacketizer pk(ring, io, Ct::P, Ct::payload_off);
+        Walk walk(out, WalkGeo{Ct::A, Ct::Uo, Ct::S, Ct::N, Ct::E, Ct::P, Ct::dst_cross});
         InputPieces input(in, Ct::A, Ct::Ui, Ct::E, Ct::src_cross);
         RelayPieces relay{Ct::A, Ct::E};
         auto* dv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dv_sem);
@@ -85,8 +83,7 @@ void kernel_main() {
             // No packet spans stripes, so the pump can find iteration boundaries by count.
             pk.close();
         }
-        noc_async_read_set_trid(0);
-        noc_async_read_barrier();
+        io.finish();
     }
 
     sem_wait_consume(dv_sem, recv_units);

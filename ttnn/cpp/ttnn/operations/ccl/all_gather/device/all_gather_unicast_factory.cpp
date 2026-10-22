@@ -38,7 +38,6 @@ all_gather_program::Kernels create_unicast_program(
     namespace agp = all_gather_program;
     auto* mesh_device = input.device();
 
-    TT_FATAL(!args.is_true_2d(), "all_gather unicast algorithm does not support true 2D topologies");
     const uint32_t axis = args.get_1d_axis();
     const auto topology = args.axis_topology[axis];
     const uint32_t dev = ::ttnn::ccl::get_linearized_index_from_physical_coord(input, coord, args.cluster_axis);
@@ -84,7 +83,6 @@ all_gather_program::Kernels create_unicast_program(
                 slice.ne,
                 s.last_skip,
                 s.last_take,
-                s.iter_units,
                 s.recv_units,
                 workers.sync_sem.address(),
             };
@@ -125,8 +123,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     return all_gather_program::build_workload(
         operation_attributes,
         tensor_coords,
-        input,
-        output_tensor,
+        tensor_args,
         all_gather_plan::AgAlgo::Unicast,
         /*cores_per_link=*/2,
         [&](tt::tt_metal::Program& program, const auto& plan, const auto& workers, const auto& coord) {

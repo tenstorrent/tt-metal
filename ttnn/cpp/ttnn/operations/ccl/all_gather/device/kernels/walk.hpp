@@ -105,11 +105,10 @@ template <class T>
 struct IsInterleavedAcc<T, std::void_t<decltype(T::DSpec::is_interleaved)>>
     : std::bool_constant<T::DSpec::is_interleaved> {};
 
-// P is cut to a multiple of A here. dst_cross: runs may cross output pages. cross_row_enabled: a tuning knob.
+// P: the packet payload, a multiple of A. dst_cross: runs may cross output pages.
 struct WalkGeo {
     uint32_t A, Uo, S, N, E, P;
     bool dst_cross;
-    bool cross_row_enabled;
 };
 
 // n elements at local elements l0 + k * lambda, linear at the destination from addr.
@@ -120,19 +119,19 @@ struct DstRun {
 
 // The destination side of the walk: runs of elements contiguous in the output, one accessor query per run.
 // If N * (S / Uo) divides L, lambda = L / N steps whole rows onto the next page of the same bank, so a run is
-// never clipped at the row end (cross_row). Otherwise lambda = L (or 1 for unit elements) and a run stops at the
-// row end, where other devices' stripes start.
+// never clipped at the row end (cross_row; on BH 6-74% faster where it applies, never slower). Otherwise
+// lambda = L (or 1 for unit elements) and a run stops at the row end, where other devices' stripes start.
 template <class OutAcc>
 struct Walk {
     Walk(const OutAcc& out, const WalkGeo& g) :
         out_(out), A_(g.A), Uo_(g.Uo), S_(g.S), N_(g.N), E_(g.E), dst_cross_(g.dst_cross) {
         L_ = out.contiguous_page_stride();
         const bool pages = g.E == g.Uo;
-        cross_row_ = g.cross_row_enabled && pages && L_ % (g.N * (g.S / g.Uo)) == 0;
+        cross_row_ = pages && L_ % (g.N * (g.S / g.Uo)) == 0;
         lambda_ = cross_row_ ? L_ / g.N : (pages ? L_ : 1);
         // A column is at most a packet, and (when runs stop at the row end) at most one row of its lane, so
         // that most columns are a single run.
-        uint32_t per_lane = (g.P - g.P % g.A) / (g.E * g.A);
+        uint32_t per_lane = g.P / (g.E * g.A);
         if (!cross_row_ && pages) {
             const uint32_t row_lane = (g.S / g.E + lambda_ - 1) / lambda_;
             per_lane = per_lane < row_lane ? per_lane : row_lane;
@@ -145,7 +144,8 @@ struct Walk {
     }
 
     // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for `stripe`. The order depends
-    // only on (e0, ne), never on the stripe, so a relay's positions match its upstream's.
+    // only on (e0, ne), never on the stripe, so a relay's positions match its upstream's. next() costs two divides
+    // per run (row and page).
     FORCE_INLINE void init(uint32_t stripe, uint32_t e0, uint32_t ne, uint32_t skip, uint32_t take) {
         stripe_units_ = stripe * S_;
         left_ = take;

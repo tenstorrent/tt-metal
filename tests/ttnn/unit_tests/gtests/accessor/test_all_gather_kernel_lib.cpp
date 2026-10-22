@@ -2,18 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host tests of the all_gather kernel library (walk.hpp, packetizer.hpp) against the real sharded
+// Host tests of the all_gather kernel library (walk.hpp, packetizer.hpp, slot_ring.hpp) against the real sharded
 // TensorAccessor and the real fabric packet headers:
 //   H1 the walk is a bijection, resumes at any position, its order does not depend on the stripe, and
 //      gate targets grow monotonically;
 //   H2 every dst run and every source piece is byte-linear;
 //   H3 every packet is legal (<= P, <= 4 segments, cuts on A, reads congruent and inside their
-//      pages) and delivers each unit to its own destination exactly once; headers round-trip.
+//      pages) and delivers each unit to its own destination exactly once; headers round-trip;
+//   H4 the slot ring never refills a slot the pump or a local copy may still read.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <random>
 #include <set>
@@ -23,11 +25,39 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ttnn/operations/ccl/all_gather/device/all_gather_plan.hpp"
+
 #include "host_kernel_prelude.hpp"
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
 
 #include "ttnn/operations/ccl/all_gather/device/kernels/packetizer.hpp"
+
+// The CB and NOC calls slot_ring.hpp makes, against a simulated CB and pump (H4).
+#ifndef NOC_MAX_BURST_SIZE
+#define NOC_MAX_BURST_SIZE 16384
+#endif
+struct RingSim {
+    uint32_t received = 0, acked = 0, idle_polls = 0, last_barrier = 0;
+    bool fenced = false;
+    std::vector<bool> unflushed;  // per slot: a local-copy write from it not yet flushed
+    std::function<void()> pump;   // pops a pushed slot, sometimes
+    std::function<void(uint32_t)> on_write;
+};
+static RingSim ring_sim;
+constexpr uint32_t read_cmd_buf = 1;
+static uint32_t get_write_ptr(uint32_t) { return 0x20000; }
+static volatile uint32_t* get_cb_tiles_received_ptr(uint32_t) { return &ring_sim.received; }
+static volatile uint32_t* get_cb_tiles_acked_ptr(uint32_t) { return &ring_sim.acked; }
+static void invalidate_l1_cache() { ring_sim.pump(); }
+static bool noc_cmd_buf_ready(uint32_t, uint32_t cmd_buf) { return ring_sim.fenced = cmd_buf == read_cmd_buf; }
+static void noc_async_writes_flushed() { ring_sim.unflushed.assign(ring_sim.unflushed.size(), false); }
+static void noc_async_read_barrier_with_trid(uint32_t trid) { ring_sim.last_barrier = trid; }
+template <uint32_t>
+static void noc_async_write(uint32_t src, uint64_t, uint32_t) {
+    ring_sim.on_write(src);
+}
+#include "ttnn/operations/ccl/all_gather/device/kernels/slot_ring.hpp"
 
 #undef get_compile_time_arg_val
 #undef noc_index
@@ -125,7 +155,7 @@ struct Case {
     uint32_t A, P, ri, ro;  // cut quantum, fabric payload, source read alignments (input, output)
     uint32_t N, S, R, Ui, Uo, E, Pps;
     uint32_t ci, co, ai, ao;  // page content and bank pitch, bytes
-    bool dst_cross, src_cross, cross_row;
+    bool dst_cross, src_cross;
     uint32_t links;
     std::string desc;
 };
@@ -158,7 +188,6 @@ struct RecRing {
         open = false;
         ++count;
     }
-    void drain() {}
 };
 
 template <class H>
@@ -229,18 +258,18 @@ std::vector<uint32_t> run_pass(
     auto out_addr = [&](uint32_t g) { return out.get_noc_addr(g / c.Uo, (g % c.Uo) * A); };
     auto in_addr = [&](uint32_t u) { return in.get_noc_addr(u / c.Ui, (u % c.Ui) * A); };
 
-    Walk<Out> walk(out, WalkGeo{A, c.Uo, c.S, c.N, c.E, c.P, c.dst_cross, c.cross_row});
+    Walk<Out> walk(out, WalkGeo{A, c.Uo, c.S, c.N, c.E, c.P, c.dst_cross});
     walk.init(stripe, e0, ne, skip, take);
     InputPieces<In> input(in, A, c.Ui, c.E, c.src_cross);
     RelayPieces relay_src{A, c.E};
     RecRing ring;
     RecIo io;
-    Packetizer<RecRing, RecIo> pk(ring, io, A, c.P, kPayloadOff);
+    Packetizer<RecRing, RecIo> pk(ring, io, c.P, kPayloadOff);
 
     std::vector<uint32_t> seq;  // elements in walk order
     uint32_t pos = 0, last_target = 0;
-    DstRun r{};
-    while (walk.next(r)) {
+    // Checks each run as the packetizer takes it.
+    auto before = [&](const DstRun& r) {
         // H1: positions advance, so gate targets (base + pos + units) grow.
         check(r.n >= 1 && pos + r.n <= take, "run length");
         const uint32_t target = (pos + r.n) * c.E;
@@ -272,13 +301,16 @@ std::vector<uint32_t> run_pass(
         };
         if (relay) {
             relay_src.for_each(r, piece_check);
-            pk.add(r, relay_src);
         } else {
             input.for_each(r, piece_check);
-            pk.add(r, input);
         }
         check(i == units.size(), "pieces do not cover the run");
         ++st.runs;
+    };
+    if (relay) {
+        pk.add_all(walk, relay_src, before);
+    } else {
+        pk.add_all(walk, input, before);
     }
     pk.close();
     check(pos == take, "walk did not take `take` elements");
@@ -289,7 +321,7 @@ std::vector<uint32_t> run_pass(
     for (uint32_t u = 0; u < c.R * c.S; ++u) {
         dst_unit[out_addr(global(u))] = u;
     }
-    const uint32_t P = c.P - c.P % A;
+    const uint32_t P = c.P;
     std::set<uint32_t> seen;
     uint64_t bytes_total = 0;
     for (uint32_t p = 0; p < io.packets.size(); ++p) {
@@ -360,11 +392,8 @@ template <class Out, class In>
 void run_case(const Case& c, const Out& out, const In& in, Stats& st) {
     const uint32_t elements = c.R * c.S / c.E;
     std::vector<uint32_t> stripes = {0, c.N - 1, rnd(0, c.N - 1)};
-    const uint32_t links = std::min(c.links, elements);
-    for (uint32_t s = 0; s < links; ++s) {
-        // Near-equal contiguous element ranges, never empty.
-        const uint32_t e0 = s * (elements / links) + std::min(s, elements % links);
-        const uint32_t ne = elements / links + (s < elements % links ? 1 : 0);
+    for (const auto [e0, ne] :
+         ttnn::operations::ccl::all_gather_plan::make_slices(elements, std::min(c.links, elements))) {
         std::vector<uint32_t> full;
         for (uint32_t stripe : stripes) {
             for (bool relay : {false, true}) {
@@ -394,6 +423,7 @@ void run_case(const Case& c, const Out& out, const In& in, Stats& st) {
 
 // Fills S, E, the cross flags and desc from the rest.
 void finish(Case& c, const char* kind) {
+    check(c.P % c.A == 0, "P is a multiple of A (the plan rounds it)");
     c.S = c.Pps * c.Ui;
     c.E = c.S % c.Uo == 0 ? c.Uo : 1;
     c.dst_cross = c.Uo * c.A == c.ao;
@@ -401,7 +431,7 @@ void finish(Case& c, const char* kind) {
     std::ostringstream o;
     o << kind << " A" << c.A << " P" << c.P << " ri" << c.ri << " ro" << c.ro << " N" << c.N << " R" << c.R << " S"
       << c.S << " Ui" << c.Ui << " Uo" << c.Uo << " E" << c.E << " ci" << c.ci << " ai" << c.ai << " co" << c.co
-      << " ao" << c.ao << " cross_row" << c.cross_row << " links" << c.links;
+      << " ao" << c.ao << " links" << c.links;
     c.desc = o.str();
 }
 
@@ -448,7 +478,6 @@ Case random_case() {
         c.ai = c.ci + (rng() % 6 == 0 ? c.ri : 0);
         c.ao = c.co + (rng() % 6 == 0 ? c.ro : 0);
     }
-    c.cross_row = rng() % 4 != 0;
     c.links = rnd(1, 3);
     finish(c, whole ? "whole" : "sub");
     return c;
@@ -500,7 +529,7 @@ TEST(AllGatherKernelLib, MatrixShapes) {
         uint32_t ci, Pps, R;
     };
     const std::vector<Shape> shapes = {
-        {2048, 10, 32},  // D1 tile bf16 [1024, 2560] d3: stripe 10, cross_row off (8 % 80)
+        {2048, 10, 32},  // D1 tile bf16 [1024, 2560] d3: stripe 10, no cross_row (8 % 80)
         {1088, 1, 8},    // D2 bfp8 [256, 256] d3: S = 1, cross_row
         {8192, 1, 32},   // D3 RM 8 KB rows d0
         {20000, 1, 64},  // D3 20000 B rows: whole-page, cuts inside pages
@@ -519,7 +548,6 @@ TEST(AllGatherKernelLib, MatrixShapes) {
             c.ci = c.co = sh.ci;
             c.ai = c.ao = align_up(sh.ci, c.A);
             c.Ui = c.Uo = c.ai / c.A;
-            c.cross_row = true;
             c.links = 2;
             finish(c, "matrix");
             const InterleavedAcc out{8, c.ao, c.R * c.N * c.Pps};
@@ -529,6 +557,58 @@ TEST(AllGatherKernelLib, MatrixShapes) {
             } catch (const std::exception& e) {
                 FAIL() << e.what() << "\n  " << c.desc;
             }
+        }
+    }
+}
+
+// H4: the slot ring against a simulated CB whose pump pops pushed slots at random times. A slot is refilled only
+// once the pump has popped it and its local-copy writes are flushed; a held slot's writes follow its read barrier;
+// at most `inflight` slots are held; without local copy every slot is pushed at once, behind the read fence.
+struct RingCt {
+    static constexpr uint32_t cb = 0, slots = 6, slot_bytes = 1024, payload_off = 64, inflight = 3;
+};
+
+TEST(AllGatherKernelLib, SlotRing) {
+    using Ct = RingCt;
+    for (const bool copy : {false, true}) {
+        ring_sim = RingSim{};
+        ring_sim.unflushed.assign(Ct::slots, false);
+        ring_sim.pump = [] {
+            if (ring_sim.acked != ring_sim.received && rng() % 2) {
+                ++ring_sim.acked;
+            } else if (++ring_sim.idle_polls > 1000) {
+                throw std::runtime_error("the ring waits for a slot nobody will free");
+            }
+        };
+        ring_sim.on_write = [](uint32_t src) {
+            const uint32_t h = (src - get_write_ptr(0)) / Ct::slot_bytes;
+            check(ring_sim.received % Ct::slots == h, "a local copy reads a slot other than the oldest held");
+            check(ring_sim.last_barrier == 1 + h, "a local copy reads its slot before the slot's reads landed");
+            ring_sim.unflushed[h] = true;
+        };
+        try {
+            CbSlotRing<Ct> ring(copy);
+            Seg segs[NOC_SCATTER_WRITE_MAX_CHUNKS];
+            for (uint32_t committed = 0; committed < 500;) {
+                ring_sim.idle_polls = 0;
+                const uint32_t k = (ring.acquire() - get_write_ptr(0)) / Ct::slot_bytes;
+                check(k == committed % Ct::slots && ring.trid() == 1 + k, "slots fill in ring order");
+                check(committed - ring_sim.acked < Ct::slots, "refilled a slot the pump has not popped");
+                check(!ring_sim.unflushed[k], "refilled a slot a local copy may still read");
+                const uint32_t nseg = rnd(1, NOC_SCATTER_WRITE_MAX_CHUNKS);
+                for (uint32_t i = 0; i < nseg; ++i) {
+                    segs[i] = {uint64_t{i} * 64, 64};
+                }
+                ring_sim.fenced = false;
+                ring.commit(segs, nseg);
+                ++committed;
+                check(copy || (ring_sim.received == committed && ring_sim.fenced), "push at once, behind the fence");
+                check(committed - ring_sim.received <= (copy ? Ct::inflight : 0), "too many held slots");
+            }
+            ring.drain();
+            check(ring_sim.received == 500, "drain pushes every held slot");
+        } catch (const std::exception& e) {
+            FAIL() << e.what() << (copy ? " (local copy)" : "");
         }
     }
 }

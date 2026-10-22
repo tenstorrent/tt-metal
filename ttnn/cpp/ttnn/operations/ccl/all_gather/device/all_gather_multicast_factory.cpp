@@ -15,9 +15,9 @@ namespace ttnn::operations::ccl {
 // Multicast all_gather.
 //
 // One core per link. Its builder reads this device's slice of the input once into slots whose headers carry
-// one route per fabric connection; its pump sends each slot on every connection and copies it into the
-// local output. The route sets (and the even-ring alternation) come from the plan; every receiver is covered
-// once per route variant.
+// one route per fabric connection, and writes each landed slot into the local output; its pump sends each slot
+// on every connection. The route sets (and the even-ring alternation) come from the plan; every receiver is
+// covered once per route variant.
 ////////////////////////////////////////////////////////////////
 
 namespace {
@@ -135,7 +135,6 @@ all_gather_program::Kernels create_multicast_program(
             workers.init_sem.address(),
             workers.sync_sem.address(),
             plan.N - 1,
-            all_gather_plan::mcast_done_expect(plan, routes.alternates),
             self_xy.x,
             self_xy.y,
         };
@@ -158,8 +157,7 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     return all_gather_program::build_workload(
         operation_attributes,
         tensor_coords,
-        input,
-        output_tensor,
+        tensor_args,
         all_gather_plan::AgAlgo::Multicast,
         /*cores_per_link=*/1,
         [&](tt::tt_metal::Program& program, const auto& plan, const auto& workers, const auto& coord) {

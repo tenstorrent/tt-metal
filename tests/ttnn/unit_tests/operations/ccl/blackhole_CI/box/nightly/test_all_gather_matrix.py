@@ -7,15 +7,15 @@
 # Shapes are OUTPUT (gathered) shapes. Each case runs one "instance", which picks the algorithm through the
 # fabric and the size alone (there is no algorithm override):
 #   U-NE         FABRIC_1D_NEIGHBOR_EXCHANGE: unicast at any size, line
-#   U-ring/line  1D ring/line: unicast. BH picks it on a ring below N x 96 KB per link, and above that on stripe
-#                rows of >= 32 KB (ring) / >= 64 KB (line)
-#   M-ring/line  1D ring/line: multicast (BH: narrow stripe rows above that size, or a small line)
+#   U-ring/line  1D ring/line: unicast. BH picks it for a small transfer on a ring, and for a large one on wide
+#                stripe rows (all_gather_plan.cpp: prefer_unicast)
+#   M-ring/line  1D ring/line: multicast (BH: narrow stripe rows on a large transfer, or a small line)
 #   2D           FABRIC_2D on (2,4): a 1D gather along the rows (HybridMesh headers), or true 2D
 #   auto-*       whatever the plan picks (composite or a forced choice)
 # Busiest-link bytes = gathered bytes / effective links (2 here, fewer when there are fewer elements); a stripe row
 # is what one device contributes to one output row. The host test G7 (test_all_gather_plan.cpp) pins each
-# instance's algorithm (4x clear of the size threshold, 2x of the stripe one), so a recalibrated threshold that
-# flips one fails there; resize the case here when it does.
+# instance's algorithm, with margin, so a recalibrated threshold that flips one fails there; resize the case here
+# when it does.
 
 import pytest
 import torch
@@ -91,8 +91,8 @@ def _case(shape, dim, layout, dtype, mem_in, mem_out, mesh=(1, 8), cluster_axis=
     )
 
 
-# id -> (instance, case). The prefix is the plan's row (IMPL_PLAN §6b). Shapes match G7's table one for one; the
-# few extra rows are marked and are U-NE or composite, whose algorithm depends on legality only, not on size.
+# id -> (instance, case). Shapes match G7's table one for one; the few extra rows are marked and are U-NE or
+# composite, whose algorithm depends on legality only, not on size.
 CASES = {
     # D1 baseline: stripe 10, relay + data_valid cadence
     "D1-une": ("U-NE", _case([1, 1, 1024, 2560], 3, _TILE, _BF16, _DRAM, _DRAM)),
@@ -103,7 +103,7 @@ CASES = {
     # D2 bfp8, one tile per stripe-row (S = 1): cross_row
     "D2-une": ("U-NE", _case([1, 1, 256, 256], 3, _TILE, _BFP8, _DRAM, _DRAM)),
     "D2-m_line": ("M-line", _case([1, 1, 256, 256], 3, _TILE, _BFP8, _DRAM, _DRAM)),
-    # D3 RM sub-page and whole-page cuts: 8 KB rows; old known_bad chunk_over_packet; 20000 B rows (> P, % 64 = 32)
+    # D3 RM sub-page and whole-page cuts: 8 KB rows; a chunk over one packet; 20000 B rows (> P, % 64 = 32)
     "D3-8k_une": ("U-NE", _case([8, 1, 256, 4096], 0, _RM, _BF16, _DRAM, _DRAM)),
     "D3-8k_m_line": ("M-line", _case([8, 1, 4, 4096], 0, _RM, _BF16, _DRAM, _DRAM)),
     "D3-chunk_over_packet_une": ("U-NE", _case([1, 1, 64, 4096], 2, _RM, _BF16, _DRAM, _DRAM)),
@@ -142,7 +142,7 @@ CASES = {
         "U-NE",
         _case([1, 1, 256, 512], 2, _RM, _BF16, _l1_width_sharded(32, 64, 8), _l1_width_sharded(256, 64, 8)),
     ),
-    # D9 F1 repro (old known_bad mismatched_alignment): 32 B rows, L1 (16 B align) -> DRAM (64 B align).
+    # D9 mismatched read alignments: 32 B rows, L1 (16 B align) -> DRAM (64 B align).
     # Unicast is whole-page (A 64, slot 64 = bank pitch, 32 B reads); multicast is sub-page (A 16).
     "D9-f1_u_ring": (
         "U-ring",
@@ -166,7 +166,7 @@ CASES = {
     "D12-u_ring4": ("U-ring", _case([1, 1, 32, 128], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(1, 4))),
     # One 384 KB row-major page per device on the 8-ring, sub-page.
     "D12-u_ring8_big_page": ("U-ring", _case([1, 1, 8, 196608], 2, _RM, _BF16, _DRAM, _DRAM)),
-    # D14 composite (F3): gather-dim padded tile; 48 B RM rows DRAM -> L1 (slot pitch 64 > L1 bank pitch 48).
+    # D14 composite: gather-dim padded tile; 48 B RM rows DRAM -> L1 (slot pitch 64 > L1 bank pitch 48).
     # Persistent output and sub_core_grid both reach the composite path. (The plan's bfp8 16x32 tile case is
     # test_all_gather_tiny_tile_composite: composite's concat only knows 32x32 tiles, so it must refuse.)
     "D14-padded_auto_line": ("auto-line", _case([1, 1, 32, 40], 3, _TILE, _BF16, _DRAM, _DRAM, grid=_grid(3, 3))),
@@ -182,7 +182,7 @@ CASES = {
     "D16-axis_u": ("2D", _case([1, 1, 1024, 8192], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4), cluster_axis=1)),
     "D16-axis_m": ("2D", _case([1, 1, 32, 1024], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4), cluster_axis=1)),
     "D16-true_2d_m": ("2D", _case([1, 1, 256, 256], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4))),
-    # D17 F2: D9b's shape where unicast is forced (NE) and illegal -> composite. (extra) N = 2, where all_broadcast
+    # D17: D9b's shape where unicast is forced (NE) and illegal -> composite. (extra) N = 2, where all_broadcast
     # is one hop; N = 8 is test_all_gather_f2_neighbor_exchange_n8.
     "D17-n2_auto_ne": ("auto-NE", _case([1, 1, 64, 16], 3, _RM, _BF16, _L1, _DRAM, mesh=(1, 2))),
     # D18 26-27 MB: deep pipeline, trid wrap, relay gates under load
@@ -327,13 +327,15 @@ def test_all_gather_tiny_tile_composite(mesh_device, device_params, expect_error
         ttnn.synchronize_device(mesh_device)
 
 
-# D13 (B1/B2): 50 all_gathers captured back to back in one trace, each with its own input and persistent output,
-# replayed twice with fresh inputs; every gather of every replay is checked. Unicast on the even ring, multicast on
-# the line.
+# D13: 50 all_gathers captured back to back in one trace, each with its own input and persistent output, replayed
+# twice with fresh inputs; every gather of every replay is checked, so a gather that reports done before its data
+# has landed, or counts a peer's next init as done, fails. Unicast on the even ring, multicast on the line and on
+# the even ring (alternating routes: done must arrive on every route variant).
 _STRESS_RUNS = 50
 _STRESS = {
     "u_ring": (ttnn.FabricConfig.FABRIC_1D_RING, _case([1, 1, 256, 8192], 3, _TILE, _BF16, _DRAM, _DRAM)),
     "m_line": (ttnn.FabricConfig.FABRIC_1D, _case([1, 1, 64, 2560], 3, _TILE, _BF16, _DRAM, _DRAM)),
+    "m_ring": (ttnn.FabricConfig.FABRIC_1D_RING, _case([1, 1, 2048, 1280], 3, _TILE, _BF16, _DRAM, _DRAM)),
 }
 
 

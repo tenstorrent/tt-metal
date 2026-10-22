@@ -239,10 +239,7 @@ AllGatherDeviceOperation::create_op_performance_model(
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // The same plan all_gather() ran to rule out the composite path, so the two cannot disagree.
-    const auto& output_spec = tensor_args.persistent_output_tensor.has_value()
-                                  ? tensor_args.persistent_output_tensor->tensor_spec()
-                                  : args.output_spec;
-    switch (all_gather_program::make_device_plan(args, tensor_args.input_tensor, output_spec).algo) {
+    switch (all_gather_program::make_device_plan(args, tensor_args).algo) {
         case all_gather_plan::AgAlgo::Unicast: return AllGatherUnicastFactory{};
         case all_gather_plan::AgAlgo::Multicast: return AllGatherMulticastFactory{};
         case all_gather_plan::AgAlgo::Composite: break;

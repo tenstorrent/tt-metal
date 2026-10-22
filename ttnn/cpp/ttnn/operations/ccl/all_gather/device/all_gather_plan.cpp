@@ -219,6 +219,7 @@ Plan make_plan(const PlanIn& in) {
                                                             plan.ring,
                                                             in.N,
                                                             links_u,
+                                                            geo_u->P,
                                                             in.output_packed_bytes / links_u,
                                                             uint64_t{in.geo.ci} * in.geo.pages_per_stripe_row)
                                                       : links_u > 0;
@@ -231,24 +232,35 @@ Plan make_plan(const PlanIn& in) {
 }
 
 bool prefer_unicast(
-    tt::ARCH arch, bool ring, uint32_t N, uint32_t /*links*/, uint64_t busiest_link_bytes, uint64_t stripe_row_bytes) {
-    // Not covered: BH at 1 link, and at 4+ links where unicast's DRAM reads bind; WH beyond T3000.
+    tt::ARCH arch,
+    bool ring,
+    uint32_t N,
+    uint32_t links,
+    uint32_t P,
+    uint64_t busiest_link_bytes,
+    uint64_t stripe_row_bytes) {
+    // Row-major gathers of small row segments (a few hundred bytes) are bound by the packet rate either way (at most
+    // 4 segments per packet); composite might win there (unmeasured).
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
-            // Measured at 2 links, payload 15168, 8 KB - 13 MB per link (8-device ring and line, 4-device line).
-            // Small (< N x 96 KB per link): latency decides. The ring is 5-18% faster on unicast, the line up to
-            // 34% faster on multicast (unicast relays N - 1 hops store-and-forward).
-            // Large: unicast's builder pays per run, and a run is at most a bank's share of a stripe row, so narrow
-            // stripe rows make it CPU-bound (one page per row also puts a stripe in one DRAM bank). Wide rows
-            // (64 KB): unicast is 5-31% faster on both; at 32 KB the ring still is (10-19%), the line is not; at
-            // 2-16 KB multicast is up to 2x faster on both.
-            const bool small = busiest_link_bytes < uint64_t{N} * 96 * 1024;
-            const bool wide = stripe_row_bytes >= (ring ? 32 : 64) * 1024;
+            // Measured on 8x p150b at 2 links, payload 15168, 8 KB - 13 MB per link. 1 link is unmeasured; past 2,
+            // unicast's DRAM reads are predicted to bind.
+            // small: a stripe is under 6 full packets per link, so latency decides (ring unicast 5-18% faster, line
+            // multicast up to 34%: unicast relays N - 1 hops store-and-forward).
+            // wide: unicast pays per run, and a DRAM run is at most one bank's share of a stripe row. Runs >= 8 KB
+            // favor unicast (5-31%), 4 KB only on the ring, <= 2 KB multicast (up to 2x).
+            if (links > 2) {
+                return false;
+            }
+            const bool small = busiest_link_bytes < uint64_t{N} * 6 * P;
+            constexpr uint64_t kDramBanks = 8;
+            const bool wide = stripe_row_bytes / kDramBanks >= (ring ? 4 : 8) * 1024;
             return ring ? small || wide : !small && wide;
         }
         case tt::ARCH::WORMHOLE_B0:
-            // Ring: the fabric relays for free. Two devices: unicast never relays. 3-6: multicast's edge shrinks
-            // with N. 7+: near tie, so size decides.
+            // Unverified with these kernels: fit to the earlier (mux-based) ones on T3000. Ring: the fabric relays
+            // for free. Two devices: unicast never relays. 3-6: multicast's edge shrinks with N. 7+: near tie, so
+            // size decides.
             if (ring) {
                 return false;
             }
@@ -327,8 +339,7 @@ McastRoutes mcast_routes(
         }
         TT_FATAL(size < 256 && my_coord[a] < size, "all_gather: bad mesh axis {}: {} of {}", a, my_coord[a], size);
         devices *= size;
-        // A 2-device ring is a line: both directions would reach the same neighbor.
-        const bool ring = axis_ring[a] && size > 2;
+        const bool ring = axis_ring[a];
         const uint32_t fwd = ring ? size / 2 : size - 1 - my_coord[a];
         const uint32_t bwd = ring ? size - 1 - fwd : my_coord[a];
         // Even ring: forward reaches one device further than backward; alternating the split by packet balances them.
@@ -366,11 +377,6 @@ McastRoutes mcast_routes(
         }
     }
     return routes;
-}
-
-uint32_t mcast_done_expect(const Plan& plan, bool alternates) {
-    // Every route variant covers each receiver once, and each sends its own done.
-    return (alternates ? 2 : 1) * (plan.N - 1);
 }
 
 }  // namespace ttnn::operations::ccl::all_gather_plan

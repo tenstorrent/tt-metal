@@ -17,16 +17,6 @@
 
 namespace ttnn::operations::ccl {
 
-// Picks the Python-facing overload; the other one (with sub_core_grid) is C++ only.
-using AllBroadcastFn = std::vector<ttnn::Tensor> (*)(
-    const ttnn::Tensor&,
-    std::optional<uint32_t>,
-    const std::optional<tt::tt_metal::SubDeviceId>&,
-    const std::optional<ttnn::MemoryConfig>&,
-    std::optional<uint32_t>,
-    std::optional<ttnn::ccl::Topology>,
-    bool);
-
 void bind_all_broadcast(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -66,7 +56,23 @@ void bind_all_broadcast(nb::module_& mod) {
     ttnn::bind_function<"all_broadcast">(
         mod,
         doc,
-        static_cast<AllBroadcastFn>(&ttnn::all_broadcast),
+        // sub_core_grid stays C++ only.
+        +[](const ttnn::Tensor& input_tensor,
+            std::optional<uint32_t> cluster_axis,
+            const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+            const std::optional<ttnn::MemoryConfig>& memory_config,
+            std::optional<uint32_t> num_links,
+            std::optional<ttnn::ccl::Topology> topology,
+            bool use_l1_small_for_semaphores) {
+            return ttnn::all_broadcast(
+                input_tensor,
+                cluster_axis,
+                subdevice_id,
+                memory_config,
+                num_links,
+                topology,
+                use_l1_small_for_semaphores);
+        },
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("cluster_axis") = nb::none(),

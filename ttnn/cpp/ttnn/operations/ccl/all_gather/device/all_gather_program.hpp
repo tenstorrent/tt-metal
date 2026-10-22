@@ -23,11 +23,11 @@
 // the runtime-arg override.
 namespace ttnn::operations::ccl::all_gather_program {
 
-// Pipeline constants. Wrong values cost speed, never correctness. Measured on BH (8x p150b, 2 links, payload
-// 15168): (K, D) = (3, 8) and (2, 4) are no faster than (3, 6) at 2 and 26 MB.
+// Pipeline constants. Wrong values cost speed, never correctness.
 inline constexpr uint32_t kSlots = 6;     // CB slots: even (slot parity = packet parity) and fixed, so a cached
                                           // program never depends on later allocator state
-inline constexpr uint32_t kInflight = 3;  // local-copy slots a builder holds until their reads land; <= kSlots - 2
+inline constexpr uint32_t kInflight = 3;  // slots a multicast builder holds for its local copy until their reads land:
+                                          // half the ring, so the pump always has as many to send
 inline constexpr uint32_t kBuilderRtInAddr = 0;
 inline constexpr uint32_t kBuilderRtOutAddr = 1;
 static_assert(kSlots % 2 == 0 && kInflight + 2 <= kSlots);
@@ -47,9 +47,8 @@ struct SharedVariables {
 };
 using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<SharedVariables>;
 
-// The plan both the composite decision and the factories run on.
-all_gather_plan::Plan make_device_plan(
-    const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
+// The plan both the composite decision and the factories run on. The output spec is the persistent output's, if any.
+all_gather_plan::Plan make_device_plan(const AllGatherParams& args, const AllGatherInputs& inputs);
 
 // What every device's program shares: worker cores (the same coordinates on every device, which makes mirror
 // and partner addressing work) and the two semaphores, allocated before any program runs.
@@ -60,7 +59,7 @@ struct Workers {
     tt::tt_metal::GlobalSemaphore sync_sem;
 };
 
-// One CB slot: [C headers | pad | payload <= P], payload 64 B aligned.
+// One CB slot: [pad | C headers | payload <= P], payload 64 B aligned (kernels/route.hpp).
 struct SlotLayout {
     uint32_t C;
     uint32_t hdr_bytes;
@@ -108,8 +107,7 @@ using DeviceProgramFn = std::function<Kernels(
 cached_mesh_workload_t build_workload(
     const AllGatherParams& args,
     const ttnn::MeshCoordinateRangeSet& coords,
-    const Tensor& input,
-    const Tensor& output,
+    const AllGatherInputs& inputs,
     all_gather_plan::AgAlgo algo,
     uint32_t cores_per_link,
     const DeviceProgramFn& fn);

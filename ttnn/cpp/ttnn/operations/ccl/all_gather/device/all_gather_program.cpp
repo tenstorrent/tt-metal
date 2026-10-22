@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <set>
-#include <unordered_map>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -27,8 +26,10 @@ constexpr uint32_t kSlotCb = tt::CBIndex::c_0;
 
 }  // namespace
 
-all_gather_plan::Plan make_device_plan(
-    const AllGatherParams& args, const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
+all_gather_plan::Plan make_device_plan(const AllGatherParams& args, const AllGatherInputs& inputs) {
+    const auto& input = inputs.input_tensor;
+    const auto& output_spec =
+        inputs.persistent_output_tensor.has_value() ? inputs.persistent_output_tensor->tensor_spec() : args.output_spec;
     const uint32_t avail_cores =
         ::ttnn::ccl::num_available_worker_cores(input.device(), args.subdevice_id, args.sub_core_grid);
     return all_gather_plan::make_plan(
@@ -73,7 +74,8 @@ Workers make_workers(const AllGatherParams& args, tt::tt_metal::distributed::Mes
 uint32_t signal_packets(const all_gather_plan::Plan& plan) {
     const uint64_t per_packet = plan.geo.P / plan.geo.A;
     const uint64_t iter_packets = ((uint64_t{plan.slices.front().ne} * plan.geo.E) + per_packet - 1) / per_packet;
-    // About a third (ring) or a quarter (line: more hops to fill) of an iteration, rounded, within [2, 8].
+    // About a third (ring) or a quarter (line: more hops to fill) of an iteration, rounded: at least 2 (1 is up to
+    // 1.5x slower), at most 8 (longer gains nothing).
     const uint64_t g = plan.ring ? (iter_packets + 1) / 3 : (iter_packets + 2) / 4;
     return static_cast<uint32_t>(std::clamp<uint64_t>(g, 2, 8));
 }
@@ -125,7 +127,6 @@ Kernels create_kernels(
         {"E", geo.E},
         {"dst_cross", geo.dst_cross ? 1u : 0u},
         {"src_cross", geo.src_cross ? 1u : 0u},
-        {"cross_row", 1u},  // measured on BH where it applies (S = 1 pages): 6-74% faster, never slower
     });
     std::vector<uint32_t> builder_ct;
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(builder_ct);
@@ -165,14 +166,13 @@ void append_route_args(
 cached_mesh_workload_t build_workload(
     const AllGatherParams& args,
     const ttnn::MeshCoordinateRangeSet& coords,
-    const Tensor& input,
-    const Tensor& output,
+    const AllGatherInputs& inputs,
     all_gather_plan::AgAlgo algo,
     uint32_t cores_per_link,
     const DeviceProgramFn& fn) {
-    const auto plan = make_device_plan(args, input, output.tensor_spec());
+    const auto plan = make_device_plan(args, inputs);
     TT_FATAL(plan.algo == algo, "all_gather factory does not match the plan's algorithm");
-    const auto workers = make_workers(args, input.device(), cores_per_link * plan.links);
+    const auto workers = make_workers(args, inputs.input_tensor.device(), cores_per_link * plan.links);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, SharedVariables> shared_variables;

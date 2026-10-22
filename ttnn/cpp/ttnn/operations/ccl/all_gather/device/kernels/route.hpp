@@ -65,6 +65,19 @@ FORCE_INLINE constexpr uint32_t slot_header_offset(uint32_t c, uint32_t C, uint3
     return payload_off - (C - c) * hdr_bytes;
 }
 
+// The slot CB, as named compile-time args from all_gather_program.cpp::create_kernels (every kernel gets them).
+struct SlotCt {
+    static constexpr uint32_t cb = get_named_compile_time_arg_val("cb");
+    static constexpr uint32_t slots = get_named_compile_time_arg_val("slots");
+    static constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+    static constexpr uint32_t payload_off = get_named_compile_time_arg_val("payload_off");
+    static constexpr uint32_t hdr_bytes = get_named_compile_time_arg_val("hdr_bytes");
+    static constexpr uint32_t C = get_named_compile_time_arg_val("C");
+    static constexpr uint32_t A = get_named_compile_time_arg_val("A");
+
+    static_assert(sizeof(PACKET_HEADER_TYPE) == hdr_bytes, "host and kernel disagree on the header size");
+};
+
 // Routes header c of every slot once, from routes[c]; per packet the builder writes only the NOC command. With
 // alternation, slot parity picks the variant: the slot count is even, so consecutive packets alternate.
 template <bool kMcast, bool kAlternate>
@@ -83,4 +96,12 @@ FORCE_INLINE void route_slots(
             set_route<kMcast>(hdr, routes[c], kAlternate ? s % 2 : 0);
         }
     }
+}
+
+// Waits for `count` on a local semaphore, then takes it back. Subtract, never clear: a peer one invocation
+// ahead may already have posted its next increments.
+FORCE_INLINE void sem_wait_consume(uint32_t sem, uint32_t count) {
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem), count);
+    noc_semaphore_inc(get_noc_addr(sem), uint32_t{0} - count);
+    noc_async_atomic_barrier();
 }

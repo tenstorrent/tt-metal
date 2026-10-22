@@ -89,9 +89,7 @@ ttnn::Tensor all_gather(
     // User errors (e.g. a wrong-sized output_tensor) must fail the same way whichever path runs, so validate before
     // routing: an illegal output spec would otherwise send the op to composite and fail there, after the gather.
     operations::ccl::AllGatherDeviceOperation::validate_on_program_cache_miss(params, inputs);
-    const auto& output_spec =
-        persistent_output_tensor.has_value() ? persistent_output_tensor->tensor_spec() : params.output_spec;
-    const auto plan = operations::ccl::all_gather_program::make_device_plan(params, input_tensor, output_spec);
+    const auto plan = operations::ccl::all_gather_program::make_device_plan(params, inputs);
     if (plan.algo == operations::ccl::all_gather_plan::AgAlgo::Composite) {
         return composite(plan.composite_reason);
     }

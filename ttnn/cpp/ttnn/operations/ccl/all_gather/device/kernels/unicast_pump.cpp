@@ -7,18 +7,10 @@
 #include <cstdint>
 
 #include "pump.hpp"
-#include "route.hpp"
 
 // Store-and-forward pump: sends the builder's packets one hop, copies iteration 0 (our own data) into our
 // output, and counts delivered units into the downstream builder's data_valid.
 void kernel_main() {
-    constexpr uint32_t cb = get_named_compile_time_arg_val("cb");
-    constexpr uint32_t slots = get_named_compile_time_arg_val("slots");
-    constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
-    constexpr uint32_t payload_off = get_named_compile_time_arg_val("payload_off");
-    constexpr uint32_t hdr_bytes = get_named_compile_time_arg_val("hdr_bytes");
-    constexpr uint32_t C = get_named_compile_time_arg_val("C");
-    constexpr uint32_t A = get_named_compile_time_arg_val("A");
     constexpr uint32_t signal_units = get_named_compile_time_arg_val("signal_units");
 
     uint32_t idx = 0;
@@ -41,7 +33,7 @@ void kernel_main() {
 
     tt::tt_fabric::RoutingPlaneConnectionManager conns;
     size_t fabric_idx = idx;
-    open_connections(conns, C, fabric_idx);
+    open_connections(conns, SlotCt::C, fabric_idx);
     IncSender inc;
     inc.init<false>(conns.get(0).sender, route, 0);
 
@@ -64,7 +56,7 @@ void kernel_main() {
         }
     };
 
-    Pump<cb, slots, slot_bytes, payload_off, hdr_bytes, C, A> pump(conns);
+    Pump<SlotCt> pump(conns);
     pump.run(
         total,
         [&](uint32_t slot, uint32_t units) {

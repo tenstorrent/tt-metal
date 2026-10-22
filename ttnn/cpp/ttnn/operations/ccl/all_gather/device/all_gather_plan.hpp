@@ -106,18 +106,26 @@ PlanIn make_plan_in(
 
 Plan make_plan(const PlanIn&);
 
-// stripe_row_bytes: what one device contributes to one output row (input page bytes x pages per stripe row).
+// links: unicast's effective links. P: the packet payload. stripe_row_bytes: what one device contributes to one
+// output row (input page bytes x pages per stripe row).
 bool prefer_unicast(
-    tt::ARCH, bool ring, uint32_t N, uint32_t links, uint64_t busiest_link_bytes, uint64_t stripe_row_bytes);
+    tt::ARCH,
+    bool ring,
+    uint32_t N,
+    uint32_t links,
+    uint32_t P,
+    uint64_t busiest_link_bytes,
+    uint64_t stripe_row_bytes);
 
 // Near-equal contiguous element ranges, never empty (needs 1 <= links <= elements).
 std::vector<Slice> make_slices(uint32_t elements, uint32_t links);
 
 UnicastDir unicast_schedule(const Plan&, uint32_t dev, uint32_t link, uint32_t dir /*0 fwd, 1 bwd*/);
 
-// Today's route sets. mesh_shape: devices per axis; axis selects the active axis of a 1D collective (nullopt: every
-// axis with more than one device). phys_dir maps each logical direction to its physical eth_chan_directions slot
-// (from the fabric's forwarding direction to that neighbor); identity when the axes run E/W and N/S.
+// Multicast route sets. mesh_shape: devices per axis; axis selects the active axis of a 1D collective (nullopt: every
+// axis with more than one device). axis_ring: the axis wraps (false for 2 devices: both directions would reach the
+// same neighbor). phys_dir maps each logical direction to its physical eth_chan_directions slot (from the fabric's
+// forwarding direction to that neighbor); identity when the axes run E/W and N/S.
 McastRoutes mcast_routes(
     const Plan&,
     std::array<uint32_t, 2> mesh_shape,
@@ -125,6 +133,5 @@ McastRoutes mcast_routes(
     std::optional<uint32_t> axis,
     std::array<bool, 2> axis_ring,
     std::array<uint32_t, 4> phys_dir = {kEast, kWest, kNorth, kSouth});
-uint32_t mcast_done_expect(const Plan&, bool alternates);  // V*(N-1)
 
 }  // namespace ttnn::operations::ccl::all_gather_plan

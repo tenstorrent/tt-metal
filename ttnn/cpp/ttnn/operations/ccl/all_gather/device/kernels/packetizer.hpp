@@ -20,38 +20,29 @@
 // Ring: uint32_t acquire();                        // L1 address of the next slot to fill
 //       uint8_t trid();                            // read transaction id of that slot
 //       void commit(const Seg*, uint32_t nseg);    // the slot is complete; its reads may still be in flight
-//       void drain();                              // push every committed slot
 // Io:   static constexpr uint32_t kReadsPerPoll;   // reads a packet may issue between throttle() calls
 //       void start(uint8_t trid);                  // a packet opens; its reads use trid
 //       void read(uint64_t src, uint32_t l1, uint32_t bytes, uint8_t trid);
 //       void throttle(uint8_t trid);               // waits until another kReadsPerPoll reads fit
 //       void write_headers(uint32_t slot, const Seg*, uint32_t nseg, uint32_t bytes);
-// slot_io.hpp has the device versions; host tests record instead.
+// slot_ring.hpp and slot_io.hpp have the device versions; host tests record instead.
 
 struct Seg {
     uint64_t dst;
     uint32_t bytes;
 };
 
-// One packet: <= P bytes (P cut to a multiple of A) and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments.
+// One packet: <= P bytes (a multiple of A) and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments.
 // A piece continues the last segment when it starts where that one ends. Byte counts, never units: no divides.
-// add() works on a local copy of the open packet's state, so the per-piece path keeps it in registers; opening
+// add_all() works on a local copy of the open packet's state, so the per-piece path keeps it in registers; opening
 // and finishing a packet are out of line (once per packet), which keeps the hot loop small.
 template <class Ring, class Io>
 class Packetizer {
 public:
-    Packetizer(Ring& ring, Io& io, uint32_t A, uint32_t P, uint32_t payload_off) :
-        ring_(ring), io_(io), P_(P - P % A), payload_off_(payload_off) {}
+    Packetizer(Ring& ring, Io& io, uint32_t P, uint32_t payload_off) :
+        ring_(ring), io_(io), P_(P), payload_off_(payload_off) {}
 
-    template <class Src>
-    FORCE_INLINE void add(const DstRun& r, Src& src) {
-        State s = s_;
-        uint64_t dst = r.addr;
-        src.for_each(r, [&](const Piece& p) __attribute__((always_inline)) { put(s, p, dst); });
-        s_ = s;
-    }
-
-    // add() for every run the walk yields, calling before(run) first. One state copy for the whole walk.
+    // Packs every run the walk yields, in order, calling before(run) first.
     template <class W, class Src, class Before>
     FORCE_INLINE void add_all(W& walk, Src& src, Before&& before) {
         State s = s_;
@@ -146,7 +137,8 @@ private:
 };
 
 // A builder address (our NOC's coordinates) as the EDM's NOC sees it: the same on BH (virtual coordinates) or
-// when we share the EDM's NOC; mirrored on WH otherwise.
+// when we share the EDM's NOC; mirrored on WH otherwise. The mirror is its own inverse, so a kernel on the other NOC
+// (the pump) also uses this to turn a header's address back into its own NOC's. The WH path is unverified on device.
 FORCE_INLINE uint64_t edm_noc_addr(uint64_t addr) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
     if constexpr (noc_index == tt::tt_fabric::edm_to_local_chip_noc) {

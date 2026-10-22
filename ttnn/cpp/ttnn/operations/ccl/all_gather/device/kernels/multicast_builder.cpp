@@ -7,7 +7,6 @@
 
 #include <cstdint>
 
-#include "route.hpp"
 #include "slot_io.hpp"
 
 // Multicast builder: one pass over this device's slice of the input, into slots whose C headers each carry one
@@ -36,18 +35,16 @@ void kernel_main() {
     route_slots<true, alternate>(
         get_write_ptr(Ct::cb), Ct::slots, Ct::slot_bytes, Ct::hdr_bytes, Ct::payload_off, routes, Ct::C);
 
-    SlotRing ring;
-    ring.set_local_copy(true);
+    SlotRing ring(/*local_copy=*/true);
     SlotIo io;
-    SlotPacketizer pk(ring, io, Ct::A, Ct::P, Ct::payload_off);
-    Walk walk(out, WalkGeo{Ct::A, Ct::Uo, Ct::S, Ct::N, Ct::E, Ct::P, Ct::dst_cross, Ct::cross_row});
+    SlotPacketizer pk(ring, io, Ct::P, Ct::payload_off);
+    Walk walk(out, WalkGeo{Ct::A, Ct::Uo, Ct::S, Ct::N, Ct::E, Ct::P, Ct::dst_cross});
     InputPieces input(in, Ct::A, Ct::Ui, Ct::E, Ct::src_cross);
 
     walk.init(dev, e0, ne, 0, ne);
     pk.add_all(walk, input, [](const DstRun&) {});
     pk.close();
     ring.drain();
-    noc_async_read_set_trid(0);
-    noc_async_read_barrier();
+    io.finish();
     noc_async_write_barrier();
 }
