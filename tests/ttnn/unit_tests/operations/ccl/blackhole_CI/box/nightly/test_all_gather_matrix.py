@@ -9,7 +9,7 @@
 #   U-NE         FABRIC_1D_NEIGHBOR_EXCHANGE: unicast at any size, line
 #   U-ring/line  1D ring/line, busiest-link bytes >= 4x the BH crossover threshold: unicast
 #   M-line       1D line, busiest-link bytes <= 1/4 of the threshold: multicast (ring multicast: D13)
-#   2D           FABRIC_2D: a 1D gather on the (1,8) mesh (HybridMesh headers), or true 2D on (2,4)
+#   2D           FABRIC_2D on (2,4): a 1D gather along the rows (HybridMesh headers), or true 2D
 #   auto-*       whatever the plan picks (composite or a forced choice)
 # Busiest-link bytes = gathered bytes / effective links (2 here, fewer when there are fewer elements). The
 # placeholder thresholds at N = 8 are 640 KB (ring) and 2560 KB (line) per link. The host test G7
@@ -160,23 +160,25 @@ CASES = {
     "D11-n3_une": ("U-NE", _case([1, 1, 64, 384], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(1, 3))),
     "D11-n2_une": ("U-NE", _case([1, 1, 64, 256], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(1, 2))),
     # D12 one tile per device on a 4-device ring: one element, one link, empty forward half of the antipode stripe.
-    # Only a ring if the (1,4) submesh wraps; otherwise the plan sees a line (and picks multicast).
+    # Only a ring if the (1,4) submesh wraps; otherwise the plan sees a line (and picks multicast, as on the BH box).
     "D12-u_ring4": ("U-ring", _case([1, 1, 32, 128], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(1, 4))),
     # (extra, size-dependent, not in G7) the same on the 8-ring: one 384 KB row-major page per device, sub-page.
     "D12-u_ring8_big_page": ("U-ring", _case([1, 1, 8, 196608], 2, _RM, _BF16, _DRAM, _DRAM)),
-    # D14 composite (F3): gather-dim padded tile; bfp8 16x32 tile DRAM -> L1 (slot pitch > L1 bank pitch).
-    # Persistent output and sub_core_grid both reach the composite path.
+    # D14 composite (F3): gather-dim padded tile; 48 B RM rows DRAM -> L1 (slot pitch 64 > L1 bank pitch 48).
+    # Persistent output and sub_core_grid both reach the composite path. (The plan's bfp8 16x32 tile case is
+    # test_all_gather_tiny_tile_composite: composite's concat only knows 32x32 tiles, so it must refuse.)
     "D14-padded_auto_line": ("auto-line", _case([1, 1, 32, 40], 3, _TILE, _BF16, _DRAM, _DRAM, grid=_grid(3, 3))),
-    "D14-bfp8_16x32_auto_line": (
+    "D14-rm48_dram_to_l1_auto_line": (
         "auto-line",
-        _case([1, 1, 64, 256], 3, _TILE, _BFP8, _DRAM, _L1, tile=(16, 32), grid=_grid(3, 3)),
+        _case([1, 1, 4096, 24], 2, _RM, _BF16, _DRAM, _L1, grid=_grid(3, 3)),
     ),
     # D15 sub_core_grid with only 2 NOC rows: unicast's 4 cores double up on rows
     "D15-une": ("U-NE", _case([1, 1, 1024, 2560], 3, _TILE, _BF16, _DRAM, _DRAM, grid=_grid(7, 1))),
     "D15-m_line": ("M-line", _case([1, 1, 256, 2560], 3, _TILE, _BF16, _DRAM, _DRAM, grid=_grid(7, 1))),
-    # D16 FABRIC_2D: a 1D gather along the (1,8) mesh (HybridMesh headers), and the true 2D gather on (2,4).
-    "D16-axis_u": ("2D", _case([1, 1, 4096, 2560], 3, _TILE, _BF16, _DRAM, _DRAM, cluster_axis=1)),
-    "D16-axis_m": ("2D", _case([1, 1, 256, 2560], 3, _TILE, _BF16, _DRAM, _DRAM, cluster_axis=1)),
+    # D16 FABRIC_2D on the box's system mesh shape (2,4) (other views of a 2D fabric can hang): a 1D gather along
+    # the 4-device rows (HybridMesh headers), and the true 2D gather.
+    "D16-axis_u": ("2D", _case([1, 1, 4096, 2560], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4), cluster_axis=1)),
+    "D16-axis_m": ("2D", _case([1, 1, 32, 1024], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4), cluster_axis=1)),
     "D16-true_2d_m": ("2D", _case([1, 1, 256, 256], 3, _TILE, _BF16, _DRAM, _DRAM, mesh=(2, 4))),
     # D17 F2: D9b's shape where unicast is forced (NE) and illegal -> composite. (extra) N = 2, where all_broadcast
     # is one hop; N = 8 is test_all_gather_f2_neighbor_exchange_n8.
@@ -186,9 +188,6 @@ CASES = {
     "D18-u_ring": ("U-ring", _case([1, 1, 4096, 3328], 3, _TILE, _BF16, _DRAM, _DRAM)),
     "D18-u_line": ("U-line", _case([1, 1, 4096, 3328], 3, _TILE, _BF16, _DRAM, _DRAM)),
 }
-
-# Row-major pages above this are read back through an on-device reshape (fast dispatch reads a page in one shot).
-_MAX_READ_PAGE = 48 * 1024
 
 
 def _devices(mesh_device, mesh):
@@ -203,16 +202,6 @@ def _host_input(mesh, c, seed):
     kwargs = {"tile": ttnn.Tile(c["tile"])} if c["tile"] is not None else {}
     host = ttnn.from_torch(full, layout=c["layout"], dtype=c["dtype"], mesh_mapper=_mapper(mesh, c), **kwargs)
     return host, full
-
-
-def _to_torch(t):
-    shape = list(t.shape)
-    row_bytes = shape[-1] * 2
-    if t.layout == _RM and row_bytes > _MAX_READ_PAGE:
-        k = row_bytes // 4096
-        flat = ttnn.reshape(t, shape[:-2] + [shape[-2] * k, shape[-1] // k])
-        return ttnn.to_torch(flat).reshape(shape)
-    return ttnn.to_torch(t)
 
 
 def _mapper(mesh, c):
@@ -248,7 +237,7 @@ def _output(mesh, c):
 
 def _check(tt_out, expected, label):
     for d, dev_out in enumerate(ttnn.get_device_tensors(tt_out)):
-        got = _to_torch(dev_out)
+        got = ttnn.to_torch(dev_out)
         ok = got.shape == expected.shape and torch.equal(got, expected)
         if not ok and got.shape == expected.shape:
             bad = (got != expected).nonzero()
@@ -317,6 +306,19 @@ def test_all_gather_f2_neighbor_exchange_n8(mesh_device, device_params, expect_e
     c = _case([1, 1, 64, 64], 3, _RM, _BF16, _L1, _DRAM)
     tt_in, _ = _input(mesh_device, c, seed=0)
     with expect_error(RuntimeError, "NEIGHBOR_EXCHANGE"):
+        _gather(tt_in, c, None)
+        ttnn.synchronize_device(mesh_device)
+
+
+# D14 (plan): bfp8 16x32 tiles DRAM -> L1 cannot go native (slot pitch 576 > L1 bank pitch 544), and the composite
+# path's concat only supports 32x32 tiles, so the op must refuse instead of returning scrambled data.
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [_LINE], indirect=True, ids=["fabric_line"])
+def test_all_gather_tiny_tile_composite(mesh_device, device_params, expect_error):
+    c = _case([1, 1, 64, 256], 3, _TILE, _BFP8, _DRAM, _L1, tile=(16, 32))
+    tt_in, _ = _input(mesh_device, c, seed=0)
+    with expect_error(RuntimeError, "32x32 tiles"):
         _gather(tt_in, c, None)
         ttnn.synchronize_device(mesh_device)
 

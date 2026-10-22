@@ -86,6 +86,9 @@ ttnn::Tensor all_gather(
     // The same plan select_program_factory makes from the same params, so the two cannot disagree.
     auto [params, inputs] = operations::ccl::all_gather_build_operation_args(
         input_tensor, persistent_output_tensor, dim, output_memory_config, cluster_axis, subdevice_id, sub_core_grid);
+    // User errors (e.g. a wrong-sized output_tensor) must fail the same way whichever path runs, so validate before
+    // routing: an illegal output spec would otherwise send the op to composite and fail there, after the gather.
+    operations::ccl::AllGatherDeviceOperation::validate_on_program_cache_miss(params, inputs);
     const auto& output_spec =
         persistent_output_tensor.has_value() ? persistent_output_tensor->tensor_spec() : params.output_spec;
     const auto plan = operations::ccl::all_gather_program::make_device_plan(params, input_tensor, output_spec);

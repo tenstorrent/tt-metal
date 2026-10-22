@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
@@ -359,6 +360,16 @@ ttnn::Tensor composite_all_gather(
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
+    // ttnn::concat builds its output with the default 32x32 tile and its kernels assume it, so any other tile
+    // comes back re-labelled and scrambled. Refuse rather than return wrong data.
+    TT_FATAL(
+        input_tensor.layout() != ttnn::Layout::TILE ||
+            (tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH),
+        "composite all_gather supports only {}x{} tiles (ttnn::concat assumes them), got {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile_height,
+        tile_width);
 
     auto input_shape = input_tensor.logical_shape();  // copied, not referenced (input_tensor is reassigned below)
     const int32_t rank = static_cast<int32_t>(input_shape.rank());
