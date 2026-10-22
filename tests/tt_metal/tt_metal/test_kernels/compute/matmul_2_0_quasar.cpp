@@ -8,7 +8,7 @@
 //
 // Compile-time args: num_tiles (output tiles), kt, block, mode.
 //   block = 0 (tile mode): tiles_per_section output tiles per section; output tile j of a section is
-//     sum_k in0[j * kt + k] x in1[j * kt + k] (matmul_tile). Shorter tail sections just pack fewer tiles.
+//     sum_k in0[j * kt + k] x in1[j * kt + k] (matmul_tile). A shorter tail section re-inits first.
 //   block = 1 (block mode): ct x rt output tiles per section, C = in0[rt, kt] x in1[kt, ct] (both row-major,
 //     matmul_block<ct, rt> for k < kt). A tail of num_tiles % (ct * rt) tiles (rt must be 1) re-inits with the
 //     runtime shape and uses the runtime matmul_block.
@@ -40,6 +40,10 @@ void matmul_tile_sections(Dfb& in0, Dfb& in1, Dfb& out, std::uint32_t num_tiles)
     ex::pack_init(out.template back<Out>());
     for (std::uint32_t done = 0; done < num_tiles;) {
         const std::uint32_t n = num_tiles - done < TPS ? num_tiles - done : TPS;
+        if (n != TPS) {  // tail: block ops take no tails, so re-init before the shorter block
+            ex::matmul_init<1, 1>(in0.template front<I0>(), in1.template front<I1>());
+            ex::pack_init(out.template back<Out>());
+        }
         in0.wait_front(n * KT);
         in1.wait_front(n * KT);
         out.reserve_back(n);
@@ -80,6 +84,7 @@ void matmul_block_sections(Dfb& in0, Dfb& in1, Dfb& out, std::uint32_t num_tiles
     if (done < num_tiles) {  // tail: a 1 x ct_tail block, runtime shape
         const std::uint32_t ct = num_tiles - done;
         ex::matmul_init(in0.template front<I0>(), in1.template front<I1>(), ct, 1, KT);
+        ex::pack_init(out.template back<Out>());
         in0.wait_front(KT);
         in1.wait_front(KT * ct);
         out.reserve_back(ct);

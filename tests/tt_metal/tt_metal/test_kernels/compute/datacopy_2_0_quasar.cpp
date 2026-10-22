@@ -6,9 +6,9 @@
 // id-free 2.0 compute API and the take-driven Dest chain. Every op init runs before its op, every Dest section is
 // dest_acquire .. dest_release, and the copy/pack TDMA sits between each wait/reserve and its pop/push.
 //
-// Compile-time args: num_tiles, tiles_per_section (full sections use copy_block<T, 1>, a shorter tail the runtime
-// copy_block), to_dest (path), mode: 0 = one run, 6 = chain switch (to-dest 3 sections, FPU datacopy 5, to-dest 3),
-// 7 = two DFB pairs (in0 -> out0 then in1 -> out1, num_tiles / 2 each).
+// Compile-time args: num_tiles, tiles_per_section (full sections use copy_block<T, 1>, a shorter tail re-inits and
+// uses the runtime copy_block), to_dest (path), mode: 0 = one run, 6 = chain switch (to-dest 3 sections, FPU
+// datacopy 5, to-dest 3), 7 = two DFB pairs (in0 -> out0 then in1 -> out1, num_tiles / 2 each).
 
 #include <cstdint>
 
@@ -31,6 +31,10 @@ void copy_sections(Dfb& in, Dfb& out, std::uint32_t num_tiles) {
     ex::pack_init(out.template back<Out>());
     for (std::uint32_t done = 0; done < num_tiles;) {
         const std::uint32_t n = num_tiles - done < TPS ? num_tiles - done : TPS;
+        if (n != TPS) {  // tail: block ops take no tails, so re-init before the shorter block
+            ex::copy_init<to_dest>(in.template front<In>());
+            ex::pack_init(out.template back<Out>());
+        }
         in.wait_front(n);
         out.reserve_back(n);
         ex::dest_acquire();
