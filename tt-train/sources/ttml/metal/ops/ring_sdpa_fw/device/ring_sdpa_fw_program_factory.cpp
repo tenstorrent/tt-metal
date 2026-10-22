@@ -62,8 +62,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .q_chunk_size = operation_attributes.program_config.q_chunk_size,
-            .k_chunk_size = operation_attributes.program_config.k_chunk_size};
+            .program_config = operation_attributes.program_config};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -142,8 +141,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .return_intermediates = true,
             .mask_type = effective_mask_type,
             .dropout_probability = 0.0F,
-            .q_chunk_size = operation_attributes.program_config.q_chunk_size,
-            .k_chunk_size = operation_attributes.program_config.k_chunk_size};
+            .program_config = operation_attributes.program_config};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
