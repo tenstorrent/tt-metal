@@ -667,6 +667,11 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     meta = plan_doc.get("profile_sections") or {}
     nch = spec.mesh[0] * spec.mesh[1]
     ops = prof.get("ops") or {}
+    if not ops and prof.get("ops_file") and (res / prof["ops_file"]).exists():  # F148: gzipped beside the profile
+        import gzip
+
+        with gzip.open(res / prof["ops_file"], "rt") as f:
+            ops = json.load(f)
 
     bridged = set(prof.get("bridged_steps") or [])  # F46: steps deferred to op-gen, on the CPU bridge
 
