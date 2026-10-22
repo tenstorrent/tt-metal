@@ -319,14 +319,32 @@ def _describe_request(completion_id: str, client: str, user_key: str, body: dict
         for key in ("model", "stream", "max_tokens", "temperature", "top_p", "thinking", "reasoning_effort")
         if body.get(key) is not None
     }
-    messages = body.get("messages") or []
-    total = sum(len(str(m.get("content", ""))) for m in messages)
+    messages = [m for m in body.get("messages") or [] if isinstance(m, dict)]
+
+    def shown(content) -> str:
+        # An array's non-text parts (an image's base64 runs to megabytes) are named, not printed.
+        if not isinstance(content, list):
+            return str(content if content is not None else "")
+        return "".join(
+            (
+                part
+                if isinstance(part, str)
+                else (
+                    part["text"]
+                    if isinstance(part, dict) and isinstance(part.get("text"), str)
+                    else f"[{part.get('type', '?') if isinstance(part, dict) else type(part).__name__}]"
+                )
+            )
+            for part in content
+        )
+
+    texts = [shown(m.get("content")) for m in messages]
     head = (
         f"{completion_id} from {client} user={user_key!r} "
         f"{' '.join(f'{k}={v!r}' for k, v in options.items())}\n"
-        f"  {len(messages)} messages, {total} chars"
+        f"  {len(messages)} messages, {sum(len(t) for t in texts)} chars"
     )
-    return "\n".join([head] + [f"    [{m.get('role')}] {_one_line(str(m.get('content', '')))}" for m in messages])
+    return "\n".join([head] + [f"    [{m.get('role')}] {_one_line(t)}" for m, t in zip(messages, texts)])
 
 
 _ROLES = ("system", "developer", "user", "assistant", "tool")
@@ -367,8 +385,16 @@ def _normalized_tools(tools) -> list[dict]:
     return out
 
 
-def _normalized_messages(messages, tools, chat_format: ChatFormat) -> list[dict]:
+def _text_content(role: str, content, index: int) -> dict:
+    """A message's content fields for the renderer: ``{"content": text}`` (see :func:`_content_text`)."""
+    return {"content": _content_text(content, index)}
+
+
+def _normalized_messages(messages, tools, chat_format: ChatFormat, content_fields=_text_content) -> list[dict]:
     """Validate a request's ``messages`` and put them in the form the renderer wants.
+
+    ``content_fields(role, content, index)`` turns one message's ``content`` into the entry's content fields
+    (:func:`_text_content` by default; a model that reads images also returns ``content_blocks``).
 
     Two shapes are canonicalised here. OpenAI's ``content`` may be a string or an array
     of typed parts, and the extra fields a client echoes back with an assistant reply
@@ -389,7 +415,7 @@ def _normalized_messages(messages, tools, chat_format: ChatFormat) -> list[dict]
         role = message["role"]
         if role not in _ROLES:
             raise RequestError(400, f"messages[{index}] has role {role!r}, which this model has no place for")
-        entry = {"role": role, "content": _content_text(message.get("content"), index)}
+        entry = {"role": role, **content_fields(role, message.get("content"), index)}
         if role == "assistant" and message.get("tool_calls"):
             entry["tool_calls"] = _normalized_tool_calls(message["tool_calls"], index)
         if role == "tool":
@@ -620,6 +646,20 @@ class _Streamer:
             self.on_chunk("", content[self._sent_c :])
             self._sent_c = len(content)
         self.reasoning, self.content = reasoning, content
+
+    def reasoning_tokens(self, token_ids) -> int:
+        """How many of the reply's ``token_ids`` are its reasoning block, tags included, split as
+        :meth:`_split` splits the text (``<think>`` and ``</think>`` are single tokens)."""
+        ids = list(token_ids)
+        open_id, close_id = self.tokenizer.convert_tokens_to_ids([_THINK_OPEN, _THINK_CLOSE])
+        if open_id in ids:
+            start = ids.index(open_id)
+        elif self.thinking:
+            start = 0
+        else:
+            return 0
+        end = ids.index(close_id, start) + 1 if close_id in ids[start:] else len(ids)
+        return end - start
 
     def _split(self, text: str) -> tuple[str, str, str]:
         """``text`` as (reasoning, answer, tool-call block), each without its tags."""
@@ -1138,9 +1178,10 @@ class _Prefiller:
         drain_seconds: float = 0.0,
         drained: int = 0,
         replayed: int = 0,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | None:
         """Prefill ``ids`` (as many tokens as :meth:`aligned` allows at ``user.pos``) into ``user``'s
-        session, empty or continued from ``user.pos``; returns the next-token logits ``[V]`` (host fp32) and
+        session, empty or continued from ``user.pos``; returns the next-token logits ``[V]`` (host fp32), or
+        ``None`` from a prefill model without a head (its :meth:`aligned` then always leaves tokens for decode), and
         advances ``user.pos`` by ``len(ids) - replayed``. A continued prefill that fails rewinds the session, so the
         next turn re-prefills the conversation whole. ``on_progress`` gets the count of new ``ids`` done.
 
@@ -1222,6 +1263,8 @@ class _Prefiller:
             f"+ prefetcher fenced {1e3 * reload_seconds:.1f} ms, state commit {1e3 * commit_seconds:.1f} ms); "
             f"host time, the device's share shows in the first decode output"
         )
+        if logits is None:  # a KV-only prefill model has no head: decode replays the prompt's tail
+            return None
         row = logits.reshape(-1)
         if not torch.isfinite(row).all():
             raise RuntimeError("prefill produced non-finite logits")
@@ -1276,6 +1319,7 @@ class _Turn:
 
         self.phase = self.PREFILL
         self.ids: list[int] = []  # the turn's prompt tokens
+        self.cached = 0  # the prompt's tokens before ``ids``, already in the slot's cache at admission
         self.fed = 0  # how many of them have been dispatched
         self.device_prefill = 0  # prompt tokens still to go through the traced prefill model
         self.prefill_from = 0  # ... from this many fed (replayed through decode up to an aligned position)
@@ -1640,6 +1684,7 @@ class _Scheduler:
             logger.debug(f"user {turn.user_key!r} rejected at admission: {type(e).__name__}: {e}")
             turn.events.put(("error", e))
             return
+        turn.cached = user.pos
         user._next_render = len(user.messages)
         turn.t_replay = turn.t_admit
         turn.stream = _Streamer(
@@ -2344,7 +2389,9 @@ class _Scheduler:
                 "done",
                 {
                     "prompt_tokens": len(turn.ids),
+                    "cached_tokens": turn.cached,
                     "completion_tokens": len(turn.generated),
+                    "reasoning_tokens": turn.stream.reasoning_tokens(turn.generated),
                     "content": turn.stream.content,
                     "reasoning_content": turn.stream.reasoning,
                     "tool_calls": turn.stream.tool_calls,
@@ -2372,7 +2419,9 @@ class _Scheduler:
                 "done",
                 {
                     "prompt_tokens": len(turn.ids),
+                    "cached_tokens": turn.cached,
                     "completion_tokens": 0,
+                    "reasoning_tokens": 0,
                     "content": "",
                     "reasoning_content": "",
                     "tool_calls": [],
@@ -2580,6 +2629,11 @@ class GenerationServer:
         return False
 
     # -- generation ------------------------------------------------------------- #
+    def normalized_messages(self, body: dict) -> list[dict]:
+        """The request's ``messages`` validated and in the renderer's form (see :func:`_normalized_messages`).
+        Runs on the HTTP thread, so it must not touch the device."""
+        return _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format)
+
     def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
         """Run one chat-completion turn for ``user_key``.
 
@@ -2591,7 +2645,7 @@ class GenerationServer:
         Blocks until the reply is complete, but holds nothing except this user's own
         lock: the decode steps run on the scheduler thread, interleaved with the other
         users' turns, and this thread only relays what they produce."""
-        messages = _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format)
+        messages = self.normalized_messages(body)
         body = {**body, "messages": messages}
 
         max_tokens = body.get("max_tokens")
@@ -2735,10 +2789,21 @@ class _Handler(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
     server_version = "DeepSeekV4Flash/1.0"
+    # Whether a stream's last chunk carries :meth:`_usage`; with ``stream_options.include_usage`` every earlier
+    # chunk then has ``"usage": null``.
+    stream_usage = False
 
     @property
     def api(self) -> GenerationServer:
         return self.server.api  # type: ignore[attr-defined]
+
+    def _usage(self, stats: dict) -> dict:
+        """The response's ``usage``, from the stats :meth:`GenerationServer.generate` returns."""
+        return {
+            "prompt_tokens": stats["prompt_tokens"],
+            "completion_tokens": stats["completion_tokens"],
+            "total_tokens": stats["prompt_tokens"] + stats["completion_tokens"],
+        }
 
     def log_message(self, fmt: str, *args) -> None:
         logger.info(f"{self.address_string()} {fmt % args}")
@@ -2810,7 +2875,7 @@ class _Handler(BaseHTTPRequestHandler):
             # a malformed request still gets a real status code. The result is discarded:
             # ``generate`` normalises the body itself, and folding tool turns into user
             # messages is not something to do twice.
-            _normalized_messages(body.get("messages"), body.get("tools"), self.api.engine.chat_format)
+            self.api.normalized_messages(body)
             completion_id = "chatcmpl-" + uuid.uuid4().hex
             object_kind, chunk_kind = "chat.completion", "chat.completion.chunk"
         else:
@@ -2822,6 +2887,10 @@ class _Handler(BaseHTTPRequestHandler):
             object_kind, chunk_kind = "text_completion", "text_completion"
 
         stream = bool(body.get("stream"))
+        stream_options = body.get("stream_options") or {}
+        if not isinstance(stream_options, dict):
+            raise RequestError(400, "stream_options must be an object")
+        include_usage = self.stream_usage and bool(stream_options.get("include_usage"))
         created = int(time.time())
         model = str(body.get("model") or self.api.model_id)
         user_key = str(body.get("user") or _DEFAULT_USER)
@@ -2829,13 +2898,16 @@ class _Handler(BaseHTTPRequestHandler):
         logger.debug(_describe_request(completion_id, client, user_key, body))
 
         def frame(delta: dict, finish) -> dict:
-            return {
+            chunk = {
                 "id": completion_id,
                 "object": chunk_kind,
                 "created": created,
                 "model": model,
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
             }
+            if include_usage:
+                chunk["usage"] = None
+            return chunk
 
         if stream:
             self._sse_start(completion_id)
@@ -2883,7 +2955,10 @@ class _Handler(BaseHTTPRequestHandler):
                 if chat and stats.get("tool_calls"):
                     calls = [{"index": i, **call} for i, call in enumerate(stats["tool_calls"])]
                     self._sse_event(frame({"tool_calls": calls}, None))
-                self._sse_event(frame({}, stats["finish_reason"]))
+                last = frame({}, stats["finish_reason"])
+                if self.stream_usage:
+                    last["usage"] = self._usage(stats)
+                self._sse_event(last)
                 self._sse_done()
             except (BrokenPipeError, ConnectionResetError):
                 pass
@@ -2914,11 +2989,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "created": created,
                     "model": model,
                     "choices": choices,
-                    "usage": {
-                        "prompt_tokens": stats["prompt_tokens"],
-                        "completion_tokens": stats["completion_tokens"],
-                        "total_tokens": stats["prompt_tokens"] + stats["completion_tokens"],
-                    },
+                    "usage": self._usage(stats),
                 }
             )
 
@@ -3310,13 +3381,15 @@ def serve(
     prefiller_cls=_Prefiller,
     num_stages: int | None = None,
     handler_cls=_Handler,
+    server_cls=GenerationServer,
 ) -> int:
     """Build the engine (``engine_cls``, a :class:`ChatEngine`) and the prefill (``prefiller_cls``, a
     :class:`_Prefiller`) on the opened mesh and serve until interrupted.
 
     ``num_stages`` is how many ``1 x TP`` submeshes to carve out of the full mesh. Unset, prefill
     takes every row. The mesh itself stays the whole system either way. The V4.1 server passes
-    ``DEEPSEEK_V4_NUM_STAGES`` and its own ``handler_cls`` (DeepSeek ``GET /models``).
+    ``DEEPSEEK_V4_NUM_STAGES``, its own ``handler_cls`` (DeepSeek ``GET /models``) and ``server_cls``
+    (a :class:`GenerationServer` that takes images).
     """
     # The model emits plenty of non-ASCII (CJK, emoji, typographic punctuation), which
     # an ASCII/POSIX locale would turn into a UnicodeEncodeError mid-reply.
@@ -3389,7 +3462,7 @@ def serve(
             engine.warmup()
             if prefiller is not None:
                 prefiller.snapshot()
-            api = GenerationServer(
+            api = server_cls(
                 engine,
                 args.model_id,
                 args.max_body_bytes,

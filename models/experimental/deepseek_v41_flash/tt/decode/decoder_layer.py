@@ -19,6 +19,8 @@ over the ranks, each sublayer all-reduces its output, and everything else -- the
 ``pre_mix``, hyper-connections, norms, Engram and caches -- is replicated.
 """
 
+from typing import Optional
+
 import ttnn
 
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DeepSeekV41Attention
@@ -134,7 +136,12 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             down.fetch_weights()
 
     def decode(
-        self, hidden_streams: ttnn.Tensor, pre_mix: ttnn.Tensor, scache: _StaticLayerCache, **attn_inputs
+        self,
+        hidden_streams: ttnn.Tensor,
+        pre_mix: ttnn.Tensor,
+        scache: _StaticLayerCache,
+        image_mask: Optional[ttnn.Tensor] = None,
+        **attn_inputs,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One decode step: ``(streams [B, 1, hc, D], pre_mix [B, 1, 1, hc])`` -> the same pair for the next layer.
 
@@ -145,6 +152,9 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         what :meth:`~.attention.DeepSeekV41Attention.decode_inputs` builds for the position. On an
         Engram layer the step's rows go to ``self.engram.write_rows`` before this call: under TP
         its all-reduces can sync the host, which would otherwise wait on rows never sent.
+
+        ``image_mask`` (``[1, B]`` uint32, 1 for a token of an image span) makes the router rank those tokens with
+        ``bias_vl``.
         """
         if self.engram is not None:
             with _region("ENGRAM"):
@@ -168,7 +178,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         with _region("POST_NORM"):
             collapsed = self.post_attention_layernorm(collapsed)
         with _region("MOE"):
-            mlp_out = self.mlp.decode_static(collapsed)
+            mlp_out = self.mlp.decode_static(collapsed, image_mask=image_mask)
         with _region("FFN_MIX"):
             streams_out = self._mix(post, comb, mlp_out, hidden_streams)
         ttnn.deallocate(hidden_streams)
