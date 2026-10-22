@@ -42,10 +42,10 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // params, matching the reduce_test.cpp idiom.
 
 // Before the measured op, a poison op unpacks POISON_TILES full 32x32 tiles of
-// 100.0, stored after the input tiles in buffer_A, into every row of both SrcA
-// and SrcB banks, then releases its DEST section with no reduce. The unpackers
-// must zero the SrcA rows that a short face leaves stale, or the reduce sums
-// the stale rows.
+// 100.0 into every row of both SrcA banks and of 25.0 into both SrcB banks. Both
+// are stored after the input tiles in buffer_A. The op then releases its DEST
+// section with no reduce. The unpackers must zero the rows that a short face
+// leaves stale, or the reduce sums the stale rows.
 static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
@@ -82,8 +82,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_init_<BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, ckernel::Transpose::None);
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
-        const std::uint32_t poison = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes);
-        _llk_unpack_AB_<BroadcastType::NONE>(poison, poison);
+        const std::uint32_t poison_a = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes);
+        const std::uint32_t poison_b = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + (POISON_TILES + i) * poison_tile_bytes);
+        _llk_unpack_AB_<BroadcastType::NONE>(poison_a, poison_b);
     }
     _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
     _llk_unpack_reconfig_tile_shape_srcb_(0 /*tile_size*/, tensor_shape.face_r_dim, tensor_shape.total_num_faces());

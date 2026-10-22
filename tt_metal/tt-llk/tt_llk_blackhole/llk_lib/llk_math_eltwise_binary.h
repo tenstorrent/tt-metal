@@ -148,7 +148,11 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
         {
             // For partial faces (face_r_dim < 16), we still need to increment counters by MAX_FPU_ROWS
             // to maintain proper 16-row spacing between faces
+            // The one-arg constructor sets both last-iteration instructions to the ELW op. Every inner iteration is the last
+            // one here, so without these the MOP runs a second ELW op on the stale rows 8-15 instead of INCRWC.
             tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_last_inner_loop_instr(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_last_outer_loop_instr(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
         }
         tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program();
@@ -418,7 +422,11 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
             // For partial faces, still increment by MAX_FPU_ROWS to maintain 16-row face spacing
+            // The one-arg constructor sets both last-iteration instructions to the ELW op. Every inner iteration is the last
+            // one here, so without these the MOP runs a second ELW op on the stale rows 8-15 instead of INCRWC.
             tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_last_inner_loop_instr(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_last_outer_loop_instr(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
         }
         tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
         tmp.program();
