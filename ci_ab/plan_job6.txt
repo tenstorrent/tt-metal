@@ -1,0 +1,11 @@
+# job 6: block 1 M H H2, counters M H Mnc Hnc, block 2 H2 M H
+b1 M ids/job6_m.txt all
+b1 H ids/job6_h.txt all
+b1 H2 ids/job6_h.txt all
+wc M_wc ids/job6_m.txt all wc
+wc H_wc ids/job6_h.txt all wc
+wc Mnc_wc ids/job6_m.txt all wc
+wc Hnc_wc ids/job6_h.txt all wc
+b2 H2 ids/job6_h.txt all
+b2 M ids/job6_m.txt all
+b2 H ids/job6_h.txt all
