@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/tensor/spec/layout/layout.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tile.hpp>
@@ -75,6 +76,9 @@ struct ReduceHardwareConfig {
     // Must match the enclosing compute kernel. Defaults to Metal's ComputeConfig fidelity.
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 };
+
+ReduceHardwareConfig make_reduce_hardware_config(
+    tt::ARCH arch, const tt::tt_metal::experimental::ComputeHardwareConfig& compute);
 
 struct ReduceChunkPlan {
     // Independent outputs retained in DEST for the chunk: the block's output_group.
@@ -306,6 +310,7 @@ private:
 class ReduceAuxiliaryArgs {
 public:
     explicit ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary);
+    ReduceAuxiliaryArgs(const ReducePlan& plan, std::uint32_t auxiliary_cb_id);
 
     void append_to(std::vector<std::uint32_t>& compile_time_args) const;
     std::vector<std::uint32_t> get_compile_time_args() const;

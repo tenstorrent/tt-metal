@@ -195,6 +195,16 @@ std::uint32_t destination_tiles(const ReduceHardwareConfig& hardware) {
 
 }  // namespace
 
+ReduceHardwareConfig make_reduce_hardware_config(
+    tt::ARCH arch, const tt::tt_metal::experimental::ComputeHardwareConfig& compute) {
+    return {
+        .arch = arch,
+        .fp32_dest_acc_en = compute.enable_32_bit_dest,
+        .dst_full_sync_en = !compute.double_buffer_dest,
+        .math_fidelity = compute.fpu_math_fidelity,
+    };
+}
+
 std::uint32_t max_reduce_output_group(
     const ReduceHardwareConfig& hardware, DataType input_dtype, ReduceOpMath reduce_math, ReduceFp32Mode fp32_mode) {
     // The SFPU path keeps one DEST tile as its working register.
@@ -1180,6 +1190,10 @@ ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
         compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
     }
 }
+
+ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReducePlan& plan, std::uint32_t auxiliary_cb_id) :
+    ReduceAuxiliaryArgs(
+        ReduceAuxiliaryPlan{.cb_id = auxiliary_cb_id, .tiles = plan.auxiliary_tiles, .cb = plan.auxiliary_cb}) {}
 
 void ReduceAuxiliaryArgs::append_to(std::vector<std::uint32_t>& compile_time_args) const {
     compile_time_args.insert(compile_time_args.end(), compile_time_args_.begin(), compile_time_args_.end());
