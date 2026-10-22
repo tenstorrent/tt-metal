@@ -256,7 +256,11 @@ def _check_plan(head, rows, name):
             t0 = min(r_[0] for r_ in d)
             logger.info(
                 f"HSE3 {name} chip {ci} planner phases (us): "
-                + " | ".join(" ".join(f"{(v - t0) / 1350:.1f}" for v in r_[:9]) for r_ in d)
+                + " | ".join(
+                    " ".join(f"{(v - t0) / 1350:.1f}" for v in r_[:9])
+                    + f" [ER {r_[24]} n {r_[25]} hdr {(r_[26] - t0) / 1350:.1f} srcs {(r_[28] - t0) / 1350:.1f} rng {(r_[29] - t0) / 1350:.1f} zero {(r_[27] - t0) / 1350:.1f}]"
+                    for r_ in d
+                )
             )
             logger.info(
                 f"HSE3 {name} chip {ci} arrivals (us): " + " ".join(f"{(v - t0) / 1350:.1f}" for v in d[0][16:24])

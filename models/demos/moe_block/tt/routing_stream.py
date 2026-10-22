@@ -112,6 +112,33 @@ def _plan_fn(subs):
         "          while (seen < N) { invalidate_l1_cache(); const uint32_t v = *cw; while (seen < v && seen < N) "
         "{ if (seen < 8) reinterpret_cast<uint32_t*>(B + O_DBG)[16 + seen] = get_timestamp_32b(); ++seen; } } }",
     )
+    # (RA_DBG: my expert range's size and entries - the debug page's words 24, 25)
+    for a_, b_ in (
+        ("    uint32_t ts[10];\n", "    uint32_t ts[10], nent_dbg = 0;\n"),
+        (
+            "                const uint32_t w = eo[x];\n                ++et[",
+            "                const uint32_t w = eo[x];\n                ++nent_dbg;\n                ++et[",
+        ),
+        (
+            "        d[13] = B;\n",
+            "        d[13] = B;\n        d[24] = e1 - e0;\n        d[25] = nent_dbg;\n        d[26] = tx_dbg[0];\n        d[27] = tx_dbg[1];\n        d[28] = tx_dbg[2];\n        d[29] = tx_dbg[3];\n",
+        ),
+        (
+            "    uint32_t tot[EPC], reg[EPC], ent[N];\n",
+            "    uint32_t tx_dbg[4];\n    tx_dbg[0] = get_timestamp_32b();\n    uint32_t tot[EPC], reg[EPC], ent[N];\n",
+        ),
+        (
+            "        for (uint32_t i = 0; i < ER * S / 2; ++i) e32[i] = 0;\n    }\n",
+            "        for (uint32_t i = 0; i < ER * S / 2; ++i) e32[i] = 0;\n    }\n    tx_dbg[1] = get_timestamp_32b();\n",
+        ),
+        ("    uint32_t off = 0, T = 0;\n", "    tx_dbg[2] = get_timestamp_32b();\n    uint32_t off = 0, T = 0;\n"),
+        (
+            "    const uint32_t ER = e1 - e0;\n",
+            "    tx_dbg[3] = get_timestamp_32b();\n    const uint32_t ER = e1 - e0;\n",
+        ),
+    ):
+        assert body.count(a_) == 1, a_
+        body = body.replace(a_, b_)
     fn = "namespace ra {\n" + head + "FORCE_INLINE void plan(uint32_t a0, uint32_t B) {" + body + "}  // namespace ra\n"
     for k, v in subs.items():
         fn = fn.replace(f"__{k}__", str(int(v)))

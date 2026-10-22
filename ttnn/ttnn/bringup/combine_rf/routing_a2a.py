@@ -212,7 +212,8 @@ constexpr uint32_t O_STG = O_PRE + N * BBP, O_HDR = O_STG + al64(4 * TSM * K + 1
 constexpr uint32_t O_ENT = O_HDR + N * HBP, O_ET = O_ENT + al64(4 * ENT_CAP + 64 * N);
 constexpr uint32_t O_TIDX = O_ET + al64(2 * EPC * S), O_TAB = O_TIDX + al64(4 * ROWS_CAP);
 constexpr uint32_t O_WANT = O_TAB + al64(8 * ROWS_CAP), O_PIN = O_WANT + al64(128 * NOWN);
-constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + 128, O_ROWS = O_CNT + al64(4 * (EPC + 32));
+constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + 128, O_RGN = O_CNT + al64(4 * (EPC + 32));
+constexpr uint32_t O_ROWS = O_RGN + al64(4 * (EPC + 32));
 constexpr uint32_t O_DBG = O_ROWS + 64;
 constexpr uint32_t LMW = 1024;  // local-memory counters: per global expert, later per (my expert, token) if they fit
 static_assert(NG <= LMW, "local counters: NG up to 1024");
@@ -258,7 +259,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* calls = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(calls_addr);
     const uint32_t par = calls[0] & 1;
     calls[0] = calls[0] + 1;
-    uint16_t lm[LMW];  // (local memory: entries per global expert, then cursors; later per (my expert, token))
+    alignas(4) uint16_t lm[LMW];  // (local memory: entries per global expert, then cursors; later per (my expert, token))
     for (uint32_t i = 0; i < NG; ++i) lm[i] = 0;
     noc_async_read_barrier();
     invalidate_l1_cache();
@@ -396,12 +397,16 @@ void kernel_main() {
     noc_async_read_barrier();
     invalidate_l1_cache();
     uint32_t tot[EPC], reg[EPC], ent[N];
-    for (uint32_t e = 0; e < EPC; ++e) tot[e] = 0;
+    // (every expert's total over the headers: two 16-bit lanes a word - a lane's sum <= N S, one entry a token)
+    static_assert(N * S < 65536, "packed expert totals");
+    constexpr uint32_t EW = (EPC + 1) / 2;
+    uint32_t tw[EW];
+    for (uint32_t i = 0; i < EW; ++i) tw[i] = 0;
     uint32_t nall = 0, pos = B + O_ENT;
     for (uint32_t o = 0; o < N; ++o) {
         const uint32_t hb = B + O_HDR + o * HBP;
-        const uint16_t* ht = reinterpret_cast<const uint16_t*>(hb + 64);
-        for (uint32_t e = 0; e < EPC; ++e) tot[e] += ht[e];
+        const uint32_t* ht = reinterpret_cast<const uint32_t*>(hb + 64);  // (EPC uint16, padded: BB >= 2 EW words)
+        for (uint32_t i = 0; i < EW; ++i) tw[i] += ht[i];
         uint32_t n = 0;
         for (uint32_t r = 0; r < M; ++r) n += reinterpret_cast<const uint32_t*>(hb)[r];
         ent[o] = 0;
@@ -411,21 +416,50 @@ void kernel_main() {
         pos += (4 * n + 63) & ~63u;
         nall += n;
     }
-    uint32_t off = 0, e0 = EPC, e1 = EPC, T = 0;
-    for (uint32_t e = 0; e < EPC; ++e) T += tot[e];
-    for (uint32_t e = 0, c = 0; e < EPC; ++e) {
+    for (uint32_t e = 0; e < EPC; ++e) tot[e] = (tw[e / 2] >> (16 * (e & 1))) & 0xFFFF;
+    uint32_t off = 0, T = 0;
+    for (uint32_t e = 0; e < EPC; ++e) {
+        T += tot[e];
         reg[e] = off;
         off += (tot[e] + 31) / 32 * 32;
-        if (e0 == EPC && c * M >= q * T) e0 = e;
-        if (e1 == EPC && q + 1 < M && c * M >= (q + 1) * T) e1 = e;
-        c += tot[e];
     }
-    if (e1 < e0) e1 = e0;
+    // my experts: from boundary q to q + 1 - boundary j the expert boundary nearest j T / M entries (whole experts: the
+    // nearest, not the next - an instance's work is its entries)
+    auto bound = [&](uint32_t j) __attribute__((always_inline)) -> uint32_t {
+        if (j == 0) return 0;
+        if (j >= M) return EPC;
+        for (uint32_t e = 0, c = 0; e < EPC; ++e) {
+            const uint32_t c1 = c + tot[e];
+            if (c1 * M >= j * T) return 2 * j * T <= (c + c1) * M ? e : e + 1;
+            c = c1;
+        }
+        return EPC;
+    };
+    const uint32_t e0 = bound(q), e1 = bound(q + 1);
     const uint32_t R0 = e0 < EPC ? reg[e0] : off, R1 = e1 < EPC ? reg[e1] : off;
+    // my experts' counts / regions (core 0: the 64-byte span of the page that holds them, the rest of the span other
+    // chips' experts: zero) - now, under the entries' reads and the fill
+    const uint32_t b0 = (E0 * 4) & ~63u, b1 = ((E0 + EPC) * 4 + 63) & ~63u;
+    if (q == 0) {
+        uint32_t* cw = reinterpret_cast<uint32_t*>(B + O_CNT);
+        uint32_t* rw = reinterpret_cast<uint32_t*>(B + O_RGN);
+        for (uint32_t i = 0; i < (b1 - b0) / 4; ++i) cw[i] = rw[i] = 0;
+        for (uint32_t e = 0; e < EPC; ++e) {
+            cw[E0 + e - b0 / 4] = tot[e];
+            rw[E0 + e - b0 / 4] = reg[e];
+        }
+        const InterleavedAddrGen<true> cgg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> rgg = {.bank_base_address = reg_addr, .page_size = NG * 4};
+        noc_async_write(B + O_CNT, get_noc_addr(0, cgg) + b0, b1 - b0);
+        noc_async_write(B + O_RGN, get_noc_addr(0, rgg) + b0, b1 - b0);
+    }
     const uint32_t W1 = R1 < ROWS_CAP ? R1 : ROWS_CAP;
     const uint32_t ER = e1 - e0;
     uint16_t* et = ER * S <= LMW ? lm : reinterpret_cast<uint16_t*>(B + O_ET);  // per (my expert, token)
-    for (uint32_t i = 0; i < ER * S; ++i) et[i] = 0;
+    {  // (32-bit stores: et is 4-byte aligned, S even)
+        uint32_t* e32 = reinterpret_cast<uint32_t*>(et);
+        for (uint32_t i = 0; i < ER * S / 2; ++i) e32[i] = 0;
+    }
     noc_async_read_barrier();
     invalidate_l1_cache();
     ts[5] = get_timestamp_32b();
@@ -537,19 +571,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < 16; ++i) rows[i] = 0;
         rows[8] = off;
         rows[9] = off > ROWS_CAP ? 1 : 0;
-        // my experts' counts / regions: the 64-byte span of the page that holds them (the rest of the span is
-        // other chips' experts: zero)
-        const uint32_t b0 = (E0 * 4) & ~63u, b1 = ((E0 + EPC) * 4 + 63) & ~63u;
-        uint32_t* cw = reinterpret_cast<uint32_t*>(B + O_CNT);
-        const InterleavedAddrGen<true> cgg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
-        const InterleavedAddrGen<true> rgg = {.bank_base_address = reg_addr, .page_size = NG * 4};
         const InterleavedAddrGen<true> pgg = {.bank_base_address = plan_addr, .page_size = 4096};
-        for (uint32_t i = 0; i < (b1 - b0) / 4; ++i) cw[i] = 0;
-        for (uint32_t e = 0; e < EPC; ++e) cw[E0 + e - b0 / 4] = tot[e];
-        noc_async_write(B + O_CNT, get_noc_addr(0, cgg) + b0, b1 - b0);
-        noc_async_write_barrier();
-        for (uint32_t e = 0; e < EPC; ++e) cw[E0 + e - b0 / 4] = reg[e];
-        noc_async_write(B + O_CNT, get_noc_addr(0, rgg) + b0, b1 - b0);
         noc_async_write(B + O_PLAN, get_noc_addr(0, pgg), 128);
         noc_async_write(B + O_ROWS, get_noc_addr(0, pgg) + 592 * 4, 64);
     }
@@ -611,7 +633,7 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
         + _al64(128 * NOWN)
         + M * 64
         + 128
-        + _al64(4 * (EPC + 32))
+        + 2 * _al64(4 * (EPC + 32))
         + 64
         + 64
     )

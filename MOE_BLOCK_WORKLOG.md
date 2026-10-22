@@ -803,3 +803,19 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Pass (3 calls each): se_engine3, mrs_bar, lin2c, lin2c_chain, tp_collectives, tp_gather (bit-exact), agmm_bar's
   ag+mm2d. Failing on HEAD too (legacy, superseded by v3): test_head_xchain (NaN), test_se_engine (0.985),
   test_head_se (0.85); the fused agmm variants and a2a_generic throw as before.
+
+### Planner post-arrival (routing_a2a's planner, ttnn/ttnn/bringup/combine_rf/routing_a2a.py)
+- RA_DBG phases (GLM chip 7, core 0; us after the last packet): reads + totals + ranges + zeroing 5.7, count +
+  prefix 6.6, fill 10.8, core 0's tail (the slowest instance, then 3 DRAM writes serialized) 5.4 = 28.5. Per instance
+  (RA_DBG words 24 / 25): experts 2-5, entries 80-200 - the range rule rounded every boundary up to the next expert.
+- Ranges: instance j's first expert = the expert boundary nearest j T / M entries (was: the next one) -> entries a
+  instance 110-164. Counts / regions written by core 0 as soon as the ranges are known (under the fill; own buffers),
+  the tail writes the plan words only. Expert totals as packed 16-bit lanes (N S < 65536), the (expert, token)
+  counters zeroed with 32-bit stores.
+- Post-arrival 28.5 -> 24.4 us (core 0's tail 5.4 -> 2.0). Planner tables bit-exact every call (6 calls, own x).
+  GLM Galaxy-projected 198 -> 193 us from the mesh's last launch (chain binds; SE 157); K3 367 (SE binds; chain 294).
+- Left: the fill ~95 cycles an entry (eo / tidx / tab L1 traffic, the 80 source-slices' loop), count ~40.
+- Seen on the way (the chain before the planner, GLM dev 7 from the mesh's last launch): the engine's partial logits
+  into the router cores (SE-RTROUT) 18 -> 43 us - ~5 GB/s into a router core; not the column's vertical links (a
+  row-tile remap: no change), not the DRAM columns (router tiles on the west block only: the slow cores moved to
+  x 1-4) - reverted, needs a traffic-only probe; the ports' routing sends (SE-RASEND) ~25 us a chip.
