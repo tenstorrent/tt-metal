@@ -1639,3 +1639,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   (`component_col_factor` = `struct_col_factor`): DeepSeek-V4.1's frozen experts tests (swa, swa_engram) read it and
   failed FIX.9's gate with KeyError. Only that structural factor is aliased; the removed fixed accuracy numbers stay gone.
   Selftest: test_component_checks.py::test_frozen_tests_keep_the_structural_column_factor_under_its_old_name.
+- F147 (overseer, 2026-10-22): one orchestrator per run (the pid file names a live other one: refuse, exit STOPPED),
+  and an overseer abort with the pause file set stops the attempt loop (exit PAUSED) instead of starting the next
+  attempt. DeepSeek-V4.1 FIX.9: abort + pause still started attempt 3 in the old orchestrator while a resumed second
+  one began the gate. Selftest: test_overseer.py::test_a_second_orchestrator_on_a_live_run_is_refused.
