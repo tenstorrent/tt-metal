@@ -223,10 +223,22 @@ class HeadSE3:
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
         assert GX < grid.x, "no column left for the movers"
-        if KB is None:  # (the largest K step <= 16 tiles that divides a chip's shard: whole steps a shard)
-            klt = H // 32 // tuple(mesh_device.shape)[1]
-            KB = max(d for d in range(1, 17) if klt % d == 0)
-        self.eng = SeEngine3(mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=KB, fidelity=fidelity)
+        # the K step: the largest <= 16 tiles dividing a chip's shard (whole steps a shard) whose arena fits L1 (smaller
+        # steps give the x families more owners: less x a core)
+        G = tuple(mesh_device.shape)[1]
+        klt = H // 32 // G
+        for kb in (
+            [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
+        ):
+            try:
+                self.eng = SeEngine3(
+                    mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=kb, fidelity=fidelity, shards=G
+                )
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows")
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self.xg = XGather3(
             mesh_device,

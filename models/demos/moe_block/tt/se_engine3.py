@@ -29,8 +29,9 @@ NWS = 3  # (W slots)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
 HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_lib family again)
 NSEM_OWN = 1 + 2 * NWS
-XIN, WIN, HOWN, HALL, OUT = 0, 1, 2, 3, 4  # CB ids
+XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
+ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
 
 _BRISC = r"""
 #include <cstdint>
@@ -48,7 +49,8 @@ constexpr auto x_args = TensorAccessorArgs<15>();
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
 // x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
-// owner = the family's subset[(j / 2) % S], its local index (j / 2) / S
+// owner = the family's subset[(j / 2) % S] (S divides a shard's steps / 2, so the rotation over (shard, pass, step)
+// rounds keeps every position on one owner), its local index (j / 2) / S
 FORCE_INLINE uint32_t own_slot(uint32_t j) { return (j & 1) ? (j / 2) / S1 : (j / 2) / S0; }
 void kernel_main() {
     size_t a = 0;
@@ -96,9 +98,12 @@ void kernel_main() {
     for (uint32_t m = 0; m < NCH; ++m) {
         {
         DeviceZoneScopedN("SE-XROUNDS");
-        for (uint32_t pg = 0; pg < NPG; ++pg)
-            for (uint32_t j = 0; j < NSG; ++j) {
-                const uint32_t round = (m * NPG + pg) * NF + j / 2;  // (the family's)
+        // shard-major: each shard (own first, then as it lands) through every pass before the next shard
+        for (uint32_t k = 0; k < g; ++k)
+            for (uint32_t pg = 0; pg < NPG; ++pg)
+            for (uint32_t st = 0; st < sps; ++st) {
+                const uint32_t j = k * sps + st;  // (position; its family j % 2 = st % 2: a block's rounds are even)
+                const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
@@ -115,7 +120,7 @@ void kernel_main() {
         // (row tile, column); the receivers' readiness ack is the slot's credit
         cb_wait_front(CB_HOWN, MT * POMAX);
         cb_reserve_back(CB_HALL, MT * HT);
-        const uint32_t hs = hall + (m & 1) * MT * HT * 2048;
+        const uint32_t hs = hall + (NCH > 1 ? (m & 1) : 0) * MT * HT * 2048;  // (one slot when there is one chunk)
         for (uint32_t r = 0; r < MT; ++r)
             for (uint32_t c = 0; c < GX; ++c) {
                 const uint32_t round = (m * MT + r) * GX + c;
@@ -159,8 +164,8 @@ void kernel_main() {
     auto blk = [&](uint32_t w) {
         const uint32_t c = w % NB;
         if (c >= NPG * NSG) return c;
-        const uint32_t j = c % NSG;
-        return (c / NSG) * NSG + get_arg_val<uint32_t>(ord0 + j / sps) * sps + j % sps;
+        const uint32_t k = c / (NPG * sps), rem = c % (NPG * sps), pg = rem / sps, st = rem % sps;
+        return pg * NSG + get_arg_val<uint32_t>(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
     };
     auto bsize = [&](uint32_t b) {  // (tiles)
         return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD);
@@ -235,6 +240,8 @@ _COMPUTE = r"""
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
@@ -247,7 +254,8 @@ constexpr uint32_t MT = get_compile_time_arg_val(0), KB = get_compile_time_arg_v
 constexpr uint32_t NPG = get_compile_time_arg_val(3), NCH = get_compile_time_arg_val(4), HT = get_compile_time_arg_val(5);
 constexpr uint32_t POMAX = get_compile_time_arg_val(6), KBD = get_compile_time_arg_val(7), NSD = get_compile_time_arg_val(8);
 constexpr uint32_t NPD = get_compile_time_arg_val(9), WSLOT = get_compile_time_arg_val(10), PWDMAX = get_compile_time_arg_val(11);
-constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4;
+constexpr uint32_t G = get_compile_time_arg_val(12), SPS = get_compile_time_arg_val(13);  // (shards, steps a shard)
+constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4, ACC = 5;
 // (runtime args: the column's gate / up pass widths [NPG], then down pass widths [NPD])
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(XIN, WIN, HOWN);
@@ -264,36 +272,59 @@ void kernel_main() {
         {
         DeviceZoneScopedN("SE-GU");
         cb_reserve_back(HOWN, MT * POMAX);
-        uint32_t hoff = 0;
-        for (uint32_t pg = 0; pg < NPG; ++pg) {
-            const uint32_t pw = get_arg_val<uint32_t>(pg);
-            matmul_block_init(XIN, WIN, 0, pw, MT, KB);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < NSG; ++j) {
-                cb_wait_front(XIN, MT * KB);
-                cb_wait_front(WIN, WSLOT);
-                for (uint32_t k = 0; k < KB; ++k) matmul_block(XIN, WIN, k, k * pw, 0, false, pw, MT, KB);
-                cb_pop_front(XIN, MT * KB);
-                cb_pop_front(WIN, WSLOT);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
+        // shard-major: shard k (own first, then as each lands) through every pass; a pass's fp32 partial over the
+        // shards so far goes to ACC (FIFO: pushed per (shard, pass), popped by the next shard's same pass) and comes
+        // back into DEST; the last shard applies the GLU and packs h
+        for (uint32_t k = 0; k < G; ++k) {
+            uint32_t hoff = 0;
+            for (uint32_t pg = 0; pg < NPG; ++pg) {
+                const uint32_t pw = get_arg_val<uint32_t>(pg), n = MT * pw;
+                tile_regs_acquire();
+                if (k > 0) {
+                    cb_wait_front(ACC, n);
+                    reconfig_data_format_srca(WIN, ACC);
+                    copy_init(ACC);
+                    for (uint32_t t = 0; t < n; ++t) copy_tile(ACC, t, t);
+                    cb_pop_front(ACC, n);
+                    reconfig_data_format_srca(ACC, WIN);
+                }
+                matmul_block_init(XIN, WIN, 0, pw, MT, KB);
+                for (uint32_t st = 0; st < SPS; ++st) {
+                    cb_wait_front(XIN, MT * KB);
+                    cb_wait_front(WIN, WSLOT);
+                    for (uint32_t kk = 0; kk < KB; ++kk) matmul_block(XIN, WIN, kk, kk * pw, 0, false, pw, MT, KB);
+                    cb_pop_front(XIN, MT * KB);
+                    cb_pop_front(WIN, WSLOT);
+                }
+                tile_regs_commit();
+                if (k + 1 < G) {
+                    cb_reserve_back(ACC, n);
+                    tile_regs_wait();
+                    pack_reconfig_data_format(ACC);
+                    for (uint32_t t = 0; t < n; ++t) pack_tile(t, ACC);
+                    tile_regs_release();
+                    cb_push_back(ACC, n);
+                    continue;
+                }
+                tile_regs_wait();
+                pack_reconfig_data_format(HOWN);
 #if defined(SE_GLU)
-            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if SE_GLU == 2
-            for (uint32_t t = 0; t < MT * pw; t += 2)
-                PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+                for (uint32_t t = 0; t < MT * pw; t += 2)
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
 #else
-            for (uint32_t t = 0; t < MT * pw; t += 2) silu_tile_pack(t);
-            for (uint32_t t = 0; t < MT * pw; t += 2)
-                PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_binary_mul, (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE), t, t + 1, t, VectorMode::RC)));
+                for (uint32_t t = 0; t < MT * pw; t += 2) silu_tile_pack(t);
+                for (uint32_t t = 0; t < MT * pw; t += 2)
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_binary_mul, (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE), t, t + 1, t, VectorMode::RC)));
 #endif
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 #endif
-            for (uint32_t r = 0; r < MT; ++r)
-                for (uint32_t t = 0; t < pw; t += 2) pack_tile<true>(r * pw + t, HOWN, r * POMAX + hoff + t / 2);
-            tile_regs_release();
-            hoff += pw / 2;
+                for (uint32_t r = 0; r < MT; ++r)
+                    for (uint32_t t = 0; t < pw; t += 2) pack_tile<true>(r * pw + t, HOWN, r * POMAX + hoff + t / 2);
+                tile_regs_release();
+                hoff += pw / 2;
+            }
         }
         cb_push_back(HOWN, MT * POMAX);
         }
@@ -357,8 +388,11 @@ class SeEngine3:
         KBD=8,
         fidelity=ttnn.MathFidelity.HiFi2,
         w_dtype=ttnn.bfloat8_b,
+        shards=1,
     ):
+        """shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
         self.mesh = mesh_device
+        self.shards = shards
         self.rows, self.H, self.I, self.glu = rows, H, I, glu
         self.cx0, self.GX, self.GY, self.MT = cx0, GX, GY, MT
         self.CR = GY * MT
@@ -368,8 +402,11 @@ class SeEngine3:
         self.KB = KB or 16  # (fewer, larger rounds: K3 403 -> 341 us at 640 rows; GLM-Flash neutral)
         self.NSG = self.KT // self.KB
         assert self.KT % self.KB == 0 and self.NSG % 2 == 0
+        assert self.NSG % shards == 0 and (self.NSG // shards) % 2 == 0, "even K steps a shard"
+        self.SPS = self.NSG // shards
         nf = self.NSG // 2
-        self.S0, self.S1 = _subsets(nf, GX)
+        # (a family's owners must divide its rounds a (shard, pass) block - SPS / 2 - so a position keeps one owner)
+        self.S0, self.S1 = _subsets(self.SPS // 2, GX)
         cols = list(range(GX))
         self.fam0 = cols[: self.S0]
         self.fam1 = cols[GX - self.S1 :]  # (overlaps family 0 only when S0 + S1 > GX)
@@ -417,12 +454,15 @@ class SeEngine3:
             ("xin", 2 * MT * self.KB * 2048),
             ("win", NWS * self.WSLOT * self.wtb),
             ("hown", MT * self.POMAX * 2048),
-            ("hall", 2 * MT * self.HT * 2048),
+            ("hall", min(self.NCH, 2) * MT * self.HT * 2048),
+            ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
             ("out", NOUT * MT * self.PWDMAX * 2048),
             ("words", 256),
         ]:
             off[k], o = o, al(o + v)
         self.off, self.arena_bytes = off, o
+        if o > ARENA_MAX:
+            raise ValueError(f"se_engine3: arena {o // 1024} KB > {ARENA_MAX // 1024} KB of L1 (KB {self.KB})")
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
         self.crs = cores
         shard = ttnn.ShardSpec(cores, [1, o // 4], ttnn.ShardOrientation.ROW_MAJOR)
@@ -505,8 +545,9 @@ class SeEngine3:
         cb(XIN, "xin", 2 * MT * self.KB * 2048, ttnn.bfloat16, 2048)
         cb(WIN, "win", NWS * self.WSLOT * self.wtb, self.w_dtype, self.wtb)
         cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
-        cb(HALL, "hall", 2 * MT * self.HT * 2048, ttnn.bfloat16, 2048)
+        cb(HALL, "hall", min(self.NCH, 2) * MT * self.HT * 2048, ttnn.bfloat16, 2048)
         cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
+        cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
@@ -627,6 +668,9 @@ class SeEngine3:
             comp.fp32_dest_acc_en = True
             comp.dst_full_sync_en = True
             comp.math_approx_mode = False
+            modes = [ttnn.UnpackToDestMode.Default] * 64  # (NUM_CIRCULAR_BUFFERS)
+            modes[ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
+            comp.unpack_to_dest_mode = modes
             c_rt = ttnn.RuntimeArgs()
             for c in cols:
                 for cy in range(GY):
@@ -649,6 +693,8 @@ class SeEngine3:
                         self.NPD,
                         self.WSLOT,
                         self.PWDMAX,
+                        len(so),
+                        self.NSG // len(so),
                     ],
                     runtime_args=c_rt,
                     config=comp,

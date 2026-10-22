@@ -405,3 +405,18 @@ K3 per chip: gather ends 279-307 (143 floor: slowed by the engine's traffic), en
 | floor / 2x target | 95 / 190 - 1.77x | 212 / 424 - 2.35x |
 K3 fused (device 0): gate / up ends 401 - only its first pass (of 3) overlaps the gather (ends ~300 us, slowed from
 the 143 floor by the engine's traffic and the one-column movers); passes 2-3 run after it, then h (20) and down (80).
+
+### Lever 2b: gate / up shard-major (each shard through every pass as it lands, fp32 partials between shards)
+Rounds per chunk ordered (shard, pass, step): the own shard's every pass first, then each remote shard's as it lands;
+a pass's fp32 partial over the shards so far is packed to a small FIFO CB and unpacked into DEST (UnpackToDestFp32)
+by the next shard's same pass (a dozen reloads of <= 8 tiles a call); the last shard applies the GLU and packs h. The
+kernel_lib x families stay (a family's owner subset divides its rounds a (shard, pass) block); the W stream follows
+the same order. h-all single-buffered when there is one chunk (K3's arena was 1.48 MB).
+| x chain, us (PCC) | GLM-Flash | K3 |
+|---|---|---|
+| lever 2 | 168 | 499 |
+| **lever 2b** | **167** (0.99981) | **449-450** (0.99973) |
+| floor / 2x target | 95 / 190 - 1.76x | 212 / 424 - 2.12x |
+Secondary check (chunk 5120 = 2560 rows a mesh row): GLM-Flash 524 us (was 541); K3 does not fit L1 (its x alone is
+334 KB a core even spread over all 11 columns, and the shard-major families concentrate it on 4 owner columns) -
+the fused head now picks the largest K step whose arena fits, and says so when none does.
