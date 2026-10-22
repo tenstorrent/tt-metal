@@ -822,7 +822,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         cb_page_size,            // cb entry size
         slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
         static_output_chunks_per_stripe,
-        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        // Stripe order of the full-mesh ring: 0 = axis ring, 1 = row-major, 2 = column-major. The ring
+        // index is translated back to that tensor stripe index.
+        linearized_mesh_ring ? 1u + operation_attributes.full_mesh_outer_axis : 0u,
         static_cast<uint32_t>(mesh_ring_plan.orientation),
         operation_attributes.mesh_rows,
         operation_attributes.mesh_cols,
@@ -928,7 +930,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         packet_size,             // packet_size
         slice_step,              // one means scatter packets; >1 enables contiguous full packets
         static_output_chunks_per_stripe,
-        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        // Stripe order of the full-mesh ring: 0 = axis ring, 1 = row-major, 2 = column-major. The ring
+        // index is translated back to that tensor stripe index.
+        linearized_mesh_ring ? 1u + operation_attributes.full_mesh_outer_axis : 0u,
         static_cast<uint32_t>(mesh_ring_plan.orientation),
         operation_attributes.mesh_rows,
         operation_attributes.mesh_cols,

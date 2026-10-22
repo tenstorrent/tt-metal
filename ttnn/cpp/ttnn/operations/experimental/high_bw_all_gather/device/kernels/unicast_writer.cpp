@@ -42,7 +42,10 @@ void kernel_main() {
     // See unicast_reader.cpp: the maximum per-rank output slot remains fixed for
     // runtime-controlled gathers, so its stripe width can be baked.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
-    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(8) != 0;
+    // 0 = axis ring, 1 = full-mesh ring with row-major stripes, 2 = full-mesh ring with column-major stripes.
+    constexpr uint32_t mesh_ring_stripe_order = get_compile_time_arg_val(8);
+    constexpr bool linearized_mesh_ring = mesh_ring_stripe_order != 0;
+    constexpr bool column_major_stripes = mesh_ring_stripe_order == 2;
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(9));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(10);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
@@ -208,6 +211,7 @@ void kernel_main() {
             slice_step,
             static_output_chunks_per_stripe,
             linearized_mesh_ring,
+            column_major_stripes,
             snake_orientation,
             mesh_rows,
             mesh_cols>
