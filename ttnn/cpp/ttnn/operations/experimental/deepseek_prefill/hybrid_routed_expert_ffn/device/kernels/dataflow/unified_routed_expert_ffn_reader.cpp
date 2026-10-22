@@ -1100,9 +1100,17 @@ void kernel_main() {
         }  // end chunk loop
     }  // end per-local-expert loop
 
-    // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
-    // is a posted atomic; without an explicit barrier it can still be in
-    // flight at kernel exit, leading to timing-dependent corruption.
+    // Drain every non-posted write before exit: the in1 sender's last down-weight
+    // multicast and its in1_valid-sem multicast are only flushed (the requests left
+    // the NIU), and Semaphore<>::set_multicast is a non-posted write (one ack per
+    // destination), not a posted atomic. A kernel that exits with acks in flight
+    // breaks the NEXT kernel on this RISC: its prologue snapshots the NIU's ack
+    // counter (noc_local_state_init, before the go signal) and every write barrier
+    // it runs is an equality test against that snapshot, so acks that land after
+    // the snapshot leave the hardware ahead for good and the first barrier spins
+    // forever. Seen as the traced decode step deadlocking in the combine's reader
+    // on the core that ran this kernel just before.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }
 
