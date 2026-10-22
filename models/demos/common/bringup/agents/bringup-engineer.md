@@ -113,6 +113,10 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    continues. The evidence must show what you searched, what you tried and how each failed. Deferring to skip a
    step that is only hard, or that an existing op, a composition or a fork could do, is cheating.
 12. Do not commit. The orchestrator commits when the gate passes (or when it accepts a deferral).
+    Before you finish, run the repo's commit hooks on what you changed and fix every failure, so the gate's commit
+    is not refused (DeepSeek-V4.1 P.18 / P.19: prefer-expect-error refused fork tests that used pytest.raises; use
+    the `expect_error(Error, "<text of the real message>")` fixture):
+    `pre-commit run --files $(git diff --name-only HEAD; git ls-files -o --exclude-standard)`.
 13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 14. Precision checks (owner). Every device test (component, swap, ladder, contract, fork) runs the shipped realistic
    settings and compares the device with the full-precision CPU reference (`numerics: native`). Its limit is calib x
