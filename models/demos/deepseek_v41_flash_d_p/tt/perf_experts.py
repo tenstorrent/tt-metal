@@ -1,16 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Timed loop of the routed experts (tt/experts.py:TtExperts) of one layer at the run's chunk, every EXPERTS_IMPL.
-
-Not a gate: a measurement for BREADCRUMBS / the EXPERTS_IMPL description. Random q-able inputs (normal x, top-6
-routing with sum-1.5 weights), 2 warm-up calls, then the mean wall time of N_CALLS synchronized calls (the forward
-has no host sync, so this is the device time of one layer per chunk).
+"""Measurements of the routed experts (tt/experts.py:TtExperts: the flat expert + weighted combine, the only path
+since FIX.9) at the run's chunk. Not a gate: numbers for BREADCRUMBS / the settings' descriptions. Random q-able inputs
+(normal x, top-6 routing with sum-1.5 weights), warm-up calls, then the mean wall time of synchronized calls (the
+forward has no host sync, so this is the device time of one layer per chunk).
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py
 
-test_unified_vs_loop: EXPERTS_KERNEL=unified vs loop on the same inputs (P.2: layer 0, 2x2, chunk 2048: bfp8 317.7 vs
-20.4 ms, bfp4 315.1 vs 20.0 ms per call; unified vs loop rel 6e-5).
+test_weighted: one layer's experts call, its error vs float64 and its determinism (P.8: 5.3-5.4 ms a layer).
 
 test_weights_bfp4: EXPERTS_IMPL bfp8 vs bfp4 on the default path (P.10: flat + weighted combine, bf16 sums, glm;
 layers 0 / 24, 2x2, chunk 2048: 4.47 vs 3.47 ms per call; vs float64 bfp8 rel 0.020, bfp4 0.18-0.20, bfp4 vs
@@ -31,53 +29,12 @@ import ttnn
 from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
 from models.demos.deepseek_v41_flash_d_p.bringup import hooks
 from models.demos.deepseek_v41_flash_d_p.tt import experts as E
+from models.demos.deepseek_v41_flash_d_p.tt.common import compute_config
 from models.demos.deepseek_v41_flash_d_p.tt.layout import row_split_to_device
-from models.demos.deepseek_v41_flash_d_p.tt.settings import TABLE
 
 N_CALLS = 3
 LAYER = 0
-N_REF = 128  # tokens of test_weighted_vs_separate's float64 reference
-
-
-@pytest.mark.timeout(3600)
-@mesh_parametrize
-def test_time_experts(mesh_device):
-    S = spec()
-    ck, cfg = hooks._checkpoint(S), hooks._config(S)
-    chunk = hooks._chunk(S)
-    g = torch.Generator().manual_seed(0)
-    x = torch.randn(chunk, cfg.dim, generator=g)
-    sc = torch.rand(chunk, cfg.n_experts, generator=g)
-    top = sc.topk(cfg.topk_experts, dim=-1)
-    dense = torch.zeros(chunk, cfg.n_experts)
-    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
-    outs = {}
-    for impl in TABLE["EXPERTS_IMPL"].choices:
-        t0 = time.time()
-        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, impl=impl)
-        load = time.time() - t0
-        xd = row_split_to_device(mesh_device, x)
-        rd = row_split_to_device(mesh_device, dense)
-        for _ in range(2):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.time()
-        for _ in range(N_CALLS):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        dt = (time.time() - t0) / N_CALLS
-        od = mod(xd, rd)
-        outs[impl] = ttnn.to_torch(ttnn.get_device_tensors(od)[0])
-        print(f"EXPERTS_TIME impl={impl} layer={LAYER} chunk={chunk} per_call_ms={dt * 1e3:.1f} load_s={load:.1f}")
-        for t in (od, xd, rd):
-            ttnn.deallocate(t)
-        mod.free()
-        del mod
-    a, b = outs["bfp8"], outs["fp4_decode"]
-    print(f"EXPERTS_SAME bfp8 vs fp4_decode bit-identical (chip 0): {bool(torch.equal(a, b))}")
-    if "bfp4" in outs:
-        d = (outs["bfp4"].double() - a.double()).norm() / a.double().norm()
-        print(f"EXPERTS_BFP4 rel vs bfp8 (chip 0, random inputs): {d.item():.4g}")
+N_REF = 128  # tokens of test_weighted's float64 reference
 
 
 def _bfp8_roundtrip(t: torch.Tensor) -> torch.Tensor:
@@ -165,7 +122,7 @@ def test_transpose_b_bfp4(mesh_device):
     ck = hooks._checkpoint(S)
     p = ck.expert(LAYER, 3)
     w = {nm: E.fp4_dequant(*p[nm]) for nm in E.NAMES}
-    cfg = E.compute_config(mesh_device)
+    cfg = compute_config(mesh_device)
     g = torch.Generator().manual_seed(1)
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
     for nm, wn in (("w1 | w3", torch.cat([w["w1"], w["w3"]])), ("w2", w["w2"])):
@@ -194,7 +151,7 @@ def test_transpose_b_exact(mesh_device):
     ck = hooks._checkpoint(S)
     p = ck.expert(LAYER, 3)  # expert 3: its w2^T is not bfp8-exact, its w2 is
     w = {nm: E.fp4_dequant(*p[nm]) for nm in E.NAMES}
-    cfg = E.compute_config(mesh_device)
+    cfg = compute_config(mesh_device)
     g = torch.Generator().manual_seed(1)
     for nm, wn in (("w1 | w3", torch.cat([w["w1"], w["w3"]])), ("w2", w["w2"])):
         n_, k_ = wn.shape
@@ -230,125 +187,8 @@ def test_transpose_b_exact(mesh_device):
         assert torch.equal(at, bt), nm
 
 
-@pytest.mark.timeout(3600)
-@mesh_parametrize
-@pytest.mark.parametrize("impl", ["bfp8", "bfp4"])
-def test_unified_vs_loop(mesh_device, impl, monkeypatch):
-    """EXPERTS_KERNEL=unified (one fused unified_routed_expert_moe) vs loop on the same random inputs: rel / PCC of
-    the outputs (both device paths; the fp8 q(h) turns GEMM-order differences into whole e4m3 steps, DS41-1) and the
-    mean time per call (N_CALLS synchronized calls after 2 warm-ups)."""
-    S = spec()
-    ck, cfg = hooks._checkpoint(S), hooks._config(S)
-    chunk = hooks._chunk(S)
-    g = torch.Generator().manual_seed(0)
-    x = torch.randn(chunk, cfg.dim, generator=g)
-    sc = torch.rand(chunk, cfg.n_experts, generator=g)
-    top = sc.topk(cfg.topk_experts, dim=-1)
-    dense = torch.zeros(chunk, cfg.n_experts)
-    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
-    outs = {}
-    for kernel in ("loop", "unified"):
-        monkeypatch.setenv("DS41_EXPERTS_KERNEL", kernel)
-        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, impl=impl)
-        xd = row_split_to_device(mesh_device, x)
-        rd = row_split_to_device(mesh_device, dense)
-        for _ in range(2):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.time()
-        for _ in range(N_CALLS):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        dt = (time.time() - t0) / N_CALLS
-        od = mod(xd, rd)
-        outs[kernel] = torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(od)])
-        print(f"EXPERTS_KERNEL_TIME impl={impl} kernel={kernel} layer={LAYER} chunk={chunk} per_call_ms={dt * 1e3:.2f}")
-        for t in (od, xd, rd):
-            ttnn.deallocate(t)
-        mod.free()
-        del mod
-    a, b = outs["loop"].double(), outs["unified"].double()
-    rel = ((b - a).norm() / a.norm()).item()
-    ac, bc = a - a.mean(), b - b.mean()
-    pcc = (ac @ bc / (ac.norm() * bc.norm())).item()
-    print(
-        f"EXPERTS_KERNEL_CMP impl={impl} unified vs loop: rel {rel:.5f} pcc {pcc:.7f} finite {bool(torch.isfinite(b).all())}"
-    )
-    assert bool(torch.isfinite(b).all()) and pcc > 0.999, (rel, pcc)
-
-
-@pytest.mark.timeout(3600)
-@mesh_parametrize
-@pytest.mark.parametrize("impl", ["bfp8", "bfp4"])
-@pytest.mark.parametrize("kernels", ["flat,unified", "flat,unified,loop"], ids=["fu", "ful"])
-def test_kernels(mesh_device, impl, kernels, monkeypatch):
-    """EXPERTS_KERNEL A/B (P.3: flat vs unified vs loop) on the same random inputs, layer LAYER at the run's chunk: the
-    mean time of a whole experts call (dispatch .. reduce, no host sync) and of its kernel part alone (the fused op or
-    the loop, timed with a device sync before and after it), plus rel / PCC of every kernel's output vs the first."""
-    S = spec()
-    ck, cfg = hooks._checkpoint(S), hooks._config(S)
-    chunk = hooks._chunk(S)
-    g = torch.Generator().manual_seed(0)
-    x = torch.randn(chunk, cfg.dim, generator=g)
-    sc = torch.rand(chunk, cfg.n_experts, generator=g)
-    top = sc.topk(cfg.topk_experts, dim=-1)
-    dense = torch.zeros(chunk, cfg.n_experts)
-    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
-    outs = {}
-    for kernel in kernels.split(","):
-        monkeypatch.setenv("DS41_EXPERTS_KERNEL", kernel)
-        t0 = time.time()
-        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, impl=impl)
-        load = time.time() - t0
-        xd = row_split_to_device(mesh_device, x)
-        rd = row_split_to_device(mesh_device, dense)
-        for _ in range(2):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.time()
-        for _ in range(N_CALLS):
-            ttnn.deallocate(mod(xd, rd))
-        ttnn.synchronize_device(mesh_device)
-        dt = (time.time() - t0) / N_CALLS
-        name = {"flat": "_flat", "unified": "_unified", "loop": "_loop"}[kernel]
-        orig, spent = getattr(mod, name), []
-
-        def timed(*a, _orig=orig, _spent=spent):
-            ttnn.synchronize_device(mesh_device)
-            t = time.time()
-            out = _orig(*a)
-            ttnn.synchronize_device(mesh_device)
-            _spent.append(time.time() - t)
-            return out
-
-        setattr(mod, name, timed)
-        for _ in range(N_CALLS):
-            ttnn.deallocate(mod(xd, rd))
-        k_ms = 1e3 * sum(spent) / len(spent)
-        od = mod(xd, rd)
-        outs[kernel] = torch.cat([ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(od)])
-        print(
-            f"EXPERTS_KERNELS impl={impl} kernel={kernel} layer={LAYER} chunk={chunk} call_ms={dt * 1e3:.2f} "
-            f"kernel_part_ms={k_ms:.2f} load_s={load:.1f}"
-        )
-        for t in (od, xd, rd):
-            ttnn.deallocate(t)
-        mod.free()
-        del mod
-    first = kernels.split(",")[0]
-    a = outs[first].double()
-    for kernel, o in outs.items():
-        b = o.double()
-        rel = ((b - a).norm() / a.norm()).item()
-        ac, bc = a - a.mean(), b - b.mean()
-        pcc = (ac @ bc / (ac.norm() * bc.norm())).item()
-        print(f"EXPERTS_KERNELS_CMP impl={impl} {kernel} vs {first}: rel {rel:.5f} pcc {pcc:.7f}")
-        assert bool(torch.isfinite(b).all()) and pcc > 0.999, (kernel, rel, pcc)
-
-
 def _weighted_params() -> dict:
-    """The run's device params with the fabric payload EXPERTS_COMBINE=weighted needs (bringup/hooks.py), so that
-    both paths run on one mesh."""
+    """The run's device params with the fabric payload the weighted combine needs (bringup/hooks.py:device_params)."""
     from models.demos.common.bringup.testing import harness
     from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
 
@@ -364,14 +204,13 @@ def _host(mesh, t) -> torch.Tensor:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
 @pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
-@pytest.mark.parametrize("combines", ["separate,weighted", "weighted"], ids=["ab", "w"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
-def test_weighted_vs_separate(mesh_device, combines, prof):
-    """EXPERTS_COMBINE A/B (P.8) on the same random inputs (layer LAYER, the run's chunk, the current
-    FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): the mean wall time of a whole experts call (q(x) ..
-    reduce over the row, synchronized: the device time of one layer's experts per chunk), weighted vs separate rel
-    error / PCC / worst row, and the determinism check (weighted twice on the same inputs: elements that differ).
-    Both run the same math (no fp8 emulation since FIX.8).
+def test_weighted(mesh_device, prof):
+    """The routed experts (flat expert + weighted combine, P.8) on random inputs (layer LAYER, the run's chunk, the
+    current FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): the mean wall time of a whole experts call (q(x) ..
+    reduce over the row, synchronized: the device time of one layer's experts per chunk), the error vs a float64
+    reference, and the determinism check (twice on the same inputs: elements that differ). FIX.9 deleted the separate
+    combine it was compared with (P.8: weighted 5.3-5.4 ms vs separate 8.0 ms a layer).
     prof (ids "ops"; run with the device profiler env, testing/profiler.py PROFILER_ENV): one more call per path in the
     profiler's op mode, the device time per op printed (EXPERTS_COMBINE_OPS)."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
@@ -388,9 +227,9 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
     tag = " ".join(f"{k}={settings.get(k)}" for k in ("FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
     outs, again = {}, None
-    for combine in combines.split(","):  # (separate first: its programs are built before weighted's)
+    for combine in ("weighted",):
         t0 = time.time()
-        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk, combine=combine)
+        mod = E.build_experts(mesh_device, ck, cfg, LAYER, chunk)
         load = time.time() - t0
         xd = row_split_to_device(mesh_device, x, dtype=xdt)
         rd = row_split_to_device(mesh_device, dense)
@@ -405,10 +244,9 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
         od = mod(xd, rd)
         outs[combine] = _host(mesh_device, od)
         ttnn.deallocate(od)
-        if combine == "weighted":
-            od = mod(xd, rd)
-            again = _host(mesh_device, od)
-            ttnn.deallocate(od)
+        od = mod(xd, rd)
+        again = _host(mesh_device, od)
+        ttnn.deallocate(od)
         if prof:
             from models.demos.common.bringup.testing import profiler
 
@@ -437,7 +275,7 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
         mod.free()
         del mod
     # float64 reference on N_REF tokens: y = sum_k w_k w2(silu(min(w1 q, 10)) clamp(w3 q, +-10)), q = x as the device
-    # reads it (its bf16 cast), no rounding of h (the exact math both paths approximate)
+    # reads it (its bf16 cast), no rounding of h (the exact math the device approximates)
     sel = torch.arange(0, chunk, chunk // N_REF)
     xq = x[sel].double().to(torch.bfloat16).double()
     ref = torch.zeros(len(sel), cfg.dim, dtype=torch.float64)
@@ -446,7 +284,7 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
     for e in sorted(set(torch.nonzero(ds)[:, 1].tolist())):
         rows = torch.nonzero(ds[:, e]).flatten()
         p = ck.expert(LAYER, e)
-        w1, w3, w2 = ((wround or (lambda t: t))(E.fp4_dequant(*p[nm])).double() for nm in E.NAMES)
+        w1, w3, w2 = (E.fp4_dequant(*p[nm]).double() for nm in E.NAMES)
         g_, u_ = xq[rows] @ w1.T, xq[rows] @ w3.T
         h = torch.nn.functional.silu(g_.clamp(max=lim)) * u_.clamp(-lim, lim)
         ref[rows] += ds[rows, e : e + 1] * (h @ w2.T)
@@ -467,19 +305,6 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
         f"{dmax:.3g}) {tag}"
     )
     assert bool(torch.isfinite(b).all())
-    if "separate" not in outs:
-        return
-    a = outs["separate"]
-    rel = ((b - a).norm() / a.norm()).item()
-    ac, bc = a - a.mean(), b - b.mean()
-    pcc = (ac.reshape(-1) @ bc.reshape(-1) / (ac.norm() * bc.norm())).item()
-    row = ((b - a).norm(dim=1) / a.norm(dim=1).clamp_min(1e-30)).max().item()
-    ratio = b.norm(dim=1) / a.norm(dim=1).clamp_min(1e-30)
-    print(
-        f"EXPERTS_COMBINE_CMP weighted vs separate: rel {rel:.6f} pcc {pcc:.8f} worst_row {row:.5f} "
-        f"row_norm_ratio [{ratio.min().item():.5f}, {ratio.max().item():.5f}] {tag}"
-    )
-    assert pcc > 0.999, (rel, pcc)
 
 
 def _wc_setup(mesh_device, route, S, **wc_kw):
@@ -508,7 +333,6 @@ def _wc_setup(mesh_device, route, S, **wc_kw):
         act="clamped_silu",
         pin=1,
         weights_nk=True,
-        routed=False,
     )
     wc = WeightedCombine(
         mesh_device,
@@ -636,7 +460,7 @@ def _cmp(a, b):
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_combine_acc(mesh_device, layer, prof):
-    """COMBINE_ACC A/B (P.9) on the same random inputs (EXPERTS_COMBINE=weighted, the current
+    """COMBINE_ACC A/B (P.9) on the same random inputs (the current
     FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): fp32 sums in passes vs bf16 sums in one pass. Per side the
     pass count, the mean wall time of a whole experts call (q(x) .. the weighted combine's partial, synchronized: the
     device time of one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of testing/profiler.py),
@@ -658,7 +482,7 @@ def test_combine_acc(mesh_device, layer, prof):
     outs, again = {}, None
     for acc in ("fp32", "bf16"):
         t0 = time.time()
-        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine="weighted", combine_acc=acc)
+        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine_acc=acc)
         load = time.time() - t0
         P = mod.wc.P
         if acc == "bf16":
@@ -775,8 +599,8 @@ def test_weighted_refuses_small_arena(mesh_device):
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_weights_bfp4(mesh_device, layer, prof):
-    """EXPERTS_IMPL A/B (P.10) on the same random inputs, the current default path otherwise (EXPERTS_KERNEL /
-    EXPERTS_COMBINE / COMBINE_ACC / EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the routed
+    """EXPERTS_IMPL A/B (P.10) on the same random inputs, the current default path otherwise (COMBINE_ACC /
+    EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the routed
     experts' weights bfp8 (exact) vs bfp4 (the checkpoint's fp4 width, rule 7 / F117). Per side the flat plan and the
     weighted combine's passes (logged: the plan may change with the smaller weights), the mean wall time of a whole
     synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
@@ -794,7 +618,7 @@ def test_weights_bfp4(mesh_device, layer, prof):
     dense = torch.zeros(chunk, cfg.n_experts)
     dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    keys = ("EXPERTS_KERNEL", "EXPERTS_COMBINE", "COMBINE_ACC", "EXPERTS_PRECISION", "FFN_NORM_DTYPE")
+    keys = ("COMBINE_ACC", "EXPERTS_PRECISION", "FFN_NORM_DTYPE")
     tag = " ".join(f"{k}={settings.get(k)}" for k in keys + ("CCL_IMPL",))
     outs, again = {}, None
     for impl in ("bfp8", "bfp4"):
@@ -885,8 +709,8 @@ def test_weights_bfp4(mesh_device, layer, prof):
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_combine_planner(mesh_device, layer, prof):
-    """COMBINE_PLANNER A/B (P.11) on the same random inputs, the current default path otherwise (EXPERTS_COMBINE=
-    weighted, COMBINE_ACC / EXPERTS_IMPL / EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the
+    """COMBINE_PLANNER A/B (P.11) on the same random inputs, the current default path otherwise (COMBINE_ACC /
+    EXPERTS_IMPL / EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the
     weighted combine's planner on one core vs the column multi-core planner. Per side the mean wall time of a whole
     synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
     testing/profiler.py), the device time per op of one more call (the planner is the generic op on the gathered
@@ -909,7 +733,7 @@ def test_combine_planner(mesh_device, layer, prof):
     outs = {}
     for planner in ("one", "multi"):
         t0 = time.time()
-        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine="weighted", combine_planner=planner)
+        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine_planner=planner)
         load = time.time() - t0
         wc = mod.wc
         print(f"PLANNER_PLAN L{layer:02d} planner={planner} {wc.planner_desc} passes={wc.P} x {wc.S_pass}")

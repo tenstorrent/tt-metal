@@ -127,3 +127,31 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/weight_runs.hpp`,
   `device/kernels/dataflow/unified_routed_expert_ffn_{reader,writer}.cpp`, `device/kernels/compute/fused_swiglu.cpp`,
   `tests/reference.py`, `tests/unit/{__init__,test_ds41_h_options}.py`
+
+### Removed: the DeepSeek-V4.1 h options `routing_weights`, `fp8_act_quant` (`weights_transposed` stays)
+- What: the two keyword arguments of `unified_routed_expert_moe` added in P.2 and everything only they used: the
+  `fuse_routing_weight` / `fp8_act_quant` attributes (and their program-cache key fields), the `routing_weights`
+  input and its validation, CBs c_20 / c_21 and the reader's routing-weight staging (`ROUTED_ROW_WEIGHT`), the compute
+  kernel's `calculate_routed_h` SFPU function (`FP8_ACT_QUANT`, `ROUTED_H_OPTS`, one output tile per acquire), the
+  UnpackToDestFp32 modes the h options set, and `tests/reference.py`'s `fp8_act_qdq` / `fp8_act_scale` /
+  `pow2_ceil` / `routed_h`. The program factory, reader and compute kernel are again the pre-P.2 code plus
+  `weights_transposed` (`git diff 1adb95000b3^` shows only WEIGHTS_NK / k_dim / n_dim lines).
+- Why: deepseek_v41_flash_d_p FIX.9 (overseer, precision_debt_report.md J2): the options existed only for
+  DeepSeek's official arithmetic (q(r h) before w2), which the model no longer emulates (agent rule 17, F137), and the
+  model's EXPERTS_KERNEL=unified path that called them is deleted. No other model calls them (grep of every model's
+  code and the forks' tests/cases.py, 2026-10-22). Option-off behaviour unchanged: every removed line was behind
+  `op.fuse_routing_weight` / `op.fp8_act_quant` / `h_opts` or the two defines.
+- Tests: `tests/unit/test_ds41_h_options.py` deleted; its `weights_transposed` check moved to
+  `tests/unit/test_weights_transposed.py` (bit-identical [N, K] vs [K, N], bf16 and bfp8 e2m1; [K, N] passed as
+  [N, K] refused).
+- Regression (options off, 2026-10-22, after the build, 2x2 QuietBox): `fork_source --fork unified_routed_expert_ffn`
+  73 of the 75 baseline tests run and pass ("regressions vs baseline 0"); the 2 of
+  `models/demos/deepseek_v3_d_p/tests/cache/test_routed_expert_cache.py` are not collected: that directory's conftest
+  imports xing40_a4b_d_p's adapter, whose tt/settings.py still passes the `max_precision=` F137 removed (TypeError at
+  import; not this change). Model cases (`tests/test_unified_routed_expert_ffn.py`): 5 passed, 1 skipped (xing40's 4x2
+  case on a 4-chip box), as recorded. `tests/unit/test_weights_transposed.py`: 3 passed.
+- Needed by: deepseek_v41_flash_d_p FIX.9
+- Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`, `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`,
+  `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp`,
+  `device/kernels/compute/fused_swiglu.cpp`, `tests/reference.py`, `tests/unit/test_weights_transposed.py`

@@ -353,11 +353,11 @@ class TtDS41Block:
         self.router = build_router(mesh, ck, cfg, i, model.chunk)
         self.experts = build_experts(mesh, ck, cfg, i, model.chunk)
         self.shared = build_shared_expert(mesh, ck, cfg, i, chunk=model.chunk)
-        # SHARED_EXPERT_IMPL=flat + EXPERTS_COMBINE=weighted (P.12): the shared expert reads its x rows from the routed
-        # experts' gathered row-major q(x) (experts runs first in the block graph)
-        self.experts.keep_rows = bool(self.shared.reads_rows and self.experts.weighted)
-        # INDEXER_GLUE=on (P.16): the weighted experts take the router's own weights (no dense scatter, no gather)
-        self.router_wts = indexer_glue() and self.experts.weighted
+        # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs first
+        # in the block graph)
+        self.experts.keep_rows = bool(self.shared.reads_rows)
+        # INDEXER_GLUE=on (P.16): the experts take the router's own weights (no dense scatter, no gather)
+        self.router_wts = indexer_glue()
         self.router.dense = not self.router_wts
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
@@ -460,10 +460,10 @@ class TtDS41Block:
             dense, idx, wts = routing
             if self.router_wts:  # INDEXER_GLUE=on (P.16)
                 return self.experts.partial(x, dense, idx, wts=wts)
-            return self.experts.partial(x, dense, idx)  # this dispatch group's fp32 partial [S/SP, H]
+            return self.experts.partial(x, dense, idx)  # this dispatch group's partial [S/SP, H]
 
         def shared_expert(ctx, x):
-            # this chip's intermediate share, fp32 partial [S/SP, H] (flat: bf16 under CCL_IMPL=fabric_bf16)
+            # this chip's intermediate share, partial [S/SP, H] (bf16 under CCL_IMPL=fabric_bf16)
             return self.shared.partial(x, rows=self.experts.take_rows())
 
         def moe_add(ctx, a, b):

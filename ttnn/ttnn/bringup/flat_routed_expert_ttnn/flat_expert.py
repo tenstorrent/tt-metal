@@ -1932,7 +1932,6 @@ class FlatRoutedExpert:
         x_bf16=False,
         h_bf16=False,
         weights_nk=False,
-        routed=False,
         check_exact=False,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
@@ -1941,14 +1940,13 @@ class FlatRoutedExpert:
         cache; the file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale
         layout. ``weights_nk``: the weights are given as nn.Linear stores them, (W1 [I, H], W3 [I, H], W2 [H, I]),
         laid out tile by tile transposed (flat_weight_regions nk) and every call passes weights_nk (the matmuls
-        transpose them back): a bfp8 tile then shares its exponents along K. ``routed``: the plan of the h options
-        (routing_weights / fp8_act_quant calls: 32-row sub-blocks). ``check_exact``: assert the block-float dtype
+        transpose them back): a bfp8 tile then shares its exponents along K. ``check_exact``: assert the block-float dtype
         holds every weight value exactly (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8,
         E the group's largest exponent)."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
-        self.weights_nk, self.routed = weights_nk, routed
+        self.weights_nk = weights_nk
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
             device,
             H,
@@ -1960,7 +1958,6 @@ class FlatRoutedExpert:
             pin=pin,
             x_bf16=x_bf16,
             h_bf16=h_bf16,
-            routed=routed,
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
@@ -2051,14 +2048,10 @@ class FlatRoutedExpert:
         pack_stochastic_rounding=False,
         y_bf16=False,
         math_fidelity=0,
-        routing_weights=None,
-        fp8_act_quant=False,
         hidden=0,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H] (``hidden``: [rows, W >= H], each row's first H values);
-        counts / regions: the routing's [1, n_global] uint32 rows. ``routing_weights`` ([rows, 32] fp32 TILE, column
-        = local expert) / ``fp8_act_quant``: DeepSeek-V4.1's h = q(r * act) before the down projection (the plan
-        must be built with routed=True).
+        counts / regions: the routing's [1, n_global] uint32 rows.
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
         token_index[r]. x_pages_per_row P: x is [rows * P, H / P] (P = 8: every row spread over the 8 DRAM banks).
         Returns y [rows, H] bfp8 TILE (the active experts' rows); ``y_row_major``: bf16 ROW_MAJOR (pack-untilized on
@@ -2087,8 +2080,6 @@ class FlatRoutedExpert:
             h_bf16=self.h_bf16,
             y_bf16=y_bf16,
             math_fidelity=math_fidelity,
-            routing_weights=routing_weights,
-            fp8_act_quant=fp8_act_quant,
             weights_nk=self.weights_nk,
             hidden=hidden,
         )
