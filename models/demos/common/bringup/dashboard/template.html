@@ -334,7 +334,7 @@ const STATUS = {
   PASS:{c:"--good", i:"✓", l:"PASS"}, FAIL:{c:"--crit", i:"✕", l:"FAIL"}, HANG:{c:"--crit", i:"⧗", l:"HANG"},
   RUNNING:{c:"--warn", i:"◐", l:"RUNNING"}, TODO:{c:"--muted", i:"○", l:"TODO"}, BLOCKED:{c:"--serious", i:"!", l:"BLOCKED"},
   STOPPED:{c:"--serious", i:"■", l:"STOPPED"}, DEFERRED:{c:"--accent", i:"↷", l:"DEFERRED"},
-  REJECTED:{c:"--muted", i:"⊘", l:"REJECTED"}
+  REJECTED:{c:"--muted", i:"⊘", l:"REJECTED"}, COMMIT_PENDING:{c:"--warn", i:"⇡", l:"COMMIT PENDING"}
 };
 const DONE = s => s === "PASS" || s === "DEFERRED" || s === "REJECTED";
 const STEP_NAMES = {reference:"Reference (CPU) and HF parity", goldens:"Goldens", box:"Box", plan:"Plan (approved by a person)",
@@ -381,7 +381,7 @@ function header(){
   D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
   $("#passn").textContent = `${counts.PASS || 0}/${n}`;
   $("#passof").textContent = "gates passed";
-  const keys = ["PASS","DEFERRED","REJECTED","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
+  const keys = ["PASS","DEFERRED","REJECTED","COMMIT_PENDING","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
   $("#meter").innerHTML = keys.map(k => `<span style="width:${100*counts[k]/n}%;background:var(${STATUS[k].c})" title="${k}: ${counts[k]}"></span>`).join("");
   $("#meter-legend").innerHTML = keys.map(k => `<span><span class="dot" style="background:var(${STATUS[k].c})"></span> ${STATUS[k].i} ${k} <span class="num">${counts[k]}</span></span>`).join("");
   const st = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
