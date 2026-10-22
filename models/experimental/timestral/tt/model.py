@@ -12,6 +12,9 @@ reference : models/experimental/timestral/reference/src/timestral/model.py (``_p
 
 The sequence runs padded to a whole tile with the pad tokens after the decoder tokens:
 causal time attention never lets a real token read them, and every other op is per token.
+When the decoder tokens cross a tile boundary (paper shape: 64 + 2 tokens -> 96) and pack into
+whole tiles, context and decoder tokens instead run as two streams (``SplitStreams``) that meet
+only in time attention, and the last layer computes just the context keys and values.
 ``predict_block`` matches the upstream signature, so ``TtTimestralForecaster`` reuses the
 upstream block-autoregressive decode, symmetric averaging and refine frame unchanged.
 """
@@ -25,7 +28,7 @@ import torch
 from torch import Tensor
 
 from models.experimental.timestral.common.timestral_src import require_timestral
-from models.experimental.timestral.tt.attention import DecoderSlots, TtAttentionInputs
+from models.experimental.timestral.tt.attention import DecoderSlots, SplitStreams, TtAttentionInputs
 from models.experimental.timestral.tt.common import (
     TILE,
     TtTimestralPrecision,
@@ -53,11 +56,40 @@ from timestral.scaler import apply_affine_asinh_masked, causal_patch_loc_scale  
 
 @dataclass(frozen=True)
 class TtTimestralDeviceInputs:
-    tokens: object  # flat (1, 1, R * S_pad, 2 * patch_size) tiles
-    attention: TtAttentionInputs
-    decoder: DecoderSlots
+    tokens: object  # flat (1, 1, R * S_pad, 2 * patch_size) tiles; context tokens only, R * L_pad, when split
+    attention: TtAttentionInputs | None  # single stream
+    decoder: DecoderSlots | None  # single stream
+    split: SplitStreams | None
     num_context_patches: int
     horizon_patches: int
+    owned: tuple  # the tensors deallocate_inputs frees (not the per-shape caches)
+
+
+def split_rows_per_block(rows: int, num_context_patches: int, horizon_patches: int) -> int | None:
+    """Rows whose decoder queries fill one tile, when the split streams run fewer tokens than the
+    padded single stream and the rows pack into such blocks; else None."""
+    ll, h = num_context_patches, horizon_patches
+    if TILE % h or rows % (TILE // h) or pad_to_tile(ll) + h >= pad_to_tile(ll + h):
+        return None
+    return TILE // h
+
+
+def _cross_mask(time_mask: Tensor, num_context_patches: int, context_seq: int, rows_per_block: int) -> Tensor:
+    """``(R, 1, S, S)`` -> ``(1, R / b, b * h, b * (L_pad + h))`` for blocks of ``b`` rows: decoder query
+    ``(row, t)`` reads its row's context keys (pads excluded) and decoder keys as the time mask allows."""
+    rows, _, s, _ = time_mask.shape
+    ll, b = num_context_patches, rows_per_block
+    h, blocks = s - ll, rows // b
+    dec = time_mask[:, 0, ll:]
+    ctx = torch.zeros(rows, h, context_seq, dtype=torch.bool)
+    ctx[..., :ll] = dec[..., :ll]
+    own_row = torch.eye(b, dtype=torch.bool).reshape(1, b, 1, b, 1)
+
+    def packed(keys):
+        n = keys.shape[-1]
+        return (keys.reshape(blocks, b, h, 1, n) & own_row).reshape(blocks, b * h, b * n)
+
+    return torch.cat([packed(ctx), packed(dec[..., ll:])], dim=-1).unsqueeze(0)
 
 
 def _additive(mask: Tensor) -> Tensor:
@@ -100,9 +132,14 @@ class TtTimestral:
         self.config = weights.config
         self.precision = precision or TtTimestralPrecision()
         self._patch_proj = TtResidualBlock(device, weights.patch_proj, self.precision)
-        self._layers = [TtTransformerBlock(device, layer, self.precision) for layer in weights.layers]
+        n = len(weights.layers)
+        self._layers = [
+            TtTransformerBlock(device, layer, self.precision, last=i == n - 1) for i, layer in enumerate(weights.layers)
+        ]
         self._head = TtResidualBlock(device, weights.head, self.precision)
         self._token_layouts: dict[tuple[int, int, int], tuple[object, object]] = {}
+        self._cross_masks: dict[tuple[int, int, int], object] = {}
+        self._forecast_queries: dict[int, object] = {}
 
     @classmethod
     def from_reference(cls, device, model, precision: TtTimestralPrecision | None = None) -> "TtTimestral":
@@ -135,31 +172,119 @@ class TtTimestral:
         return prepare_inputs(self.config, self.weights.inv_freq, inputs, observed, group_ids, horizon_patches)
 
     def upload_inputs(self, prepared: TimestralHostInputs) -> TtTimestralDeviceInputs:
-        import ttnn
-
         rows, seq = prepared.rows, prepared.seq_len
+        ll, h = prepared.num_context_patches, prepared.horizon_patches
+        rows_per_block = split_rows_per_block(rows, ll, h)
+        if rows_per_block is not None:
+            return self._upload_split(prepared, rows_per_block)
         padded_seq = pad_to_tile(seq)
-        tokens = torch.zeros(rows, padded_seq, prepared.tokens.shape[-1])
-        tokens[:, :seq] = prepared.tokens
-        # Tilizing on device is far cheaper than on the host for large batches.
-        tokens_rm = upload(self.device, tokens.reshape(1, 1, rows * padded_seq, -1), layout=ttnn.ROW_MAJOR_LAYOUT)
-        tokens_tt = ttnn.to_layout(tokens_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tokens_rm)
-
+        tokens = self._upload_tokens(prepared.tokens, padded_seq)
         time_mask = None
         if prepared.time_mask is not None:
-            # Time attention runs on an (H, R, S_pad, Dh) view, so the per-row masks sit on dim 1.
-            time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, padded_seq)).transpose(0, 1))
-        ll, h = prepared.num_context_patches, prepared.horizon_patches
+            time_mask = self._upload_time_mask(prepared.time_mask, padded_seq)
         variate_mask = decoder_variate_mask = None
         if prepared.variate_mask is not None:
             slot_major = _additive(_pad_variate_mask(prepared.variate_mask, seq, padded_seq))
             variate_mask = self._upload_small_mask(slot_major)
             series = rows // prepared.group_size
             decoder_variate_mask = self._upload_small_mask(slot_major[ll * series : (ll + h) * series])
-        attention = TtAttentionInputs(
-            cos=self._upload_rope(prepared.cos, rows, padded_seq, 1.0),
-            sin=self._upload_rope(prepared.sin, rows, padded_seq, 0.0),
+        attention = self._stream_inputs(prepared, padded_seq, prepared.cos, prepared.sin, time_mask, variate_mask)
+        decoder_inputs = TtAttentionInputs(
+            cos=None,
+            sin=None,
+            unit_stats=None,
+            time_mask=None,
+            variate_mask=decoder_variate_mask,
+            rows=rows,
+            padded_seq=h,
+            group_size=prepared.group_size,
+        )
+        owned = (tokens, attention.cos, attention.sin, attention.unit_stats, time_mask, variate_mask)
+        return TtTimestralDeviceInputs(
+            tokens=tokens,
+            attention=attention,
+            decoder=DecoderSlots(start=ll, count=h, inputs=decoder_inputs),
+            split=None,
+            num_context_patches=ll,
+            horizon_patches=h,
+            owned=tuple(t for t in (*owned, decoder_variate_mask) if t is not None),
+        )
+
+    def _upload_split(self, prepared: TimestralHostInputs, rows_per_block: int) -> TtTimestralDeviceInputs:
+        rows, ll, h = prepared.rows, prepared.num_context_patches, prepared.horizon_patches
+        context_seq = pad_to_tile(ll)
+        tokens = self._upload_tokens(prepared.tokens[:, :ll], context_seq)
+        time_mask = None
+        if prepared.time_mask is None:
+            cross_mask = self._causal_cross_mask(ll, h, rows_per_block)
+        else:
+            time_mask = self._upload_time_mask(prepared.time_mask[:, :, :ll, :ll], context_seq)
+            cross_mask = upload(
+                self.device, _additive(_cross_mask(prepared.time_mask, ll, context_seq, rows_per_block))
+            )
+        context_variate = decoder_variate = None
+        if prepared.variate_mask is not None:
+            split_at = ll * rows // prepared.group_size
+            context_variate = self._upload_small_mask(
+                _additive(_pad_variate_mask(prepared.variate_mask[:split_at], ll, context_seq))
+            )
+            decoder_variate = self._upload_small_mask(_additive(prepared.variate_mask[split_at:]))
+        cos, sin = prepared.cos, prepared.sin
+        context = self._stream_inputs(prepared, context_seq, cos[:, :ll], sin[:, :ll], time_mask, context_variate)
+        decoder = self._stream_inputs(prepared, h, cos[:, ll:], sin[:, ll:], None, decoder_variate)
+        owned = (
+            tokens,
+            *(t for s in (context, decoder) for t in (s.cos, s.sin, s.unit_stats)),
+            time_mask,
+            None if prepared.time_mask is None else cross_mask,
+            context_variate,
+            decoder_variate,
+        )
+        return TtTimestralDeviceInputs(
+            tokens=tokens,
+            attention=None,
+            decoder=None,
+            split=SplitStreams(context=context, decoder=decoder, cross_mask=cross_mask, rows_per_block=rows_per_block),
+            num_context_patches=ll,
+            horizon_patches=h,
+            owned=tuple(t for t in owned if t is not None),
+        )
+
+    def _upload_tokens(self, tokens: Tensor, padded_seq: int):
+        """Host ``(R, S, F)`` -> device tiles ``(1, 1, R * S_pad, F)``, zero tokens in the pad slots."""
+        import ttnn
+
+        rows, seq, features = tokens.shape
+        padded = torch.zeros(rows, padded_seq, features)
+        padded[:, :seq] = tokens
+        # Tilizing on device is far cheaper than on the host for large batches.
+        tokens_rm = upload(self.device, padded.reshape(1, 1, rows * padded_seq, -1), layout=ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.to_layout(tokens_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tokens_rm)
+        return out
+
+    def _upload_time_mask(self, mask: Tensor, padded_seq: int):
+        # Time attention runs on an (H, R, S_pad, Dh) view, so the per-row masks sit on dim 1.
+        return upload(self.device, _additive(_pad_time_mask(mask, padded_seq)).transpose(0, 1))
+
+    def _causal_cross_mask(self, num_context_patches: int, horizon_patches: int, rows_per_block: int):
+        """The all-valid ``_cross_mask``, one block broadcast over all of them; cached per shape."""
+        key = (num_context_patches, horizon_patches, rows_per_block)
+        if key not in self._cross_masks:
+            s = num_context_patches + horizon_patches
+            causal = torch.tril(torch.ones(s, s, dtype=torch.bool)).expand(rows_per_block, 1, s, s)
+            mask = _cross_mask(causal, num_context_patches, pad_to_tile(num_context_patches), rows_per_block)
+            self._cross_masks[key] = upload(self.device, _additive(mask))
+        return self._cross_masks[key]
+
+    def _stream_inputs(self, prepared, padded_seq, cos, sin, time_mask, variate_mask) -> TtAttentionInputs:
+        """Attention inputs of ``padded_seq`` token slots per row, RoPE tables ``cos`` / ``sin`` ``(1 or R, S, Dh)``."""
+        import ttnn
+
+        rows = prepared.rows
+        return TtAttentionInputs(
+            cos=self._upload_rope(cos, rows, padded_seq, 1.0),
+            sin=self._upload_rope(sin, rows, padded_seq, 0.0),
             unit_stats=ttnn.full(
                 ttnn.Shape((1, 1, rows * padded_seq, TILE)),
                 self.config.d_model / TILE,
@@ -174,29 +299,15 @@ class TtTimestral:
             padded_seq=padded_seq,
             group_size=prepared.group_size,
         )
-        decoder_inputs = TtAttentionInputs(
-            cos=None,
-            sin=None,
-            unit_stats=None,
-            time_mask=None,
-            variate_mask=decoder_variate_mask,
-            rows=rows,
-            padded_seq=h,
-            group_size=prepared.group_size,
-        )
-        return TtTimestralDeviceInputs(
-            tokens=tokens_tt,
-            attention=attention,
-            decoder=DecoderSlots(start=ll, count=h, inputs=decoder_inputs),
-            num_context_patches=ll,
-            horizon_patches=h,
-        )
 
     def _upload_rope(self, table: Tensor, rows: int, padded_seq: int, identity: float):
         """``(1 or R, S, Dh)`` -> device ``(1, 1, R * S_pad, Dh)``, one row per token, in ``rope_pair_order``."""
         import ttnn
 
         padded = _pad_rope(rope_pair_order(table), padded_seq, identity)
+        if padded.shape[0] != rows and padded_seq % TILE:
+            # A device repeat would copy the tile padding between rows.
+            padded = padded.expand(rows, -1, -1, -1)
         flat = upload(self.device, padded.reshape(1, 1, -1, padded.shape[-1]))
         if padded.shape[0] == rows:
             return flat
@@ -225,9 +336,14 @@ class TtTimestral:
         return self._token_layouts[key]
 
     def embed(self, inputs: TtTimestralDeviceInputs):
-        """Patch tokens -> flat hidden states ``(1, 1, R * S_pad, D)``; decoder slots hold the forecast query."""
+        """Patch tokens -> flat hidden states ``(1, 1, R * S_pad, D)``; decoder slots hold the forecast query.
+        With split streams: ``(context (1, 1, R * L_pad, D), decoder (1, 1, R * h, D))``."""
         import ttnn
 
+        if inputs.split is not None:
+            decoder = inputs.split.decoder
+            queries = self._forecast_query_rows(decoder.rows * decoder.padded_seq)
+            return self._patch_proj(inputs.tokens), ttnn.clone(queries, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         att = inputs.attention
         r, sp, d = att.rows, att.padded_seq, self.config.d_model
         embedded = ttnn.reshape(self._patch_proj(inputs.tokens), (r, sp, d))
@@ -237,6 +353,21 @@ class TtTimestral:
         x = ttnn.add(kept, add, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(kept)
         return ttnn.reshape(x, (1, 1, r * sp, d))
+
+    def _forecast_query_rows(self, tokens: int):
+        """Device ``(1, 1, tokens, D)`` of the forecast query; cached per token count."""
+        if tokens not in self._forecast_queries:
+            query = self.weights.forecast_query.to(torch.float32).expand(1, 1, tokens, -1)
+            self._forecast_queries[tokens] = upload(self.device, query)
+        return self._forecast_queries[tokens]
+
+    def run_layer(self, layer: TtTransformerBlock, x, inputs: TtTimestralDeviceInputs, *, last: bool = False):
+        """One block on the residual stream, flat ``x`` or ``(context, decoder)`` with split streams;
+        consumes ``x``. ``last`` returns only the decoder slots, ``(1, 1, R * h, D)``."""
+        if inputs.split is None:
+            return layer(x, inputs.attention, decoder=inputs.decoder if last else None)
+        context, decoder = layer.split(*x, inputs.split, last=last)
+        return decoder if last else (context, decoder)
 
     def head(self, x):
         """Decoder-slot hidden states ``(1, 1, R * h, D)`` -> head output ``(1, 1, R * h, patch_size * Q)``; consumes ``x``."""
@@ -253,8 +384,8 @@ class TtTimestral:
         x = self.embed(inputs)
         *body, last = self._layers
         for layer in body:
-            x = layer(x, inputs.attention)
-        return self.head(last(x, inputs.attention, decoder=inputs.decoder))
+            x = self.run_layer(layer, x, inputs)
+        return self.head(self.run_layer(last, x, inputs, last=True))
 
     def postprocess(self, output_device, prepared: TimestralHostInputs) -> Tensor:
         """Download the head output -> raw-space quantiles ``(R, h * patch_size, Q)``."""
@@ -267,11 +398,8 @@ class TtTimestral:
     def deallocate_inputs(inputs: TtTimestralDeviceInputs) -> None:
         import ttnn
 
-        att = inputs.attention
-        tensors = (inputs.tokens, att.cos, att.sin, att.unit_stats, att.time_mask, att.variate_mask)
-        for t in (*tensors, inputs.decoder.inputs.variate_mask):
-            if t is not None:
-                ttnn.deallocate(t)
+        for t in inputs.owned:
+            ttnn.deallocate(t)
 
     def predict_block(
         self,

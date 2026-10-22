@@ -13,6 +13,10 @@ reference : models/experimental/timestral/reference/src/timestral/layers.py (``A
     variate: one row per series -> ctx = v exactly (softmax over one key)
              else SDPA over each series' rows, (S * B, H, V, Dh)
     return (merge(ctx) * sigmoid(xn @ Wg)) @ Wo
+
+With ``SplitStreams`` the context and decoder tokens are two flat streams. Context queries attend
+causally on (H, R, L_pad, Dh); the decoder queries of ``rows_per_block`` rows fill one tile and attend
+over those rows' context keys followed by their decoder keys, a block mask keeping each on its row.
 """
 
 from __future__ import annotations
@@ -65,6 +69,16 @@ class DecoderSlots:
         return take_slots(x, inputs.rows, inputs.padded_seq, self.start, self.count)
 
 
+@dataclass(frozen=True)
+class SplitStreams:
+    """Inputs of the split layout: context tokens ``(1, 1, R * L_pad, D)`` and decoder tokens ``(1, 1, R * h, D)``."""
+
+    context: TtAttentionInputs  # padded_seq = L_pad
+    decoder: TtAttentionInputs  # padded_seq = h
+    cross_mask: object  # (1, 1 or R / b, b * h, b * (L_pad + h)) additive, b = rows_per_block
+    rows_per_block: int  # b = TILE / h
+
+
 def pair_rotation(n: int) -> torch.Tensor:
     """``(n, n)`` matrix with ``t @ R`` mapping each ``rope_pair_order`` pair ``(a_i, b_i)`` to ``(-b_i, a_i)``."""
     rotation = torch.zeros(n, n)
@@ -79,7 +93,8 @@ def sdpa_chunk(padded_len: int) -> int:
 
 
 class TtAttention:
-    def __init__(self, device, weights: AttentionWeights, precision: TtTimestralPrecision):
+    def __init__(self, device, weights: AttentionWeights, precision: TtTimestralPrecision, *, kv_only: bool = False):
+        """``kv_only``: also keep ``[Wk | Wv]`` for ``split_time(context_out=False)``."""
         self.device = device
         self.precision = precision
         self.num_heads = weights.num_heads
@@ -89,6 +104,7 @@ class TtAttention:
         self.eps = weights.eps
         dtype = precision.weight_dtype()
         self._wqkv = upload_linear(device, weights.wqkv, dtype)
+        self._wkv = upload_linear(device, weights.wqkv[self.d_model :], dtype) if kv_only else None
         self._wv = None if weights.is_time else upload_linear(device, weights.wv, dtype)
         self._wg = upload_linear(device, weights.wg, dtype)
         self._wo = upload_linear(device, weights.wo, precision.weight_dtype(residual=True))
@@ -102,17 +118,55 @@ class TtAttention:
         residual run on the decoder slots only and the output is ``(1, 1, R * count, D)``."""
         import ttnn
 
-        p = self.precision
-        xn = rms_norm(x, self.eps, p)
+        xn = rms_norm(x, self.eps, self.precision)
         merged = self._context(xn, inputs)
-        if decoder is not None:
-            # Nothing after the context mixes token slots.
-            full = (merged, xn)
-            merged, xn = decoder.take(merged, inputs), decoder.take(xn, inputs)
-            for t in full:
-                ttnn.deallocate(t)
-            if residual is not None:
-                residual = decoder.take(residual, inputs)
+        if decoder is None:
+            return self._output(merged, xn, residual)
+        # Nothing after the context mixes token slots.
+        full = (merged, xn)
+        merged, xn = decoder.take(merged, inputs), decoder.take(xn, inputs)
+        for t in full:
+            ttnn.deallocate(t)
+        if residual is None:
+            return self._output(merged, xn, None)
+        residual = decoder.take(residual, inputs)
+        out = self._output(merged, xn, residual)
+        ttnn.deallocate(residual)
+        return out
+
+    def split_time(self, x_c, x_d, streams: SplitStreams, *, context_out: bool = True):
+        """Time attention plus residual on both streams: ``(x_c, x_d)`` -> ``(y_c, y_d)``; borrows both.
+        Without ``context_out`` the context stream only supplies keys and values and ``y_c`` is None."""
+        import ttnn
+
+        p, ctx, dec = self.precision, streams.context, streams.decoder
+        xn_c = rms_norm(x_c, self.eps, p)
+        if context_out:
+            q_c, k_c, v_c = linear_split(xn_c, self._wqkv, p, 3)
+        else:
+            k_c, v_c = linear_split(xn_c, self._wkv, p, 2)
+            ttnn.deallocate(xn_c)
+        k_c, v_c = self._heads(k_c, ctx, rope=True), self._heads(v_c, ctx, rope=False)
+        xn_d = rms_norm(x_d, self.eps, p)
+        q_d, k_d, v_d = linear_split(xn_d, self._wqkv, p, 3)
+        q_d, k_d, v_d = (
+            self._heads(q_d, dec, rope=True),
+            self._heads(k_d, dec, rope=True),
+            self._heads(v_d, dec, rope=False),
+        )
+        y_d = self._output(self._decoder_attention(q_d, k_c, v_c, k_d, v_d, streams), xn_d, x_d)
+        if not context_out:
+            ttnn.deallocate(k_c)
+            ttnn.deallocate(v_c)
+            return None, y_d
+        merged_c = self._time_sdpa(self._heads(q_c, ctx, rope=True), k_c, v_c, ctx)
+        return self._output(merged_c, xn_c, x_c), y_d
+
+    def _output(self, merged, xn, residual):
+        """``(merged * sigmoid(xn @ Wg)) @ Wo``, plus ``residual`` when given; consumes ``merged`` and ``xn``."""
+        import ttnn
+
+        p = self.precision
         gate = linear(xn, self._wg, p, activation="sigmoid")
         ttnn.deallocate(xn)
         gated = ttnn.mul(merged, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -122,8 +176,6 @@ class TtAttention:
             out = linear(gated, self._wo, p)
         else:
             out = linear_residual(gated, self._wo, p, residual, self._ones)
-            if decoder is not None:
-                ttnn.deallocate(residual)
         ttnn.deallocate(gated)
         return out
 
@@ -146,11 +198,10 @@ class TtAttention:
     def _sdpa(self, q, k, v, *, mask, is_causal: bool, concat_heads: bool = True):
         import ttnn
 
-        chunk = sdpa_chunk(q.padded_shape[-2])
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=chunk,
-            k_chunk_size=chunk,
+            q_chunk_size=sdpa_chunk(q.padded_shape[-2]),
+            k_chunk_size=sdpa_chunk(k.padded_shape[-2]),
             exp_approx_mode=False,
         )
         ctx = ttnn.transformer.scaled_dot_product_attention(
@@ -192,19 +243,52 @@ class TtAttention:
         return out
 
     def _time_context(self, xn, inputs: TtAttentionInputs):
-        import ttnn
-
-        r, s, h, dh = inputs.rows, inputs.padded_seq, self.num_heads, self.head_dim
         q, k, v = linear_split(xn, self._wqkv, self.precision, 3)
-        q, k, v = (
+        return self._time_sdpa(
             self._heads(q, inputs, rope=True),
             self._heads(k, inputs, rope=True),
             self._heads(v, inputs, rope=False),
+            inputs,
         )
+
+    def _time_sdpa(self, q, k, v, inputs: TtAttentionInputs):
+        """Head-major ``(1, H, R * S_pad, Dh)`` q, k, v -> merged ``(1, 1, R * S_pad, D)``; consumes them."""
+        import ttnn
+
+        r, s, h, dh = inputs.rows, inputs.padded_seq, self.num_heads, self.head_dim
         q, k, v = (ttnn.reshape(t, (h, r, s, dh)) for t in (q, k, v))
         ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None, concat_heads=False)
+        return self._concat_heads(ctx, r * s)
+
+    def _decoder_attention(self, q_d, k_c, v_c, k_d, v_d, streams: SplitStreams):
+        """Head-major decoder q, k, v and context k, v -> merged decoder ``(1, 1, R * h, D)``; consumes the
+        decoder tensors and borrows the context ones."""
+        import ttnn
+
+        h, dh, b = self.num_heads, self.head_dim, streams.rows_per_block
+        blocks, lc, ld = streams.context.rows // b, streams.context.padded_seq, streams.decoder.padded_seq
+
+        def block_keys(context, decoder):
+            keys = ttnn.concat(
+                [ttnn.reshape(context, (h, blocks, b * lc, dh)), ttnn.reshape(decoder, (h, blocks, b * ld, dh))],
+                dim=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(decoder)
+            return keys
+
+        k, v = block_keys(k_c, k_d), block_keys(v_c, v_d)
+        q = ttnn.reshape(q_d, (h, blocks, b * ld, dh))
+        ctx = self._sdpa(q, k, v, mask=streams.cross_mask, is_causal=False, concat_heads=False)
+        return self._concat_heads(ctx, streams.decoder.rows * ld)
+
+    def _concat_heads(self, ctx, tokens: int):
+        """SDPA output viewed ``(1, H, tokens, Dh)`` -> ``(1, 1, tokens, D)``; consumes ``ctx``."""
+        import ttnn
+
+        h, dh = self.num_heads, self.head_dim
         merged = ttnn.experimental.nlp_concat_heads(
-            ttnn.reshape(ctx, (1, h, r * s, dh)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            ttnn.reshape(ctx, (1, h, tokens, dh)), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(ctx)
         return merged

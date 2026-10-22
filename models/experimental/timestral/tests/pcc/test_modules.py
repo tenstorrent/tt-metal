@@ -48,25 +48,25 @@ def _tt_model(mesh_device, model, precision=None):
     return TtTimestral.from_reference(mesh_device, model, precision)
 
 
-def _host_inputs(model, rows, *, group_size=1, key_valid=None, first_obs=None) -> TimestralHostInputs:
+def _host_inputs(model, rows, *, ll=L, h=H, group_size=1, key_valid=None, first_obs=None) -> TimestralHostInputs:
     """Host inputs for module tests on arbitrary hidden states (the tokens are unused)."""
     from models.experimental.timestral.tt.preprocessing import _block_diagonal, rope_tables
 
     first_obs = torch.zeros(rows, dtype=torch.long) if first_obs is None else first_obs
-    positions = build_forecast_positions(L, H, first_obs)
+    positions = build_forecast_positions(ll, h, first_obs)
     if bool((first_obs == first_obs[0]).all()):
         positions = positions[:1]
     cos, sin = rope_tables(positions, model.transformer.rope.inv_freq)
     time_mask = variate_mask = None
     if key_valid is not None:
-        time_mask = build_forecast_time_mask(L, H, key_valid, key_valid.device)
+        time_mask = build_forecast_time_mask(ll, h, key_valid, key_valid.device)
         if group_size > 1:
             group_ids = torch.arange(rows // group_size).repeat_interleave(group_size)
-            variate_mask = _block_diagonal(build_two_stream_variate_mask(group_ids, key_valid, H), group_size)
+            variate_mask = _block_diagonal(build_two_stream_variate_mask(group_ids, key_valid, h), group_size)
     return TimestralHostInputs(
-        tokens=torch.zeros(rows, S, 2 * model.config.patch_size),
-        num_context_patches=L,
-        horizon_patches=H,
+        tokens=torch.zeros(rows, ll + h, 2 * model.config.patch_size),
+        num_context_patches=ll,
+        horizon_patches=h,
         group_size=group_size,
         cos=cos,
         sin=sin,
@@ -102,9 +102,37 @@ def _run_on_device(tt, module, x: torch.Tensor, prepared: TimestralHostInputs, *
     return host
 
 
-def _x(model, rows=R) -> torch.Tensor:
+def _run_split(tt, layer, x: torch.Tensor, prepared: TimestralHostInputs, *, last: bool) -> torch.Tensor:
+    """Host ``(R, S, D)`` -> one block on the split context / decoder streams -> host ``(R, S, D)``,
+    or ``(R, h, D)`` with ``last``."""
+    import ttnn
+
+    from models.experimental.timestral.tt.common import upload
+
+    device_inputs = tt.upload_inputs(prepared)
+    streams = device_inputs.split
+    assert streams is not None, "shape does not take the split streams"
+    rows, _, d = x.shape
+    ll = prepared.num_context_patches
+    context = torch.zeros(rows, streams.context.padded_seq, d)
+    context[:, :ll] = x[:, :ll]
+    x_c = upload(tt.device, context.reshape(1, 1, -1, d))
+    x_d = upload(tt.device, x[:, ll:].reshape(1, 1, -1, d))
+    out = tt.run_layer(layer, (x_c, x_d), device_inputs, last=last)
+    y_c, y_d = (None, out) if last else out
+    host = ttnn.to_torch(y_d).float().reshape(rows, prepared.horizon_patches, d)
+    ttnn.deallocate(y_d)
+    if y_c is not None:
+        host_c = ttnn.to_torch(y_c).float().reshape(rows, streams.context.padded_seq, d)[:, :ll]
+        ttnn.deallocate(y_c)
+        host = torch.cat([host_c, host], dim=1)
+    tt.deallocate_inputs(device_inputs)
+    return host
+
+
+def _x(model, rows=R, seq=S) -> torch.Tensor:
     torch.manual_seed(SEED + 1)
-    return torch.randn(rows, S, model.config.d_model)
+    return torch.randn(rows, seq, model.config.d_model)
 
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -222,6 +250,37 @@ def test_last_block_decoder_slots_pcc(mesh_device, group_size):
     _check_pcc(f"last_block/{group_size}", expected, got, 0.999)
 
 
+# 16 rows of 32 context patches and 2 decoder tokens: 34 tokens as 32 + 2 split streams instead of 64.
+SPLIT_ROWS, SPLIT_L, SPLIT_H = 16, 32, 2
+
+
+@pytest.mark.parametrize("masked", [False, True], ids=["causal", "masked"])
+@pytest.mark.parametrize("group_size", [1, 4], ids=["univariate", "multivariate"])
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_split_stream_blocks_pcc(mesh_device, group_size, masked):
+    """Every block on the split context / decoder streams, and the last block cut to the decoder stream."""
+    model = tiny_model()
+    tt = _tt_model(mesh_device, model)
+    rows, ll, h = SPLIT_ROWS, SPLIT_L, SPLIT_H
+    x = _x(model, rows, ll + h)
+    key_valid = torch.ones(rows, ll, dtype=torch.bool)
+    if masked:
+        key_valid[1, :5] = False
+        key_valid[9, 3:7] = False
+    group_ids = torch.arange(rows // group_size).repeat_interleave(group_size)
+    time_mask = build_forecast_time_mask(ll, h, key_valid, x.device)
+    prepared = _host_inputs(model, rows, ll=ll, h=h, group_size=group_size, key_valid=key_valid if masked else None)
+    cos, sin = prepared.cos.expand(rows, -1, -1), prepared.sin.expand(rows, -1, -1)
+    variate_mask = build_two_stream_variate_mask(group_ids, key_valid, h)
+    name = f"split/{group_size}{'_masked' if masked else ''}"
+    for i, (kind, layer) in enumerate(zip(model.config.block_schedule, model.transformer.layers)):
+        with torch.no_grad():
+            expected = layer(x, TwoStreamMask(mask=time_mask, enc_len=ll), variate_mask, cos, sin)
+        _check_pcc(f"{name}/block_{kind}", expected, _run_split(tt, tt._layers[i], x, prepared, last=False), 0.999)
+    got = _run_split(tt, tt._layers[-1], x, prepared, last=True)
+    _check_pcc(f"{name}/last_block", expected[:, ll:], got, 0.999)
+
+
 def _normalized(q: torch.Tensor, prepared: TimestralHostInputs) -> torch.Tensor:
     """Raw-space quantiles back to the model's asinh space, where bf16 error is not amplified by sinh."""
     return torch.asinh((q - prepared.anchor_loc[..., None]) / prepared.anchor_scale[..., None])
@@ -238,39 +297,55 @@ def _check_predict_block(tt, model, context, observed, group_ids, horizon, *, na
     log_golden(f"tt_{name}/median", got[..., model.config.median_index])
 
 
-@pytest.mark.parametrize("case", ["univariate", "missing", "multivariate"])
+@pytest.mark.parametrize(
+    "case", ["univariate", "missing", "multivariate", "split_univariate", "split_missing", "split_multivariate"]
+)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_predict_block_tiny_pcc(mesh_device, case):
+    """``split_*``: shapes that take the split context / decoder streams."""
+    from models.experimental.timestral.tt.model import split_rows_per_block
+
     model = tiny_model()
     tt = _tt_model(mesh_device, model)
     ps = model.config.patch_size
-    if case == "multivariate":
+    split = case.startswith("split_")
+    horizon = SPLIT_H if split else 3
+    if split:
+        series_count, variates = (4, 4) if case == "split_multivariate" else (SPLIT_ROWS, 1)
+        context = series(series_count, variates, SPLIT_L * ps).reshape(SPLIT_ROWS, -1)
+        group_ids = torch.arange(series_count).repeat_interleave(variates)
+    elif case == "multivariate":
         context = series(3, 4, 6 * ps).reshape(12, -1)
         group_ids = torch.arange(3).repeat_interleave(4)
     else:
         context = series(4, 1, 8 * ps)[:, 0]
         group_ids = torch.arange(4)
     observed = torch.ones_like(context, dtype=torch.bool)
-    if case == "missing":
+    if case.endswith("missing"):
         observed[0, 40:75] = False
         observed[2, : 2 * ps + 5] = False
         context = torch.where(observed, context, torch.zeros_like(context))
-    _check_predict_block(tt, model, context, observed, group_ids, 3, name=f"tiny_{case}", pcc_norm=0.99, pcc_raw=0.99)
+    rows, ll = context.shape[0], context.shape[1] // ps
+    assert (split_rows_per_block(rows, ll, horizon) is not None) == split
+    _check_predict_block(
+        tt, model, context, observed, group_ids, horizon, name=f"tiny_{case}", pcc_norm=0.99, pcc_raw=0.99
+    )
 
 
 @pytest.mark.parametrize("name", ["Timestral-5M", "Timestral-209M"])
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_predict_block_pretrained_pcc(mesh_device, name):
-    """Real weights: 8 univariate series of 2048 steps, plus 2 series of 3 variates, horizon 64 and 1024."""
+    """Real weights: 16 univariate series of 2048 steps, plus 2 series of 3 variates, horizon 64 and 1024.
+    Horizon 64 (2 patches) takes the split context / decoder streams, the others the single stream."""
     model = load_checkpoint(name)
     tt = _tt_model(mesh_device, model)
-    context = series(8, 1, 2048)[:, 0]
+    context = series(16, 1, 2048)[:, 0]
     observed = torch.ones_like(context, dtype=torch.bool)
     _check_predict_block(
-        tt, model, context, observed, torch.arange(8), 2, name=f"{name}_uni_h2", pcc_norm=0.99, pcc_raw=0.98
+        tt, model, context, observed, torch.arange(16), 2, name=f"{name}_uni_h2", pcc_norm=0.99, pcc_raw=0.98
     )
     _check_predict_block(
-        tt, model, context, observed, torch.arange(8), 32, name=f"{name}_uni_h32", pcc_norm=0.99, pcc_raw=0.98
+        tt, model, context, observed, torch.arange(16), 32, name=f"{name}_uni_h32", pcc_norm=0.99, pcc_raw=0.98
     )
     multi = series(2, 3, 1024, seed=1).reshape(6, -1)
     _check_predict_block(

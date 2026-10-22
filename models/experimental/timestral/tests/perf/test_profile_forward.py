@@ -11,7 +11,7 @@ Signposts (for ``tt-perf-report --start-signpost/--end-signpost``):
     TIMESTRAL_START / TIMESTRAL_END       the whole reduced forward
     embed_start / embed_end               patch embedding and forecast-query layout
     layer_<kind>_start / layer_<kind>_end one transformer block of each kind
-    layer_last_start / layer_last_end     the last block, cut to the decoder slots
+    layer_last_start / layer_last_end     the last block, cut to the decoder slots (or stream)
     head_start / head_end                 out_norm, quantile head
 
 The full-model device time is estimated as embed + sum(count[kind] * layer[kind]) + head, with the
@@ -74,10 +74,10 @@ def test_profile_predict_block(mesh_device):
         mark("embed_end")
         for kind, layer in zip(kinds, tt._layers):
             mark(f"layer_{kind}_start")
-            x = layer(x, inputs.attention)
+            x = tt.run_layer(layer, x, inputs)
             mark(f"layer_{kind}_end")
         mark("layer_last_start")
-        x = tt._layers[-1](x, inputs.attention, decoder=inputs.decoder)
+        x = tt.run_layer(tt._layers[-1], x, inputs, last=True)
         mark("layer_last_end")
         mark("head_start")
         out = tt.head(x)

@@ -208,6 +208,7 @@ def linear_split(x, weight, precision: TtTimestralPrecision, chunks: int):
         math.prod(x_shape[:-1]) // TILE,
         k // TILE,
         n // (chunks * TILE),
+        chunks,
         max_dest=_max_dest(precision),
     )
     return ttnn.experimental.minimal_matmul_split(

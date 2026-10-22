@@ -20,8 +20,10 @@ _L1_TILE_BUDGET = 640
 _MAX_IN0_BLOCK_W = 12
 _MAX_OUT_BLOCK_H = 12
 _MINIMAL_BLOCK = 8
-_SPLIT_M_BLOCK = 16
-_SPLIT_N_BLOCK = 4
+# minimal_matmul_split ((M, K, N) blocks, subblock) per chunk count, from tests/perf/sweep_qkv_split.py:
+#   2  [Wk | Wv]       swept as [Wv | Wg] (same shape): 1.90 ms vs 2.58 ms as two linears (doc/optimize/iter_04)
+#   3  [Wq | Wk | Wv]  2.79 ms vs the fused 2D linear's 2.76 ms (doc/optimize/iter_03)
+_SPLIT_BLOCKS = {2: ((16, 4, 6), (8, 1)), 3: ((16, 12, 4), (2, 4))}
 
 
 def _largest_divisor_at_most(n: int, cap: int) -> int:
@@ -99,17 +101,18 @@ def minimal_matmul_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, *, max
     )
 
 
-def split_config(grid, m_tiles: int, k_tiles: int, chunk_tiles: int, *, max_dest: int = 8):
-    """``minimal_matmul_split`` blocks M 16 / K 12 / N 4 (QKV 2.79 ms vs the fused 2D linear's 2.76 ms;
-    ``tests/perf/sweep_qkv_split.py``, ``doc/optimize/iter_03``)."""
+def split_config(grid, m_tiles: int, k_tiles: int, chunk_tiles: int, chunks: int, *, max_dest: int = 8):
+    """``minimal_matmul_split`` config for ``chunks`` outputs of ``chunk_tiles`` columns each."""
     import ttnn
 
-    m_block = min(_SPLIT_M_BLOCK, m_tiles)
-    n_block = _largest_divisor_at_most(chunk_tiles, _SPLIT_N_BLOCK)
-    sub_h, sub_w = _subblock(m_block, n_block, max_dest)
+    (m_cap, k_cap, n_cap), (sub_h, sub_w) = _SPLIT_BLOCKS[chunks]
+    m_block = min(m_cap, m_tiles)
+    n_block = _largest_divisor_at_most(chunk_tiles, n_cap)
+    if m_block % sub_h or n_block % sub_w or sub_h * sub_w > max_dest:
+        sub_h, sub_w = _subblock(m_block, n_block, max_dest)
     return ttnn.MinimalMatmulConfig(
         M_block_size=m_block,
-        K_block_size=_largest_divisor_at_most(k_tiles, _MAX_IN0_BLOCK_W),
+        K_block_size=_largest_divisor_at_most(k_tiles, k_cap),
         N_block_size=n_block,
         subblock_h=sub_h,
         subblock_w=sub_w,
