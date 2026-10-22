@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "api/debug/assert.h"
+
 // Device HW DataFormat from tensix_types.h. Declared here so get_dataformat(token) can return it
 // without including the arch-specific header. LLKMetadata::kNoFormat is DataFormat::Invalid (0xFF).
 enum class DataFormat : uint8_t;
@@ -35,5 +37,9 @@ struct LLKMetadata {
     uint8_t num_faces_r_dim = 2;
     uint8_t num_faces_c_dim = 2;
 };
+
+// Deliberately non-constexpr: a missing format fails constant evaluation even when ASSERT is disabled.
+// Runtime callers retain the configured device assertion behavior.
+inline void data_format_metadata_not_set() { ASSERT(false); }
 
 }  // namespace binding_details

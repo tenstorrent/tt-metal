@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -42,6 +43,42 @@ TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
 // alias must JIT under a Blackhole mock; WH Gen1 cannot include that header.
 // Fold checks for LLKOperandFrom (SPEC Part II). Reuses ProgramSpecTestBlackhole from mock_device_fixtures.hpp.
 using LLKOperandInterop = ProgramSpecTestBlackhole;
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    }};
+    spec.kernels[0].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/scratchpad_binding_token.h"
+void kernel_main() {
+    constexpr auto format = get_dataformat(scratch::pad);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
+}
+
+// A compute-bound DFB must have host format metadata; construct an id-only token to exercise the getter's guard.
+TEST_F(ProgramSpecTestGen1, CPU_DFBWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/dfb_binding_token.h"
+void kernel_main() {
+    constexpr DFBBindingToken<> token{0};
+    constexpr auto format = get_dataformat(token);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
+}
 
 TEST_F(LLKOperandInterop, ScratchpadWithoutMetadataFailsToFormOperand) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -224,6 +261,24 @@ TensorParameter MakeL1ShardedTiledTensor(std::string name, std::array<uint32_t, 
         /*num_cores=*/1,
         tt::tt_metal::Layout::TILE,
         Tile{tile_shape});
+}
+
+// Generated tensor tokens always have a format. Preserve rejection of manually constructed invalid tokens as well.
+TEST_F(ProgramSpecTestGen1, CPU_TensorWithoutMetadataFailsToGetDataFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeL1ShardedTiledTensor("a", {32, 32})};
+    BindTensorParameterToKernel(spec.kernels[0], "a", "a");
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/tensor/tensor_binding_token.h"
+void kernel_main() {
+    constexpr decltype(tensor::a) token{binding_details::LLKMetadata{}};
+    constexpr auto format = get_dataformat(token);
+    (void)format;
+}
+)"};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
 }
 
 // The existing dataflow include path must define the token overloads without the Blackhole-only LLK header.

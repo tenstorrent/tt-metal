@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "api/debug/assert.h"
 #include "internal/llk_metadata.h"
 
 // Forward declaration only: the token grants Scratchpad<T> access to its members, but nothing
@@ -70,10 +69,12 @@ private:
  * See: `ScratchpadSpec::data_format_metadata` in the Metal host API for configuration.
  *
  * pre-condition: `ScratchpadSpec::data_format_metadata` associated with this scratchpad has been set to a
- * non-empty value on the host.
+ * non-empty value on the host. Missing metadata fails constant evaluation regardless of device assertion settings.
  */
 constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token) {
-    ASSERT(token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat);
+    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
+        binding_details::data_format_metadata_not_set();
+    }
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 

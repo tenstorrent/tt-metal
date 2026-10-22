@@ -69,9 +69,13 @@ private:
 /**
  * Extract DataFormat metadata associated with a `TensorBindingToken`.
  * This metadata describes the data format of the `MeshTensor` that this token represents.
+ * Missing metadata fails constant evaluation regardless of device assertion settings.
  */
 template <uint32_t Cta, uint32_t Addr>
 constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) {
+    if (token.llk_metadata_.format == binding_details::LLKMetadata::kNoFormat) {
+        binding_details::data_format_metadata_not_set();
+    }
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 
