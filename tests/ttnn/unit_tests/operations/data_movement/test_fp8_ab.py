@@ -51,7 +51,8 @@ def _bits(case, mode, ct, values, actual):
         return
     exp = values.to(torch.float8_e4m3fn).view(torch.uint8)
     bad = int((exp != actual).sum())
-    print(f"RAB BITS {case} ct{ct} bad={bad} of {exp.numel()}", flush=True)
+    with open(os.environ.get("RAB_BITS_FILE", "/tmp/rab_bits.txt"), "a") as f:
+        f.write(f"RAB BITS {case} ct{ct} bad={bad} of {exp.numel()}\n")
 
 
 CTS = [9, 11, 13, 15, 17, 19, 12]
