@@ -209,8 +209,9 @@ void kernel_main() {
                             out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                         }
 
-                        noc.async_write_barrier();
-
+                        // Tiles only need to leave the buffer before the pop: the writes
+                        // complete at the final barrier (or before the fused op's signal).
+                        noc.async_writes_flushed();
                         dfb_out.pop_front(out_subblock_tile_count);
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
@@ -235,6 +236,7 @@ void kernel_main() {
 
         if (fuse_op_reduce_scatter) {
             // Signal reduce_scatter to go
+            noc.async_write_barrier();  // the output lands before reduce-scatter reads it
             op_signaler.synchronize_workers_and_signal_op(0);
         }
     }
@@ -246,4 +248,5 @@ void kernel_main() {
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);
 #endif
+    noc.async_write_barrier();
 }
