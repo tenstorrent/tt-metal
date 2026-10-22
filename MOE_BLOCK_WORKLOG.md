@@ -819,3 +819,15 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   into the router cores (SE-RTROUT) 18 -> 43 us - ~5 GB/s into a router core; not the column's vertical links (a
   row-tile remap: no change), not the DRAM columns (router tiles on the west block only: the slow cores moved to
   x 1-4) - reverted, needs a traffic-only probe; the ports' routing sends (SE-RASEND) ~25 us a chip.
+
+### Housekeeping: the superseded v1 / v2 heads and their tests removed
+- Deleted: tt/lin2c.py (the v1 chunked engine), tt/se_engine.py (v2), tt/x_gather.py (v2's gather), tt/tp_gather.py
+  (v1's store-and-forward gather), fused_head's HeadLayout / HeadXChain / HeadSE; tests test_lin2c, test_lin2c_chain,
+  test_lin2d_ref, test_head_xchain, test_se_engine, test_head_se, test_tp_gather (the v1 / v2 tests failed on HEAD:
+  NaN / 0.985 / 0.85). The sections above about them stay as history.
+- test_tp_collectives: every candidate asserted against the host's collective of each call's x (moves exact, sums
+  within 2^-6 of the largest); a2a_generic is the in / out-swapped call (the other one computes the transposed
+  split: it never matched); test_agmm_bar keeps the ag + mm2d bar (all_gather_minimal_matmul_async throws in its
+  program build at these shapes).
+- Green: test_fused_head_parts (se_engine3, head_se3 with RS / router / routing / latent), test_tp_collectives,
+  test_agmm_bar, test_mrs_bar, test_moe_block (4 cases, 3 checked calls each), protocol models 47, mock Galaxy 2.
