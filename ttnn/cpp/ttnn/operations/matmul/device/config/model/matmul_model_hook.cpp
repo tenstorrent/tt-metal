@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/matmul/device/config/model/matmul_model_hook.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -19,6 +21,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace ttnn::operations::matmul::model {
 
@@ -227,28 +230,32 @@ std::optional<Call> describe(
     call.hw = HardwareDesc::blackhole(grid.x, grid.y, 0);
     call.hw.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    call.key = fmt::format(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}x{}",
+    // The pick cache key: an exact binary encoding of everything the pick depends on (the encoding the program
+    // cache uses). Built on every call, so it must stay cheap: no text formatting.
+    const bool has_bias = bias.has_value();
+    call.key = ttsl::hash::canonical_key(
         a.logical_shape(),
         a.padded_shape(),
         b.logical_shape(),
         b.padded_shape(),
-        static_cast<int>(a.dtype()),
-        static_cast<int>(b.dtype()),
-        static_cast<int>(*attr.output_dtype),
+        a.dtype(),
+        b.dtype(),
+        *attr.output_dtype,
         a.memory_config(),
         b.memory_config(),
         attr.output_mem_config,
         attr.transpose_a,
         attr.transpose_b,
-        bias.has_value()
-            ? fmt::format("{}/{}/{}", bias->padded_shape(), static_cast<int>(bias->dtype()), bias->memory_config())
-            : std::string("none"),
-        static_cast<int>(fidelity),
+        has_bias ? std::optional(bias->padded_shape()) : std::nullopt,
+        has_bias ? std::optional(bias->dtype()) : std::nullopt,
+        has_bias ? std::optional(bias->memory_config()) : std::nullopt,
+        fidelity,
         approx,
-        fmt::format("{}{}{}", fp32_acc, l1_acc, full_sync),
+        fp32_acc,
+        l1_acc,
+        full_sync,
         attr.bcast_batch.value_or(false),
-        static_cast<int>(device->arch()),
+        device->arch(),
         grid.x,
         grid.y);
     return call;
@@ -349,6 +356,7 @@ std::optional<MatmulProgramConfig> choose(
     const std::optional<const Tensor>& bias,
     const std::optional<Tensor>& output,
     const ttnn::prim::MatmulParams& attributes) {
+    const auto start = std::chrono::steady_clock::now();
     std::string why;
     auto call = describe(a, b, bias, attributes, why);
     if (!call) {
@@ -385,6 +393,21 @@ std::optional<MatmulProgramConfig> choose(
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
+    // Without packer L1 accumulation or fp32 dest accumulation the factories keep partial sums in the output format
+    // between K blocks, so with a block-float output every extra K block re-quantizes them (the model scores time,
+    // not accuracy). Keep the candidates with the fewest K blocks.
+    const MatmulDesc& p = call->desc;
+    if (!p.packer_l1_acc && !p.fp32_dest_acc && (p.out == DataType::kBfloat8B || p.out == DataType::kBfloat4B) &&
+        !candidates.empty()) {
+        auto k_blocks = [&](const Candidate& c) {
+            return (p.Kt + c.blocking.in0_block_w - 1) / c.blocking.in0_block_w;
+        };
+        const auto fewest = k_blocks(
+            *std::min_element(candidates.begin(), candidates.end(), [&](const Candidate& x, const Candidate& y) {
+                return k_blocks(x) < k_blocks(y);
+            }));
+        std::erase_if(candidates, [&](const Candidate& c) { return k_blocks(c) > fewest; });
+    }
     const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
     Pick pick;
     pick.description = candidates.empty() ? "no candidate fits L1" : "the model can't score any candidate";
@@ -415,6 +438,10 @@ std::optional<MatmulProgramConfig> choose(
     if (!pick.candidate && rejected > 0) {
         pick.description = fmt::format("all {} scored candidates rejected", rejected);
     }
+    // Time of this first (uncached) selection; later calls reuse the pick and its description
+    pick.description += fmt::format(
+        " (selected in {} us)",
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
     return use(pick_cache().insert(key, std::move(pick)));
 }
 

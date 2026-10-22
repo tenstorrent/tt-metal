@@ -154,6 +154,24 @@ def test_explicit_program_config_is_untouched(device, model_on):
     assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.999)
 
 
+def test_block_float_output_keeps_precision(device, model_on):
+    """bfp8 output without packer L1 or fp32 accumulation: partial sums are kept in bfp8 between K blocks, so the
+    pick must not split K finely (gpt-oss decode LM head, K = 2880 is 90 tiles)."""
+    torch.manual_seed(0)
+    a = torch.randn(1, 1, 32, 2880).bfloat16()
+    b = (torch.randn(1, 1, 2880, 4096) / 2880**0.5).bfloat16()
+    ta = ttnn.from_torch(
+        a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    tb = ttnn.from_torch(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False
+    )
+    out = ttnn.matmul(ta, tb, dtype=ttnn.bfloat8_b, compute_kernel_config=config)
+    assert ttnn.matmul_model_last_pick().startswith("model: "), ttnn.matmul_model_last_pick()
+    assert_with_pcc(ttnn.to_torch(ta).float() @ ttnn.to_torch(tb).float(), ttnn.to_torch(out), 0.99)
+
+
 @pytest.mark.parametrize("a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b", CASES[:3])
 def test_flag_off_is_the_default(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
     """Flag off (the default): the model is never consulted and matmul's results are bit-identical run to run."""
