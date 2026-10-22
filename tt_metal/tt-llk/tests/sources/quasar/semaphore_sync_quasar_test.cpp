@@ -50,13 +50,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_dest_init_();
         _llk_unpack_unary_operand_to_dest_init_(bfd_a);
         // Seed the semaphores this thread posts (max N = sections in flight: 1 in SyncFull, 2 in SyncHalf) in front of
-        // its first wait and post on them, then raise the startup barrier behind the seeds. Math passes it before its
-        // first wait on UNPACK_MATH, so no SEMINIT lands on a pending SEMWAIT and no post precedes its SEMINIT (seen on
-        // the emulator as the unpacker running through every tile before the packer's first read).
+        // its first wait and post on them. Math spins until the first UNPACK_MATH post before its first wait, so no
+        // SEMINIT lands on a pending SEMWAIT.
         constexpr std::uint32_t N = (dest_sync == ckernel::DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
-        _llk_sync_barrier_raise_(semaphore::UNPACK_INIT);
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);
@@ -104,12 +102,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (unpack_to_dest)
     {
-        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts), then pass the startup barrier
-        // the unpack thread raises behind its seeds of UNPACK_MATH / UNPACK_PACK, so the first wait below is armed only
-        // once those exist. Per section: wait for the unpacker's data, hand the section to pack (MATH_PACK post and, in
-        // SyncHalf, the math-side bank flip), then release the unpacker's data-ready credit.
+        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts), then spin until the unpacker's
+        // first UNPACK_MATH post, so the first wait below is armed only after its seed. Per section: wait for the
+        // unpacker's data, hand the section to pack (MATH_PACK post and, in SyncHalf, the math-side bank flip), then
+        // release the unpacker's data-ready credit.
         _llk_math_pack_sync_init_<dest_sync>();
-        _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
+        _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_math_wait_for_dest_available_();
