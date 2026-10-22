@@ -133,19 +133,21 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         state: Optional[PrefillAttentionState] = None,
         shared: Optional[PrefillShared] = None,
         engram_rows: Optional[ttnn.Tensor] = None,
+        image_mask: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """The block over one prompt chunk: ``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> the same pair
         for the next layer, both bf16 TILE. ``hidden_streams`` and ``pre_mix`` are left intact.
 
         ``state`` is this layer's attention state and ``shared`` the prompt's :class:`~.attention.PrefillShared`
         (see :meth:`~.attention.DeepSeekV41PrefillAttention.forward`). An Engram layer takes the chunk's host-looked-up
-        ``engram_rows`` ``[1, 1, T, kin]`` bf16 TILE; any other layer takes none.
+        ``engram_rows`` ``[1, 1, T, kin]`` bf16 TILE; any other layer takes none. ``image_mask`` (``[1, T]`` uint32
+        ROW_MAJOR, 1 inside an image span) makes the router rank those tokens with ``bias_vl``.
         """
         if state is None:
             state = self.new_state()
         self._check_chunk(hidden_streams, state, None)
         return self._v41_block(
-            hidden_streams, pre_mix, lambda normed: self.self_attn(normed, state, shared), engram_rows
+            hidden_streams, pre_mix, lambda normed: self.self_attn(normed, state, shared), engram_rows, image_mask
         )
 
     def forward_static(
@@ -158,15 +160,19 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         engram_rows: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Trace-safe :meth:`forward` (see :class:`~.model.DeepSeekV41TracedPrefill`): the attention state is the
-        persistent ``bufs``, the chunk's inputs come from ``step`` and the stage's group state is ``shared``."""
+        persistent ``bufs``, the chunk's inputs (the image mask among them) come from ``step`` and the stage's group
+        state is ``shared``."""
         return self._v41_block(
             hidden_streams,
             pre_mix,
             lambda normed: self.self_attn.forward_static(normed, bufs, step, shared),
             engram_rows,
+            step.image_mask,
         )
 
-    def _v41_block(self, hidden_streams, pre_mix, attend, engram_rows) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _v41_block(
+        self, hidden_streams, pre_mix, attend, engram_rows, image_mask=None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """The shared body: ``attend(normed [1, 1, T, D]) -> [1, 1, T, D]`` is the only part that differs."""
         if (self.engram is None) != (engram_rows is None):
             raise ValueError(f"layer {self.layer_idx}: engram_rows go to an Engram layer, and only to one")
@@ -187,7 +193,7 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         ttnn.deallocate(attn_pre)
         normed = self._norm(collapsed, self.post_attention_layernorm_weight)
         ttnn.deallocate(collapsed)
-        mlp_out = self.mlp(normed)
+        mlp_out = self.mlp(normed, image_mask=image_mask)
         ttnn.deallocate(normed)
         out = mix_streams(post, comb, mlp_out, mixed)
         for tensor in (post, comb, mlp_out, mixed):

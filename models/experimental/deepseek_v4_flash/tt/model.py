@@ -3759,9 +3759,14 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
             raise ValueError(f"expected token ids [T] or [1, T], got {tuple(ids.shape)}")
         if ids.numel() == 0 or ids.shape[1] % ALIGNMENT:
             raise ValueError(f"prompt length {ids.shape[1]} must be a positive multiple of {ALIGNMENT}")
-        if int(ids.min()) < 0 or int(ids.max()) >= self.vocab_size:
-            raise ValueError(f"token ids must lie in [0, {self.vocab_size})")
+        if int(ids.min()) < 0 or int(ids.max()) >= self.embedding_rows:
+            raise ValueError(f"token ids must lie in [0, {self.embedding_rows})")
         return ids.long()
+
+    @property
+    def embedding_rows(self) -> int:
+        """Rows of the embedding table, so the ids :meth:`_host_ids` accepts: the vocabulary here."""
+        return self.vocab_size
 
     def _upload_ids(self, ids: torch.Tensor, device: Optional[ttnn.MeshDevice] = None) -> ttnn.Tensor:
         """``[1, T]`` ids as the uint32 ROW_MAJOR tensor the embedding and hash routers read (on every rank)."""
