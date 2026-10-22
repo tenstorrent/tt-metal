@@ -286,9 +286,10 @@ def _run_hw_free(monkeypatch, run_types, run_count):
     )
     # run() bumps the PerfConfig.TEST_COUNTER ClassVar, which the autouse
     # perf_report fixture reads to decide whether to write a CSV. This module
-    # carries no perf marker, so it runs in the ordinary CI session; restore the
-    # counter on teardown so we do not leave empty perf_data artefacts for every
-    # later module on the worker (register it with monkeypatch to auto-restore).
+    # carries no perf marker and runs in the host-only session started by
+    # tests/run_hardware_free.sh; restore the counter on teardown so we do not
+    # leave empty perf_data artefacts for every later module on the worker
+    # (register it with monkeypatch to auto-restore).
     monkeypatch.setattr(PerfConfig, "TEST_COUNTER", PerfConfig.TEST_COUNTER)
 
     # Profiler read seam: synthetic events, a fresh seed per call (call = run).

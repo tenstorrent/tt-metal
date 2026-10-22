@@ -9,11 +9,10 @@ to be its own pytest rootdir — nested ``pytest_plugins`` is rejected by pytest
 and that constraint is itself part of the contract, so the fixture cannot simply
 be collected into this run.
 
-This wrapper bridges that: it is collected by the existing jobs (which all run
-pytest from ``tests/python_tests/``) and drives the fixture as a subprocess with
-its own rootdir. No CI configuration is needed, and a harness change that would
-break an external consumer fails in the PR that makes it rather than during a
-later submodule uplift.
+This wrapper bridges that: ``tests/run_hardware_free.sh`` collects it (pytest
+from ``tests/python_tests/``) and drives the fixture as a subprocess with its
+own rootdir. A harness change that would break an external consumer fails in
+the PR that makes it rather than during a later submodule uplift.
 
 A failure here is an API break. Fix the change, or land it with a deprecation
 path — do not adjust the fixture until it passes again.
@@ -31,12 +30,12 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE_DIR = Path(__file__).resolve().parents[1] / "out_of_tree"
-# Deliberately below the ambient pytest-timeout budget CI passes (--timeout=60
-# in setup-and-test.yml and collect-test-durations.yml): our own timeout has to
-# fire first, because ``_run_fixture`` turns it into a failure carrying the
-# child's output, whereas pytest-timeout reports a bare kill. Measured cost of
-# the child in CI: 7.1s on wormhole, so the headroom is ample.
+FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
+# Deliberately below the pytest-timeout budget tests/run_hardware_free.sh passes
+# (--timeout=120): our own timeout has to fire first, because ``_run_fixture``
+# turns it into a failure carrying the child's output, whereas pytest-timeout
+# reports a bare kill. Measured cost of the child in CI: 7.1s on wormhole, so
+# the headroom is ample.
 TIMEOUT_SECONDS = 50
 
 # Node ids the child must report as passing. Checking exact ids, from the junit
@@ -188,6 +187,7 @@ def _assert_the_child_ran_the_fixture(
     # skipping — an arch marker, a guard clause, a mode that returns early — is
     # the same silent loss of coverage this check exists to catch, and it would
     # otherwise still emit a <testcase> element.
+    # The driver compile stays required only when hw/inc is present.
     root = ET.parse(report).getroot()
     ran = {
         case.get("name", "").split("[")[0]
@@ -197,7 +197,11 @@ def _assert_the_child_ran_the_fixture(
         )
     }
 
-    missing = sorted(EXPECTED_FIXTURE_NODE_IDS - ran)
+    expected = EXPECTED_FIXTURE_NODE_IDS
+    if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+        expected = expected - {"test_out_of_tree_driver_compiles"}
+
+    missing = sorted(expected - ran)
     assert not missing, (
         f"the fixture did not run {missing}. Either the child collected the "
         "wrong module, those tests stopped running, or they were renamed "

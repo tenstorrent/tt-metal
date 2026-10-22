@@ -23,13 +23,23 @@ configuration. CSR 0x7c0 is write-only in this codebase (every use is
 """
 
 import struct
+from pathlib import Path
 
+import pytest
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
+
+# Vendored tt-llk: parents[4] is tt_metal. A standalone checkout has no hw/inc,
+# and both the ELF compile and the firmware diff need that tree.
+if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+    pytest.skip(
+        "tt-metal hw/inc is absent; gathering compiles and diffs firmware against that tree",
+        allow_module_level=True,
+    )
 
 # RISC-V encodings of the two CSR ops in configure_gathering(). Both hard-code t1
 # (x6) in the asm template, so the encodings are fixed:

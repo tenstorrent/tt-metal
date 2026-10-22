@@ -20,9 +20,12 @@ efficiency-metric names) from drifting. Derivation helpers live in the device-fr
 """
 
 import ast
+import sys
 from pathlib import Path
 
-from perf_schema_derive import (
+# tt-llk/perf is not a package. Same path insert the other gate tests use.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "perf"))
+from perf_schema_derive import (  # noqa: E402
     PARAM_BASES,
     ROOT,
     class_field_specs,
