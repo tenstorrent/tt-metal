@@ -1102,6 +1102,9 @@ class Orchestrator:
                 previous = "\n".join(problems)
                 if aborts > OV.MAX_ABORTS:
                     return self.stop_task(task, f"aborted by the overseer {aborts} times; waiting for a person")
+                if self.pause_file.exists():  # F147: abort + pause stops here; no next attempt starts
+                    self.echo(f"  [{task['id']}] paused after the overseer's abort; `resume` starts the next attempt")
+                    raise SystemExit(PAUSED)
                 continue
             used += 1
             if task.get("approval") and not problems and self.needs_human(task):
@@ -1851,6 +1854,21 @@ class Orchestrator:
         return out
 
 
+def _live_orchestrator(pid_file: Path) -> int | None:
+    """F147: the pid in the run's pid file when that process is alive and is not this one."""
+    try:
+        pid = int(pid_file.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    if pid == os.getpid():
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return pid
+
+
 def _place_fixes(orch: Orchestrator) -> bool:
     """F77: every queued overseer fix becomes a ledger task placed just before the first unpassed task."""
     jobs = OV.take_fixes(orch.spec.bringup_dir)
@@ -1970,6 +1988,10 @@ def main(argv=None) -> int:
     OV.agent_finished(orch.run_dir)  # F95: an agent record left by a crash names a dead (or reused) process
     (orch.run_dir / OV.ABORT_FILE).unlink(missing_ok=True)
     pid_file = orch.run_dir / W.PID_FILE  # the supervisor's watch (watch.py) tells a stopped run from a quiet one
+    other = _live_orchestrator(pid_file)
+    if other:  # F147: two orchestrators on one run raced (DeepSeek-V4.1 FIX.9: a second agent attempt beside a gate)
+        print(f"another orchestrator (pid {other}) runs this run; stop it first (pause, then kill)", file=sys.stderr)
+        return STOPPED
     pid_file.write_text(f"{os.getpid()} {now()}\n")
     # F70: the run's timeline (start / exit with its code) and every device run's lock wait and run time
     os.environ.setdefault("TT_DEVICE_TIMING_LOG", str(orch.run_dir / TL.DEVICE_LOG))
