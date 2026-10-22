@@ -1776,8 +1776,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         std::uint32_t end_step                = (i_start_phase == i_end_phase) ? i_end_step : 4;
                         std::uint32_t sorted_seq_length       = 1 << num_steps;
                         std::uint32_t datums_compared         = 0;
+                        // BOTTOM_DEAD: phase 5 keeps and sorts only the first tile.
+                        const bool top_only = BOTTOM_DEAD && ph == 5;
                         // The second tile alone is the second 32-datum sequence of phase 4, sorted in the flipped direction.
-                        const bool top_only                         = BOTTOM_DEAD && ph == 5;
                         const std::uint32_t total_datums_to_compare = (tile1_only || top_only) ? 32 : 64;
                         const bool pass_dir                         = tile1_only ? !static_cast<bool>(idir) : static_cast<bool>(idir);
                         for (std::uint32_t ss = start_step; ss > end_step; ss--)
@@ -1788,7 +1789,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             std::uint32_t dist       = (ss == 5) ? 16 : 32;
                             if constexpr (TOPK_STEP_LOADMACRO && !STABLE_SORT)
                             {
-                                bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dist, pass_dir, tile1_only || top_only, sorted_seq_length);
+                                bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(
+                                    dist, pass_dir, tile1_only || top_only, sorted_seq_length);
                             }
                             else if (CT_STEPS && i_start_phase != i_end_phase)
                             {
@@ -1798,7 +1800,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 }
                                 else if (ph == 5)
                                 {
-                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, BOTTOM_DEAD ? 32 : 64, 64>(pass_dir);
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, BOTTOM_DEAD ? 32 : 64, 64>(
+                                        pass_dir);
                                 }
                                 else
                                 {
@@ -2532,7 +2535,7 @@ template <
     bool RANK_STAMPED,
     TopkTieOrder TIE_ORDER,
     bool STRAIGHT_LINE,
-    bool REV_BY_MODE9 = false,
+    bool REV_BY_MODE9    = false,
     bool FIRST_HALF_ONLY = false>
 inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
@@ -2764,7 +2767,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                 default:
                     std::uint32_t num_steps               = ph + 1;
                     std::uint32_t sorted_seq_length       = 1 << num_steps;
-                    // FIRST_HALF_ONLY (K 32 with skip_second): the second tile is dead after the distance 32 step, so its sort is skipped.
+                    // FIRST_HALF_ONLY (K 32 with skip_second): only the first tile is kept, so the last step sorts the first tile alone.
                     std::uint32_t total_datums_to_compare = FIRST_HALF_ONLY ? 32 : 64;
                     if constexpr (STRAIGHT_LINE)
                     {
@@ -2784,11 +2787,13 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         if (idir)
                         {
-                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, FIRST_HALF_ONLY ? 32 : 64>(sorted_seq_length);
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, FIRST_HALF_ONLY ? 32 : 64>(
+                                sorted_seq_length);
                         }
                         else
                         {
-                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false, FIRST_HALF_ONLY ? 32 : 64>(sorted_seq_length);
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false, FIRST_HALF_ONLY ? 32 : 64>(
+                                sorted_seq_length);
                         }
                     }
                     else
