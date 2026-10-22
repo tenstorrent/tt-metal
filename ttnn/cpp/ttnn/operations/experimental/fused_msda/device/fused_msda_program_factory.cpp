@@ -169,13 +169,10 @@ constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
 // D fall back to the reader scattering sticks into tile faces.
 bool uses_rm_staging(const MSDAShapes& s) { return s.head_dim % kTileWidth == 0; }
 
-// Split gather: the writer RISC gathers rows [SPLIT_ROW, 32) of every
-// row-major block on its own NoC (see msda_gather_rows.hpp), since one
-// RISC's decode and read issue bound the reader. Measured on Blackhole only,
-// with value in L1 and in DRAM (both faster than the reader-only gather);
-// Wormhole keeps the reader-only gather until it is measured.
-// The scatter path (D % 32 != 0) is always reader-only. Decided only here, by
-// the CB plan; create_descriptor reads the decision back from the plan.
+// Split gather (msda_gather_rows.hpp): the writer RISC takes part of every
+// row-major block. Blackhole only, as Wormhole has not been measured; the
+// scatter path (D % 32 != 0) is always reader-only. Decided only here, by the
+// CB plan; create_descriptor reads the decision back from the plan.
 bool uses_split_gather(const MSDAShapes& s, tt::ARCH arch) { return uses_rm_staging(s) && arch == tt::ARCH::BLACKHOLE; }
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {

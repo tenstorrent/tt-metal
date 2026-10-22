@@ -495,7 +495,7 @@ semaphores count points instead of flagging valid / invalid. Splitting by point
 instead, with each RISC its own CBs as `grid_sample`'s split reader does, would
 duplicate the input, `x0` / `y0` and geometry pipes and make compute alternate
 between them; the row split leaves compute unchanged and adds one 64 B CB.
-Wormhole keeps the reader-only gather until the split is measured there.
+Wormhole keeps the reader-only gather; the split has not been measured there.
 
 ---
 

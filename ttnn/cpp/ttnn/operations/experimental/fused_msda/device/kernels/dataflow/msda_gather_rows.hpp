@@ -75,12 +75,10 @@ constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 // tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
 //
 // The reader also builds the next point's geometry tiles while the writer
-// gathers, so it takes fewer rows. 15 is the measured optimum on Blackhole for
-// the BEVFormer nuscenes_base shape with value in L1 (D = 32,
-// test_fused_msda_perf.py); with value in DRAM, 13-16 are within run-to-run
-// noise of each other. The time is not linear in the split, so re-measure
-// rather than derive it. test_fused_msda_v1_masks_out_of_bounds_corners puts
-// v_rows on SPLIT_ROW and SPLIT_ROW + 1 through its own copy of this value;
+// gathers, so it takes fewer rows. 15 is measured on Blackhole (nuscenes_base,
+// D = 32, test_fused_msda_perf.py); the time is not linear in the split, so
+// re-measure rather than derive it. test_fused_msda_v1_masks_out_of_bounds_corners
+// puts v_rows on SPLIT_ROW and SPLIT_ROW + 1 through its own copy of this value;
 // change both together.
 constexpr uint32_t SPLIT_ROW = 15;
 static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS);
@@ -98,6 +96,12 @@ static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS
 // rather than a CB because the writer fills part of a block the reader
 // reserved, and x0/y0 must stay at the reader's front until the writer has
 // decoded them.
+//
+// Ordering: volatile accesses keep the mailbox stores ahead of ready, and a
+// compiler barrier keeps the writer's plain zero stores ahead of done. That
+// they also reach L1 in that order assumes one RISC's L1 stores land in
+// program order. The L1 cache note in internal/tt-1xx/cache.h covers
+// visibility (the waiter invalidates on every poll), not store order.
 
 inline void post_point(uint32_t mailbox_l1, const PointArgs& a) {
     const uint32_t* src = reinterpret_cast<const uint32_t*>(&a);

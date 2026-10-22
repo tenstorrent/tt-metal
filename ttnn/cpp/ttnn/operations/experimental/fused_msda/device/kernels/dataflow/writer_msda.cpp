@@ -18,10 +18,8 @@
 //
 // Generic writer: one head's stick at a byte offset in the query page.
 //
-// With SPLIT_GATHER the writer also gathers rows [SPLIT_ROW, 32) of every
-// point the reader stages, into the input-CB block the reader reserved (the
-// handshake is in msda_gather_rows.hpp). This RISC has spare issue capacity
-// and its own NoC, and the reader is bound by decode and read issue.
+// With SPLIT_GATHER the writer also gathers part of every row-major block the
+// reader reserves; see msda_gather_rows.hpp.
 //
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B) is documented in
 // ../msda_tile_layout.hpp. D-tile k holds value columns [k*32, k*32+31].
@@ -126,8 +124,8 @@ void kernel_main() {
                 fused_msda_gather::gather_rows<WriterGatherCfg>(
                     noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
-                // Plain zero stores above: a compiler barrier keeps them ahead
-                // of the done store, and L1 stores from one RISC are in order.
+                // Keeps the plain zero stores above ahead of the done store;
+                // see the ordering note in msda_gather_rows.hpp.
                 asm volatile("" ::: "memory");
                 gather_done.set(gather_seq);
             }

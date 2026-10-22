@@ -12,8 +12,8 @@
 // geom_x/geom_y are float32 when REF_FP32 is set and compute unpacks them
 // straight into its 32-bit DST, so the reference point reaches the SFPU
 // unrounded; every other tile here is bf16.
-// The row-major gather itself is msda_gather_rows.hpp, which the writer also
-// runs for rows [SPLIT_ROW, 32) of each block when the gather is split.
+// The row-major gather itself is msda_gather_rows.hpp, shared with the writer
+// when the gather is split.
 //
 // The reader pushes point j+1's geometry tiles before it gathers point j.
 // Without that lookahead the reader is idle through every geometry solve and
@@ -43,9 +43,8 @@
 //     can annihilate a stale row.
 //   * with RM_STAGING the four corners of a point go over as one row-major
 //     block (row r = [NW | NE | SW | SE], D bf16 each) that compute tilizes;
-//     the same rule applies per corner slot. With SPLIT_GATHER the reader
-//     produces rows [0, SPLIT_ROW) and the writer rows [SPLIT_ROW, 32) of the
-//     same block; the reader pushes it once both are done.
+//     the same rule applies per corner slot. With SPLIT_GATHER the writer
+//     produces part of the block; the reader pushes it once both are done.
 //
 // Runtime-arg layout (identical for both readers):
 //   [0]                 value buffer address
@@ -122,8 +121,6 @@ constexpr uint32_t x0_cb_index = get_compile_time_arg_val(27);
 constexpr uint32_t y0_cb_index = get_compile_time_arg_val(28);
 constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(29);
 constexpr bool RM_STAGING = get_compile_time_arg_val(30) != 0;
-// The writer takes rows [SPLIT_ROW, 32) of every row-major block; see
-// msda_gather_rows.hpp.
 constexpr bool SPLIT_GATHER = get_compile_time_arg_val(31) != 0;
 constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(32);
 constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(33);
