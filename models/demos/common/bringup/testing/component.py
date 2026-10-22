@@ -339,6 +339,34 @@ def CC_rel(a, b) -> float:
     return rel(a, b)
 
 
+def _waive_index(s, block_type: str, step: str, ok: bool, got, cpu, tag: str) -> bool:
+    """F161: an integer step output under an owner waiver (DeepSeek-V4.1 indexer: bf16 top-k scores) passes its checks
+    when it is a top-k whose per-row overlap with the CPU step is structural (>= 1 - struct_scaled_rel, F97): a wrong
+    module (a zero stub, another layer's ids) still fails; a waiver covers precision only."""
+    from models.demos.common.bringup.testing import component_checks as CC
+    from models.demos.common.bringup.testing import noise_floor as NF
+
+    if ok or not NF.waiver(s, block_type, step):
+        return ok
+    floor = 1.0 - CC.limits(s)["struct_scaled_rel"]
+    ov = NF.value("topk_overlap", got.reshape(cpu.shape), cpu) if got.numel() == cpu.numel() else 0.0
+    if ov < floor:
+        print(f"FAIL {tag}: waived, but the overlap with the CPU step {ov:.4f} < {floor} (a structural error)")
+        return False
+    return NF.waive(s, block_type, step, False, got, tag, None)
+
+
+def step_mode(mode: str | None, st, cpu: torch.Tensor) -> str:
+    """F160: a top-k's ids are a set (the consumer reads them as one; the reference and a device top-k order them
+    differently): compared by per-row overlap, never by position (DeepSeek-V4.1 swap indexer: match 0.0015 while the
+    set recall was 0.994). An explicit COMPARE "match" of the frozen test is a positional check and also becomes it."""
+    from models.demos.common.bringup.testing.component_checks import output_kind
+
+    if mode in (None, "match") and not cpu.is_floating_point() and output_kind(cpu) == "index":
+        return "topk_overlap"
+    return mode or default_mode(cpu)
+
+
 def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: bool, model=None, chain=None) -> bool:
     """F80: model = the step's noise floor on the same inputs ({"outs": nudged fp32 runs, "scores": ...}, limits vs
     the CPU step), chain = the step's outputs when every swapped step runs nudged from the golden block input, one per
@@ -359,7 +387,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         print(f"FAIL {tag}: the CPU step on the swapped step's inputs raised {type(cpu).__name__}: {cpu}")
         return False
     mode, thr = component_test_limits(s, block_type, st.name)
-    mode = mode or default_mode(cpu)
+    mode = step_mode(mode, st, cpu)
     k = _calib(s, st.kind)
     out_dtype = NF.output_dtype(s, block_type, st.name)  # vs the CPU: one rounding to the official output dtype
     _, chunk = component_golden(s)
@@ -420,7 +448,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
                 f"recall={fl['recall']:.6f} recall_tie={fl['recall_tie']:.6f} worst_row={fl['worst_recall_tie']:.4f}"
             )
             ok = good and ok
-        return ok
+        return _waive_index(s, block_type, st.name, ok, got, cpu, tag)  # F161: the owner waiver reaches index outputs
     if got.numel() != cpu.numel():
         print(f"FAIL {tag}: {got.numel()} elements, the CPU step has {tuple(cpu.shape)}")
         return False
