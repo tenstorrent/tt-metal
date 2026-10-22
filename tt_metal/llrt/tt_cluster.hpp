@@ -153,9 +153,9 @@ public:
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
-    // Without an explicit ordering, writes to DRAM cores are Relaxed and all others Strict. Each write goes through
-    // PCIe DMA or MMIO depending on its size and ordering. Strict writes from one thread to the same core land in the
-    // order they were issued, even when consecutive writes take different transports.
+    // Without an explicit ordering, writes to DRAM cores are Relaxed and all others Strict. Large writes can go through
+    // PCIe DMA instead of MMIO, see Hal::get_dma_write_min_bytes. Relaxed writes are not ordered against any other
+    // write until a barrier.
     void write_core(
         const void* mem_ptr,
         uint32_t sz_in_bytes,

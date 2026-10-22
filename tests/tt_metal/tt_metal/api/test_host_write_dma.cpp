@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -15,31 +14,38 @@
 #include <tt-metalium/hal_types.hpp>
 
 #include "device_fixture.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
+// How the case writes its data: an L1 write with the default Strict ordering, an L1 write that asks for Relaxed
+// ordering, or a DRAM channel write, which is Relaxed.
+enum class HostWriteKind { L1Strict, L1Relaxed, Dram };
+
 struct HostWriteCase {
     std::string name;
-    HalMemType mem_type;
+    HostWriteKind kind;
     uint32_t size_bytes;
     uint32_t address_offset = 0;
 };
 
 namespace {
 
-// On Wormhole and Blackhole, Cluster::write_core sends Strict writes of 2 KiB or more and Relaxed writes of 64 KiB
-// or more through PCIe DMA, and everything else, including sizes or addresses that are not a multiple of 4, through
-// MMIO. L1 writes default to Strict and DRAM writes to Relaxed, so these cases land on both sides of each threshold.
+// Cluster::write_core sends Relaxed writes of 64 KiB or more through PCIe DMA. Strict writes stay on MMIO on Blackhole
+// and use DMA from 32 B on Wormhole, and anything whose size or address is not a multiple of 4 stays on MMIO. These
+// cases land on both sides of each of those rules.
 const std::vector<HostWriteCase> kHostWriteCases = {
-    {"L1Mmio1KiB", HalMemType::L1, 1024},
-    {"L1Dma2KiB", HalMemType::L1, 2048},
-    {"L1Mmio2KiBPlus2", HalMemType::L1, 2050},
-    {"L1Mmio2KiBAtUnalignedAddress", HalMemType::L1, 2048, 2},
-    {"L1Dma256KiB", HalMemType::L1, 256 * 1024},
-    {"DramMmio32KiB", HalMemType::DRAM, 32 * 1024},
-    {"DramDma64KiB", HalMemType::DRAM, 64 * 1024},
-    {"DramDma4MiB", HalMemType::DRAM, 4 * 1024 * 1024},
+    {"L1Strict1KiB", HostWriteKind::L1Strict, 1024},
+    {"L1Strict256KiB", HostWriteKind::L1Strict, 256 * 1024},
+    {"L1StrictUnalignedSize", HostWriteKind::L1Strict, 2050},
+    {"L1RelaxedMmio32KiB", HostWriteKind::L1Relaxed, 32 * 1024},
+    {"L1RelaxedDma64KiB", HostWriteKind::L1Relaxed, 64 * 1024},
+    {"L1RelaxedMmio64KiBAtUnalignedAddress", HostWriteKind::L1Relaxed, 64 * 1024, 2},
+    {"DramMmio32KiB", HostWriteKind::Dram, 32 * 1024},
+    {"DramDma64KiB", HostWriteKind::Dram, 64 * 1024},
+    {"DramDma4MiB", HostWriteKind::Dram, 4 * 1024 * 1024},
+    {"DramMmio64KiBAtUnalignedAddress", HostWriteKind::Dram, 64 * 1024, 2},
 };
 
 }  // namespace
@@ -50,8 +56,8 @@ class HostWriteDmaTest : public UnitMeshFixture, public ::testing::WithParamInte
 TEST_P(HostWriteDmaTest, WriteReadsBack) {
     auto& mesh_device = *this->devices_[0];
     const HostWriteCase& test_case = GetParam();
-    const uint32_t address =
-        mesh_device.allocator()->get_base_allocator_addr(test_case.mem_type) + test_case.address_offset;
+    const HalMemType mem_type = test_case.kind == HostWriteKind::Dram ? HalMemType::DRAM : HalMemType::L1;
+    const uint32_t address = mesh_device.allocator()->get_base_allocator_addr(mem_type) + test_case.address_offset;
 
     std::vector<uint8_t> pattern(test_case.size_bytes);
     for (uint32_t i = 0; i < test_case.size_bytes; ++i) {
@@ -59,11 +65,29 @@ TEST_P(HostWriteDmaTest, WriteReadsBack) {
     }
     std::vector<uint8_t> readback(test_case.size_bytes, 0);
 
-    if (test_case.mem_type == HalMemType::L1) {
-        slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, address, std::span<const uint8_t>(pattern));
+    switch (test_case.kind) {
+        case HostWriteKind::L1Strict:
+            slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, address, std::span<const uint8_t>(pattern));
+            break;
+        case HostWriteKind::L1Relaxed: {
+            const ChipId chip_id = mesh_device.get_device_ids()[0];
+            const CoreCoord worker_core = mesh_device.worker_core_from_logical_core(CoreCoord{0, 0});
+            MetalContext::instance().get_cluster().write_core(
+                pattern.data(),
+                pattern.size(),
+                tt_cxy_pair(chip_id, worker_core),
+                address,
+                tt::umd::IoOrdering::Relaxed);
+            break;
+        }
+        case HostWriteKind::Dram:
+            slow_dispatch::WriteToDRAMChannel(mesh_device, 0, address, std::span<const uint8_t>(pattern));
+            break;
+    }
+
+    if (mem_type == HalMemType::L1) {
         slow_dispatch::ReadFromL1(mesh_device, CoreCoord{0, 0}, address, std::span<uint8_t>(readback));
     } else {
-        slow_dispatch::WriteToDRAMChannel(mesh_device, 0, address, std::span<const uint8_t>(pattern));
         slow_dispatch::ReadFromDRAMChannel(mesh_device, 0, address, std::span<uint8_t>(readback));
     }
 
@@ -75,50 +99,5 @@ INSTANTIATE_TEST_SUITE_P(
     HostWriteDmaTest,
     ::testing::ValuesIn(kHostWriteCases),
     [](const ::testing::TestParamInfo<HostWriteCase>& info) { return info.param.name; });
-
-// A 256 KiB L1 write goes through the DMA window and a 1 KiB one through the MMIO window. Strict orders writes
-// within one window only, so these check the ordering Cluster::write_core promises across transports. They have no
-// barrier between the writes on purpose, since a barrier would make them pass regardless.
-constexpr uint32_t kDmaWriteBytes = 256 * 1024;
-constexpr uint32_t kMmioWriteBytes = 1024;
-constexpr int kOrderingIterations = 1000;
-
-// The tail of a DMA write is the part most likely to still be in flight, so the MMIO write overlaps it.
-TEST_F(UnitMeshFixture, HostWriteDmaThenMmioToSameAddressKeepsMmioData) {
-    auto& mesh_device = *this->devices_[0];
-    const uint32_t address = mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t overlap_address = address + kDmaWriteBytes - kMmioWriteBytes;
-    const std::vector<uint8_t> dma_data(kDmaWriteBytes, 0xAA);
-    const std::vector<uint8_t> mmio_data(kMmioWriteBytes, 0xBB);
-
-    std::vector<uint8_t> expected(kDmaWriteBytes, 0xAA);
-    std::fill(expected.end() - kMmioWriteBytes, expected.end(), 0xBB);
-
-    for (int i = 0; i < kOrderingIterations; ++i) {
-        slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, address, std::span<const uint8_t>(dma_data));
-        slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, overlap_address, std::span<const uint8_t>(mmio_data));
-
-        std::vector<uint8_t> readback(kDmaWriteBytes, 0);
-        slow_dispatch::ReadFromL1(mesh_device, CoreCoord{0, 0}, address, std::span<uint8_t>(readback));
-        ASSERT_EQ(readback, expected) << "iteration " << i;
-    }
-}
-
-// Posted MMIO writes may still be in flight when the DMA starts, so the MMIO write overlaps the DMA's head.
-TEST_F(UnitMeshFixture, HostWriteMmioThenDmaToSameAddressKeepsDmaData) {
-    auto& mesh_device = *this->devices_[0];
-    const uint32_t address = mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1);
-    const std::vector<uint8_t> mmio_data(kMmioWriteBytes, 0xBB);
-    const std::vector<uint8_t> dma_data(kDmaWriteBytes, 0xAA);
-
-    for (int i = 0; i < kOrderingIterations; ++i) {
-        slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, address, std::span<const uint8_t>(mmio_data));
-        slow_dispatch::WriteToL1(mesh_device, CoreCoord{0, 0}, address, std::span<const uint8_t>(dma_data));
-
-        std::vector<uint8_t> readback(kDmaWriteBytes, 0);
-        slow_dispatch::ReadFromL1(mesh_device, CoreCoord{0, 0}, address, std::span<uint8_t>(readback));
-        ASSERT_EQ(readback, dma_data) << "iteration " << i;
-    }
-}
 
 }  // namespace tt::tt_metal
