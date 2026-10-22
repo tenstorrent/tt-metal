@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
@@ -333,6 +334,7 @@ inline EnumType enum_type<EDMStatus>() {
 using DescribedEnums = std::tuple<
     EDMStatus,
     TerminationSignal,
+    connection_interface::ConnectionValue,
     CoordinatedEriscContextSwitchState,
     eth_chan_directions,
     manifest::NocCmdBuf,
