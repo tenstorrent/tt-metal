@@ -1607,7 +1607,8 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1668,7 +1669,7 @@ void sdpa_inner_loop(
     const bool is_last_ring_iter = true,
     const ChunkedContext& chunked = {},
     // RING only: padded multicast slots the reader runs after this core's Q chunks; their K/V are drained.
-    const uint32_t padded_q_slots = 0) {
+    [[maybe_unused]] const uint32_t padded_q_slots = 0) {
     // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
     // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
     // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
@@ -2150,21 +2151,24 @@ void sdpa_inner_loop(
     if constexpr (sdpa_type == RING) {
         // Padded multicast slots: the reader pushes every K/V entry it receives so this core's CBs advance with
         // the injector's. Drain them with the same skips as a real Q chunk, before the phase-alignment dummy.
-        for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
-            const uint32_t q_flat = padded_slot_flat_q<false>({}, iter_q_start, q_per_core, q_per_core + slot, 1);
-            const uint32_t q_chunk = remap_q_index(q_flat, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
-            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
-                continue;
-            }
-            for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
-                if (k_chunk < num_local_k_chunks && ring_kv_global_start_tile(k_chunk) >= logical_nt) {
+        // Compiled only when the factory can schedule padded slots, so configs without them keep their text size.
+        if constexpr (padded_q_slots_enabled) {
+            for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+                const uint32_t q_flat = padded_slot_flat_q<false>({}, iter_q_start, q_per_core, q_per_core + slot, 1);
+                const uint32_t q_chunk = remap_q_index(q_flat, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+                if (is_balanced && (q_chunk < q_num_chunks / 2)) {
                     continue;
                 }
-                KV_chunks_processed_in_iter++;
-                cb_k_in_obj.wait_front(k_chunk_tiles);
-                cb_v_in_obj.wait_front(v_chunk_tiles);
-                cb_k_in_obj.pop_front(k_chunk_tiles);
-                cb_v_in_obj.pop_front(v_chunk_tiles);
+                for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                    if (k_chunk < num_local_k_chunks && ring_kv_global_start_tile(k_chunk) >= logical_nt) {
+                        continue;
+                    }
+                    KV_chunks_processed_in_iter++;
+                    cb_k_in_obj.wait_front(k_chunk_tiles);
+                    cb_v_in_obj.wait_front(v_chunk_tiles);
+                    cb_k_in_obj.pop_front(k_chunk_tiles);
+                    cb_v_in_obj.pop_front(v_chunk_tiles);
+                }
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {
@@ -2454,7 +2458,8 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2531,7 +2536,10 @@ void sdpa_ring(
         lightweight_mask_enabled,
         chunked_enabled,
         chunked_q_local_padded_Nt,
-        chunked_chunk_size_t>(
+        chunked_chunk_size_t,
+        false,  // use_windowed_narrowing (not used)
+        0,      // cb_windowed_k_range (not used)
+        padded_q_slots_enabled>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,

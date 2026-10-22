@@ -279,9 +279,7 @@ class Sampling1D(LightweightModule):
             enable_log_probs: Per-call logprobs toggle (bool, or per-user list of bool — if any
                 user is enabled the whole batch computes logprobs). Refreshed every call, so no
                 mutable logprobs state is stored on the module. Only the top-k path emits logprobs
-                (sampled-token logprob); the argmax path never does (see ``_sample_argmax``). The
-                calculator additionally requires a multi-device shard (T3K 1×8) — it returns ``None``
-                on 1×1/1×2 even when enabled.
+                (sampled-token logprob); the argmax path never does (see ``_sample_argmax``).
 
         Returns:
             (token_ids, log_probs_or_none)
@@ -324,8 +322,11 @@ class Sampling1D(LightweightModule):
             output_tensor=tt_out_tok,
             keepdim=False,
         )
-        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
-        # logprobs are requested). Return None unconditionally — do not call the calculator.
+        # Argmax fast-path never emits logprobs: this helper is only reached when the caller
+        # explicitly chose argmax by passing k=p=temp=None. Callers that need logprobs for a
+        # greedy row must send explicit (k=1, p=0, temp=1) so they route through _sample_topk.
+        # TTTv2's prepare_sampling_params already does this (row_paths="topk" when greedy and
+        # enable_log_probs=True). TTTv1's TTSampling instead computes logprobs on its argmax path.
         return tt_out_tok, None
 
     def _get_argmax_all_gather_config(self, cluster_axis):
@@ -456,10 +457,10 @@ class Sampling1D(LightweightModule):
         ttnn.deallocate(topk_global_indices)
 
         # Logprobs (old path: single sampled-token logprob). Gated on enable_log_probs so the
-        # disabled case incurs zero extra ops. The calculator itself returns None unless the mesh
-        # is multi-device with num_devices ∈ {8, 32} (T3K 1×8).
+        # disabled case incurs zero extra ops. The calculator supports a complete
+        # vocabulary on one device and established tensor-parallel vocab layouts.
         if self._log_probs_calculator.enable_log_probs:
-            log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
+            log_probs = self._log_probs_calculator.calculate_log_probs(x_bf16, tt_out_tok)
         else:
             log_probs = None
         return tt_out_tok, log_probs

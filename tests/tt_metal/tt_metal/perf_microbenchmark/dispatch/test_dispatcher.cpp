@@ -21,6 +21,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+#include "distributed/mesh_device_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
@@ -1070,7 +1071,7 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-        this->device_ = this->mesh_device_->get_devices()[0];
+        this->device_ = this->mesh_device_->impl().get_devices()[0];
         if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }

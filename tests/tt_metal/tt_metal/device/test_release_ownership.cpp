@@ -122,7 +122,12 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
 namespace {
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
-constexpr uint32_t kTestTdpLimitWatts = 200;
+
+// Firmware caps a limit request at the board's max_tdp_limit, which only Galaxy populates;
+// elsewhere the cap collapses onto the board default, so the limit can only be lowered. 75 W is
+// below the default of every Blackhole board and above the 50 W floor firmware accepts, so it is
+// the one value the whole fleet takes.
+constexpr uint32_t kTestTdpLimitWatts = 75;
 
 // Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
 const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);

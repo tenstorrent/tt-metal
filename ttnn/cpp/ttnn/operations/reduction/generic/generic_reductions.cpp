@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -368,7 +370,19 @@ static Tensor std_var_impl(
 
     if (rank == 0 || reduced_volume == 1) {
         // If the input tensor is a rank 0 tensor (i.e. scalar), or reduction would produce a scalar,
-        // return NaN or 0.0, depending on correction. This matches PyTorch behavior.
+        // return NaN with correction. Without correction, return 0.0 for a finite element and NaN for inf or NaN.
+        // This matches PyTorch behavior.
+        if (!correction && is_floating_point(input_tensor_arg.dtype())) {
+            auto output_tensor = ttnn::where(
+                ttnn::isfinite(input_tensor_arg, memory_config),
+                0.0f,
+                std::numeric_limits<float>::quiet_NaN(),
+                memory_config);
+            if (output_tensor.layout() != Layout::TILE) {
+                output_tensor = ttnn::to_layout(output_tensor, Layout::TILE);
+            }
+            return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
+        }
         float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
         // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
