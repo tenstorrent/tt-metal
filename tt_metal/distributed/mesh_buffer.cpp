@@ -344,25 +344,18 @@ void MeshBuffer::initialize_device_buffers() {
     if (mesh_device == nullptr) {
         return;
     }
-    if (build_all_device_buffers_at_allocation(*mesh_device, device_local_config_)) {
-        for (auto& [coord, device_buffer] : buffers_) {
-            if (mesh_device->impl().is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
-                    create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord)));
-            }
-        }
-    } else {
-        // Build device buffers lazily so that allocation does not scale with the mesh size. Only the reference (first
-        // local) buffer, which dispatch reads, is built here; get_device_buffer() builds the others on first use.
-        bool is_reference = true;
-        for (auto& [coord, device_buffer] : buffers_) {
-            if (mesh_device->impl().is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
-                    is_reference
-                        ? create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord))
-                        : nullptr);
-                is_reference = false;
-            }
+    // Build device buffers lazily so that allocation does not scale with the mesh size. Unless all of them have to be
+    // built now, only the reference (first local) buffer, which dispatch reads, is built here; get_device_buffer()
+    // builds the others on first use.
+    const bool build_all = build_all_device_buffers_at_allocation(*mesh_device, device_local_config_);
+    bool is_reference = true;
+    for (auto& [coord, device_buffer] : buffers_) {
+        if (mesh_device->impl().is_local(coord)) {
+            device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(
+                build_all || is_reference
+                    ? create_device_buffer_at_lockstep_address(*this, mesh_device->impl().get_device(coord))
+                    : nullptr);
+            is_reference = false;
         }
     }
 
