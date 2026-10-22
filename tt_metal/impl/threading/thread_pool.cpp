@@ -344,15 +344,21 @@ public:
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
 
+    using Clock = std::chrono::steady_clock;
+
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
     using ParticipantOfCall = ttsl::SmallVector<size_t, 32>;
 
     ParallelJob(
-        const std::function<void(size_t)>& fn, Participants participants, ParticipantOfCall participant_of_call) :
+        const std::function<void(size_t)>& fn,
+        Participants participants,
+        ParticipantOfCall participant_of_call,
+        std::atomic<int64_t>& wake_ns) :
         fn_(fn),
         claims_(participants.size()),
         participant_of_call_(std::move(participant_of_call)),
-        participants_(std::move(participants)) {
+        participants_(std::move(participants)),
+        wake_ns_(wake_ns) {
         remaining_.add(static_cast<int64_t>(participant_of_call_.size()));
     }
 
@@ -364,17 +370,48 @@ public:
 
     const Participants& participants() const { return participants_; }
 
-    void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
+    // References: the caller's and the first participant's. Each later offer adds one.
+    void start() noexcept {
+        refs_.store(2, std::memory_order_relaxed);
+        started_ = Clock::now();
+    }
 
     // Wakes this worker's children, runs its calls and releases the job. A finished job is only released: its
     // executors may be stopping.
     void participate(NumaAwareExecutor* executor) noexcept {
-        if (!remaining_.finished()) {
-            const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
+        const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
+        if (node == 0) {
+            record_wake();
+        }
+        if (!remaining_.finished() && go_parallel()) {
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
             run_if_unclaimed(node);
         }
         release();
+    }
+
+    // Caller, after running the calls of participant `node` for `took`: keeps the remaining calls to itself if
+    // running them would take about as long as getting workers to help. Returns whether the job is serial.
+    bool decide(size_t node, Clock::duration took) noexcept {
+        size_t done = 0;
+        for (size_t participant : participant_of_call_) {
+            done += participant == node ? 1 : 0;
+        }
+        const auto per_call = took / static_cast<int64_t>(std::max<size_t>(done, 1));
+        const auto remaining = static_cast<int64_t>(participant_of_call_.size() - done);
+        const auto wake = std::chrono::nanoseconds(wake_ns_.load(std::memory_order_relaxed));
+        const auto first_arrives = std::max(wake - (Clock::now() - started_), Clock::duration::zero());
+        // Each level of the wake tree below the first participant adds another wake.
+        int64_t depth = 0;
+        for (size_t reached = 1, level = WAKE_FANOUT; reached + 1 < participants_.size(); level *= WAKE_FANOUT) {
+            reached += level;
+            depth++;
+        }
+        // A worker's call costs about twice the caller's (cold source data, contended doorbells), plus the join.
+        const bool serial = remaining * per_call <= first_arrives + (depth * wake) + (2 * per_call) + JOIN_COST;
+        Mode expected = Mode::UNDECIDED;
+        mode_.compare_exchange_strong(expected, serial ? Mode::SERIAL : Mode::PARALLEL, std::memory_order_acq_rel);
+        return expected == Mode::SERIAL || (expected == Mode::UNDECIDED && serial);
     }
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
@@ -383,18 +420,18 @@ public:
             return;
         }
         for (size_t call = 0; call < participant_of_call_.size(); call++) {
-            if (participant_of_call_[call] != node) {
-                continue;
+            if (participant_of_call_[call] == node) {
+                run_call(call);
             }
-            try {
-                fn_(call);
-            } catch (...) {
-                std::lock_guard lock(exception_mutex_);
-                if (!exception_) {
-                    exception_ = std::current_exception();
-                }
+        }
+    }
+
+    // Caller, once the job is serial and no worker can claim: runs every call except those of participant `done`.
+    void run_serially(size_t done) noexcept {
+        for (size_t call = 0; call < participant_of_call_.size(); call++) {
+            if (participant_of_call_[call] != done) {
+                run_call(call);
             }
-            remaining_.done();
         }
     }
 
@@ -413,6 +450,36 @@ public:
     }
 
 private:
+    void run_call(size_t call) noexcept {
+        try {
+            fn_(call);
+        } catch (...) {
+            std::lock_guard lock(exception_mutex_);
+            if (!exception_) {
+                exception_ = std::current_exception();
+            }
+        }
+        remaining_.done();
+    }
+
+    static constexpr auto JOIN_COST = std::chrono::nanoseconds(1500);
+
+    enum class Mode : uint8_t { UNDECIDED, SERIAL, PARALLEL };
+
+    // A worker that sees the job before the caller decides is already awake, so it takes part.
+    bool go_parallel() noexcept {
+        Mode expected = Mode::UNDECIDED;
+        return mode_.compare_exchange_strong(expected, Mode::PARALLEL, std::memory_order_acq_rel) ||
+               expected == Mode::PARALLEL;
+    }
+
+    // Moving average of the time from start() until the first participant shows up.
+    void record_wake() noexcept {
+        const int64_t took = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started_).count();
+        const int64_t average = wake_ns_.load(std::memory_order_relaxed);
+        wake_ns_.store(average + ((took - average) / 8), std::memory_order_relaxed);
+    }
+
     template <typename Fn>
     void for_each_child(size_t node, Fn fn) const noexcept {
         for (size_t child = (node * WAKE_FANOUT) + 1;
@@ -422,9 +489,11 @@ private:
         }
     }
 
-    // Wakes `node`, or its children in its place if the caller already claimed it.
+    // Hands the job to `node` and wakes it, or its children in its place if the caller already claimed it.
     void wake_subtree(size_t node) noexcept {
         if (!claims_[node].claimed.load(std::memory_order_relaxed)) {
+            refs_.fetch_add(1, std::memory_order_relaxed);
+            participants_[node]->offer(this);
             participants_[node]->wake();
             return;
         }
@@ -441,6 +510,9 @@ private:
     ParticipantOfCall participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
+    std::atomic<int64_t>& wake_ns_;  // Owned by the pool, which outlives its workers.
+    Clock::time_point started_;
+    alignas(64) std::atomic<Mode> mode_ = Mode::UNDECIDED;
     Completion remaining_;
     std::atomic<size_t> refs_ = 0;
     std::mutex exception_mutex_;
@@ -463,6 +535,12 @@ inline void NumaAwareExecutor::offer(ParallelJob* job) noexcept {
     // seq_cst pairs with the worker's check before it parks.
     if (auto* stale = job_.exchange(job, std::memory_order_seq_cst)) {
         stale->release();
+    }
+    // A worker can offer to a sibling the pool is stopping; take the job back if stop() may have missed it.
+    if (shutdown_.load(std::memory_order_seq_cst)) {
+        if (auto* missed = job_.exchange(nullptr, std::memory_order_acquire)) {
+            missed->release();
+        }
     }
 }
 
@@ -589,21 +667,26 @@ public:
             run_on_caller(device_ids.size(), fn);
             return;
         }
-        auto owned = std::make_unique<ParallelJob>(fn, std::move(executors), std::move(participant_of_call));
+        auto owned = std::make_unique<ParallelJob>(fn, std::move(executors), std::move(participant_of_call), wake_ns_);
         // Nothing below throws: once offered, workers hold the job and the job refers to fn.
         auto* job = owned.release();
         job->start();
         const auto& participants = job->participants();
-        // Wake the first participant as soon as it has the job; it wakes the others as it starts.
+        // Only the first participant gets the job now; it hands it to the others if the job goes parallel.
         participants[0]->offer(job);
         participants[0]->wake();
-        for (size_t position = 1; position < participants.size(); position++) {
-            participants[position]->offer(job);
-        }
         // The workers are woken first to last, so take participants from the back. The caller runs the calls of
         // every participant no worker has claimed, so the job finishes even if some workers are never woken.
-        for (size_t node = participants.size(); node-- > 0;) {
-            job->run_if_unclaimed(node);
+        // Timing the first of them decides whether the rest are worth handing to the workers.
+        const size_t last = participants.size() - 1;
+        const auto before = std::chrono::steady_clock::now();
+        job->run_if_unclaimed(last);
+        if (job->decide(last, std::chrono::steady_clock::now() - before)) {
+            job->run_serially(last);
+        } else {
+            for (size_t node = last; node-- > 0;) {
+                job->run_if_unclaimed(node);
+            }
         }
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
@@ -630,8 +713,10 @@ public:
     }
 
 private:
-    // Declared before the executors so that it outlives them.
+    // Declared before the executors so that they outlive them.
     Completion completion_;
+    // Moving average of how long the first worker of a parallel_for takes to start.
+    std::atomic<int64_t> wake_ns_ = 5000;
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
     // Used to pick threads when device_idx is not specified in the enqueue API

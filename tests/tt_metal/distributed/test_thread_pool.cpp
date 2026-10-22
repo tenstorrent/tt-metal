@@ -153,6 +153,26 @@ TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
     EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
 }
 
+// Waking a parked worker takes far longer than these calls, so the caller keeps them.
+TEST(ThreadPoolTest, ParallelForShortCallsStayOnCaller) {
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    const auto caller_id = std::this_thread::get_id();
+    std::vector<uint32_t> device_ids = {0, 1};
+    uint32_t all_on_caller = 0;
+    constexpr uint32_t NUM_FAN_OUTS = 20;
+    for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::atomic<uint32_t> on_caller = 0;
+        thread_pool->parallel_for(device_ids, [&on_caller, caller_id](size_t) {
+            if (std::this_thread::get_id() == caller_id) {
+                on_caller++;
+            }
+        });
+        all_on_caller += on_caller.load() == device_ids.size() ? 1 : 0;
+    }
+    EXPECT_GE(all_on_caller, NUM_FAN_OUTS * 3 / 4);
+}
+
 // Calls for the same device never overlap and run in index order.
 TEST(ThreadPoolTest, ParallelForSameDeviceInOrder) {
     auto thread_pool = create_pool_per_device();
