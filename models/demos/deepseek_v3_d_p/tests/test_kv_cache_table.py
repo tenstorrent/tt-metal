@@ -1099,12 +1099,14 @@ def test_glm53_index_cache_pipeline_stage_addresses():
 
 
 @pytest.mark.parametrize("sp, tp", [(2, 4), (4, 4)], ids=["sp2-tp4", "sp4-tp4"])
-def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
+@pytest.mark.parametrize("tp_sharded", [False, True], ids=["tp-replicated", "tp-sharded"])
+def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp, tp_sharded):
     """SP on mesh axis 1 (a 4x4 tray-half stage) must publish the table SP on axis 0 publishes.
 
     Each chip is labelled by its LOGICAL (sp, tp) position and placed at its mesh coordinate for the
     given axis, so a builder that reads mesh row r as SP row r gives SP row r the wrong chips (or, on
-    a non-square mesh, runs off the end). Host-only: the address math needs no device.
+    a non-square mesh, runs off the end). tp_sharded is GLM's KV dedup, where each chip of an SP row
+    holds its own 1/tp of the row's tokens. Host-only: the address math needs no device.
     """
     num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
     chunk_size_bytes = 19584
@@ -1144,6 +1146,7 @@ def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
             chunk_size_bytes=chunk_size_bytes,
             num_users=num_users,
             stage_layout=[stage(rank, first, count, sp_axis) for rank, (first, count) in enumerate(stage_ranges)],
+            tp_axis=1 - sp_axis if tp_sharded else None,
         )
         return table.entries
 
@@ -1151,10 +1154,16 @@ def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp):
     assert sp1.keys() == sp0.keys(), f"sp_axis=1 covers {len(sp1)} entries vs {len(sp0)} at sp_axis=0"
     mismatched = {k: (sp1[k], sp0[k]) for k in sp0 if sp1[k] != sp0[k]}
     assert not mismatched, f"{len(mismatched)} entries differ at sp_axis=1, e.g. {list(mismatched.items())[:2]}"
-    # The group of any token is one SP row: tp chips, all labelled with that row's SP index.
     for (_, _, position, _), (_, _, group) in sp1.items():
-        expected_sp = (position % PREFILL_CHUNK_TOKENS) // (PREFILL_CHUNK_TOKENS // sp)
-        assert sorted(chip // tp for _, chip in group) == [expected_sp] * tp, (position, group)
+        offset = position % PREFILL_CHUNK_TOKENS
+        expected_sp = offset // (PREFILL_CHUNK_TOKENS // sp)
+        if tp_sharded:
+            # One chip per 32-token run: TP index t of that SP row owns its t-th 1/tp of the row.
+            expected_tp = (offset % (PREFILL_CHUNK_TOKENS // sp)) // (PREFILL_CHUNK_TOKENS // (sp * tp))
+            assert [chip for _, chip in group] == [expected_sp * tp + expected_tp], (position, group)
+        else:
+            # The group of any token is one SP row: tp chips, all labelled with that row's SP index.
+            assert sorted(chip // tp for _, chip in group) == [expected_sp] * tp, (position, group)
 
 
 def test_glm53_tp_sharded_pipeline_stage_addresses():
