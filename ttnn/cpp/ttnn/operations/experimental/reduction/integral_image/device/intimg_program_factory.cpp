@@ -52,11 +52,6 @@ constexpr std::array<const char*, 3> KERNEL_PATHS{
 
 namespace ttnn::experimental::prim {
 
-// it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
-// expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
-constexpr uint32_t CORES_X = 2;
-constexpr uint32_t CORES_Y = 4;
-
 ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

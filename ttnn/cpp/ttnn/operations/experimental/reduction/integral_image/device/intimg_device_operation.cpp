@@ -24,6 +24,17 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
         "only bf16 and fp32 dtypes are supported, {} was provided instead",
         input_dtype);
+    const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
+    TT_FATAL(
+        tensor_args.padded_shape()[3] == CORES_X * CORES_Y * tile_width,
+        "intimg runs one {}-wide channel slice on each core of a fixed {}x{} core grid, so the channel dimension must "
+        "be {}, but it is {} (padded {})",
+        tile_width,
+        CORES_X,
+        CORES_Y,
+        CORES_X * CORES_Y * tile_width,
+        input_shape[3],
+        tensor_args.padded_shape()[3]);
 }
 
 IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output_specs(
