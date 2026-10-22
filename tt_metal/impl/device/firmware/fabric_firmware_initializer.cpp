@@ -24,6 +24,7 @@
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
+#include "fabric/host_bridge_links.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_metal {
@@ -138,15 +139,15 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
 }
 
 [[noreturn]] void report_router_sync_timeout_and_throw(
-    Device* dev,
+    IDevice* dev,
     chan_id_t master_chan,
     const tt::umd::CoreCoord& master_core,
     uint32_t master_raw_status,
     uint32_t expected_status,
     uint32_t router_sync_address,
     uint32_t timeout_ms,
-    tt::tt_fabric::ControlPlane& control_plane,
-    Cluster& cluster) {
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const Cluster& cluster) {
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& soc_desc = cluster.get_soc_desc(dev->id());
@@ -484,58 +485,75 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     }
 }
 
+void FabricFirmwareInitializer::wait_for_router_sync_on_device(
+    IDevice* dev, const tt::tt_fabric::ControlPlane& control_plane, const Cluster& cluster, uint32_t timeout_ms) {
+    if (!dev) {
+        TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
+    }
+    const auto& builder_context = control_plane.get_fabric_context().get_builder_context();
+    if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+        return;
+    }
+
+    const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
+    const auto master_router_logical_core =
+        cluster.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
+
+    const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
+    std::vector<std::uint32_t> master_router_status{0};
+    auto start_time = std::chrono::steady_clock::now();
+    while (master_router_status[0] != expected_status) {
+        detail::ReadFromDeviceL1(
+            dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+        if (master_router_status[0] == expected_status) {
+            break;
+        }
+        auto current_time = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
+        if (elapsed_ms > timeout_ms) {
+            report_router_sync_timeout_and_throw(
+                dev,
+                master_router_chan,
+                master_router_logical_core,
+                master_router_status[0],
+                expected_status,
+                router_sync_address,
+                timeout_ms,
+                control_plane,
+                cluster);
+        }
+    }
+
+    auto ready_address_and_signal = builder_context.get_fabric_router_ready_address_and_signal();
+    if (ready_address_and_signal) {
+        std::vector<uint32_t> ready_signal(1, ready_address_and_signal->second);
+        detail::WriteToDeviceL1(
+            dev, master_router_logical_core, ready_address_and_signal->first, ready_signal, CoreType::ETH);
+    }
+}
+
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
 
-    const auto& fabric_context = control_plane_.get_fabric_context();
-    const auto& builder_context = fabric_context.get_builder_context();
-
+    const auto& host_bridge_spec = rtoptions_.get_fabric_host_bridge();
     auto wait_for_handshake = [&](Device* dev) {
         if (!dev) {
             TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
         }
-        if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+        if (!host_bridge_spec.empty() &&
+            tt_fabric::host_bridge::device_has_bridged_router(
+                host_bridge_spec, control_plane_, control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id()))) {
+            log_info(
+                tt::LogMetal,
+                "Fabric router sync on device {} is left to the FabricHostBridge: a host-bridged router handshakes "
+                "once the bridge is armed",
+                dev->id());
             return;
         }
-
-        const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
-        const auto master_router_logical_core =
-            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
-
-        const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
-        std::vector<std::uint32_t> master_router_status{0};
-        auto start_time = std::chrono::steady_clock::now();
-        while (master_router_status[0] != expected_status) {
-            detail::ReadFromDeviceL1(
-                dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-            if (master_router_status[0] == expected_status) {
-                break;
-            }
-            auto current_time = std::chrono::steady_clock::now();
-            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
-            if (elapsed_ms > timeout_ms) {
-                report_router_sync_timeout_and_throw(
-                    dev,
-                    master_router_chan,
-                    master_router_logical_core,
-                    master_router_status[0],
-                    expected_status,
-                    router_sync_address,
-                    timeout_ms,
-                    control_plane_,
-                    cluster_);
-            }
-        }
-
-        auto ready_address_and_signal = builder_context.get_fabric_router_ready_address_and_signal();
-        if (ready_address_and_signal) {
-            std::vector<uint32_t> ready_signal(1, ready_address_and_signal->second);
-            detail::WriteToDeviceL1(
-                dev, master_router_logical_core, ready_address_and_signal->first, ready_signal, CoreType::ETH);
-        }
+        wait_for_router_sync_on_device(dev, control_plane_, cluster_, timeout_ms);
     };
 
     // Poll devices in tunnel order: farthest-to-closest, then MMIO device itself
@@ -560,12 +578,16 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
     }
 }
 
-uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
-    auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
-    if (rtoptions_.get_simulator_enabled()) {
+uint32_t FabricFirmwareInitializer::fabric_router_sync_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
+    auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
+    if (rtoptions.get_simulator_enabled()) {
         return timeout.value_or(15000);
     }
     return timeout.value_or(10000);
+}
+
+uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
+    return fabric_router_sync_timeout_ms(rtoptions_);
 }
 
 }  // namespace tt::tt_metal

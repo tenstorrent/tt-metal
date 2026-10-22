@@ -176,6 +176,15 @@ constexpr bool enable_speedy_vc0 = NAMED_CT_ARG("ENABLE_SPEEDY_VC0") != 0;
 constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
+#ifdef FABRIC_HOST_BRIDGE
+// Host-bridged link (fabric_router_host_bridge_transport.hpp): control block and the NOC/cmd buf each direction may use
+constexpr uint32_t host_bridge_block_addr = NAMED_CT_ARG("HOST_BRIDGE_BLOCK_ADDR");
+constexpr uint32_t host_bridge_page_bytes = NAMED_CT_ARG("HOST_BRIDGE_PAGE_BYTES");
+constexpr uint8_t host_bridge_tx_noc = NAMED_CT_ARG("HOST_BRIDGE_TX_NOC");
+constexpr uint8_t host_bridge_tx_cmd_buf = NAMED_CT_ARG("HOST_BRIDGE_TX_CMD_BUF");
+constexpr uint8_t host_bridge_rx_noc = NAMED_CT_ARG("HOST_BRIDGE_RX_NOC");
+constexpr uint8_t host_bridge_rx_cmd_buf = NAMED_CT_ARG("HOST_BRIDGE_RX_CMD_BUF");
+#endif
 
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 

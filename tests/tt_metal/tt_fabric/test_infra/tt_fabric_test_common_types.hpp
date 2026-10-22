@@ -166,6 +166,16 @@ struct ChannelTrimmingSettings {
     bool operator==(const ChannelTrimmingSettings&) const = default;
 };
 
+// fabric_setup.override_transport: build the selected links on another link transport.
+//   direction: all | NS | EW | intermesh      type: eth (default, no-op) | host_bridge | pcie (reserved)
+enum class TransportOverrideDirection { ALL, NS, EW, INTERMESH };
+enum class LinkTransportType { ETH, HOST_BRIDGE, PCIE };
+struct TransportOverride {
+    TransportOverrideDirection direction = TransportOverrideDirection::ALL;
+    LinkTransportType type = LinkTransportType::ETH;
+    bool operator==(const TransportOverride&) const = default;
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
@@ -180,6 +190,8 @@ struct TestFabricSetup {
     //   nullopt (key absent) → obey TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE
     std::optional<bool> enable_channel_trimming;
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
+
+    std::optional<TransportOverride> override_transport;  // Links to build on another link transport
 };
 
 struct HighLevelPatternConfig {

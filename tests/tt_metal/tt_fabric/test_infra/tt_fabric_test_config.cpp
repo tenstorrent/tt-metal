@@ -468,6 +468,21 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
         fabric_setup.use_vc2 = parse_scalar<bool>(fabric_setup_yaml["use_vc2"]);
     }
 
+    if (fabric_setup_yaml["override_transport"]) {
+        const auto& override_yaml = fabric_setup_yaml["override_transport"];
+        TT_FATAL(override_yaml.IsMap(), "override_transport must be a map with direction and type keys");
+        TransportOverride override_transport;
+        if (override_yaml["direction"]) {
+            override_transport.direction = detail::transport_override_direction_mapper.from_string(
+                parse_scalar<std::string>(override_yaml["direction"]), "override_transport.direction");
+        }
+        if (override_yaml["type"]) {
+            override_transport.type = detail::link_transport_type_mapper.from_string(
+                parse_scalar<std::string>(override_yaml["type"]), "override_transport.type");
+        }
+        fabric_setup.override_transport = override_transport;
+    }
+
     return fabric_setup;
 }
 

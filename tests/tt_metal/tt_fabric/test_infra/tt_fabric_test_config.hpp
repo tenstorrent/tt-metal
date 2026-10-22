@@ -109,6 +109,19 @@ static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_map
     {"DYNAMIC_RECONFIGURATION_SETUP_MODE", FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE},
 });
 
+static const StringEnumMapper<TransportOverrideDirection> transport_override_direction_mapper({
+    {"all", TransportOverrideDirection::ALL},
+    {"NS", TransportOverrideDirection::NS},
+    {"EW", TransportOverrideDirection::EW},
+    {"intermesh", TransportOverrideDirection::INTERMESH},
+});
+
+static const StringEnumMapper<LinkTransportType> link_transport_type_mapper({
+    {"eth", LinkTransportType::ETH},
+    {"host_bridge", LinkTransportType::HOST_BRIDGE},
+    {"pcie", LinkTransportType::PCIE},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
