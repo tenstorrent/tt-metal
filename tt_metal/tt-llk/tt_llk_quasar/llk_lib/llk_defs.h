@@ -219,8 +219,6 @@ enum class SfpuType : std::uint32_t
     situ_glu,
     snake_beta,
     tan,
-    unary_max_uint32,
-    unary_min_uint32,
     max_pool_with_indices,
     signbit,
     rand,

@@ -56,7 +56,8 @@
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
 // Ported SFPI kernels behind the log, abs, sign, tiled_prod, power, exp2, heaviside, expm1,
-// add_top_row and alt_complex_rotate90 entry points below, and the signbit and unary max/min ones.
+// add_top_row and alt_complex_rotate90 entry points below.
+// Codegen SFPU kernels behind the signbit (SFPLOADMACRO, SFPI fallback) and unary max/min entry points.
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_signbit.h"
 #include "ckernel_sfpu_abs.h"

@@ -586,6 +586,12 @@ std::vector<int32_t> int_tile_layout_golden(const std::string& op_name, const st
 //
 // Int8 L1 (non-negative, so sign-magnitude == two's complement) copied into a 32-bit Dest, Int32 out.
 // Scalars match the tt-llk SFPU tests.
+// The int32 max/min scalar, shared by the device chains and the golden. Inputs stay non-negative: Int8
+// promotes to sign-magnitude in Dest, while unary_max/min_int32_tile expect two's complement (native Int32).
+constexpr int32_t unary_max_min_int32_scalar = 64;
+const std::string unary_max_min_int32_scalar_arg =
+    std::to_string(static_cast<uint32_t>(unary_max_min_int32_scalar)) + "u";
+
 const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_to_op_name = {
     {"bitwise_and",
      {{"SFPU_OP_BITWISE_INCLUDE", "1"},
@@ -622,10 +628,12 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
       {"SFPU_OP_CHAIN_0", "signbit_tile_int32_init(); signbit_tile_int32(0);"}}},
     {"unary_max_int32",
      {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
-      {"SFPU_OP_CHAIN_0", "unary_max_int32_tile_init(); unary_max_int32_tile(0, 64u);"}}},
+      {"SFPU_OP_CHAIN_0",
+       "unary_max_int32_tile_init(); unary_max_int32_tile(0, " + unary_max_min_int32_scalar_arg + ");"}}},
     {"unary_min_int32",
      {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
-      {"SFPU_OP_CHAIN_0", "unary_min_int32_tile_init(); unary_min_int32_tile(0, 64u);"}}},
+      {"SFPU_OP_CHAIN_0",
+       "unary_min_int32_tile_init(); unary_min_int32_tile(0, " + unary_max_min_int32_scalar_arg + ");"}}},
 };
 
 // Int32 unary ops that also see negative inputs: the sign bit sits at bit 31 in both
@@ -664,10 +672,10 @@ int32_t int32_unary_result(const std::string& op_name, int32_t x) {
         return x < 0 ? 1 : 0;
     }
     if (op_name == "unary_max_int32") {
-        return std::max(x, 64);
+        return std::max(x, unary_max_min_int32_scalar);
     }
     if (op_name == "unary_min_int32") {
-        return std::min(x, 64);
+        return std::min(x, unary_max_min_int32_scalar);
     }
     TT_THROW("Unsupported int unary op_name in test");
 }
@@ -2397,7 +2405,7 @@ bool run_sfpu_ema(distributed::MeshDevice& mesh_device, const SfpuConfig& test_c
     // One bf16 ulp of the output (2^-7 relative), plus the 16-bit Dest's rounding of the input.
     return is_close_packed_vectors<bfloat16, uint32_t>(
         out, pack_vector<uint32_t, bfloat16>(golden), [](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b, /*rtol=*/0.02f, /*atol=*/0.02f);
+            return is_close(a, b, 0.02f /*rtol*/, 0.02f /*atol*/);
         });
 }
 
