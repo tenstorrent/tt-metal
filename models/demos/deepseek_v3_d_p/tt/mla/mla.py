@@ -674,6 +674,15 @@ class ttMLA:
             and indexer_layer_is_reused(config, layer_idx + 1)
         ):
             self._push_prefetch = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
+        # sparse_sdpa is bound by DRAM bandwidth (indexed KV row reads), so cores beyond what its query rows need only
+        # add contention: on the 12x10 Galaxy grid a 5k chunk (160 rows per chip) runs 8% faster on the overlap
+        # profile's 96-core top-k grid than on all 120 cores. Used whenever it holds as few rows per core as the full
+        # grid (see _sparse_sdpa_grid).
+        self._sparse_sdpa_cores = None
+        if requested_overlap_profile is not None and self._has_indexer and not self.kv_only and self.sp_factor > 1:
+            self._sparse_sdpa_cores = self.tt_ccl.get_sparse_mla_overlap_resources(
+                requested_overlap_profile
+            ).topk_core_grid
         if requested_overlap_profile is not None:
             if not self._has_indexer or self.kv_only or self._indexer_reuse:
                 # Only a non-kv-only full indexer layer can launch the two independent branches. Shared
@@ -2538,7 +2547,7 @@ class ttMLA:
             **grid,
         )
         # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).
-        out = sdpa(**(overlap or {}))
+        out = sdpa(**(overlap or self._sparse_sdpa_grid(q_rm.shape[2])))
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
@@ -2559,6 +2568,17 @@ class ttMLA:
             ttnn.deallocate(ret)
             ret = head_sharded
         return ret
+
+    def _sparse_sdpa_grid(self, rows: int) -> dict:
+        """sparse_sdpa's core grid for `rows` query rows per chip: the top-k grid when it needs no more rows per core
+        than the full grid, else the full grid."""
+        if self._sparse_sdpa_cores is None:
+            return {}
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        per_core = lambda cores: -(-rows // cores)
+        if per_core(self._sparse_sdpa_cores.num_cores()) > per_core(grid.x * grid.y):
+            return {}
+        return {"sub_core_grids": self._sparse_sdpa_cores}
 
     def _gather_kvpe_prefix(
         self,
