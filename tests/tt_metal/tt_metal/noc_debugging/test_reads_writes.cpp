@@ -14,6 +14,7 @@
 
 #include "hal_types.hpp"
 #include "noc_debugging_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -1073,7 +1074,7 @@ private:
         // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
-        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(tt::tt_metal::MetalContext::instance(), devices_);
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
@@ -1142,7 +1143,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
     std::vector<tt::tt_metal::IDevice*> all_devices;
     for (const auto& md : this->devices_) {
-        for (auto* d : md->get_devices()) {
+        for (auto* d : md->impl().get_devices()) {
             all_devices.push_back(d);
         }
     }

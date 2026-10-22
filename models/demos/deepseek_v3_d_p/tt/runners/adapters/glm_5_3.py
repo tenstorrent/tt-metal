@@ -44,7 +44,9 @@ class GLM53Adapter(MLAPrefillAdapter):
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
     # 1216: the tp_sharded fallback gather (used wherever the snake ring
     # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
-    l1_small_size = 1216
+    # 1536: #58681 gave every all_gather multicast program a second (done) semaphore, which pushed the
+    # traced path one 16 B slot past 1216 (Blaze run 37730295536). Keep in sync with GLM_L1_SMALL_SIZE.
+    l1_small_size = 1536
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
@@ -117,13 +119,6 @@ class GLM53Adapter(MLAPrefillAdapter):
             tp_axis=kv_tp_axis,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
-
-    def layer_split_boundaries(self, num_layers):
-        """GLM-5.3 cross-layer reuse: a pipeline rank must start on a ``full`` layer (it seeds that
-        rank's indexer-reuse chain; a ``shared`` first layer has no prior top-k to reuse). So the valid
-        rank-start boundaries are the ``full`` layer indices. ``None`` absent an ``indexer_types`` map."""
-        types = getattr(self.load_hf_config(), "indexer_types", None)
-        return None if not types else {i for i in range(num_layers) if types[i] == "full"}
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace). The bare

@@ -32,12 +32,6 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal::detail {
 
-bool DispatchStateCheck(bool isFastDispatch) {
-    static bool fd = isFastDispatch;
-    TT_FATAL(fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!");
-    return fd;
-}
-
 Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
     return std::visit(
         ttsl::overloaded{

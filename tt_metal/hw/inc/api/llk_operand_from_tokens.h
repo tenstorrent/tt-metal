@@ -18,8 +18,8 @@ namespace binding_details {
  */
 template <typename T>
 inline constexpr bool binding_token_with_llk_metadata = false;
-template <>
-inline constexpr bool binding_token_with_llk_metadata<DFBBindingToken> = true;
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline constexpr bool binding_token_with_llk_metadata<DFBBindingToken<Pap, Cap>> = true;
 template <>
 inline constexpr bool binding_token_with_llk_metadata<ScratchpadBindingToken> = true;
 template <uint32_t Cta, uint32_t Addr>

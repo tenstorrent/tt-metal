@@ -114,6 +114,9 @@ struct DitFusedDistributedRmsnormInputs {
     // Welford LLK does an array load instead of a soft-float 1/(N+1) per sample. Only
     // consumed on the LAYERNORM path; ignored (may be null) for RMS.
     std::optional<const Tensor> reciprocals;
+    // Optional row-major uint32 [1, 1, 1, >= num_tile_rows] map (one page): per-token weight/bias tile row r
+    // is read from tile row map[r] of the weight/bias tensor, which may then be a small table of tile rows.
+    std::optional<const Tensor> affine_tile_row_map;
 };
 
 // Sizing derived from args + input shape. Shared between compute_output_specs

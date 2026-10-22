@@ -1,0 +1,78 @@
+{
+  "margin": {
+    "throughput_tok_s": 0.05,
+    "ttft_s": 0.05,
+    "chunk_time_ms": 0.1
+  },
+  "baselines": {
+    "kimi27": {
+      "sc4": {
+        "probe": "@250k",
+        "8kw": {
+          "throughput_tok_s": 6309,
+          "ttft_s": 24.78,
+          "chunk_time_ms": 2897
+        },
+        "14kw": {
+          "throughput_tok_s": 8318,
+          "ttft_s": 18.82,
+          "chunk_time_ms": 2202
+        }
+      },
+      "sc1": {
+        "probe": "@250k",
+        "14kw": {
+          "throughput_tok_s": 2398,
+          "ttft_s": 60.67,
+          "chunk_time_ms": 2195
+        }
+      }
+    },
+    "glm53": {
+      "sc4": {
+        "probe": "@1020k",
+        "8kw": {
+          "throughput_tok_s": 11654,
+          "ttft_s": 59.32,
+          "chunk_time_ms": 2423
+        },
+        "14kw": {
+          "throughput_tok_s": 11414,
+          "ttft_s": 61.8,
+          "chunk_time_ms": 2556
+        }
+      },
+      "sc1": {
+        "probe": "@1020k",
+        "14kw": {
+          "throughput_tok_s": 3452,
+          "ttft_s": 196.37,
+          "chunk_time_ms": 1486
+        }
+      }
+    },
+    "kimi_k3": {
+      "sc4": {
+        "probe": "@1M",
+        "8kw": {
+          "throughput_tok_s": 2776,
+          "ttft_s": 222.78,
+          "chunk_time_ms": 8663
+        },
+        "14kw": {
+          "throughput_tok_s": 3475,
+          "ttft_s": 179.0,
+          "chunk_time_ms": 7247
+        }
+      },
+      "sc1": {
+        "probe": "@1M",
+        "14kw": {
+          "throughput_tok_s": 4392,
+          "ttft_s": 136.81,
+          "chunk_time_ms": 1171
+        }
+      }
+    }
+  }
+}

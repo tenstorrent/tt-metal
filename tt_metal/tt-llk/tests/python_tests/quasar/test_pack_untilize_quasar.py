@@ -10,7 +10,6 @@ from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     format_dict,
 )
@@ -26,7 +25,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
@@ -221,7 +219,6 @@ def test_pack_untilize_quasar(
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
             UNPACKER_ENGINE_SEL(),
         ],
@@ -251,9 +248,6 @@ def test_pack_untilize_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(

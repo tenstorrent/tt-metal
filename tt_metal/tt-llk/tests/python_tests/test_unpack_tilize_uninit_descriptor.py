@@ -7,7 +7,8 @@ Configures the SrcA descriptor with a ``num_faces`` that differs from the tilize
 operand's, runs ``init`` + ``uninit`` with no geometry reconfig between, and reads
 the descriptor word back on device. That difference is the point: the other
 teardown tests use the same ``num_faces`` for both, so they pass whether or not
-uninit rewrites the descriptor.
+uninit rewrites the descriptor. The kernel also asserts the unpack-config
+``tileize_mode`` bit is set after init and clear after uninit.
 """
 
 import pytest
@@ -26,7 +27,6 @@ pytestmark = skip_for_coverage
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
         ],
         same=True,

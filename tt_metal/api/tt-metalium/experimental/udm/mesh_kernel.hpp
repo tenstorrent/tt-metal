@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
-#include <set>
 #include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <variant>
+#include <vector>
 
 namespace tt::tt_metal {
 struct DataMovementConfig;

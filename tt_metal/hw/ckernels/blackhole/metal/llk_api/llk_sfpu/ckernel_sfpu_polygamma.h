@@ -40,13 +40,19 @@ namespace ckernel::sfpu {
 bool bf16_dest_polygamma();
 template <int ITERATIONS>
 void calculate_polygamma_bf16();
+// The n_packed the generated polygamma kernel is fitted for, as FP32 bits; any other n_packed runs the stock kernel.
+inline constexpr std::uint32_t polygamma_bf16_n_packed_bits = 0x3f800000u;
+// The scale_packed the generated polygamma kernel is fitted for, as FP32 bits; any other scale_packed runs the stock
+// kernel.
+inline constexpr std::uint32_t polygamma_bf16_scale_packed_bits = 0x3f800000u;
 // Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
 inline constexpr bool polygamma_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
     if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
-        if (bf16_dest_polygamma() && n_packed == 0x3f800000u && scale_packed == 0x3f800000u) {
+        if (bf16_dest_polygamma() && n_packed == ckernel::sfpu::polygamma_bf16_n_packed_bits &&
+            scale_packed == ckernel::sfpu::polygamma_bf16_scale_packed_bits) {
             calculate_polygamma_bf16<ITERATIONS>();
             return;
         }
@@ -59,6 +65,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
     int n = int(Converter::as_float(n_packed));
+    int n_plus_1 = n + 1;
     float scale = Converter::as_float(scale_packed);
 
     // Precompute Bernoulli-related coefficients for asymptotic tail
@@ -71,10 +78,14 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     float n4 = n + 4;
     float n5 = n + 5;
     float nf = n;
-    float inv_nf = 1.0f / nf;
-    float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
-    float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
-    float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    // The scale (-1)^(n+1) * n! goes into every term rather than onto the final sum: the unscaled
+    // sum sits n! below the result and flushes to zero while the result is still a normal float.
+    float c_b0 = scale / nf;                                   // leading term coefficient
+    float c_b2 = scale * n1 / 12.0f;                           // B_2 term coefficient
+    float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
+    float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    float half_scale = 0.5f * scale;
+    sfpi::vFloat vscale = scale;
 
     constexpr auto RECIP = APPROXIMATION_MODE ? 0 : is_fp32_dest_acc_en ? 2 : 1;
 
@@ -85,6 +96,15 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
             }
             pwr >>= 1;
             if (!pwr) {
+                break;
+            }
+            // The last squaring goes into val as two multiplies, so the top power of x is never
+            // formed on its own: x^(2^k) alone can flush while val * x^(2^k) is still a normal
+            // float. The lower squares stay normal well past the x where the result itself leaves
+            // fp32 range, so they are still formed directly.
+            if (pwr == 1) {
+                val *= x;
+                val *= x;
                 break;
             }
             x *= x;
@@ -98,13 +118,14 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
         sfpi::vFloat sum = 0.0f;
 
         // Part 1: Exact summation of first NUM_TERMS terms
-        // Σ_{k=0}^{NUM_TERMS-1} 1/(x+k)^(n+1)
+        // Σ_{k=0}^{NUM_TERMS-1} scale/(x+k)^(n+1)
+#pragma GCC unroll NUM_TERMS
         for (int k = 0; k < NUM_TERMS; k++) {
             sfpi::vFloat xi = x + float(k);
 
             // Compute reciprocal first, then raise to power (avoids overflow of large intermediates)
             sfpi::vFloat inv_xi = sfpu_reciprocal_iter<RECIP>(xi);
-            sfpi::vFloat inv_power = power(inv_xi, n, inv_xi);
+            sfpi::vFloat inv_power = power(inv_xi, n_plus_1, vscale);
 
             sum += inv_power;
         }
@@ -117,9 +138,9 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
         sfpi::vFloat inv_z2 = inv_z * inv_z;
 
         // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
-        // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
-        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
-        sfpi::vFloat tail = E + 0.5f * inv_z;
+        // E = c_b0 + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
+        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, c_b0, c_b2, c_b4, c_b6);
+        sfpi::vFloat tail = E + half_scale * inv_z;
 
         // Scale by inv_z^n, taking advantage of inv_z^2's
         // computation above
@@ -135,13 +156,10 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
         sum += tail;
 
-        // Apply scale: (-1)^(n+1) * n!
-        sfpi::vFloat result = sum * scale;
-
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = sum;
         sfpi::dst_reg++;
     }
 }

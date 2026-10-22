@@ -66,7 +66,8 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<uint32_t>& slice_dim = std::nullopt,
     const std::optional<uint32_t>& num_devices = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<Tensor>& preallocated_output = std::nullopt);
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    bool output_mem_config_inherited = false);
 
 // Row-major factories retain keyed scalar assignments and refresh only tensor bindings.
 tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output);

@@ -27,6 +27,7 @@ class BinarySfpu(Sfpu):
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
+        sign_magnitude: bool = True,
     ):
         if not operation in MathOperation.get_sfpu_binary_operations():
             raise ValueError(
@@ -35,6 +36,7 @@ class BinarySfpu(Sfpu):
         self.operation = operation
         self.approx_mode = approx_mode
         self.iterations = iterations
+        self.sign_magnitude = sign_magnitude
 
     def get_headers(self) -> List[str]:
         return [
@@ -85,11 +87,12 @@ class BinarySfpu(Sfpu):
         src2 = block.dest_src1
         dst = block.tile_id_dest
         format = self._format_arg(config)
+        sign_magnitude = str(self.sign_magnitude).lower()
 
         return (
             f"    test_utils::call_binary_sfpu_operation<"
             f"{dest_sync}, {dest_acc}, "
-            f"{approx_mode}, {op}, {iterations}, {format}"
+            f"{approx_mode}, {op}, {iterations}, {format}, {sign_magnitude}"
             f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )
 

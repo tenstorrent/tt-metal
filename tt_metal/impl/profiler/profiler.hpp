@@ -28,6 +28,8 @@
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalContext;
+class MetalEnvImpl;
 class ThreadPool;
 }  // namespace tt::tt_metal
 
@@ -73,8 +75,10 @@ private:
     // Device ID
     ChipId device_id{};
 
-    // ContextID extracted from the device
-    ContextId context_id;
+    // The context and env this profiler's device belongs to, resolved once at construction. A DeviceProfiler is owned
+    // by the ProfilerStateManager, which MetalContext owns, so both outlive it.
+    MetalContext& ctx_;
+    MetalEnvImpl& env_;
 
     // Device frequency
     int device_core_frequency{};
@@ -127,6 +131,18 @@ private:
 
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
+
+    struct ProgramSubDeviceMetaData {
+        uint8_t sub_device_id;
+        uint64_t sub_device_manager_id;
+    };
+
+    // Sub-device metadata per encoded run host id, looked up once from the data collector. Entries are never
+    // refreshed, so a run host id reused within one profiling session keeps its first entry. Like the marker sets,
+    // only one thread at a time processes this device's markers, so no lock is needed.
+    std::unordered_map<uint32_t, std::optional<ProgramSubDeviceMetaData>> program_sub_device_meta_data_cache;
+
+    std::optional<ProgramSubDeviceMetaData> getProgramSubDeviceMetaData(uint32_t run_host_id);
 
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes{};
@@ -373,14 +389,14 @@ public:
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id);
+bool useFastDispatch(MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device);
 
 void writeToCoreControlBuffer(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const CoreCoord& virtual_core,
     const std::vector<uint32_t>& data,
-    bool force_slow_dispatch,
-    ContextId context_id);
+    bool force_slow_dispatch);
 
 }  // namespace tt::tt_metal

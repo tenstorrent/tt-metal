@@ -272,6 +272,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("gelu_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("gelu_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::GELU_TANH:
+            // param0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            return {
+                fmt::format("gelu_tanh_tile_init<{}u>();", (uint32_t)(param0 != 0)),
+                fmt::format("gelu_tanh_tile<DST_ACCUM_MODE, {1}u>({0});", idst, (uint32_t)(param0 != 0))};
         case UnaryOpType::LOG:
             return {
                 fmt::format("log_tile_init<{}u>();", (uint32_t)param0),
@@ -1193,6 +1198,10 @@ void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>&
     }
 }
 
+namespace {
+constexpr std::string_view kGenericChainKernel = "eltwise_sfpu_metal2.cpp";
+}  // namespace
+
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::LGAMMA:
@@ -1209,8 +1218,12 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";
         case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
-        default: return "eltwise_sfpu.cpp";
+        default: return kGenericChainKernel;
     }
+}
+
+bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    return get_compute_kernel_path(op_type, input_dtype) != kGenericChainKernel;
 }
 
 std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {

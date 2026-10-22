@@ -37,6 +37,11 @@ namespace ckernel::sfpu {
  *   n_packed:     order n (as float bits)
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
+// The n_packed the generated polygamma kernel is fitted for, as FP32 bits; any other n_packed runs the stock kernel.
+inline constexpr std::uint32_t polygamma_bf16_n_packed_bits = 0x3f800000u;
+// The scale_packed the generated polygamma kernel is fitted for, as FP32 bits; any other scale_packed runs the stock
+// kernel.
+inline constexpr std::uint32_t polygamma_bf16_scale_packed_bits = 0x3f800000u;
 // Whether BF16 DEST runs the generated polygamma kernel as one call over the whole tile.
 inline constexpr bool polygamma_bf16_whole_tile = false;
 

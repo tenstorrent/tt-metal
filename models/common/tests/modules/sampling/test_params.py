@@ -336,6 +336,30 @@ def test_legacy_device_sampling_capabilities_declare_the_exact_limit(relative_pa
     assert all(capabilities.get("max_device_top_k") == 32 for _, capabilities in advertised)
 
 
+@pytest.mark.parametrize(
+    "class_name",
+    ["LlamaForCausalLM", "QwenForCausalLM", "MistralForCausalLM"],
+)
+def test_device_grammar_generators_retain_sampling_capabilities(class_name):
+    relative_path = "models/tt_transformers/tt/generator_vllm.py"
+    tree = ast.parse(
+        Path(relative_path).read_text(encoding="utf-8"),
+        filename=relative_path,
+    )
+    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+    assignment = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "model_capabilities" for target in node.targets)
+    )
+    capabilities = ast.literal_eval(assignment.value)
+
+    assert capabilities["supports_sample_on_device"] is True
+    assert capabilities["supports_device_grammar"] is True
+    assert capabilities["max_device_top_k"] == 32
+
+
 def test_tttv2_runtime_import_boundary_excludes_legacy_sampling_state():
     roots = [Path("models/common/llm_runtime")]
     files = [path for root in roots for path in root.rglob("*.py")]

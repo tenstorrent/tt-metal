@@ -44,9 +44,7 @@ private:
         uint32_t timer_id = 0;
         uint64_t timestamp = 0;
         uint64_t data = 0;
-        // runtime_id goes in `trace id`, not `run host ID`: that column means which host run produced the row, and
-        // an op id there trips the reader's concatenated-capture warning.
-        uint32_t prog = 0;
+        uint32_t prog = 0;           // the program's runtime id, written as `run host ID` like the device profiler log
         std::string_view zone_name;  // in the zone-name registry, alive for the process
         const char* type = "";  // ZONE_START | ZONE_END | TS_DATA
     };

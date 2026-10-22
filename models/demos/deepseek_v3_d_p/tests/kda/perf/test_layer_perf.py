@@ -25,7 +25,9 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
+    LayerNrmseThresholds,
     check_kimi_k3_accuracy,
     deallocate_state,
     make_kimi_k3_device_case,
@@ -47,13 +49,20 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 8.617,
-    "SP2xTP4": 8.758,
-    "SP4xTP2": 9.066,
+    "SP1xTP8": 6.785,
+    "SP2xTP4": 7.022,
+    "SP4xTP2": 6.114,
 }
-_GALAXY_PERF_REFERENCE_MS = 3.121
+# Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
+# prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
+# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
+_GALAXY_PERF_REFERENCE_MS = 1.456
+_GALAXY_ACTUAL_START = 4 * 640 + 320
+# Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
+# they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
+# the warm-up compiled for.
+_L1_SMALL_SIZE = 1152
 
 
 @pytest.fixture(scope="session")
@@ -119,6 +128,7 @@ def _trace_wall_samples_ms(
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
     actual_start: int = 0,
+    actual_end: int | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
     state = None
     warm_output = None
@@ -127,9 +137,10 @@ def _trace_wall_samples_ms(
     output = None
     next_state = None
     actual_start_tt = make_actual_start(mesh_device, actual_start)
+    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -137,11 +148,19 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state, actual_start_tt)
+        output, next_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        validation = validate_first_replay(next_state, output) if validate_first_replay is not None else None
+        validation = (
+            validate_first_replay(
+                next_state,
+                output,
+                nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            )
+            if validate_first_replay is not None
+            else None
+        )
 
         samples_ms = []
         for _ in range(_TIMING_SAMPLES):
@@ -183,6 +202,7 @@ def _trace_wall_samples_ms(
         pytest.param(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "l1_small_size": _L1_SMALL_SIZE,
             },
             id="fabric_1d",
         ),
@@ -225,6 +245,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)
@@ -286,11 +307,11 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP4-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -314,12 +335,19 @@ def test_synthetic_kimi_k3_perf(
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
-    samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
+    actual_start, actual_end = (
+        (_GALAXY_ACTUAL_START, _GALAXY_ACTUAL_START + _SEQUENCE) if layout == "SP8xTP4" else (0, None)
+    )
+    samples_ms, _ = _trace_wall_samples_ms(
+        mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_end
+    )
     median_wall_ms = statistics.median(samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
         "layout": layout,
         "sequence": _SEQUENCE,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
         "weights": "deterministic synthetic",
         "repetitions": _REPETITIONS,
         "trace_wall_samples_ms": samples_ms,

@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
@@ -287,6 +287,9 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
         [[TILE_HEIGHT * 4 - 10, TILE_WIDTH * 5 - 20], [1]],  # h
         # ncd multiple tile
         [[3, 4, 5, TILE_HEIGHT * 3 - 15, TILE_WIDTH * 4 - 10], [0, 2]],  # c
+        # rank-1
+        [[5], [0]],
+        [[5], None],
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
