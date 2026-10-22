@@ -499,6 +499,18 @@ FORCE_INLINE void reduce_split_segmented_row(
 }
 #endif
 
+// A raw pack and unpack round trip can leave unpacker state a later program's init does not reset; one discarded copy
+// resets it.
+FORCE_INLINE void settle_next_program(uint32_t input_cb) {
+    reconfig_data_format_srca(input_cb);
+    copy_init(input_cb);
+    tile_regs_acquire();
+    copy_tile(input_cb, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -626,6 +638,11 @@ void kernel_main() {
                 }
             }
             MATH((topk_large_indices_split::finish()));
+            if constexpr (split_segments) {
+                if (num_chunks > max_fused_chunks) {
+                    settle_next_program(input_cb);
+                }
+            }
             if (!has_split) {
                 return;
             }
@@ -692,5 +709,8 @@ void kernel_main() {
             // Re-arm the untilize pack the row output path expects.
             pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
         }
+    }
+    if (num_recv_rounds > 0 || sends_survivor) {
+        settle_next_program(input_cb);
     }
 }
