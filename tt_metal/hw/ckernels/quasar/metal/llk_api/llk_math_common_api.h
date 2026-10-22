@@ -9,6 +9,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_compute_api_claim.h"
 #include "llk_io.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
@@ -99,6 +100,7 @@ inline void llk_math_set_dvalid() {
  * compute APIs.
  */
 inline void llk_math_wait_for_dest_available() {
+    LLK_COMPUTE_API_CLAIM(legacy, 2_0);
     _llk_math_wait_for_dest_available_();
 
     if constexpr (UnpackToDestEn) {

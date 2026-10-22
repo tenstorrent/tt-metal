@@ -51,6 +51,7 @@ ALWI void compute_kernel_hw_startup(
         experimental::is_legal_tile_shape(SA) && experimental::is_legal_tile_shape(SB) &&
             experimental::is_legal_tile_shape(SO),
         "compute_kernel_hw_startup: illegal tile shape.");
+    LLK_COMPUTE_API_CLAIM(2_0, legacy);
     _llk_dest_chain_reset_();
     UNPACK((llk_2_0::unpack_hw_configure<
             experimental::LLKOperand<FA, SA>::descriptor,
