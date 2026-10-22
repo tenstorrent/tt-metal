@@ -1677,3 +1677,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   untracked files are in the gate key only. DeepSeek-V4.1: resumed fix jobs re-ran 45-70 min gates on code unchanged
   since their last run. Selftests: test_stamps.py (reuse on resume, a one-byte change runs, FAIL never reused, the key
   follows content, fix-job units, verify --force, the orchestrator's resumed task without an agent), test_verify.py.
+- F151 (owner, 2026-10-22): a fix job runs its gate tasks' commands exactly. Cause: overseer._as_task copies each gate
+  task's tasks.yaml command, but a full-model task's --no-precompile is not in that text for L.* and X.3 (ledger_gen
+  writes it literally only for M.1, K.1, the profile and smoke): gate_command adds it at run time by the task's step
+  (integrate / assemble / contract / perf), and a fix job's step is overseer_fix. So DeepSeek-V4.1 FIX.8's L.last,
+  FIX.9's L.last and FIX.5's X.3 segments ran run_safe_pytest's precompile pass (the whole test once more) inside 45-70
+  min gates, while M.1 / K.1 segments did not. Fix: core/gate.gate_units builds each unit's command with its source
+  task's step (step_command), so a unit's command is exactly gate_command(source task); fixes already placed in a live
+  tasks.yaml are covered at run time (no rewrite needed). Component tasks keep their precompile pass, as their own gates
+  do. Selftest: test_overseer.py::test_a_fix_job_runs_its_gate_tasks_commands_exactly.

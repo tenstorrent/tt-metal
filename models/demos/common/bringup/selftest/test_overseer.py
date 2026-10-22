@@ -300,3 +300,47 @@ def test_a_second_orchestrator_on_a_live_run_is_refused(tmp_path):
         p.wait()
     pid_file.write_text(f"{p.pid} now\n")
     assert _live_orchestrator(pid_file) is None  # a dead process does not block
+
+
+def test_a_fix_job_runs_its_gate_tasks_commands_exactly(sandbox):
+    """F151: a fix job's segment of a full-model task (integrate, contract, perf) kept run_safe_pytest's precompile
+    pass, which the task's own gate skips (gate_command adds --no-precompile by the task's step, and the fix's step is
+    overseer_fix): DeepSeek-V4.1 FIX.8 / FIX.9 / FIX.5 compiled L.last and X.3 twice in 45-70 min gates."""
+    from models.demos.common.bringup.core.gate import gate_command, gate_units, run_gate
+
+    runner = sandbox.repo / "scripts/run_safe_pytest.sh"
+    runner.parent.mkdir()
+    runner.write_text(f"#!/bin/bash\necho \"$BRINGUP_TASK $*\" >> {sandbox.repo.parent / 'calls.txt'}\n")
+    runner.chmod(0o755)
+    safe = "scripts/run_safe_pytest.sh --run-all"
+    tasks = {
+        "C.1": {"id": "C.1", "title": "c", "step": "implement", "device": True, "gate": {"cmd": f"{safe} t_c.py"}},
+        "L.1": {
+            "id": "L.1",
+            "title": "l",
+            "step": "integrate",
+            "device": True,
+            "gate": {"cmd": f"BRINGUP_RUNG=s {safe} t_l.py"},
+        },
+        "X.3": {
+            "id": "X.3",
+            "title": "x",
+            "step": "perf",
+            "device": True,
+            "gate": {"cmd": f"{safe} t_l.py && TT_METAL_DEVICE_PROFILER=1 {safe} test_profile.py"},
+        },
+    }
+    sandbox.tasks(*tasks.values())
+    job = OV.queue_fix(sandbox.spec.bringup_dir, "Fix.", ["C.1", "L.1", "X.3"], tasks=tasks)
+    fix = OV.fix_task(job, tasks)
+    units = gate_units(fix, tasks)
+    assert units == [(t, gate_command(tasks[t])) for t in ("C.1", "L.1", "X.3")]
+    assert "--no-precompile" not in units[0][1] and units[1][1].count("--no-precompile") == 1
+    assert gate_command(fix, tasks).count("--no-precompile") == 4  # L.1, and X.3's ladder, clean wall and profile
+    led = sandbox.tasks(*tasks.values(), fix)
+    for t in tasks:
+        led.update(t, status="PASS")
+    assert run_gate(sandbox.spec, led, "FIX.1").verdict == "PASS"
+    calls = (sandbox.repo.parent / "calls.txt").read_text().splitlines()
+    assert calls[:2] == ["C.1 --run-all t_c.py", "L.1 --no-precompile --run-all t_l.py"]
+    assert len(calls) == 5 and all(c.startswith("X.3 --no-precompile") for c in calls[2:])
