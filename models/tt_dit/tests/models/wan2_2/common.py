@@ -9,6 +9,49 @@ import torch
 from loguru import logger
 from PIL import Image
 
+import ttnn
+
+# Upper timing limits in seconds per (mesh shape, height, arch): 30% headroom over measured, 100% on
+# encoder. test_performance_wan.py gates on them (with TIMING_LOWER_FRACTION as the lower bound);
+# test_pipeline_wan.py gates its cold single run on a multiple of the total.
+T2V_TIMING_LIMITS = {
+    ((2, 2), 480, "bh"): {"encoder": 0.12, "denoising": 680.0, "vae": 60.0, "total": 760.0},
+    ((2, 4), 480, "bh"): {"encoder": 0.1, "denoising": 240.0, "vae": 5.0, "total": 255.0},
+    ((2, 4), 480, "wh"): {"encoder": 0.1, "denoising": 800.0, "vae": 9.0, "total": 850.0},
+    # 4x8: ring measurements only; linear needs remeasuring.
+    ((4, 8), 480, "bh"): {"encoder": 0.21, "denoising": 75.0, "vae": 0.42, "total": 76.0},
+    ((4, 8), 480, "wh"): {"encoder": 0.23, "denoising": 142.0, "vae": 1.55, "total": 144.0},
+    ((4, 8), 720, "bh"): {"encoder": 0.22, "denoising": 205.0, "vae": 0.85, "total": 206.0},
+    ((4, 8), 720, "wh"): {"encoder": 0.22, "denoising": 449.0, "vae": 3.4, "total": 452.0},
+    ((4, 32), 720, "bh"): {"encoder": 0.54, "denoising": 75.0, "vae": 5.0, "total": 80.5},
+}
+# I2V configs measured on their own; anything missing falls back to the T2V limits (TODO: measure).
+I2V_TIMING_LIMITS = {}
+# BH 4x8 linear topology is expected to be slower than ring; relax the limits by this factor.
+BH_4X8_LINEAR_SLACK = 1.10
+# Uncalibrated placeholder (#60481): a run under this fraction of the upper limit is suspicious
+# (skipped work, a stale cache hit) rather than fast.
+TIMING_LOWER_FRACTION = 0.5
+
+
+def timing_limits(model_type, mesh_shape, height, topology):
+    """``{metric: (lower, upper)}`` seconds for this config, or None if it has no limits."""
+    key = (tuple(mesh_shape), height, "bh" if ttnn.device.is_blackhole() else "wh")
+    upper = (I2V_TIMING_LIMITS.get(key) if model_type == "i2v" else None) or T2V_TIMING_LIMITS.get(key)
+    if upper is None:
+        return None
+    slack = BH_4X8_LINEAR_SLACK if tuple(mesh_shape) == (4, 8) and topology == ttnn.Topology.Linear else 1.0
+    return {k: (v * slack * TIMING_LOWER_FRACTION, v * slack) for k, v in upper.items()}
+
+
+def check_timings(measured, limits, label):
+    """Messages for each measured metric outside its ``(lower, upper)`` limits."""
+    return [
+        f"{label} {k} = {measured[k]:.3f}s outside [{lower:.3f}, {upper:.3f}]s"
+        for k, (lower, upper) in limits.items()
+        if k in measured and not lower <= measured[k] <= upper
+    ]
+
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
     """Deterministic synthetic conditioning image for the I2V tests (no image file needed in CI)."""
