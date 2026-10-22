@@ -116,6 +116,9 @@ static void run_test_stress(
 }
 
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     vector<struct core_setup> cores;
     vector<LinkError> errors;
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs;

@@ -19,6 +19,10 @@ void kernel_main() {
     const auto num_reduced_tiles_along_dim = get_arg(args::num_reduced_tiles_along_dim);
 
     DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_x_obj(dfb::x);
+    DataflowBuffer dfb_val_obj(dfb::val);
+    DataflowBuffer dfb_cal_obj(dfb::cal);
+    DataflowBuffer dfb_y_obj(dfb::y);
 
     constexpr uint32_t onetile = 1;
 
@@ -43,22 +47,23 @@ void kernel_main() {
             // x != 0
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(dfb::x)>{},
+                ckl::CopyTile<ckl::input(dfb::x)>{dfb_x_obj},
                 ckl::Optional<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                 ckl::Optional<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
                 ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(dfb::val)>{});
+                ckl::PackTile<ckl::output(dfb::val)>{dfb_val_obj});
 
             // calculate f(x) over dimensions
             if (inner_idx == 0) {
-                ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
+                ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj);
             } else {
 #ifdef IS_ZERO
                 ckl::add<ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
-                    ckl::IterationShape::tiles(onetile));
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
 #else
                 ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
-                    ckl::IterationShape::tiles(onetile));
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
 #endif
             }
         }
@@ -66,9 +71,9 @@ void kernel_main() {
         // Compute dfb::y
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(dfb::cal)>{},
+            ckl::CopyTile<ckl::input(dfb::cal)>{dfb_cal_obj},
             ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::PackTile<ckl::output(dfb::y)>{});
+            ckl::PackTile<ckl::output(dfb::y)>{dfb_y_obj});
     }
     dfb_one_obj.pop_front(onetile);
 }

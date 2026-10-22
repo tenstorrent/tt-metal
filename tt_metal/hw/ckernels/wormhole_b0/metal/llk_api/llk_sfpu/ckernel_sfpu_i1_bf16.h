@@ -63,26 +63,37 @@ struct I1Bf16Config {
           0.0000000000000000e+00f}}};
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_exp_root.h"
+#include "ckernel_sfpu_i1_bf16_exp_root.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_i1() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
+inline void calculate_i1_bf16_body() {
+    ckernel::sfpu::bf16::i1::calculate_exp_root<ckernel::sfpu::I1Bf16Config, ITERATIONS>();
+}
+// The constants stock's init also sets hold the kernel's own values for its call only.
+template <int ITERATIONS = 32>
 inline void calculate_i1_bf16() {
-    ckernel::sfpu::bf16::calculate_exp_root<ckernel::sfpu::I1Bf16Config, ITERATIONS>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x5f1110a0u);
+    calculate_i1_bf16_body<ITERATIONS>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
 }
 inline void init_i1_bf16() {
-    if (bf16_dest_i1()) {
-        ckernel::sfpu::bf16::init_exp_root<ckernel::sfpu::I1Bf16Config>();
-    }
+    ckernel::sfpu::bf16::i1::init_exp_root<ckernel::sfpu::I1Bf16Config>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
 }
 
 }  // namespace ckernel::sfpu

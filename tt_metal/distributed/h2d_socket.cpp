@@ -411,7 +411,8 @@ H2DSocket::H2DSocket(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
-    mesh_device_(mesh_device.get()) {
+    mesh_device_(mesh_device.get()),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
@@ -423,7 +424,7 @@ H2DSocket::H2DSocket(
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
     config_buffer_address_ = config_buffer_->address();
-    if (!mesh_device->is_local(recv_core_.device_coord)) {
+    if (!rank_owns_endpoint_) {
         return;
     }
 
@@ -472,6 +473,7 @@ H2DSocket::H2DSocket(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
     MeshCoordinateRangeSet recv_device_range_set;
@@ -535,6 +537,7 @@ H2DSocket::H2DSocket(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
     // MeshDevice* and does not extend the device's lifetime.
@@ -733,7 +736,7 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
 }
 
 bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
-    validate_host_socket_access(mesh_device_, recv_core_);
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
@@ -753,7 +756,7 @@ bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
 }
 
 bool H2DSocket::acked_past(uint32_t watermark) {
-    validate_host_socket_access(mesh_device_, recv_core_);
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     // in_flight = bytes_sent_ - bytes_acked_ (unsigned, always <= fifo_size_)
     // bytes_since_watermark = bytes_sent_ - watermark (unsigned, in [0, fifo_size_])
     // Write at watermark is done iff bytes_acked_ >= watermark, equivalently
@@ -856,7 +859,7 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
 }
 
 void H2DSocket::write(void* data, uint32_t num_pages) {
-    validate_host_socket_access(mesh_device_, recv_core_);
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
@@ -875,7 +878,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
 }
 
 bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
-    validate_host_socket_access(mesh_device_, recv_core_);
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
@@ -913,7 +916,7 @@ MeshDevice* H2DSocket::get_mesh_device() const { return mesh_device_; }
 H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
 
 HDSocketDescriptor H2DSocket::populate_descriptor() const {
-    validate_host_socket_access(mesh_device_, recv_core_);
+    validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
     // The descriptor schema has no fields for the L2CPU LIM addresses, so a connector
     // could not rebuild the device side. Checked here rather than in export_descriptor()

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <tt_stl/span.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/memory_pin.hpp>

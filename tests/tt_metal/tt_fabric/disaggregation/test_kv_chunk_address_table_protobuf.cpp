@@ -326,6 +326,7 @@ void expect_tables_equal(const KvChunkAddressTable& a, const KvChunkAddressTable
         EXPECT_EQ(ca.max_sequence_length, cb.max_sequence_length);
         EXPECT_EQ(ca.num_slots, cb.num_slots);
         EXPECT_EQ(ca.chunk_n_tokens, cb.chunk_n_tokens);
+        EXPECT_EQ(ca.tensor_type, cb.tensor_type) << "tensor_type mismatch at id " << c;
         for (uint32_t slot = 0; slot < ca.num_slots; slot++) {
             for (uint32_t layer = 0; layer < ca.num_layers; layer++) {
                 for (uint32_t pos = 0; pos < ca.max_sequence_length; pos += ca.chunk_n_tokens) {
@@ -418,7 +419,113 @@ TEST(KvChunkAddressTableProtobuf, LegacySingleConfigWireStillReads) {
     auto restored = import_from_protobuf(pb.SerializeAsString());
     ASSERT_EQ(restored.num_configs(), 1u);
     EXPECT_EQ(restored.config_name(0), "0");
+    EXPECT_EQ(restored.config().tensor_type, KvChunkTensorType::Kv);  // legacy = KV
     EXPECT_EQ(restored.lookup(1, 32, 0).noc_addr, 0xABCDu);
+}
+
+// --- Per-config tensor type (KvChunkConfig.tensor_type) ---
+
+// Two configs of different tensor types: a positional KV config and a snapshot config with a
+// single chunk per (layer, slot) row (no sequence axis).
+KvChunkAddressTable make_mixed_tensor_type_table() {
+    std::map<std::string, KvChunkAddressTableConfig> configs = {
+        {"kv", {.num_layers = 2, .max_sequence_length = 128, .num_slots = 2, .chunk_n_tokens = 32}},
+        {"snap",
+         {.num_layers = 2,
+          .max_sequence_length = 32,
+          .num_slots = 2,
+          .chunk_n_tokens = 32,
+          .tensor_type = KvChunkTensorType::Snapshot}},
+    };
+    KvChunkAddressTable table(configs);
+    auto grp = table.add_device_group({make_proto_fnid(0, 0)});
+    table.set_fabric_node_host(make_proto_fnid(0, 0), "alpha-host");
+    for (uint32_t c = 0; c < table.num_configs(); c++) {
+        const auto& cfg = table.config(c);
+        for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
+            for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
+                for (uint32_t pos = 0; pos < cfg.max_sequence_length; pos += cfg.chunk_n_tokens) {
+                    const uint64_t h = pseudo_rand(c * 100 + slot, layer, pos);
+                    table.set(
+                        layer,
+                        pos,
+                        slot,
+                        KvCacheLocation{
+                            .noc_addr = 0x1'0000'0000ULL + (h & 0xFFFF'FF00ULL),
+                            .size_bytes = 512,
+                            .device_group_index = grp},
+                        c);
+                }
+            }
+        }
+    }
+    return table;
+}
+
+void expect_mixed_tensor_types(const KvChunkAddressTable& table) {
+    EXPECT_EQ(table.config(table.config_id_of("kv")).tensor_type, KvChunkTensorType::Kv);
+    EXPECT_EQ(table.config(table.config_id_of("snap")).tensor_type, KvChunkTensorType::Snapshot);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeWireTags) {
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    ASSERT_EQ(pb.configs_size(), 2);
+    for (const auto& c : pb.configs()) {
+        EXPECT_EQ(
+            c.tensor_type(),
+            c.name() == "snap" ? ::tt::disaggregation::proto::SNAPSHOT : ::tt::disaggregation::proto::KV)
+            << "config " << c.name();
+    }
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeRoundTripViaString) {
+    auto original = make_mixed_tensor_type_table();
+    auto restored = import_from_protobuf(export_to_protobuf(original));
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeRoundTripViaFile) {
+    auto original = make_mixed_tensor_type_table();
+    std::string tmp_path = std::filesystem::temp_directory_path() / "kv_mixed_tensor_type_table_test.pb";
+    export_to_protobuf_file(original, tmp_path);
+    auto restored = import_from_protobuf_file(tmp_path);
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+    std::filesystem::remove(tmp_path);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedTensorTypeTextFormatRoundTrip) {
+    auto original = make_mixed_tensor_type_table();
+    const std::string text = export_to_protobuf_text(original);
+    EXPECT_NE(text.find("SNAPSHOT"), std::string::npos);
+    auto restored = import_from_protobuf_text(text);
+    expect_mixed_tensor_types(restored);
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, ConfigWithoutTensorTypeReadsAsKv) {
+    // A `configs` entry written before tensor_type existed (field 8 absent) must import as KV.
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    for (auto& c : *pb.mutable_configs()) {
+        c.clear_tensor_type();
+    }
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.config(restored.config_id_of("kv")).tensor_type, KvChunkTensorType::Kv);
+    EXPECT_EQ(restored.config(restored.config_id_of("snap")).tensor_type, KvChunkTensorType::Kv);
+}
+
+TEST(KvChunkAddressTableProtobuf, UnknownTensorTypeRejected) {
+    // A tensor_type written by a newer format is rejected loudly (fail-closed versioning).
+    auto original = make_mixed_tensor_type_table();
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    pb.mutable_configs(0)->set_tensor_type(static_cast<::tt::disaggregation::proto::KvChunkTensorType>(7));
+    EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
 }
 
 // --- Strided-run compression (field 11 `runs`) ---
@@ -526,6 +633,141 @@ TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
 
     auto restored = import_from_protobuf(pb.SerializeAsString());
     expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, SetStridedRowMatchesUnrolledAuthoring) {
+    // A block-cyclic layout authored row-by-row with set_strided_row() (no unrolled grid) exports
+    // the same runs and reads back the same as the identical layout authored chunk-by-chunk.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kBanks = 8;
+    constexpr uint32_t kChunks = 64;  // 8 full periods
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 2, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    auto addr = [](uint32_t slot, uint32_t layer, uint32_t i) {
+        const uint64_t row_base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+        return row_base + (i % kBanks) * 0x2000ULL + (i / kBanks) * 0x30000ULL;
+    };
+
+    KvChunkAddressTable unrolled(std::map<std::string, KvChunkAddressTableConfig>{{"kv", cfg}});
+    auto grp_a = unrolled.add_device_group({make_proto_fnid(0, 0)});
+    auto grp_b = unrolled.add_device_group({make_proto_fnid(0, 1)});
+    KvChunkAddressTable strided(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    strided.add_device_group({make_proto_fnid(0, 0)});
+    strided.add_device_group({make_proto_fnid(0, 1)});
+    ASSERT_EQ(strided.compression(0), ChunkCompression::kStridedRows);
+
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            // Device group alternates every 4 chunks, so it varies per residue.
+            for (uint32_t i = 0; i < kChunks; i++) {
+                unrolled.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr = addr(slot, layer, i),
+                        .size_bytes = 512,
+                        .device_group_index = (i / 4) % 2 ? grp_b : grp_a});
+            }
+            std::vector<uint64_t> bases;
+            std::vector<int64_t> strides;
+            std::vector<DeviceGroupIndex> groups;
+            for (uint32_t r = 0; r < kBanks; r++) {
+                bases.push_back(addr(slot, layer, r));
+                strides.push_back(static_cast<int64_t>(addr(slot, layer, r + kBanks) - addr(slot, layer, r)));
+                groups.push_back((r / 4) % 2 ? grp_b : grp_a);
+            }
+            strided.set_strided_row(layer, slot, 512, bases, strides, groups);
+        }
+    }
+
+    expect_tables_equal(unrolled, strided);
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_unrolled;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_strided;
+    ASSERT_TRUE(pb_unrolled.ParseFromString(export_to_protobuf(unrolled)));
+    ASSERT_TRUE(pb_strided.ParseFromString(export_to_protobuf(strided)));
+    pb_unrolled.clear_origin_host();
+    pb_strided.clear_origin_host();
+    EXPECT_EQ(pb_unrolled.SerializeAsString(), pb_strided.SerializeAsString());
+    expect_tables_equal(strided, import_from_protobuf(pb_strided.SerializeAsString()));
+}
+
+// Rows authored with set_strided_row() and with set() at 11 chunks, step 4: residues 0-2 hold three
+// chunks and residue 3 two, so the last period is partial and import must accept per-residue run
+// counts of ceil((npc - r) / step). The device group alternates per residue.
+struct PartialPeriodTables {
+    KvChunkAddressTable unrolled;
+    KvChunkAddressTable strided;
+};
+
+PartialPeriodTables partial_period_tables(const std::vector<int64_t>& strides) {
+    constexpr uint32_t kStep = 4;
+    constexpr uint32_t kChunks = 11;
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 1, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    const std::vector<uint64_t> bases{0x10'0000, 0x20'0000, 0x30'0000, 0x50'0000};
+    auto addr = [&](uint32_t slot, uint32_t i) {
+        const int64_t offset = static_cast<int64_t>(i / kStep) * strides[i % kStep];
+        return bases[i % kStep] + slot * 0x100'0000ULL + static_cast<uint64_t>(offset);
+    };
+    PartialPeriodTables t{
+        KvChunkAddressTable(std::map<std::string, KvChunkAddressTableConfig>{{"kv", cfg}}),
+        KvChunkAddressTable(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+            {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}})};
+    auto grp_a = t.unrolled.add_device_group({make_proto_fnid(0, 0)});
+    auto grp_b = t.unrolled.add_device_group({make_proto_fnid(0, 1)});
+    t.strided.add_device_group({make_proto_fnid(0, 0)});
+    t.strided.add_device_group({make_proto_fnid(0, 1)});
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t i = 0; i < kChunks; i++) {
+            t.unrolled.set(
+                0,
+                i * 32,
+                slot,
+                KvCacheLocation{
+                    .noc_addr = addr(slot, i), .size_bytes = 512, .device_group_index = i % 2 ? grp_b : grp_a});
+        }
+        std::vector<uint64_t> row_bases;
+        row_bases.reserve(kStep);
+        for (uint32_t r = 0; r < kStep; r++) {
+            row_bases.push_back(addr(slot, r));
+        }
+        t.strided.set_strided_row(0, slot, 512, row_bases, strides, {grp_a, grp_b, grp_a, grp_b});
+    }
+    return t;
+}
+
+TEST(KvChunkAddressTableProtobuf, SetStridedRowPartialPeriodNegativeStrideMatchesUnrolled) {
+    // One negative stride for every residue (the export detects a period only when the stride is
+    // uniform): both builds export the same runs and round-trip as STRIDED_ROWS.
+    DualWriteEnvGuard guard("0");
+    auto t = partial_period_tables({-0x400, -0x400, -0x400, -0x400});
+    EXPECT_EQ(t.strided.lookup(0, 10 * 32, 1).noc_addr, 0x130'0000ULL - 2 * 0x400);  // residue 2, third chunk
+    expect_tables_equal(t.unrolled, t.strided);
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_unrolled;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_strided;
+    ASSERT_TRUE(pb_unrolled.ParseFromString(export_to_protobuf(t.unrolled)));
+    ASSERT_TRUE(pb_strided.ParseFromString(export_to_protobuf(t.strided)));
+    pb_unrolled.clear_origin_host();
+    pb_strided.clear_origin_host();
+    EXPECT_EQ(pb_unrolled.SerializeAsString(), pb_strided.SerializeAsString());
+    auto restored = import_from_protobuf(pb_strided.SerializeAsString());
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(t.strided, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, SetStridedRowPartialPeriodMixedStridesRoundTrip) {
+    // A different stride per residue, two of them negative: the strided row reads back like the
+    // per-chunk one and survives export/import as STRIDED_ROWS.
+    DualWriteEnvGuard guard("0");
+    auto t = partial_period_tables({0x100, -0x200, 0x300, -0x400});
+    EXPECT_EQ(t.strided.lookup(0, 10 * 32, 1).noc_addr, 0x130'0000ULL + 2 * 0x300);  // residue 2, third chunk
+    EXPECT_EQ(t.strided.lookup(0, 7 * 32, 0).noc_addr, 0x50'0000ULL - 0x400);        // residue 3, last chunk
+    expect_tables_equal(t.unrolled, t.strided);
+    auto restored = import_from_protobuf(export_to_protobuf(t.strided));
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(t.strided, restored);
 }
 
 TEST(KvChunkAddressTableProtobuf, ShardedRowRunsRoundTrip) {
@@ -668,6 +910,7 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     EXPECT_EQ(cfg.num_slots, 2u);
     EXPECT_EQ(cfg.max_sequence_length, 96 * 32u);
     EXPECT_EQ(restored.compression(0), ChunkCompression::kUnrolled);  // legacy = unrolled
+    EXPECT_EQ(cfg.tensor_type, KvChunkTensorType::Kv);                // legacy = KV
     EXPECT_EQ(restored.get_host(make_proto_fnid(0, 0)), "legacy-host");
     for (uint32_t slot = 0; slot < 2; slot++) {
         for (uint32_t layer = 0; layer < 2; layer++) {
@@ -1007,6 +1250,59 @@ TEST(KvChunkAddressTableProtobuf, EntryConfigIdxOutOfRangeThrows) {
     e->set_size_bytes(10);
     e->set_config_idx(5);  // only one config (idx 0) exists
     EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+}
+
+TEST(KvChunkAddressTableProtobuf, EmptyStridedConfigRoundTrips) {
+    // A STRIDED_ROWS config that never got a row exports as an empty UNROLLED config (zero runs would
+    // be rejected on import as malformed), next to a populated strided config.
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 2, .max_sequence_length = 256, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable table(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"a", {.config = cfg, .compression = ChunkCompression::kStridedRows}},
+        {"b", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    auto g0 = table.add_device_group({make_proto_fnid(0, 0)});
+    table.set_strided_row(1, 0, 64, {0x100, 0x200}, {0x10, 0x20}, {g0, g0}, table.config_id_of("a"));
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(table)));
+    ASSERT_EQ(pb.configs_size(), 2);
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.compression(restored.config_id_of("a")), ChunkCompression::kStridedRows);
+    EXPECT_EQ(restored.compression(restored.config_id_of("b")), ChunkCompression::kUnrolled);
+    expect_tables_equal(table, restored);
+
+    // Every config strided and empty.
+    KvChunkAddressTable empty(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+        {"a", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+    auto restored_empty = import_from_protobuf(export_to_protobuf(empty));
+    EXPECT_EQ(restored_empty.lookup(0, 0, 0).size_bytes, 0u);
+}
+
+TEST(KvChunkAddressTableProtobuf, SingleChunkResidueStrideIsCanonical) {
+    // 8 position chunks, step 6: residues 0-1 hold two chunks, residues 2-5 hold one, so their stride
+    // is never used. Rows that differ only in those unused strides export the same bytes.
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 1, .max_sequence_length = 256, .num_slots = 1, .chunk_n_tokens = 32};
+    auto make = [&](int64_t unused_stride) {
+        KvChunkAddressTable t(std::map<std::string, KvChunkAddressTable::NamedConfigInit>{
+            {"kv", {.config = cfg, .compression = ChunkCompression::kStridedRows}}});
+        auto g = t.add_device_group({make_proto_fnid(0, 0)});
+        std::vector<uint64_t> bases{0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000};
+        std::vector<int64_t> strides{0x100, 0x100, unused_stride, unused_stride, unused_stride, unused_stride};
+        t.set_strided_row(0, 0, 64, bases, strides, std::vector<DeviceGroupIndex>(6, g));
+        return t;
+    };
+    auto a = make(0);
+    auto b = make(0x12345);
+    expect_tables_equal(a, b);
+    EXPECT_EQ(b.lookup(0, 6 * 32, 0).noc_addr, 0x1100u);  // residue 0, second chunk
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_a;
+    ::tt::disaggregation::proto::KvChunkAddressTable pb_b;
+    ASSERT_TRUE(pb_a.ParseFromString(export_to_protobuf(a)));
+    ASSERT_TRUE(pb_b.ParseFromString(export_to_protobuf(b)));
+    pb_a.clear_origin_host();
+    pb_b.clear_origin_host();
+    EXPECT_EQ(pb_a.SerializeAsString(), pb_b.SerializeAsString());
 }
 
 }  // namespace

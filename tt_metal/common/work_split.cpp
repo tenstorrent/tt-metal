@@ -6,6 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
+#include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include "common/work_split_internal.hpp"
@@ -152,7 +153,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     const CoreCoord start_core,
     const uint32_t target_num_cores,
     const CoreRangeSet& sub_core_grids,
-    const bool row_wise = false) {
+    const bool row_wise) {
     TTZoneScopedD(MISC);
     TT_FATAL(target_num_cores > 0, "Target number of cores must be greater than 0");
     TT_FATAL(

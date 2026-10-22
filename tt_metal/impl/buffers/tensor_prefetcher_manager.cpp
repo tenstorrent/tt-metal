@@ -910,7 +910,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     // by the GCB rather than the prefetcher kernel.
     auto& arena = mesh_device_->impl().drisc_l1_arena();
     const uint32_t kernel_region_size = arena.kernel_working_region_size();
-    const uint32_t l1_alignment = hal::get_l1_alignment();
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     TT_FATAL(
         kernel_region_size >= 2 * l1_alignment,
         "DRISC L1 kernel region ({} B) too small for the prefetcher ping-pong stage",

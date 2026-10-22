@@ -7,6 +7,8 @@
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 #include <mutex>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -52,10 +54,13 @@ bool is_native_L1_sharding(
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
-        return false;
-    }
-    return true;
+    // The aliased path computes input shard k into whichever output shard lives on the same core, with
+    // no data movement in between, so the two specs must place the same tensor region on each core.
+    const auto& in_shard = *input_spec.memory_config().shard_spec();
+    const auto& out_shard = *output_memory_config.shard_spec();
+    return in_shard.grid == out_shard.grid && in_shard.shape == out_shard.shape &&
+           in_shard.orientation == out_shard.orientation &&
+           input_spec.memory_config().memory_layout() == output_memory_config.memory_layout();
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
@@ -72,23 +77,25 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     }
 
     // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
-    // for the sharded CB-aliasing path to work (it requires whole-tile pages).
+    // for the sharded borrowed-DFB path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
+    // Each shard row is its own page, padded up to the L1 alignment, so the dense tile pages the
+    // borrowed DFB walks only line up with the buffer when that padding is zero.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
+        auto fits_borrowed_dfb = [](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
-            return shard_elements % tile_hw == 0;
+            return shard_elements % tile_hw == 0 &&
+                   spec.compute_page_size_bytes() % tt::tt_metal::hal::get_l1_alignment() == 0;
         };
 
-        if ((input_sharded && !is_shard_tile_aligned(input_spec)) ||
-            (output_sharded && !is_shard_tile_aligned(output_spec))) {
+        if ((input_sharded && !fits_borrowed_dfb(input_spec)) || (output_sharded && !fits_borrowed_dfb(output_spec))) {
             static std::once_flag warn_flag;
             std::call_once(warn_flag, [] {
                 log_warning(
                     tt::LogOp,
-                    "Unary: ROW_MAJOR shard element count is not tile-aligned; "
+                    "Unary: ROW_MAJOR shard element count is not tile-aligned or its rows are not L1-aligned; "
                     "falling back to interleaved path");
             });
             return std::nullopt;
@@ -161,8 +168,9 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
     // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
     // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
     // grid is a small vector and copying it keeps the lifetime obvious.
-    auto sub_device_workers_for = [](const tt::tt_metal::CoreRangeSet& grid,
-                                     tt::tt_metal::IDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
+    auto sub_device_workers_for =
+        [](const tt::tt_metal::CoreRangeSet& grid,
+           tt::tt_metal::distributed::MeshDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
@@ -229,6 +237,39 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
+}
+
+void require_buffer_distribution_matches_spec(
+    const Tensor& tensor,
+    const std::optional<tt::tt_metal::BufferDistributionSpec>& spec_distribution,
+    const char* slot) {
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    if (buffer_distribution.has_value() && spec_distribution.has_value() &&
+        buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+        buffer_distribution->cores() == spec_distribution->cores()) {
+        return;
+    }
+    const auto describe = [](const std::optional<tt::tt_metal::BufferDistributionSpec>& distribution) {
+        if (!distribution.has_value()) {
+            return std::string("no distribution");
+        }
+        std::string banks;
+        for (const auto& core : distribution->cores()) {
+            banks += (banks.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, banks [{}]", distribution->shard_shape_in_pages(), banks);
+    };
+    TT_THROW(
+        "Unary: the sharded {} tensor's buffer distribution ({}) differs from its TensorSpec distribution ({}); "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        slot,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
+
+void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* slot) {
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    require_buffer_distribution_matches_spec(tensor, sharding_args.buffer_distribution_spec(), slot);
 }
 
 }  // namespace ttnn::operations::unary

@@ -138,64 +138,6 @@ struct SDPAForwardKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid. (Standard row-based distribution)
  */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SDPAForwardKernels& kernels,
-    const tt::tt_metal::Buffer* query_buffer,
-    const tt::tt_metal::Buffer* key_buffer,
-    const tt::tt_metal::Buffer* value_buffer,
-    const tt::tt_metal::Buffer* mask_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    const tt::tt_metal::Buffer* intermediates_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {query_buffer->address(),
-             key_buffer->address(),
-             value_buffer->address(),
-             mask_buffer != nullptr ? mask_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
-
-        // Writer kernel: (output_addr, intermediates_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
-
-        // Compute kernel: (start_row) - needed for causal mask to know global position
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 /**
  * Set up the runtime arguments for balanced parallelism mode.
  * In this mode, work is distributed by pairs rather than rows.
@@ -692,21 +634,36 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             num_cores_y,
             pair_distribution);
     } else {
-        assign_per_core_runtime_args(
-            program,
-            kernels,
-            query_buffer,
-            key_buffer,
-            value_buffer,
-            mask_buffer,
-            output_buffer,
-            intermediates_buffer,
+        for_each_core_with_work(
             num_cores,
             num_cores_y,
+            core_group_1,
+            core_group_2,
             num_rows_per_core_group_1,
             num_rows_per_core_group_2,
-            core_group_1,
-            core_group_2);
+            [&](const CoreWork& work) {
+                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+                SetRuntimeArgs(
+                    program,
+                    kernels.reader,
+                    core,
+                    {query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     mask_buffer != nullptr ? mask_buffer->address() : 0,
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program,
+                    kernels.writer,
+                    core,
+                    {output_buffer->address(),
+                     intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -750,9 +707,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -771,7 +726,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
             runtime_args[kIntermediateBufferIdx] =
                 intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

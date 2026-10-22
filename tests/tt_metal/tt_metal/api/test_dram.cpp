@@ -289,6 +289,9 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
 }
 
 TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {

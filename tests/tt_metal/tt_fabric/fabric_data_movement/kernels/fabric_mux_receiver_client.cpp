@@ -6,7 +6,7 @@
 #include <limits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -60,7 +60,6 @@ void kernel_main() {
         rt_args_idx++;  // my_device_id (unused in this kernel)
         dst_device_id = get_arg_val<uint32_t>(rt_args_idx++);
         dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
-        rt_args_idx++;  // mesh_ew_dim (unused in this kernel)
     }
 
     auto test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_address);

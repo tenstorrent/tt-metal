@@ -136,6 +136,27 @@ Two execution variants exist per ISL, identified by the test id prefix:
 Single-user TP decode runs **MTP speculative decode by default**. Set
 `QWEN36_SPEC=0` to turn it off and fall back to plain single-token decode.
 
+Multi-user TP decode with up to 8 users also runs MTP speculative decode by
+default. All users' verify rows share one 32-row tile, so the draft length K
+shrinks as the batch grows (B=2: K=11, B=4: K=7, B=8: K=3); batches above 8 run
+plain batched decode (the automatic policy keeps K >= 3). The traced draft chain and the traced reseed run for every
+batch size. Knobs:
+
+- `QWEN36_SPEC=0` — plain decode.
+- `QWEN36_SPEC_DRAFT_LEN=<K>` — override K (must keep B x (K+1) <= 32).
+- `QWEN36_TRACED_DRAFT=0` / `QWEN36_TRACED_RESEED=0` — run the draft chain / MTP
+  reseed eagerly (debugging; same tokens, slower).
+- `QWEN36_SPEC_TIMING=1` — per-phase timing lines.
+- `QWEN36_SPEC_BATCH_DISTINCT=1` — distinct prompts per user in the batched demo
+  cases.
+
+```bash
+# Batched spec decode demo cases (B=2/4/8 at 128 tokens, B=4/8 at 4k, B=8 at 8k/16k)
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "spec_128_b8"
+# Batched spec decode unit tests (lossless vs plain greedy, determinism, traced == eager)
+pytest models/demos/blackhole/qwen36/tests/test_spec_batched.py
+```
+
 Run the preferred traced cases (the env vars above must already be exported):
 
 ```bash

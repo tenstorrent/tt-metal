@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 

@@ -27,8 +27,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
-#include <tt-metalium/int8.hpp>
-#include <tt-metalium/uint8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -44,6 +42,8 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/int8.hpp"
+#include "tt_metal/test_utils/uint8.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
@@ -362,9 +362,6 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
-    }
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
         compute_defines.emplace("FAST_TILIZE", "1");
@@ -686,9 +683,6 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         {"REDUCE_OP", "PoolType::MAX"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
     };
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
@@ -833,8 +827,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data =
-                create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_int8(
+                tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -857,8 +851,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data =
-                create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_uint8(
+                tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -924,6 +918,107 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
+        }
+    }
+}
+
+// tilizeA_B + eltwise add on narrow tiles: 32x16 (two vertically stacked 16x16 faces) and 16x16 (one face).
+// A is row-major, B is a constant, so every output datum is the tilized A datum plus that constant. Small
+// integer inputs keep the bf16 sum exact.
+TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilizeA_B has a narrow-tile path";
+    }
+    constexpr std::uint32_t tile_w = 16;
+    constexpr std::uint32_t face_dim = 16;
+    constexpr std::uint32_t dram_bank_id = 0;
+    constexpr float b_value = 1.0f;
+
+    for (const std::uint32_t tile_h : {32u, 16u}) {
+        const Tile tile({tile_h, tile_w});
+        const std::uint32_t tile_bytes = tile.get_tile_size(tt::DataFormat::Float16_b);
+        for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
+            auto& mesh_device = *this->devices_.at(0);
+            auto& cq = mesh_device.mesh_command_queue();
+            Program program = CreateProgram();
+            const CoreCoord core = {0, 0};
+            const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
+            const std::uint32_t buffer_bytes = num_tiles * tile_bytes;
+
+            auto make_buffer = [&]() {
+                return distributed::MeshBuffer::create(
+                    distributed::ReplicatedBufferConfig{.size = buffer_bytes},
+                    {.page_size = buffer_bytes, .buffer_type = BufferType::DRAM},
+                    &mesh_device);
+            };
+            auto src0 = make_buffer();
+            auto src1 = make_buffer();
+            auto dst = make_buffer();
+            for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+                CircularBufferConfig config =
+                    CircularBufferConfig(buffer_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes);
+                config.set_tile_dims(cb, tile);
+                CreateCircularBuffer(program, core, config);
+            }
+            auto reader = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            auto writer = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B.cpp",
+                core,
+                ComputeConfig{.compile_args = {num_tiles_r, num_tiles_c}});
+
+            // A: row-major [num_tiles_r * tile_h, num_tiles_c * 16], cycling through the integers in [-50, 50]:
+            // 37 and 101 are coprime, so (i * 37) % 101 visits every residue once per 101 datums.
+            const std::uint32_t cols = num_tiles_c * tile_w;
+            const std::uint32_t rows = num_tiles_r * tile_h;
+            std::vector<bfloat16> a(rows * cols);
+            for (std::uint32_t i = 0; i < a.size(); i++) {
+                a[i] = bfloat16(static_cast<float>(static_cast<int>((i * 37) % 101) - 50));
+            }
+            distributed::EnqueueWriteMeshBuffer(cq, src0, pack_vector<std::uint32_t, bfloat16>(a), /*blocking=*/true);
+            distributed::EnqueueWriteMeshBuffer(
+                cq, src1, create_constant_vector_of_bfloat16(buffer_bytes, b_value), /*blocking=*/true);
+            SetRuntimeArgs(
+                program, reader, core, {src0->address(), dram_bank_id, src1->address(), dram_bank_id, num_tiles});
+            SetRuntimeArgs(program, writer, core, {dst->address(), dram_bank_id, num_tiles});
+            LaunchProgram(mesh_device, std::move(program));
+
+            std::vector<std::uint32_t> result_packed;
+            distributed::EnqueueReadMeshBuffer(cq, result_packed, dst, /*blocking=*/true);
+            const auto result = unpack_vector<bfloat16, std::uint32_t>(result_packed);
+
+            // Golden in output tile order: per tile, face 0 (rows 0-15) then, for 32-high tiles, face 1
+            // (rows 16-31), each row-major.
+            std::vector<bfloat16> golden;
+            golden.reserve(a.size());
+            for (std::uint32_t tr = 0; tr < num_tiles_r; tr++) {
+                for (std::uint32_t tc = 0; tc < num_tiles_c; tc++) {
+                    for (std::uint32_t face = 0; face < tile_h / face_dim; face++) {
+                        for (std::uint32_t r = 0; r < face_dim; r++) {
+                            for (std::uint32_t c = 0; c < face_dim; c++) {
+                                const std::uint32_t row = tr * tile_h + face * face_dim + r;
+                                golden.push_back(
+                                    bfloat16(static_cast<float>(a[row * cols + tc * tile_w + c]) + b_value));
+                            }
+                        }
+                    }
+                }
+            }
+            ASSERT_EQ(result.size(), golden.size());
+            std::uint32_t mismatches = 0;
+            for (std::uint32_t i = 0; i < golden.size(); i++) {
+                mismatches += static_cast<float>(result[i]) != static_cast<float>(golden[i]);
+            }
+            EXPECT_EQ(mismatches, 0u) << tile_h << "x" << tile_w << " tiles, " << num_tiles_r << "x" << num_tiles_c;
         }
     }
 }
@@ -1117,9 +1212,9 @@ static void run_quasar_tilize_untilize_test(
 
     std::vector<std::uint32_t> src_vec;
     if (input_data_format == tt::DataFormat::Int8) {
-        src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
+        src_vec = tt::test_utils::create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::UInt8) {
-        src_vec = create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
+        src_vec = tt::test_utils::create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::Int16) {
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
@@ -1314,7 +1409,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
 }
 
 // Quasar Unpack Tilize
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1391,7 +1486,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCr
 
 // Quasar Unpack TilizeA_B (tilize + reduce col max)
 // Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeUnpackTilizeA_B) {
     for (bool dst_full_sync_en : {true, false}) {
         for (bool fp32_dest_acc_en : {true, false}) {
             for (tt::DataFormat input_data_format : {tt::DataFormat::Float16_b}) {
@@ -1456,7 +1552,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
 // Quasar fast untilize: no dedicated fast-untilize LLK on Quasar, so fast_untilize_* (api/compute/experimental/
 // fast_untilize.h) forwards to the plain pack_untilize path -- this exercises that forwarding on real Quasar
 // single-card CI.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastUntilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
@@ -1476,7 +1573,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
 
 // Quasar fast tilize: no dedicated fast-tilize LLK on Quasar, so fast_tilize_* forwards to the plain
 // unpack_tilize path (tilize.h) -- this exercises that forwarding on real Quasar single-card CI.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastTilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
@@ -1588,7 +1686,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_t, /*seed=*/42);
+            auto src_data =
+                tt::test_utils::create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -1611,7 +1710,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_uint8(
+                tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,

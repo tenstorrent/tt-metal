@@ -142,6 +142,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     // tile sizes
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    const tt::DataFormat residual_data_format =
+        b.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype()) : in_data_format;
+    const uint32_t residual_single_tile_size = tt::tile_size(residual_data_format);
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_dfb_data_format);
@@ -205,6 +208,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .block_wt_resharded = block_wt_resharded,
         .Kt = Kt,
         .in_single_tile_size = in_single_tile_size,
+        .residual_single_tile_size = residual_single_tile_size,
         .single_tile_size = single_tile_size,
         .out_single_tile_size = out_single_tile_size,
         .gamma_single_tile_size = gamma_single_tile_size,
@@ -329,6 +333,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         // The column mask is one tile-row wide: block_wt tiles, holding only 1.0 or 0.0 in bfloat16.
         .col_mask_gen_dfb_size_bytes = block_wt * bfloat16_tile_size,
         .in_data_format = in_data_format,
+        .residual_data_format = residual_data_format,
         .dfb_data_format = dfb_data_format,
         .out_data_format = out_data_format,
         .gamma_dfb_data_format = gamma_dfb_data_format,
@@ -336,6 +341,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .stats_dfb_data_format = stats_dfb_data_format,
         .reciprocal_dfb_data_format = reciprocal_dfb_data_format,
         .in_single_tile_size = in_single_tile_size,
+        .residual_single_tile_size = residual_single_tile_size,
         .single_tile_size = single_tile_size,
         .out_single_tile_size = out_single_tile_size,
         .gamma_single_tile_size = gamma_single_tile_size,

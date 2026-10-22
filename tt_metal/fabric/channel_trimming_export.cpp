@@ -45,14 +45,14 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "hostdevcommon/fabric_common.h"
 
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 

@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -18,7 +18,6 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -30,12 +29,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 // UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 // UMD: re-exports CoreType (used in MeshDevice::virtual_core_from_logical_core parameter).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;

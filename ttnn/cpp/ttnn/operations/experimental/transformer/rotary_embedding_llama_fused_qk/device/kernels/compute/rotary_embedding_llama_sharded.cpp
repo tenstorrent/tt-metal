@@ -60,13 +60,14 @@ void kernel_main() {
     constexpr uint32_t sin_interm_dfb = dfb::sin_interm;
 
     // The in/out DFB identity is runtime-selected (q vs k), so these objects are constructed
-    // from the selected id (the dfb:: tokens carry the same ids). cos/sin/trans_mat carry no
+    // from the selected id (the dfb:: tokens carry the same ids). cos/trans_mat carry no
     // objects: they are consumed via raw LLK index calls only (as in the row-major variant).
     DataflowBuffer in_dfb_obj(in_dfb);
     DataflowBuffer out_dfb_obj(out_dfb);
     DataflowBuffer rotated_in_interm_dfb_obj(rotated_in_interm_dfb);
     DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
     DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);
+    DataflowBuffer sin_dfb_obj(sin_dfb);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
     matmul_init(in_dfb, trans_mat_dfb);
@@ -112,12 +113,10 @@ void kernel_main() {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Block,
-                    ckl::DataFormatReconfig::Disabled)>{},
+                    ckl::DataFormatReconfig::Disabled)>{rotated_in_interm_dfb_obj, sin_dfb_obj},
             ckl::PackTile<ckl::output(
-                sin_interm_dfb,
-                ckl::ReservePolicy::None,
-                ckl::PushPolicy::AtEnd,
-                ckl::DataFormatReconfig::Disabled)>{});
+                sin_interm_dfb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                sin_interm_dfb_obj});
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

@@ -775,8 +775,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -787,4 +790,19 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guard matches the one on the reserve.
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
 }

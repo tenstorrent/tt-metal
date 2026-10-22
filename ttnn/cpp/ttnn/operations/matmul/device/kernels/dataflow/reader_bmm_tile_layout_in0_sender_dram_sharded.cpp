@@ -12,7 +12,21 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+
+#ifdef ARCH_QUASAR
+// Quasar emulator self-loopback workaround: a NoC transfer whose source and destination are both this
+// core's L1 (the mcast group degenerates to the sender alone on a single-node grid) is done with the shared RISC copy
+// helper, which also issues the fence that orders the uncached-alias stores ahead of the semaphore / credit that
+// publishes them. The helper takes uncached-alias addresses (what the DFB getters hand out on Quasar DM); a
+// LocalTensorAccessor base is the plain (cached) L1 address, so normalise both operands first.
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
+    return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
+}
+#endif
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -71,13 +85,14 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-    const DataflowBuffer dfb_in2(dfb::in0_sharded);  // Sharded in0
+    // The resident in0 width shard: only its L1 base address is needed (no FIFO traffic).
+    const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0_shard);
     Semaphore sender_sem(sem::in0_mcast_sender);
     Semaphore receiver_sem(sem::in0_mcast_receiver);
 #ifdef IN0_MULTISHARD
     // A storage core that does no compute assembles its multi-shard block here: its in0 slot is
     // inside the multicast rectangle and receives the other senders' blocks.
-    DataflowBuffer dfb_stage(dfb::in0_stage);
+    Scratchpad<uint32_t> stage(scratch::in0_stage);
 #endif
 
     uint32_t l1_write_addr_in0;
@@ -87,7 +102,7 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    uint32_t local_read_addr = dfb_in2.get_read_ptr();
+    uint32_t local_read_addr = in0_shard.get_bank_base_address();
 
     // Gather the shards_per_block shards of this sender's block from the storage cores (this one
     // included; the shard buffer sits at the same L1 address on every core) into dst_addr. The
@@ -125,7 +140,7 @@ void kernel_main() {
 
 #ifdef IN0_MULTISHARD
             // The gather overlaps the credit wait below.
-            const uint32_t staging_addr = dfb_stage.get_write_ptr();
+            const uint32_t staging_addr = stage.get_base_address();
             gather_block_shards(staging_addr);
             local_read_addr = staging_addr;
 #endif
@@ -252,18 +267,27 @@ void kernel_main() {
                          .addr = mcast_l1_write_addr_in0},
                         true);
                 } else {
-                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                        CoreLocalMem<uint32_t>(local_read_addr),
-                        mcast_dst,
-                        in0_block_size_bytes,
-                        in0_mcast_num_cores,
-                        {},
-                        {.noc_x_start = in0_mcast_dest_noc_start_x,
-                         .noc_y_start = in0_mcast_dest_noc_start_y,
-                         .noc_x_end = in0_mcast_dest_noc_end_x,
-                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                         .addr = mcast_l1_write_addr_in0},
-                        true);
+#ifdef ARCH_QUASAR
+                    if constexpr (in0_mcast_num_cores == 1) {
+                        // Single-node grid: the only multicast destination is this core (see local_l1_copy).
+                        local_l1_copy(
+                            l1_uncached(mcast_l1_write_addr_in0), l1_uncached(local_read_addr), in0_block_size_bytes);
+                    } else
+#endif
+                    {
+                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                            CoreLocalMem<uint32_t>(local_read_addr),
+                            mcast_dst,
+                            in0_block_size_bytes,
+                            in0_mcast_num_cores,
+                            {},
+                            {.noc_x_start = in0_mcast_dest_noc_start_x,
+                             .noc_y_start = in0_mcast_dest_noc_start_y,
+                             .noc_x_end = in0_mcast_dest_noc_end_x,
+                             .noc_y_end = in0_mcast_dest_noc_end_y,
+                             .addr = mcast_l1_write_addr_in0},
+                            true);
+                    }
                 }
 #endif
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.

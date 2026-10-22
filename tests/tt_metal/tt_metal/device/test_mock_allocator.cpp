@@ -48,10 +48,11 @@ protected:
 };
 
 TEST_F(MockAllocatorTest, CPU_MockDeviceCreationAndQueries) {
-    EXPECT_EQ(mock_env_->get_arch(), tt::ARCH::WORMHOLE_B0);
-    EXPECT_GT(mock_env_->get_l1_size(), 0u);
-    EXPECT_GT(mock_env_->get_dram_alignment(), 0u);
-    EXPECT_GT(mock_env_->get_l1_alignment(), 0u);
+    const auto props = mock_env_->get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_GT(props.node_local_mem_size(), 0u);
+    EXPECT_GT(props.dram_alignment(), 0u);
+    EXPECT_GT(props.node_local_mem_alignment(), 0u);
     EXPECT_EQ(mock_device_->num_devices(), 1u);
 }
 

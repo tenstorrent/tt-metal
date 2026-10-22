@@ -134,15 +134,17 @@ int main(int /*argc*/, char** /*argv*/) {
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
+            ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
                                                                 // that trade off performance for accuracy. HiFi4 is the most accurate
                                                                 // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
                                                                 // difference between them is the number of bits used during computation.
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {static_cast<uint32_t>(src0_dram_buffer->address()),
+             static_cast<uint32_t>(src1_dram_buffer->address()),
+             n_tiles});
+        SetRuntimeArgs(program, writer, core, {static_cast<uint32_t>(dst_dram_buffer->address()), n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates

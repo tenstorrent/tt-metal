@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 
 TEST_PADDING_VALUE = -42

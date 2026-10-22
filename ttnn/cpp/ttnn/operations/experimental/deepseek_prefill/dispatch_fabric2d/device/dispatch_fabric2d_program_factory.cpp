@@ -18,6 +18,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -148,7 +149,7 @@ StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRa
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
     StreamSemaphores sems{make(), make(), make(), make()};
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
 

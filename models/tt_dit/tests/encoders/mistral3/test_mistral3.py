@@ -15,10 +15,13 @@ import ttnn
 
 from ....blocks.rope import RopeConfig
 from ....encoders.mistral3.model_mistral3 import Mistral3Encoder
+from ....encoders.transformer import WEIGHT_CACHE_DTYPE, TransformerEncoderConfig
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
+
+TRACE_REGION_SIZE = 16_000_000
 
 
 @pytest.mark.parametrize(
@@ -70,17 +73,19 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
     assert isinstance(generation_config, transformers.GenerationConfig)
 
     model = Mistral3Encoder(
-        vocab_size=config.vocab_size,
-        head_size=config.head_dim,
-        embed_size=config.hidden_size,
-        ff_size=config.intermediate_size,
-        num_layers=config.num_hidden_layers - skip_layers,
-        num_heads=config.num_attention_heads,
-        num_kv_heads=config.num_key_value_heads,
-        norm_eps=config.rms_norm_eps,
-        attn_qkv_bias=False,
-        attn_out_bias=False,
-        rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        TransformerEncoderConfig(
+            vocab_size=config.vocab_size,
+            head_size=config.head_dim,
+            embed_size=config.hidden_size,
+            ff_size=config.intermediate_size,
+            num_layers=config.num_hidden_layers - skip_layers,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
+            norm_eps=config.rms_norm_eps,
+            attn_qkv_bias=False,
+            attn_out_bias=False,
+            rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        ),
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
@@ -95,6 +100,8 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
         subfolder="text_encoder",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        dtype=WEIGHT_CACHE_DTYPE,
     )
 
     # This makes unmasked generation more similar in the two implementations, possibly because
@@ -113,9 +120,6 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
     tokens = out["input_ids"].to(torch_model.device)
     mask = out["attention_mask"].to(torch_model.device) if masked else None
 
-    tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    tt_mask = tensor.from_torch(mask, device=mesh_device) if mask is not None else None
-
     generation_config.max_length = max_length
     generation_config.repetition_penalty = None  # repetition penalty is not implemented
     generation_config.return_dict_in_generate = True
@@ -125,20 +129,18 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
 
     start_time = time.time()
     tt_out = model.generate(
-        tt_tokens,
-        mask=tt_mask,
+        tokens,
+        mask=mask,
         eos_tokens=generation_config.eos_token_id,
         max_length=generation_config.max_length,
         top_k=generation_config.top_k if generation_config.do_sample else 1,
         top_p=generation_config.top_p or 1,
         temperature=generation_config.temperature,
     )
-    tt_tokens_out = tensor.to_torch(tt_out.tokens)
-
     print(f"generation took {time.time() - start_time:.2f} seconds")
 
-    for i in range(tt_tokens_out.size(0)):
-        print(tokenizer.decode(tt_tokens_out[i]))
+    for i in range(tt_out.tokens.size(0)):
+        print(tokenizer.decode(tt_out.tokens[i]))
 
 
 @pytest.mark.parametrize(
@@ -151,7 +153,7 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -161,7 +163,11 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
         pytest.param(False, id="unmasked"),
     ],
 )
-def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool) -> None:
+@pytest.mark.parametrize(
+    "traced",
+    [pytest.param(False, id="untraced"), pytest.param(True, id="traced")],
+)
+def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool, traced: bool) -> None:
     torch.manual_seed(0)
 
     tp_axis = 1
@@ -191,17 +197,19 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
     assert isinstance(generation_config, transformers.GenerationConfig)
 
     model = Mistral3Encoder(
-        vocab_size=config.vocab_size,
-        head_size=config.head_dim,
-        embed_size=config.hidden_size,
-        ff_size=config.intermediate_size,
-        num_layers=config.num_hidden_layers - skip_layers,
-        num_heads=config.num_attention_heads,
-        num_kv_heads=config.num_key_value_heads,
-        norm_eps=config.rms_norm_eps,
-        attn_qkv_bias=False,
-        attn_out_bias=False,
-        rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        TransformerEncoderConfig(
+            vocab_size=config.vocab_size,
+            head_size=config.head_dim,
+            embed_size=config.hidden_size,
+            ff_size=config.intermediate_size,
+            num_layers=config.num_hidden_layers - skip_layers,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
+            norm_eps=config.rms_norm_eps,
+            attn_qkv_bias=False,
+            attn_out_bias=False,
+            rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        ),
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
@@ -216,6 +224,8 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
         subfolder="text_encoder",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        dtype=WEIGHT_CACHE_DTYPE,
     )
 
     # This makes unmasked generation more similar in the two implementations, possibly because
@@ -233,9 +243,6 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
     )
     tokens = out["input_ids"].to(torch_model.device)
     mask = out["attention_mask"].to(torch_model.device) if masked else None
-
-    tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-    tt_mask = tensor.from_torch(mask, device=mesh_device) if mask is not None else None
 
     generation_config.max_length = max_length
     generation_config.repetition_penalty = None  # repetition penalty is not implemented
@@ -257,24 +264,24 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
 
     print("running ttnn model...")
     tt_out = model.generate(
-        tt_tokens,
+        tokens,
         guide=tokens_out,
-        mask=tt_mask,
+        mask=mask,
         eos_tokens=generation_config.eos_token_id,
         max_length=generation_config.max_length,
         top_k=generation_config.top_k if generation_config.do_sample else 1,
         top_p=generation_config.top_p or 1,
         temperature=generation_config.temperature,
         return_logits=True,
+        traced=traced,
     )
 
-    tt_tokens_out = tensor.to_torch(tt_out.tokens)
-    tt_logits = tensor.to_torch(ttnn.stack(tt_out.logits, dim=1), mesh_axes=[..., tp_axis])
+    tt_logits = tt_out.logits
 
     # To compare generated tokens, remove `guide` in the call to `model.generate`!
-    # for i in range(tt_tokens_out.size(0)):
+    # for i in range(tt_out.tokens.size(0)):
     #     print(tokenizer.decode(tokens_out[i]))
-    #     print(tokenizer.decode(tt_tokens_out[i]))
+    #     print(tokenizer.decode(tt_out.tokens[i]))
 
     if mask is not None:
         # Masked positions on the start of the sequence contain random values from computing softmax over all -inf
@@ -286,7 +293,7 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
 
     assert_quality(logits, tt_logits, ccc=0.9980, relative_rmse=0.063)
 
-    assert tt_tokens_out.eq(tokens_out).all()
+    assert tt_out.tokens.eq(tokens_out).all()
 
 
 @pytest.mark.parametrize(
@@ -335,17 +342,19 @@ def test_transformer(*, mesh_device: ttnn.MeshDevice, batch_size: int, skip_laye
     del torch_model.model.language_model.layers[num_layers - skip_layers :]
 
     model = Mistral3Encoder(
-        vocab_size=config.vocab_size,
-        head_size=config.head_dim,
-        embed_size=config.hidden_size,
-        ff_size=config.intermediate_size,
-        num_layers=config.num_hidden_layers - skip_layers,
-        num_heads=config.num_attention_heads,
-        num_kv_heads=config.num_key_value_heads,
-        norm_eps=config.rms_norm_eps,
-        attn_qkv_bias=False,
-        attn_out_bias=False,
-        rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        TransformerEncoderConfig(
+            vocab_size=config.vocab_size,
+            head_size=config.head_dim,
+            embed_size=config.hidden_size,
+            ff_size=config.intermediate_size,
+            num_layers=config.num_hidden_layers - skip_layers,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
+            norm_eps=config.rms_norm_eps,
+            attn_qkv_bias=False,
+            attn_out_bias=False,
+            rope_config=RopeConfig(theta=config.rope_parameters["rope_theta"]),
+        ),
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
@@ -360,6 +369,8 @@ def test_transformer(*, mesh_device: ttnn.MeshDevice, batch_size: int, skip_laye
         subfolder="text_encoder",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        dtype=WEIGHT_CACHE_DTYPE,
     )
 
     tokens = torch.randint(0, config.vocab_size, [batch_size, sequence_length])
@@ -395,4 +406,4 @@ def test_transformer(*, mesh_device: ttnn.MeshDevice, batch_size: int, skip_laye
     assert len(hidden_states) == len(tt_hidden_states_torch)
 
     for x, tt_x in zip(hidden_states[-4:], tt_hidden_states_torch[-4:], strict=True):
-        assert_quality(x, tt_x, pcc=0.9979, relative_rmse=0.065)
+        assert_quality(x, tt_x, pcc=0.9964, relative_rmse=0.091)

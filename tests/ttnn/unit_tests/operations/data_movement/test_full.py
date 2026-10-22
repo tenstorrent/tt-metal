@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import comp_allclose, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose, skip_for_blackhole
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_equal, tt_dtype_to_torch_dtype
 

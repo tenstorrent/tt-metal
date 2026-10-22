@@ -435,7 +435,7 @@ void kernel_main() {
                 // NoC-written, CPU-read: the lock drops stale cached lines on acquire (no-op off Quasar DM).
                 // The shared helper takes a raw pointer, read under this lock.
                 auto cu_lock = cu_reader.scoped_lock(0, cu_window_seqlens_eles);
-                const auto range = windowed_k_chunk_range(
+                const auto range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,

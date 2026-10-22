@@ -1145,6 +1145,14 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
         config.mesh_scope = detail::mesh_scope_mapper.to_enum.at(mesh_scope_str);
     }
 
+    if (pattern_yaml["vc_id"]) {
+        config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
+        TT_FATAL(
+            config.vc_id.value() == 0 || config.vc_id.value() == 2,
+            "vc_id must be 0 or 2, got {}",
+            config.vc_id.value());
+    }
+
     return config;
 }
 
@@ -1858,24 +1866,32 @@ void TestConfigBuilder::validate_test(const TestConfig& test) const {
 
 void TestConfigBuilder::expand_patterns_into_test(
     ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx) {
-    const auto& defaults = test.defaults.value_or(ParsedTrafficPatternConfig{});
+    const auto& test_defaults = test.defaults.value_or(ParsedTrafficPatternConfig{});
 
     for (const auto& pattern : patterns) {
         if (pattern.iterations.has_value() && iteration_idx >= pattern.iterations.value()) {
             continue;
         }
 
+        // Fold per-pattern overrides into the config passed to expanders.
+        ParsedTrafficPatternConfig defaults = test_defaults;
+        if (pattern.vc_id.has_value()) {
+            defaults.vc_id = pattern.vc_id;
+        }
+
         if (pattern.type == "all_to_all") {
             if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
                 expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::AllToAll, pattern.mesh_scope);
             } else {
-                expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::AllToAll);
+                expand_one_or_all_to_all_multicast(
+                    test, defaults, HighLevelTrafficPattern::AllToAll, pattern.mesh_scope);
             }
         } else if (pattern.type == "one_to_all") {
             if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
                 expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::OneToAll, pattern.mesh_scope);
             } else {
-                expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
+                expand_one_or_all_to_all_multicast(
+                    test, defaults, HighLevelTrafficPattern::OneToAll, pattern.mesh_scope);
             }
         } else if (pattern.type == "all_to_one") {
             expand_all_to_one_unicast(test, defaults, iteration_idx);
@@ -2128,7 +2144,7 @@ bool TestConfigBuilder::should_skip_test_for_disabled_mesh_passthrough(const Par
 void TestConfigBuilder::expand_all_devices_uniform_pattern(
     ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
     log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
-    std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+    std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
     TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
     for (const auto& src_node : devices) {
@@ -2138,9 +2154,21 @@ void TestConfigBuilder::expand_all_devices_uniform_pattern(
 }
 
 void TestConfigBuilder::expand_one_or_all_to_all_multicast(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+    ParsedTestConfig& test,
+    const ParsedTrafficPatternConfig& base_pattern,
+    HighLevelTrafficPattern pattern_type,
+    MeshTrafficScope mesh_scope) {
     const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
     log_debug(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
+    if (mesh_scope == MeshTrafficScope::INTER_MESH) {
+        log_warning(
+            LogTest,
+            "{}_multicast requested with mesh_scope 'inter_mesh'; multicast cannot cross mesh boundaries, so no "
+            "traffic will be generated.",
+            pattern_name);
+        return;
+    }
+
     std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
     TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
 

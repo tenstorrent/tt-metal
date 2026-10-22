@@ -26,8 +26,8 @@
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor shape
  * @param operand_B: Logical dataflow buffer id for input B
- * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest
- *     (NONE broadcast path only).
+ * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
+ *     Applies to NONE and to ROW, COL, and SCALAR broadcast.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -47,14 +47,18 @@ inline void llk_math_eltwise_binary_init(
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        const DataFormat dest_src_format = ckernel::math::dest_src_format<DST_ACCUM_MODE>(srcA_format);
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : srcA_format,
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : srcB_format,
+            tensor_shape_A,
+            acc_to_dest);
     } else {
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
         _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A);
+            srcA_format, srcB_format, tensor_shape_A, acc_to_dest);
     }
 }
 

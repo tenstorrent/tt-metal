@@ -54,20 +54,20 @@ std::string dtype_to_string(const ttnn::DataType dtype) {
     }
 }
 
-std::string fidelity_to_string(const MathFidelity fidelity) {
+std::string fidelity_to_string(const tt::tt_metal::MathFidelity fidelity) {
     std::ostringstream oss;
     oss << fidelity;
     return oss.str();
 }
 
-int get_cycles_per_tile_for_fidelity(const MathFidelity fidelity) {
+int get_cycles_per_tile_for_fidelity(const tt::tt_metal::MathFidelity fidelity) {
     constexpr int LoFi_cycle = 16;
 
     switch (fidelity) {
-        case MathFidelity::LoFi: return LoFi_cycle;
-        case MathFidelity::HiFi2: return LoFi_cycle * 2;
-        case MathFidelity::HiFi3: return LoFi_cycle * 3;
-        case MathFidelity::HiFi4: return LoFi_cycle * 4;
+        case tt::tt_metal::MathFidelity::LoFi: return LoFi_cycle;
+        case tt::tt_metal::MathFidelity::HiFi2: return LoFi_cycle * 2;
+        case tt::tt_metal::MathFidelity::HiFi3: return LoFi_cycle * 3;
+        case tt::tt_metal::MathFidelity::HiFi4: return LoFi_cycle * 4;
         default: return LoFi_cycle;
     }
 }
@@ -107,7 +107,7 @@ tt::tt_metal::Shape2D get_subblock_sizes(
 
 struct MatmulTestConfig {
     ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
-    MathFidelity fidelity = MathFidelity::HiFi2;
+    tt::tt_metal::MathFidelity fidelity = tt::tt_metal::MathFidelity::HiFi2;
     bool enable_tracing = false;
     int num_warmup_iterations = 1;
     int num_measurement_iterations = 1;
@@ -142,7 +142,7 @@ void RunMatmulBenchmark(
     const int num_measurement_iterations = test_config.num_measurement_iterations;
 
     ttnn::DataType dtype = test_config.dtype;
-    MathFidelity math_fidelity = test_config.fidelity;
+    tt::tt_metal::MathFidelity math_fidelity = test_config.fidelity;
     const bool use_trace = test_config.enable_tracing;
 
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
@@ -413,10 +413,10 @@ void RunMatmulBenchmark(
 }
 namespace BFloat16_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
-    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/true},
-    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/true}};
+    {ttnn::DataType::BFLOAT16, tt::tt_metal::MathFidelity::HiFi2, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT16, tt::tt_metal::MathFidelity::HiFi2, /*enable_tracing=*/true},
+    {ttnn::DataType::BFLOAT16, tt::tt_metal::MathFidelity::HiFi4, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT16, tt::tt_metal::MathFidelity::HiFi4, /*enable_tracing=*/true}};
 const auto shapes = std::vector<MatmulShape>{
     {/*m=*/512,
      /*k=*/512,
@@ -562,10 +562,10 @@ void BM_Matmul_BFLOAT16(benchmark::State& state) {
 
 namespace BFloat8_B_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/true},
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/true}};
+    {ttnn::DataType::BFLOAT8_B, tt::tt_metal::MathFidelity::HiFi2, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT8_B, tt::tt_metal::MathFidelity::HiFi2, /*enable_tracing=*/true},
+    {ttnn::DataType::BFLOAT8_B, tt::tt_metal::MathFidelity::LoFi, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT8_B, tt::tt_metal::MathFidelity::LoFi, /*enable_tracing=*/true}};
 const auto shapes = std::vector<MatmulShape>{
     {/*m=*/512,
      /*k=*/512,
@@ -703,8 +703,8 @@ void BM_Matmul_BFLOAT8_B(benchmark::State& state) {
 
 namespace BFloat4_B_Tests {
 const auto configs = std::vector<MatmulTestConfig>{
-    {ttnn::DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/false},
-    {ttnn::DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/true}};
+    {ttnn::DataType::BFLOAT4_B, tt::tt_metal::MathFidelity::LoFi, /*enable_tracing=*/false},
+    {ttnn::DataType::BFLOAT4_B, tt::tt_metal::MathFidelity::LoFi, /*enable_tracing=*/true}};
 const auto shapes = std::vector<MatmulShape>{
     {/*m=*/512,
      /*k=*/512,

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <tt_stl/span.hpp>
@@ -11,7 +13,7 @@
 #include <unordered_set>
 #include <vector>
 #include <hostdevcommon/common_values.hpp>
-#include "umd/device/types/cluster_descriptor_types.hpp"
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "device_impl.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -48,6 +50,9 @@ public:
     std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
     bool close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(ChipId id) const;
+    // Records the dispatch mode on the first call and fails if a later call passes a different mode: mixing fast and
+    // slow dispatch is prohibited.
+    void check_dispatch_mode(bool fast_dispatch);
     // True if dispatch firmware is active on this device pool
     bool is_dispatch_firmware_active() const;
     // Called by the mesh device
@@ -57,8 +62,6 @@ public:
     // re-enable fast dispatch after it was disabled at runtime.
     void initialize_dispatch_firmware(bool force_recreate_topology);
     void reset_dispatch_topology();
-    // API needed due to Issue #19729
-    std::size_t get_max_num_eth_cores_across_all_devices() const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
@@ -78,6 +81,8 @@ private:
     size_t worker_l1_size_{};
     std::vector<uint32_t> l1_bank_remap_;
     bool using_fast_dispatch_ = false;
+    // Dispatch mode recorded by check_dispatch_mode: -1 if unset, otherwise 0 (slow) or 1 (fast).
+    std::atomic<int8_t> checked_dispatch_mode_{-1};
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     bool is_initialized_ = false;

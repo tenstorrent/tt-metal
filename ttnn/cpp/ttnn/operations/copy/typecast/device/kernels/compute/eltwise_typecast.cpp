@@ -16,6 +16,8 @@ void kernel_main() {
     // buffer.
     constexpr uint32_t in_data_format = get_arg(args::in_data_format);
     constexpr uint32_t out_data_format = get_arg(args::out_data_format);
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
@@ -27,5 +29,5 @@ void kernel_main() {
     constexpr auto output = ckl::output(
         dfb::out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter, ckl::DataFormatReconfig::Disabled);
     ckl::unary<ckl::Typecast<in_data_format, out_data_format>, input, output>(
-        ckl::IterationShape::grid(per_core_block_cnt, per_core_block_dim));
+        ckl::IterationShape::grid(per_core_block_cnt, per_core_block_dim), dfb_in_obj, dfb_out_obj);
 }

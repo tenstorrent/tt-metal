@@ -162,6 +162,15 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Every core on chip `chip_id` currently assigned to a dispatch role (prefetcher, prefetcher_d,
+    ///        completion-queue writer, dispatcher, dispatcher_d, dispatcher_s, fabric mux) for any device,
+    ///        channel and command queue. A remote device's issue/completion-queue cores live on its MMIO
+    ///        device and are reported under that chip. Valid once init_command_queue_host() has run for
+    ///        the devices of interest; cores assigned later are not included.
+    /// @param chip_id physical chip whose assigned cores are wanted
+    /// @return logical core coordinates on that chip, sorted by (x, y), without duplicates
+    std::vector<CoreCoord> get_assigned_dispatch_cores(ChipId chip_id);
+
     /// @brief Returns the tensix reserved at construction time for the real-time profiler.
     /// Taken from the back of the WORKER dispatch pool (dispatch consumes from the front), so
     /// this core is never assigned to dispatch / prefetch / dispatch_s / fabric-mux kernels.

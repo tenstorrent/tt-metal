@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every distinct finite 16-bit value, every ULP-gateable unary SFPU op.
+"""Every distinct finite 16-bit value -- a stride of Float32 -- every enrolled unary SFPU
+op.
 
 The functional drivers in test_eltwise_unary_sfpu.py sample a few thousand points from
 an op's safe domain, so a budget measured that way can only ever be re-confirmed by
@@ -9,18 +10,25 @@ them: it cannot see a tail the sample never reaches.
 
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
-in. Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name
-or with ``-m accuracy``. Run it as a gate::
+in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
+Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name or with
+``-m accuracy``. Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
+
+which fails a gated cell over its budget and skips a tolerance cell with its measured
+maximum in the reason. To hold the tolerance cells to the figures their rows record,
+measure and compare::
+
+    pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
+    python3 helpers/ulp_budget_diff.py headroom \\
+        --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
 
 or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
 
     pytest test_unary_sfpu_ulp.py --ulp-emit            # every op with a key line
     pytest test_unary_sfpu_ulp.py --ulp-emit --op MyOp  # one op, matched exactly
 """
-
-import sys
 
 import pytest
 import torch
@@ -42,12 +50,14 @@ from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     FLUSH_SUBNORMAL_OUTPUTS,
+    MEASURED_ARCH,
     Metric,
     accuracy_contract,
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     sfpu_unary_ops,
+    unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -63,24 +73,38 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.ulp import ulp_distance, ulp_stats
+from helpers.ulp_budget_diff import RECORDED_SKIP
 from helpers.ulp_sweep import (
     golden_input,
-    measurable_mask,
+    near_zero_floor,
     nonfinite_failures,
     nonfinite_reason,
+    ranked_mask,
     stimuli_format_for,
     sweep_cells,
     sweep_spec,
 )
-from helpers.utils import passed_test
+from helpers.utils import _record_ulp_measurement, passed_test
 
-#: ~7 minutes of 64-tile device runs. `accuracy` is the marker every LLK workflow
-#: deselects; `nightly` would not do, since llk-e2e runs it.
-pytestmark = pytest.mark.accuracy
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
+#: llk-e2e runs it.
+pytestmark = [
+    pytest.mark.accuracy,
+    # Every unkeyed budget is a Wormhole measurement and binds nowhere else
+    # (sfpu_accuracy_budget.MEASURED_ARCH), so off it every cell resolves to tolerance,
+    # nothing can fail, and the headroom report would hold another chip's figures
+    # against this table's. --ulp-emit refuses off Wormhole for the same reason.
+    pytest.mark.skipif(
+        get_chip_architecture() != MEASURED_ARCH,
+        reason=f"the table's budgets are {MEASURED_ARCH.value} measurements; this sweep "
+        "gates nothing on another architecture",
+    ),
+]
 
-#: 64 tiles x 1024 lanes = 65,536: every finite bf16 and fp16 value in one run, and the
-#: generator's own ceiling. A smaller count would silently keep only the lowest-sorted
-#: values, so test_ulp_sweep.py pins it against `swept_value_count`.
+#: 64 tiles x 1024 lanes = 65,536: every finite bf16 and fp16 value in one run, the
+#: Float32 stride's sample count, and the generator's own ceiling. A smaller count would
+#: silently keep only the lowest-sorted values, so test_ulp_sweep.py pins it against
+#: `swept_value_count`.
 SWEEP_TILE_COUNT = 64
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 
@@ -90,7 +114,8 @@ _FLUSH_SUBNORMALS = FLUSH_SUBNORMAL_OUTPUTS
 
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
-    """One exhaustive variant on hardware. Returns ``(src, golden, result)``."""
+    """One variant on hardware, over every value of a 16-bit input or a stride of a
+    Float32 one (``ulp_sweep.is_exhaustive``). Returns ``(src, golden, result)``."""
     torch.manual_seed(0)
     stimuli_format = stimuli_format_for(formats.input_format)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -98,7 +123,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         input_dimensions_A=SWEEP_DIMENSIONS,
         stimuli_format_B=stimuli_format,
         input_dimensions_B=SWEEP_DIMENSIONS,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop,
@@ -144,8 +169,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        # Every swept input is 16-bit or a block float, so nothing unpacks to Dest.
-        unpack_to_dest=False,
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     # `sweep_cells` leaves out the cells TestConfig would promote to another Dest, so
     # every cell swept here must be built with the dest_acc it asks for; a cell built
@@ -163,31 +187,16 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
     return src_A, golden, torch.tensor(result, dtype=format_dict[formats.output_format])
 
 
-def _emitting():
-    """Whether this session measures rather than gates. ``ulp_sweep.EMIT`` is set in
-    ``pytest_configure``, too late for collection, and an xdist worker's argv lacks the
-    flag -- so both are read, or ``--compile-producer -n N`` builds the wrong set."""
-    return ulp_sweep.EMIT or "--ulp-emit" in sys.argv
-
-
 def _sweep_ops():
-    """Gating sweeps every unary op with a step budget on some variant. Emitting sweeps
-    every unary op with a key line in the table, whatever its rows say: the key line is
-    the enrolment (SFPU_ULP.md, step 2), the measurement fills it in. An op without one
-    has nowhere to be written, so sweeping it would only turn the emit red after the
-    rest was written -- and `sfpu_unary_ops()` admits every newly registered op, so a
-    whole-table emit would go red the day anyone adds an op."""
+    """Every unary op with a key line in the table, whatever its rows say, gating or
+    emitting. The key line is the enrolment (SFPU_ULP.md, step 2) and the measurement
+    fills it in; an op without one has nowhere to be written, and `sfpu_unary_ops()`
+    admits every newly registered op, so a wider set would turn a whole-table emit red
+    the day anyone adds an op."""
     unary = sfpu_unary_ops()
-    if _emitting():
-        ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
-            _UNARY_OPS_NOT_SWEPT
-        )
-    else:
-        ops = {
-            op
-            for op, table in _SFPU_ACCURACY_BUDGET.items()
-            if op in unary and any(c.metric == Metric.ULP for c in table.values())
-        }
+    ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
+        _UNARY_OPS_NOT_SWEPT
+    )
     return sorted(ops, key=lambda op: op.name)
 
 
@@ -204,7 +213,9 @@ def _sweep_ops():
 )
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
-    """Every non-special value of the input format, against the op's declared budget."""
+    """Every non-special value of a 16-bit input format, or a stride of Float32. A gated
+    cell is held to its step budget here; a tolerance cell is measured and recorded, and
+    the headroom report holds it to the figure its row records."""
     formats = InputOutputFormat(in_fmt, out_fmt)
     cell = (
         f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
@@ -218,32 +229,22 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
-    if contract.metric != Metric.ULP and not ulp_sweep.EMIT:
-        # Nothing to gate, so the cell is not swept here at all: neither the step count
-        # nor the non-finite check runs on it. Its safe domain is the functional driver's
-        # (test_eltwise_unary_sfpu.py, tolerance arm); the whole-format tail is measured
-        # only by an emit run, which is what wrote the row's comment. The nightly sweep
-        # that measures every cell and holds a tolerance row to its recorded maximum
-        # arrives with the headroom report (#57527).
-        pytest.skip(
-            f"{cell}: on the tolerance metric, so unswept at gate time; its safe "
-            "domain is the functional driver's, the full-format tail only an emit's"
-        )
+    # A tolerance cell is measured too: the headroom report holds it to its row's figure.
+    gated = contract.metric == Metric.ULP
 
-    try:
-        src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
-    except OverflowError as exc:
-        if not ulp_sweep.EMIT:
-            # A gated cell's golden already ran over the full range when its budget was
-            # measured, so an overflow now is a regression, not a limit of the reference.
-            raise
-        # The float64 host golden overflows on inputs no sampled domain reaches
-        # (cosh(3.4e38)): a limit of the reference, not a measurement, for an op emit
-        # is measuring for the first time. Only OverflowError -- a ValueError here is a
-        # real "Unsupported operation".
-        pytest.skip(f"golden cannot be computed over the full range: {exc}")
+    # No OverflowError skip. cosh/sinh were the last goldens that could raise on a finite
+    # input; they go through torch now. Some still call `math.*` (atan, asinh, the tanh
+    # family, gelu_derivative, xielu, the rounding ops), but none can raise on a finite
+    # argument: each is bounded, takes a non-positive argument, or guards with isfinite.
+    # A new `math.exp`-style golden would, and then fails the cell loudly rather than
+    # turning it into a skip nobody reads.
+    src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
 
-    mask = measurable_mask(src, golden, result, in_fmt)
+    # Ranked over the op's claim as well as the measurable lanes: a lane past an
+    # argument-reduction limit or on a pole is one the op answers nothing for, so it
+    # can no more set a budget than be a non-finite failure (which already read the
+    # claim). Sin's and Cos's budgets were set by |x| ~ 1e13 lanes answering 2e38.
+    mask = ranked_mask(mathop, src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
         mathop,
         src,
@@ -251,49 +252,81 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         result,
         in_fmt,
         out_fmt,
-        approx_mode=approx_mode,
         dest_acc=dest_acc,
+        approx_mode=approx_mode,
     )
     if not ulp_sweep.EMIT:
         # An excused lane that agrees again means the defect its issue tracks is gone
         # from this cell; the entry has to go with it, or its lanes stay ungated.
         stale = ulp_sweep.stale_excuses(
-            mathop, src, golden, result, in_fmt, out_fmt, approx_mode, dest_acc
+            mathop,
+            src,
+            golden,
+            result,
+            in_fmt,
+            out_fmt,
+            approx_mode=approx_mode,
+            dest_acc=dest_acc,
         )
         assert not stale, (
             f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
             f"{', '.join(entry.issue for entry in stale)} names disagrees with the "
             "golden any more; drop the entry so those lanes are gated again"
         )
-    stats = ulp_stats(
-        ulp_distance(golden, result, flush_subnormals=_FLUSH_SUBNORMALS), mask
-    )
+    distance = ulp_distance(golden, result, flush_subnormals=_FLUSH_SUBNORMALS)
+    stats = ulp_stats(distance, mask)
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
-    # Before the emit return: an empty mask reports `max: 0` and would be recorded as
-    # bit-exact. A gate fails, since an unmeasurable budget is a gate not running; an
-    # emit run records the reason as the cell's verdict, so the op's grid stays whole.
-    if lanes == 0:
-        reason = "no lane a step count can describe"
-        unmeasurable = reason
-    elif overflowed.any():
+    # Before the emit return, or an empty mask is recorded as bit-exact `max: 0`. The
+    # overflow first: an all-non-finite cell also has `lanes == 0`, and only this
+    # reason carries the lane count the headroom report reads back.
+    if overflowed.any():
         reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
         )
+    elif lanes == 0:
+        reason = "no lane a step count can describe"
+        unmeasurable = reason
     else:
         unmeasurable = None
     if unmeasurable:
-        if not ulp_sweep.EMIT:
-            raise AssertionError(f"{cell}: {unmeasurable}")
-        ulp_sweep.record_unmeasurable(mathop.name, key, reason)
-        return
+        if ulp_sweep.EMIT or not gated:
+            # On the record either way: the row names how many lanes went non-finite,
+            # and the headroom report fails a run where that count appears or grows.
+            _record_ulp_measurement(
+                distance,
+                mask=mask,
+                nonfinite=int(overflowed.sum()),
+            )
+        if ulp_sweep.EMIT:
+            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            return
+        if not gated:
+            pytest.skip(f"{cell}: {RECORDED_SKIP} -- not measurable: {unmeasurable}")
+        raise AssertionError(f"{cell}: {unmeasurable}")
 
-    if ulp_sweep.EMIT:
-        ulp_sweep.record(mathop.name, key, int(stats["max"]))
-        return
+    if ulp_sweep.EMIT or not gated:
+        # Measured, not gated. The JSONL row is what `--ulp-measure` would have written
+        # from inside passed_test, which this branch returns before; a tolerance cell is
+        # held against its row's "max N ULP" by the headroom report.
+        _record_ulp_measurement(distance, mask=mask)
+        if ulp_sweep.EMIT:
+            # A cell that only a near-zero lane demotes is recorded with the floor that
+            # covers it, and the emitter enrols it on the lanes outside that floor.
+            floor = near_zero_floor(golden, result, distance, mask, out_fmt)
+            ulp_sweep.record(mathop.name, key, int(stats["max"]), floor=floor)
+            return
+        # A skip, not a pass: nothing here judged the cell. Without --ulp-measure there
+        # is no record for the headroom report either, and a regression would show green.
+        pytest.skip(
+            f"{cell}: {RECORDED_SKIP} -- on the tolerance metric; measured max "
+            f"{int(stats['max'])} ULP over {lanes} lanes. The headroom report "
+            "(ulp_budget_diff.py headroom over --ulp-measure) holds it to its row's "
+            "recorded figure."
+        )
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
     # (Erfinv Float16_b->Float16_b reads 14704 steps raw, and 2 with it) is honoured.
