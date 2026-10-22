@@ -303,3 +303,28 @@ x sends are out and the gather stopped reading its x-own). GLM-Flash: correct, 3
 (PCC 0.993; at K3's H with I 512: 0.07), GLM at KB 4: NaN, and 0.992 with the partials moved out of the reused
 region - an aliasing / ordering bug in the reuse not found before the direction changed. Not committed; the committed
 engine (65eaae64c66) stays. Lesson for the next engine: no L1 reuse across phases without a proof of who still reads.
+
+### Step 6: the x chain v3 - row-chunk-major, shared expert weights resident in L1 (user direction)
+tt/se_engine3.py SeEngine3 + tt/x_gather3.py XGather3 + fused_head.HeadSE3.
+- weights: each column's W blocks (gate / up [KB x pass width], down [KBD x pass width]) spread over the column's
+  cores (block b on row b % GY), read from DRAM once at the call's start, streamed down the column every chunk from
+  their holders (L1 -> L1 loopback multicast, per-slot credits to the slot's next holder) - hand-written: a kernel_lib
+  rotation needs each family's holder count to divide its rounds a chunk, which unbalances K3's L1 beyond fit;
+- x: all of it resident in its owners' L1 (the gather lands it, the engine loads its own shard); per gate / up pass
+  multicast along the row by two kernel_lib rotating PerRow families (x slots; owner subsets dividing the steps a pass:
+  GLM 8 + 8 columns, K3 7 + 7); h all-gathered along the row by a kernel_lib rotating family (rounds (row tile,
+  column)); kernel_lib's mid-line sender is one loopback rectangle, so the east / west split was unnecessary;
+- compute: all of K in DEST per pass (full-sync fp32, MT x width <= 8), GLU, pack once; no partials, no L1 reuse;
+- gather: chunk-major (each chunk: own rows, then the relayed shards' rows), packets at the step's owner, a watcher
+  increment a chunk per incoming stream, XREADY = m + 1 when chunk m is in.
+| engine alone (x from DRAM), us, PCC | GLM-Flash | K3 |
+|---|---|---|
+| MT 1 (8 chunks of 320 rows), KB 8 / 4 | 436, 0.99975 | 1700 (KB 4) / 1470 (KB 8), 0.99964 |
+| **MT 2 (4 chunks of 640), KB 8** | **325** | **1041** |
+| (v2 engine, W once, K-shard-major) | 340 | 1086 |
+| **x chain v3 fused (MT 2)** | **541**, 0.99973 | **1253**, 0.99964 |
+| per chip: gather end / engine end | 449-479 / 372-543 | 835-891 / 1152-1253 |
+| floors (user): gather + one chunk's compute | 341 | 643 |
+Rounds matter: each x / h round is a blocking handshake (receivers ack, the sender waits all acks): MT 1 / KB 4 doubled
+the rounds and cost 30-60%. Gaps to the floor: the gather runs 35-50% slower beside the engine (336 -> ~470,
+585 -> ~870: GLM is gather-bound), and the engine computes at ~100 / 160 TFLOP/s (2 x 4 sub-blocks, unpack-bound).

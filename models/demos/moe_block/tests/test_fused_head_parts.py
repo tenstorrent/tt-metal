@@ -348,3 +348,105 @@ def test_head_se(mesh_device, device_params):
         assert min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_se_engine3(mesh_device, device_params):
+    """The shared expert engine v3 alone (tt/se_engine3.py: row-chunk-major, weights resident in L1), x from DRAM."""
+    from models.demos.moe_block.tt.lin2c import glu_weight
+    from models.demos.moe_block.tt.se_engine3 import SeEngine3
+
+    rows, GX, GY, MT = 2560, 11, 10, int(os.environ.get("SE_MT", "1"))
+    for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
+        H, N, glu, _, _ = CHAIN[name]
+        I = N // 2
+        if os.environ.get("SE_SHAPE"):  # (debug) rows,H,I,GX,GY
+            rows, H, I, GX, GY = map(int, os.environ["SE_SHAPE"].split(","))
+            N = 2 * I
+        eng = SeEngine3(
+            mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=int(os.environ.get("SE_KB", "0")) or None
+        )
+        logger.info(
+            f"SE3 {name}: chunks {eng.NCH} x {eng.CR * 32} rows, KB {eng.KB}, x families {eng.S0} + {eng.S1}, "
+            f"passes gate/up {eng.NPG} down {eng.NPD}, W own {eng.wown_t} tiles, x own {eng.xown_t} tiles, "
+            f"arena {eng.arena_bytes // 1024} KB"
+        )
+        g = torch.Generator().manual_seed(5)
+        x = torch.randn(rows, H, generator=g)
+        wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
+        wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+        w = eng.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+        xt = ttnn.from_torch(
+            x.view(1, 1, rows, H),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        us, y = _time(mesh_device, lambda: eng.run_alone(xt, w))
+        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
+        ps = []
+        for d in range(R * C):
+            hh = x @ wg[d]
+            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        flops = 2 * rows * H * N + 2 * rows * I * H
+        logger.info(
+            f"SE3 {name} rows {rows} H {H} I {I}: {us if us is None else round(us, 1)} us"
+            + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
+            + f", PCC min {min(ps):.5f}"
+        )
+        assert min(ps) > 0.999, ps
+        ttnn.deallocate(y)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_head_se3(mesh_device, device_params):
+    """The fused head's x chain v3 (row-chunk-major, weights resident) (tt/fused_head.py HeadSE): the x all-gather straight into the shared expert engine's
+    L1, gate / up in shard arrival order, every weight read once."""
+    from models.demos.moe_block.tt.fused_head import HeadSE3
+    from models.demos.moe_block.tt.lin2c import glu_weight
+
+    rows = 2560
+    for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
+        H, N, glu, _, _ = CHAIN[name]
+        I = N // 2
+        head = HeadSE3(mesh_device, rows=rows, H=H, I=I, glu=glu, MT=int(os.environ.get("SE_MT", "2")))
+        g = torch.Generator().manual_seed(7)
+        xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
+        wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
+        wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+        w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+        xt = ttnn.from_torch(
+            torch.stack(xs).view(R, C, rows, H // C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        us, y = _time(mesh_device, lambda: head.run(xt, w))
+        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
+        ps = []
+        for d in range(R * C):
+            r = d // C
+            xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
+            hh = xf @ wg[d]
+            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        logger.info(
+            f"HSE3 {name} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
+            f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
+        )
+        assert min(ps) > 0.999, ps
+        ttnn.deallocate(y)
+        ttnn.deallocate(xt)
