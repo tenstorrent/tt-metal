@@ -171,7 +171,82 @@ void kernel_main() {
 
 #else
 
-#ifdef MASK_PADDED_DATA
+#if defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE) && !defined(ARCH_QUASAR)
+        // Only the last tile of the row holds padding. Mask that tile into x and read the other tiles straight
+        // from in0, rather than first copying the whole row into x (one extra pass over every tile of every row).
+        // Quasar keeps the copy below: it has no MAX + REDUCE_ROW accumulation.
+        if constexpr (block_w_unpadded > 0) {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::in0,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                compute_kernel_lib::ReduceInputBlockShape::row(block_w_unpadded));
+        }
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(
+                    dfb::in0,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileAddressing::Offset),
+                ckl::input(dfb::mask_padded, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_mask_padded_obj, block_w_unpadded},
+            ckl::PackTile<ckl::output(dfb::x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_x_obj});
+        dfb_x_obj.wait_front(1);
+        if constexpr (block_w_unpadded > 0) {
+            // Fold the masked tile into the max of the other tiles (accumulator and output are both dfb::max).
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::x,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                compute_kernel_lib::ReduceInputBlockShape::row(1),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(dfb::max, /*iter=*/1));
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::x,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(1));
+        }
+        // exp(x - max): the unpadded tiles from in0 (keeping the max), then the masked tile from x.
+        if constexpr (block_w_unpadded > 0) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::input(dfb::max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                    dfb_in0_obj, dfb_max_obj},
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+                    dfb_exps_obj});
+        }
+        // The raw last tile was read through x; release it from in0.
+        dfb_in0_obj.pop_front(1);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Sub,
+                ckl::input(dfb::x, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb::max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+                dfb_x_obj, dfb_max_obj},
+            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_exps_obj});
+        dfb_exps_obj.wait_front(block_w);
+#elif defined(MASK_PADDED_DATA)
         // Copy the row so the last tile can get the -inf padding mask before the max and the exp.
         if constexpr (block_w_unpadded > 0) {
             ckl::eltwise_chain(
