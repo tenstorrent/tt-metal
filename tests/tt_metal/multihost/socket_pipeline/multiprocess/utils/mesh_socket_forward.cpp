@@ -36,7 +36,7 @@ tt::tt_metal::Program create_socket_forward_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket forward only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];

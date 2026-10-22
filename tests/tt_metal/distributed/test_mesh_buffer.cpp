@@ -1713,7 +1713,7 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     std::vector<uint16_t> input(single_tile_size / sizeof(uint16_t), 1);
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buffer, input, /*blocking=*/true);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*this->mesh_device_);
     auto kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/full_grid_eltwise_device_reuse.cpp",

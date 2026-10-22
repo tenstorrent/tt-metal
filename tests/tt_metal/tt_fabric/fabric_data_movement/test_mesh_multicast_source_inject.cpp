@@ -69,7 +69,7 @@ struct SourceInjectCandidate {
 struct SourceInjectProgram {
     ChipId physical_id;
     std::shared_ptr<tt_metal::distributed::MeshDevice> device;
-    tt_metal::Program program;
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
     bool is_target;
 };
 
@@ -537,7 +537,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
             QUIESCENCE_TIME_US;
         ASSERT_LE(quiescence_cycles, std::numeric_limits<uint32_t>::max());
 
-        auto program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateProgram(*source_device);
         const auto receiver_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"

@@ -65,7 +65,7 @@ void test_h2d_socket(
     };
     auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
     // Create Recv MeshWorkload
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*mesh_device);
     CreateKernel(
         recv_program,
         h2d_mode == H2DMode::DEVICE_PULL ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_receiver.cpp"
@@ -140,7 +140,7 @@ void test_d2h_socket(
     };
     auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
@@ -249,7 +249,7 @@ void test_hd_socket_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(
         send_program,
         mesh_device,
@@ -297,7 +297,7 @@ void test_hd_socket_multithreaded_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(
         send_program,
         mesh_device,
@@ -436,7 +436,7 @@ void test_hd_socket_staged_loopback(
         uint32_t num_received = 0;
     };
     std::vector<Loopback> loopbacks(socket_cores.size());
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
     for (std::size_t s = 0; s < socket_cores.size(); ++s) {
         Loopback& loopback = loopbacks[s];
         const MeshCoreCoord socket_core(device_coord, socket_cores[s]);

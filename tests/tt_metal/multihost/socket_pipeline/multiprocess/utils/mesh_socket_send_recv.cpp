@@ -58,7 +58,7 @@ tt::tt_metal::Program create_send_async_program(
     tt::tt_fabric::FabricNodeId upstream_fabric_node_id = recv_socket.get_fabric_node_id(
         tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // Use mesh_device allocator - in practice all devices in a mesh share the same allocator configuration
     auto max_alignment = std::max(
