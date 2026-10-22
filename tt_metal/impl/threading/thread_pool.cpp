@@ -345,8 +345,7 @@ public:
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
 
-    // Inline capacity covers one call per device on a 32-chip Galaxy.
-    using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;
+    using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
     using ParticipantOfCall = ttsl::SmallVector<size_t, 32>;
 
     ParallelJob(
