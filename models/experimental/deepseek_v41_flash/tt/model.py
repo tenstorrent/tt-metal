@@ -40,6 +40,7 @@ import collections
 import math
 import queue
 import threading
+from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
 import torch
@@ -131,6 +132,37 @@ def _device_zeros(shape, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def _replica_rows(tensor: ttnn.Tensor) -> torch.Tensor:
+    """A replicated device ``tensor`` read back from its first chip, leading dims folded: ``[rows, width]``."""
+    host = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+    return host.reshape(-1, host.shape[-1])
+
+
+@dataclass(eq=False)
+class SessionSnapshot:
+    """One session's decode state in host memory, from :meth:`DeepSeekV41Model.export_session`.
+
+    ``rings``: layer -> its ring slot ``[sliding_window, head_dim]``. ``windows``: ratio > 1 kv source -> its
+    compressor window slot ``(kv, gate)``, ``[_WIN_SLOT_ROWS, head_dim]`` each (the whole ``[ratio, head_dim]``
+    windows with one session). ``entries``: kv source -> its first ``pos // ratio`` compressed entries
+    ``[n, head_dim]`` and index keys ``[n, index_head_dim]``. ``engram``: the compressed-token history ``[1, pos]``.
+    """
+
+    pos: int
+    rings: dict[int, torch.Tensor]
+    windows: dict[int, tuple[torch.Tensor, torch.Tensor]]
+    entries: dict[int, tuple[torch.Tensor, torch.Tensor]]
+    engram: Optional[torch.Tensor]
+
+    @property
+    def nbytes(self) -> int:
+        tensors = [*self.rings.values()]
+        tensors += [t for pair in (*self.windows.values(), *self.entries.values()) for t in pair]
+        if self.engram is not None:
+            tensors.append(self.engram)
+        return sum(t.numel() * t.element_size() for t in tensors)
 
 
 class DeepSeekV41Model(DeepSeekV4Model):
@@ -678,8 +710,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                             )
                         group.update(
                             idx_key_cache=_index_key_pool(device, blocks, CSA_INDEX_BLOCK_SIZE, cfg.index_head_dim),
-                            comp_kv=_device_zeros(
-                                (blocks, 1, CSA_INDEX_BLOCK_SIZE, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
+                            # Filled on device: a pool sized for the shared budget is tens of GB per chip,
+                            # which zeros built on the host take minutes to write.
+                            comp_kv=ttnn.moreh_full(
+                                [blocks, 1, CSA_INDEX_BLOCK_SIZE, head_dim],
+                                0.0,
+                                device,
+                                dtype=ttnn.bfloat16,
+                                layout=ttnn.ROW_MAJOR_LAYOUT,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                             ),
                             idx_page_table=sm["page_tables"][ratio],
                             sel_kv=_device_zeros((1, 1, rows, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
@@ -968,6 +1007,120 @@ class DeepSeekV41Model(DeepSeekV4Model):
         paged.truncate_session(sid, pos)
         self._session_pos[sid] = pos
         self._write_page_tables()
+
+    def export_session(self, sid: int) -> SessionSnapshot:
+        """Copy session ``sid``'s decode state at its position ``P`` into host memory, for :meth:`import_session`.
+
+        A session's state is its slot of every ring and compressor window, the first ``P // ratio`` entries of each
+        group's paged pools and its Engram history; everything else a step reads, it writes first (see
+        :meth:`reset_session`). The pools are read from one stage per group, since every stage holding a group keeps
+        the same entries. Reads only: the session can go on, or be reset. Call it with no step in flight.
+        """
+        self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        pos, slot, w = self._session_pos[sid], self._slot_of[sid], self.sliding_window
+
+        def slot_rows(t: ttnn.Tensor, start: int, n: int) -> torch.Tensor:
+            part = ttnn.slice(t, [0, 0, start, 0], [1, 1, start + n, t.shape[3]])
+            rows = _replica_rows(part)
+            if part.buffer_address() != t.buffer_address():  # a slice of all of ``t`` is ``t`` itself
+                ttnn.deallocate(part)
+            return rows
+
+        rings, windows, entries = {}, {}, {}
+        for sm in self.submeshes_io:
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                rings[li] = slot_rows(scache.kv, slot * w, w)
+                src = self._kv_source_of.get(li)
+                if li == src and scache.win_kv is not None:
+                    win_rows = _WIN_SLOT_ROWS if self._slotted else scache.win_kv.shape[2]
+                    windows[li] = tuple(
+                        slot_rows(t, slot * win_rows, win_rows) for t in (scache.win_kv, scache.win_gate)
+                    )
+                if src is None or src in entries or scache.comp_kv is None:
+                    continue
+                ratio = int(self.config.compress_ratios[src])
+                if pos // ratio == 0:
+                    continue
+                kv, keys = self._gather_paged_entries(scache, self._paged_ratios[ratio].layer_type, sid, pos // ratio)
+                entries[src] = (_replica_rows(kv), _replica_rows(keys))
+                ttnn.deallocate(kv)
+                ttnn.deallocate(keys)
+        engram = self._engram_lookup.export_history(slot, pos) if self._engram_lookup is not None else None
+        return SessionSnapshot(pos, rings, windows, entries, engram)
+
+    def import_session(self, sid: int, snapshot: SessionSnapshot) -> None:
+        """Load ``snapshot`` (:meth:`export_session` of this model, from any session) into session ``sid``, which must
+        be at position 0 (opened or reset), and move the session to the snapshot's position.
+
+        Raises :class:`PagedCacheFull` when the pools cannot hold the snapshot's entries; the session keeps whatever
+        blocks it grew, so reset it then. Call it with no step in flight.
+        """
+        self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        if self._session_pos[sid]:
+            raise ValueError(f"session {sid} is at {self._session_pos[sid]}: import into a session at position 0")
+        pos = snapshot.pos
+        if pos >= self._decode_max_seq:
+            raise PagedCacheFull(f"a {pos}-token snapshot is past max_seq {self._decode_max_seq}")
+        self._wait_replays_dispatched()
+        if pos:
+            self.ensure_session_capacity(pos - 1, sid)
+        slot, w = self._slot_of[sid], self.sliding_window
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+
+            def write_rows(dst: ttnn.Tensor, rows: torch.Tensor, start: int) -> None:
+                if rows.shape[0] == dst.shape[2]:
+                    host_to_device(rows.reshape(tuple(dst.shape)).float(), dst)
+                    return
+                src_rows = ttnn.from_torch(
+                    rows.reshape(1, 1, *rows.shape).float(),
+                    dtype=dst.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+                ttnn.fill_cache(dst, src_rows, 0, update_idx=start)
+                ttnn.deallocate(src_rows)
+
+            written = set()
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                write_rows(scache.kv, snapshot.rings[li], slot * w)
+                src = self._kv_source_of.get(li)
+                if li == src and scache.win_kv is not None:
+                    for dst, rows in zip((scache.win_kv, scache.win_gate), snapshot.windows[li]):
+                        write_rows(dst, rows, slot * rows.shape[0])
+                if src is None or src in written or scache.comp_kv is None or src not in snapshot.entries:
+                    continue
+                written.add(src)
+                kv, keys = (
+                    ttnn.from_torch(
+                        rows.reshape(1, 1, *rows.shape).float(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                    for rows in snapshot.entries[src]
+                )
+                ratio = int(self.config.compress_ratios[src])
+                self._commit_paged_entries(scache, self._paged_ratios[ratio].layer_type, sid, kv, keys)
+                ttnn.deallocate(kv)
+                ttnn.deallocate(keys)
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        if snapshot.engram is not None and self._engram_lookup is not None:
+            self._engram_lookup.import_history(slot, snapshot.engram)
+        self._session_pos[sid] = pos
 
     # -- replay: every posted step is bound to the session resident when it was posted -- #
     def replay_traced(self, pos: int) -> None:

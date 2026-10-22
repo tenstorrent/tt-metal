@@ -133,6 +133,16 @@ class EngramHostLookup:
         with self._lock:
             self.hash.cache = self._histories[slot]
 
+    def export_history(self, slot: int, pos: int) -> torch.Tensor:
+        """A copy of session slot ``slot``'s first ``pos`` compressed tokens, ``[batch, pos]``."""
+        with self._lock:
+            return self._histories[slot][:, :pos].clone()
+
+    def import_history(self, slot: int, history: torch.Tensor) -> None:
+        """Make ``history`` (an :meth:`export_history`, of any slot) the start of session slot ``slot``'s history."""
+        with self._lock:
+            self._histories[slot][:, : history.shape[1]] = history
+
     @torch.no_grad()
     def hash_session(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
         """``self.hash`` against session slot ``slot``'s history, leaving the :meth:`use_session` choice as it was."""

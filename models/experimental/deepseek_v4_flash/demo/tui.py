@@ -414,7 +414,15 @@ class ServerConsole:
         head = Text()
         head.append(f"{stats.get('model_id', '?')}  ", style="bold cyan")
         head.append(f"up {uptime // 3600:d}h{uptime // 60 % 60:02d}m{uptime % 60:02d}s   ")
-        head.append(f"turns {len(active)}/{stats.get('slots', 0)}", style="bold")
+        states = stats.get("slot_states")
+        if states:
+            head.append(
+                f"running {states['running']}/{states['max_running']}  queued {states['queued']}  "
+                f"parked {states['parked']}  empty {states['empty']}  of {stats.get('slots', 0)} slots",
+                style="bold",
+            )
+        else:
+            head.append(f"turns {len(active)}/{stats.get('slots', 0)}", style="bold")
         head.append(
             f"   {stats.get('step_rate', 0.0):.1f} tok/s total"
             f"   {stats.get('per_user_rate', 0.0):.1f} tok/s/user"
@@ -434,6 +442,13 @@ class ServerConsole:
             head.append("\nKV pages: ")
             head.append(Text.from_markup(" ".join(parts)))
             head.append(f"  ~{stats.get('tokens_left', 0)} tokens free")
+        limits = stats.get("host_limits") or {}
+        if limits.get("users") and not compact:
+            host = stats.get("host") or {}
+            head.append(
+                f"\nhost RAM: {host.get('users', 0)}/{limits['users']} conversations, "
+                f"{host.get('bytes', 0) / 2**30:.2f}/{limits['bytes'] / 2**30:.0f} GiB"
+            )
 
         # Not expanded: with seven short columns, stretching to the panel width scatters
         # them across the screen and makes the rows hard to read across.
@@ -450,10 +465,17 @@ class ServerConsole:
             table.add_column(name, justify=justify, no_wrap=True, width=width)
         by_slot = {turn["slot"]: turn for turn in active}
         for row in stats.get("users", []):
-            turn = by_slot.get(row["index"])
-            if turn is None:
-                phase, progress, rate = ("busy" if row.get("busy") else "idle"), "", ""
-                style = "dim" if not row.get("busy") else ""
+            turn = by_slot.get(row["index"]) if row["index"] is not None else None
+            if row.get("tier") == "empty":
+                continue  # counted in the header; 64 slots would bury the rest
+            if row.get("tier") == "host":
+                phase, progress, rate = "host RAM", f"{row.get('bytes', 0) / 2**20:.0f} MiB", ""
+                style = "dim blue"
+            elif turn is None:
+                phase = row.get("tier") or ("busy" if row.get("busy") else "idle")
+                progress = f"#{row['queue'] + 1} in queue" if row.get("queue") is not None else ""
+                rate = ""
+                style = "magenta" if phase == "queued" else "dim" if not row.get("busy") else ""
             elif turn["phase"] == "prefill":
                 phase = "prefill"
                 progress = f"{turn['prefilled']}/{turn['prompt_tokens']}"
@@ -465,7 +487,7 @@ class ServerConsole:
                 rate = f"{turn['decode_rate']:.1f}"
                 style = "green"
             table.add_row(
-                str(row["index"]),
+                str(row["index"]) if row["index"] is not None else f"h{row.get('host', '')}",
                 (str(row["id"])[:14] or "-"),  # a slot nobody has used yet has no owner
                 f"{row['tokens']}/{stats.get('max_seq', 0)}",
                 str(row["messages"]),
@@ -474,7 +496,7 @@ class ServerConsole:
                 rate,
                 style=style,
             )
-        if not stats.get("users"):
+        if all(row.get("tier") == "empty" for row in stats.get("users", [])):
             table.add_row("-", "(no users yet)", "", "", "", "", "", style="dim")
 
         flags = []

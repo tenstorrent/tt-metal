@@ -257,12 +257,14 @@ def _index_key_pool(device, n_blocks: int, block: int, width: int) -> ttnn.Tenso
 
     Interleaved because ``paged_update_cache`` writes the index keys and accepts only an
     interleaved cache; ``fused_lightning_select_kv`` then reads each block tile by tile.
+    Filled on device rather than written from host zeros, which take minutes for a pool of many sessions.
     """
-    return ttnn.from_torch(
-        torch.zeros(n_blocks, 1, block, width),
+    return ttnn.moreh_full(
+        [n_blocks, 1, block, width],
+        0.0,
+        device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
