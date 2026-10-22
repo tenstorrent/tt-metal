@@ -14,6 +14,7 @@
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
@@ -123,8 +124,6 @@ public:
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
     const std::set<CoreCoord>& ethernet_cores() const override { return this->ethernet_cores_; }
-
-    const std::set<CoreCoord>& storage_only_cores() const override { return this->storage_only_cores_; }
 
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
@@ -252,7 +251,6 @@ private:
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
-    std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
     // (dispatch axis / harvesting change logical worker bounds). Mutable so the const getter can fill

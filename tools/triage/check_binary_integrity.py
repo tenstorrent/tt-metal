@@ -19,8 +19,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
 import os
 from ttexalens.context import Context
-from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.memory_access import create_l1_memory_access
+from ttexalens.hardware.risc_debug import RiscLocation
 from triage import ScriptConfig, log_check_risc, run_script
 
 script_config = ScriptConfig(
@@ -28,14 +27,14 @@ script_config = ScriptConfig(
 )
 
 
-def check_binary_integrity(
-    location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
-):
+def check_binary_integrity(risc_location: RiscLocation, dispatcher_data: DispatcherData, elfs_cache: ElfsCache):
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     if not dispatcher_data.risc_enabled(risc_name):
         return
 
-    l1_mem_access = create_l1_memory_access(location)
-    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    l1_mem_access = dispatcher_data.l1_memory_access(location)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
 
     # Check firmware ELF binary state on the device
     log_check_risc(
@@ -68,7 +67,8 @@ def check_binary_integrity(
                 )
 
     # Check kernel ELF binary state on the device
-    if dispatcher_core_data.kernel_xip_path is not None:
+    # Firmware clears enables after a run, so a disabled RISC's launch slot is stale
+    if dispatcher_core_data.kernel_xip_path is not None and dispatcher_core_data.risc_enabled_by_kernel is not False:
         log_check_risc(
             risc_name,
             location,
@@ -113,7 +113,7 @@ def run(args, context: Context):
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_binary_integrity(location, risc_name, dispatcher_data, elfs_cache),
+        lambda risc_debug: check_binary_integrity(risc_debug.risc_location, dispatcher_data, elfs_cache),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 

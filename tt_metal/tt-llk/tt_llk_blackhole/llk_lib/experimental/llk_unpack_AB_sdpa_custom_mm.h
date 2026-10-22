@@ -30,11 +30,17 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim              = 1,
     const bool mask_chunk                   = false,
-    const std::uint32_t operandB_face_r_dim = 8)
+    const std::uint32_t operandB_face_r_dim = 8,
+    const std::uint32_t row_stride          = 0)
 {
+    const std::uint32_t in1_row = row_stride ? row_stride : kt_dim;
+    if constexpr (read_transposed)
+    {
+        LLK_ASSERT(in1_row >= kt_dim, "row_stride must contain the contraction tiles");
+    }
     volatile std::uint32_t* cfg         = get_cfg_pointer();
-    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
-    const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
+    const std::uint32_t block_increment = read_transposed ? in1_row * tile_size_a : tile_size_a;
+    const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * in1_row) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;

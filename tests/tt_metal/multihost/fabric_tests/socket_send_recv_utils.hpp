@@ -15,6 +15,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 

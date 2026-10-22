@@ -22,7 +22,7 @@ TEST(ProgramTypesFromFlatbuffer, SubDeviceIdVectorRoundtrip) {
     const std::vector<SubDeviceId> original = {SubDeviceId{0}, SubDeviceId{2}, SubDeviceId{5}};
 
     flatbuffers::FlatBufferBuilder builder;
-    const auto fb_offset = to_flatbuffer(builder, tt::stl::Span<const SubDeviceId>(original.data(), original.size()));
+    const auto fb_offset = to_flatbuffer(builder, ttsl::Span<const SubDeviceId>(original.data(), original.size()));
     builder.Finish(fb_offset);
 
     const auto* fb_sub_device_ids = flatbuffers::GetRoot<flatbuffers::Vector<uint8_t>>(builder.GetBufferPointer());
@@ -44,7 +44,7 @@ TEST(ProgramTypesFromFlatbuffer, SubDeviceIdVectorEmptyRoundtrip) {
     const std::vector<SubDeviceId> original = {};
 
     flatbuffers::FlatBufferBuilder builder;
-    const auto fb_offset = to_flatbuffer(builder, tt::stl::Span<const SubDeviceId>(original.data(), original.size()));
+    const auto fb_offset = to_flatbuffer(builder, ttsl::Span<const SubDeviceId>(original.data(), original.size()));
     builder.Finish(fb_offset);
 
     const auto* fb_sub_device_ids = flatbuffers::GetRoot<flatbuffers::Vector<uint8_t>>(builder.GetBufferPointer());

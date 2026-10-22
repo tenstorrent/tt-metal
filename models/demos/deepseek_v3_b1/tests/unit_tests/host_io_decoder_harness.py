@@ -815,7 +815,9 @@ def _run_decoder_layer_pass(
     kv_cache_torch: torch.Tensor | None = None
     if pull_kv_cache:
         logger.info(f"{layer_prefix}: pulling on-device KV cache to host")
-        with ttnn.device.setup_fast_dispatch(submesh):
+        # Layer weights and stage buffers still hold L1 on cores Fast Dispatch claims; only the DRAM KV cache is
+        # read from here on, so proceed as before the guard: it logs a warning instead of refusing.
+        with ttnn.device.setup_fast_dispatch(submesh, allow_destructive=True):
             kv_cache_torch = stage.get_kv_cache_host()
         assert kv_cache_torch is not None, "get_kv_cache_host returned None (setup not completed?)"
         logger.info(f"{layer_prefix}: " f"KV cache shape={tuple(kv_cache_torch.shape)} dtype={kv_cache_torch.dtype}")

@@ -35,7 +35,7 @@
 ARG UBUNTU_VERSION=22.04
 # As of June 2026: this is where you set SMI version of Metal container image
 # for CI and things like IRD or other workflows using the dev container.
-ARG TT_SMI_VERSION=5.2.0
+ARG TT_SMI_VERSION=6.7.0
 # PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
@@ -43,7 +43,7 @@ ARG PYTHON_VERSION=""
 # Fallback UV_IMAGE for standalone `docker build` without Bake.
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
-ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 # Prebuilt tt-llm-engine migration image that release-models bakes _migration_client
 # out of on the 3.10 build (see the mig-client stages before release-models), so that
 # image doubles as the disaggregated-prefill worker. Global because it is used in a

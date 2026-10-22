@@ -10,6 +10,10 @@
 #define TOPOLOGY_SOLVER_TPP
 
 // Only include the header if we're being compiled standalone (not included from the header)
+#include <ostream>
+#include <tuple>
+#include <utility>
+#include <vector>
 #ifndef TOPOLOGY_SOLVER_TPP_INCLUDING
 // NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -18,7 +22,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <optional>
 #include <set>
@@ -34,7 +37,6 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/assert.hpp>
 
 #include <memory>
 
@@ -1348,6 +1350,17 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     constraint_data_.emplace(snap_constraints_, *graph_data_);
     use_sat_ = detail::topology_mapping_should_use_sat_engine(
         solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
+    // Zero-link tolerance lives on the SAT backend: route Auto to SAT; an explicit Dfs keeps edges hard.
+    if (snap_constraints_.allow_unmatched_target_edges()) {
+        if (solver_engine == TopologyMappingSolverEngine::Dfs) {
+            log_warning(
+                tt::LogFabric,
+                "allow_unmatched_target_edges (RELAXED zero-link tolerance) requires the SAT engine; the "
+                "explicitly requested DFS engine keeps target edges hard");
+        } else {
+            use_sat_ = true;
+        }
+    }
     // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer) depends on use_sat_ computed above
     search_engine_ = detail::make_topology_search_engine<TargetNode, GlobalNode>(use_sat_);
     if (conflict_cap_ > 0) {
@@ -1492,6 +1505,18 @@ std::vector<int> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::to_i
         }
     }
     return idx_map;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::set_allow_unmatched_target_edges(bool enable) {
+    if (!ready_) {
+        return false;
+    }
+    if (snap_constraints_.allow_unmatched_target_edges() == enable) {
+        return true;
+    }
+    snap_constraints_.set_allow_unmatched_target_edges(enable);
+    return refresh_constraints();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2073,6 +2098,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
         std::sort(dest.begin(), dest.end());
         dest.erase(std::unique(dest.begin(), dest.end()), dest.end());
     }
+    allow_unmatched_target_edges = constraints.allow_unmatched_target_edges();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2863,10 +2889,15 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Try each candidate in order (best first)
     for (size_t global_idx : selection.candidates) {
-        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
-        if (host_cap_active && global_idx < global_to_host.size()) {
-            const int grp = global_to_host[global_idx];
-            if (grp >= 0 && !occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
+        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap. A candidate
+        // past the label vector or labelled < 0 is unlabelled (in no host group, e.g. spans hosts) and is
+        // not usable under the cap -- the same rule the SAT encoder applies (topology_solver_sat.cpp).
+        if (host_cap_active) {
+            const int grp = global_idx < global_to_host.size() ? global_to_host[global_idx] : -1;
+            if (grp < 0) {
+                continue;
+            }
+            if (!occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
                 continue;  // would exceed at-most-k occupied host groups
             }
         }
@@ -3330,11 +3361,15 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::enumerate_mappings(
                 return;
             }
 
-            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
-            if (host_cap_active && global_idx < global_to_host.size()) {
-                const int grp = global_to_host[global_idx];
-                if (grp >= 0 && !occupied_host_groups.contains(grp) &&
-                    occupied_host_groups.size() >= host_group_cap) {
+            // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap. A candidate
+            // past the label vector or labelled < 0 is unlabelled (in no host group, e.g. spans hosts) and is
+            // not usable under the cap -- the same rule the SAT encoder applies (topology_solver_sat.cpp).
+            if (host_cap_active) {
+                const int grp = global_idx < global_to_host.size() ? global_to_host[global_idx] : -1;
+                if (grp < 0) {
+                    continue;
+                }
+                if (!occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
                     continue;  // would exceed at-most-k occupied host groups
                 }
             }
@@ -3773,6 +3808,21 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                 neighbor_global_idx);
 
             if (!edge_exists) {
+                if (constraint_data.allow_unmatched_target_edges) {
+                    // Zero-link edge (#56762): logical-only, warn instead of failing.
+                    std::string warn_msg = fmt::format(
+                        "Relaxed mode: target graph edge from node {} to {} has NO physical link between {} and {} "
+                        "(zero-link edge; traffic must use the host interconnect).",
+                        graph_data.printable_target(i),
+                        graph_data.printable_target(neighbor),
+                        graph_data.printable_global(global_idx),
+                        graph_data.printable_global(neighbor_global_idx));
+                    log_warning(tt::LogFabric, "{}", warn_msg);
+                    if (warnings != nullptr) {
+                        warnings->push_back(warn_msg);
+                    }
+                    continue;
+                }
                 std::string error_msg = fmt::format(
                     "Mapping validation failed: target graph has edge from node {} to {}, "
                     "but global graph does not have corresponding edge from {} to {}. "

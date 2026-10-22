@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "tensor_shape.h"
 
 // === L1 layout for perf tests ===
 //
@@ -23,14 +24,12 @@ constexpr std::uint32_t PERF_INPUT_B    = PERF_INPUT_A + PERF_RING_TILES * 4096;
 constexpr std::uint32_t PERF_INPUT_C    = PERF_INPUT_B + PERF_RING_TILES * 4096;
 constexpr std::uint32_t PERF_OUTPUT     = PERF_INPUT_C + PERF_RING_TILES * 4096;
 
-#ifdef PERF_COUNTERS_COMPILED
 // Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
-// 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above.
+// 0x16AFF0 (asserted in counters.h) and must not overlap the stimuli buffers above; both builds use it.
 #define PERF_COUNTERS_BASE_ADDR         0x169000
 #define PERF_COUNTERS_CONFIG_WORDS      200
 #define PERF_COUNTERS_DATA_WORDS        200
 #define PERF_COUNTERS_BANK_CYCLES_WORDS 5
-#endif // PERF_COUNTERS_COMPILED
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {
@@ -280,3 +279,13 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
+
+// Functional builds take the dimensions from runtime params, so the shape is const.
+// Speed-of-light compiles those dimensions in, so the same declaration is constexpr.
+#ifdef SPEED_OF_LIGHT
+#define TEST_TENSOR_SHAPE(name, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim) \
+    constexpr ckernel::TensorShape name = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+#else
+#define TEST_TENSOR_SHAPE(name, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim) \
+    const ckernel::TensorShape name = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+#endif

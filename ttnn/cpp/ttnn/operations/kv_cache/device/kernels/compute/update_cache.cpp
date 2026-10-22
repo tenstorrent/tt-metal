@@ -10,6 +10,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/update_cache_tile_work.hpp"
 
 void kernel_main() {
     constexpr std::uint32_t cache = dfb::cache;
@@ -21,19 +22,15 @@ void kernel_main() {
     constexpr std::uint32_t num_batched_heads = get_arg(args::num_batched_heads);
     constexpr std::uint32_t Wt = get_arg(args::Wt);
     constexpr std::uint32_t granularity = get_arg(args::granularity);
-    constexpr std::uint32_t u_count = get_arg(args::u_count);
+    constexpr std::uint32_t Bcache = get_arg(args::Bcache);
+    const std::uint32_t batch_start_id = get_arg(args::batch_start_id);
 
     compute_kernel_hw_startup(input, untilized_input);
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t u_count = ttnn::kv_cache::user_groups_in_batch_tile(Bcache, batch_start_id, h, granularity);
         // Untilize input (standalone operation)
-        compute_kernel_lib::untilize<
-            Wt,
-            input,
-            untilized_input,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::untilize<Wt, input, untilized_input>(1);
 
         for (std::uint32_t u = 0; u < u_count; ++u) {
             compute_kernel_lib::untilize<Wt, cache, untilized_cache>(granularity);
@@ -41,6 +38,5 @@ void kernel_main() {
             // Wait on writer to update block, then tilize back
             compute_kernel_lib::tilize<Wt, untilized_cache2, output>(granularity);
         }
-        reconfig_data_format_srca(cache, input);
     }
 }

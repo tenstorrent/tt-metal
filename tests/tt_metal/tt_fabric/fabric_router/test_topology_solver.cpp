@@ -325,17 +325,25 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     auto physical_system_descriptor = tt::tt_fabric::test::build_mock_psd(
         std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
-    // Hand-craft the asic_id_to_mesh_rank mapping
+    // The graph is keyed on addresses, so name the four ASICs by asking the descriptor for theirs
+    // rather than by their labels in the file. That is the whole point of the indirection: the labels
+    // here happen to be 100..103, and nothing downstream may depend on that.
+    auto node = [&](std::uint64_t asic_label) {
+        return physical_system_descriptor.get_physical_node_id(tt::tt_metal::AsicID{asic_label});
+    };
+
+    // Hand-craft the physical_node_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)
     // Mesh 1: ASICs 102, 103 (connected)
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{100}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{0}][tt::tt_metal::AsicID{101}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{102}] = MeshHostRankId{0};
-    asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    physical_node_id_to_mesh_rank[MeshId{0}][node(100)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{0}][node(101)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(102)] = MeshHostRankId{0};
+    physical_node_id_to_mesh_rank[MeshId{1}][node(103)] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_graph_physical(cluster_type, physical_system_descriptor, asic_id_to_mesh_rank);
+    auto adjacency_map =
+        build_adjacency_graph_physical(cluster_type, physical_system_descriptor, physical_node_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -348,12 +356,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes0.size(), 2u) << "Mesh 0 should have 2 ASICs";
 
     // Check that ASIC 100 has ASIC 101 as neighbor (2 connections = 2 entries)
-    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), tt::tt_metal::AsicID{100});
+    auto asic100_it = std::find(nodes0.begin(), nodes0.end(), node(100));
     ASSERT_NE(asic100_it, nodes0.end()) << "Mesh 0 should contain ASIC 100";
-    const auto& neighbors100 = graph0.get_neighbors(tt::tt_metal::AsicID{100});
+    const auto& neighbors100 = graph0.get_neighbors(node(100));
     EXPECT_EQ(neighbors100.size(), 2u) << "ASIC 100 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors100[0], tt::tt_metal::AsicID{101}) << "ASIC 100 should be connected to ASIC 101";
-    EXPECT_EQ(neighbors100[1], tt::tt_metal::AsicID{101}) << "ASIC 100 should have 2 connections to ASIC 101";
+    EXPECT_EQ(neighbors100[0], node(101)) << "ASIC 100 should be connected to ASIC 101";
+    EXPECT_EQ(neighbors100[1], node(101)) << "ASIC 100 should have 2 connections to ASIC 101";
 
     // Verify mesh 1
     auto it1 = adjacency_map.find(MeshId{1});
@@ -363,12 +371,12 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     EXPECT_EQ(nodes1.size(), 2u) << "Mesh 1 should have 2 ASICs";
 
     // Check that ASIC 102 has ASIC 103 as neighbor
-    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), tt::tt_metal::AsicID{102});
+    auto asic102_it = std::find(nodes1.begin(), nodes1.end(), node(102));
     ASSERT_NE(asic102_it, nodes1.end()) << "Mesh 1 should contain ASIC 102";
-    const auto& neighbors102 = graph1.get_neighbors(tt::tt_metal::AsicID{102});
+    const auto& neighbors102 = graph1.get_neighbors(node(102));
     EXPECT_EQ(neighbors102.size(), 2u) << "ASIC 102 should have 2 neighbor entries (2 eth connections)";
-    EXPECT_EQ(neighbors102[0], tt::tt_metal::AsicID{103}) << "ASIC 102 should be connected to ASIC 103";
-    EXPECT_EQ(neighbors102[1], tt::tt_metal::AsicID{103}) << "ASIC 102 should have 2 connections to ASIC 103";
+    EXPECT_EQ(neighbors102[0], node(103)) << "ASIC 102 should be connected to ASIC 103";
+    EXPECT_EQ(neighbors102[1], node(103)) << "ASIC 102 should have 2 connections to ASIC 103";
 }
 
 // AdjacencyGraph Tests with Different User Types
@@ -1597,6 +1605,132 @@ TEST_F(TopologySolverTest, RelaxedSolveDoesNotMutatePreferredConstraints) {
     ASSERT_EQ(dfs_result.target_to_global.size(), 2u);
     EXPECT_EQ(constraints.get_preferred_mappings().size(), 1u);
     EXPECT_EQ(constraints.get_preferred_mappings(1), (std::set<TestGlobalNode>{10}));
+}
+
+// Zero-link tolerance (#56762): path a-b-c onto one linked pair plus two isolated nodes maps only with soft
+// edges, and the maximization realizes the one possible edge.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRealizedEdges) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Hard edges (default): no valid mapping on either engine.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, hard, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success) << "hard target edges must not map onto a graph with one link";
+    }
+
+    // Soft edges (Auto routes to SAT): maps, realizing the one possible edge.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Auto}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        EXPECT_TRUE(soft.allow_unmatched_target_edges());
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, soft, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), 3u);
+        EXPECT_TRUE(result.stats.used_sat);
+        const std::set<TestGlobalNode> linked{10, 11};
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)))
+            << "maximization must realize edge 0-1 or 1-2 on the linked pair, not leave both zero-link";
+        EXPECT_FALSE(result.warnings.empty()) << "the unrealized edge must be reported as a warning";
+    }
+
+    // Explicit DFS keeps edges hard.
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        auto result = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Dfs);
+        EXPECT_FALSE(result.success);
+    }
+}
+
+// Zero-link tolerance (#56762): a session started with soft edges flips to hard seams and back in place, with
+// no second encoding; a session started hard cannot be made soft.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_InSessionToggleKeepsOneEncoding) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+    const std::set<TestGlobalNode> linked{10, 11};
+
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+
+        // Hard seams on the live session: the path cannot be realized.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success) << "hard seams must not map a path onto one link";
+
+        // Back to soft seams: a zero-link mapping with the one realizable edge.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(true));
+        auto result = session.next();
+        ASSERT_TRUE(result.success) << result.error_message;
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)));
+        EXPECT_FALSE(result.warnings.empty());
+
+        // Hard again after a soft model: still UNSAT, still the same encoding.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success);
+        EXPECT_EQ(session.sat_hard_constraint_encode_calls(), 1u) << "toggling seams must not re-encode";
+    }
+
+    {
+        // A hard-edge session on a solvable instance (path onto a path) cannot be relaxed in place.
+        AdjacencyGraph<TestGlobalNode>::AdjacencyMap path_adj_map;
+        path_adj_map[10] = {11};
+        path_adj_map[11] = {10, 12};
+        path_adj_map[12] = {11};
+        path_adj_map[13] = {};
+        AdjacencyGraph<TestGlobalNode> path_graph(path_adj_map);
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            path_graph,
+            hard,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+        EXPECT_TRUE(session.next().success);
+        EXPECT_FALSE(session.set_allow_unmatched_target_edges(true))
+            << "a session encoded with hard edges cannot be relaxed in place";
+    }
 }
 
 TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
@@ -3599,6 +3733,180 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespect
             << name << ": set_max_same_rank_groups_used(" << kCap << ") must confine placement to <= " << kCap
             << " host groups";
     }
+}
+
+// Globals in NO host group (the master placement's cross-host *_hostedge seats) raise no occupancy literal, so a
+// capped solve used to satisfy "at most k groups" vacuously by choosing them: a k=1 solve on a 4-galaxy quad returned
+// two cross-host seats over three hosts. Under an armed HARD cap such globals must be unusable, for both engines, on
+// the single solve and on every enumerated mapping.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph_with_unlabelled(
+    size_t n_labelled, const std::vector<TestGlobalNode>& unlabelled) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n_labelled; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    for (TestGlobalNode g : unlabelled) {
+        adj[g] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+static size_t count_unlabelled_used(
+    const MappingResult<TestTargetNode, TestGlobalNode>& result,
+    const std::vector<std::set<TestGlobalNode>>& global_groups) {
+    size_t n = 0;
+    for (const auto& [t, g] : result.target_to_global) {
+        bool labelled = false;
+        for (const auto& grp : global_groups) {
+            if (grp.contains(g)) {
+                labelled = true;
+                break;
+            }
+        }
+        if (!labelled) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_UnlabelledGlobalsExcludedUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": a global in no host group must not be chosen while the HARD cap is armed";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+            EXPECT_EQ(count_host_groups_used(results[i], host_groups), kCap) << name << " mapping " << i;
+        }
+    }
+}
+
+// The cardinality clause is not binding when at most k labelled groups are reachable (here: ONE group, k=1), but
+// the unlabelled exclusion must still be emitted: an unlabelled global would otherwise slip past the cap exactly
+// when the cap looks trivially satisfied. Both engines must refuse it.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_CapNotBindingStillExcludesUnlabelled) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 1, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": the cap is not binding with one reachable group, but unlabelled globals stay excluded";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+        }
+    }
+}
+
+// When a target's only candidates are unlabelled, the capped solve must FAIL rather than place it: that failure is
+// the signal MultiMeshSolutionEnumerator / the SAT placement session use to drop the cap and re-admit such globals.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_OnlyUnlabelledCandidatesInfeasibleUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    ASSERT_TRUE(constraints.add_required_constraint(TestTargetNode(1), std::set<TestGlobalNode>{900, 901}));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success)
+            << name << ": target 1 can only take an unlabelled global, which the armed HARD cap must refuse";
+    }
+
+    // Without the cap the same instance places (the drop-cap path the enumerator falls back to).
+    constraints.set_max_same_rank_groups_used(0);
+    auto uncapped = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(uncapped.success) << uncapped.error_message;
+    EXPECT_TRUE(uncapped.target_to_global.at(1) == 900 || uncapped.target_to_global.at(1) == 901)
+        << "without the cap target 1 takes one of its (unlabelled) required globals";
+    EXPECT_GE(count_unlabelled_used(uncapped, host_groups), 1u);
+}
+
+// SOFT minimize (no HARD cap) shares the at-most-k encoding, so while its packing assumption holds it must also
+// prefer labelled globals over unlabelled ones instead of scoring a cross-host seat as "zero hosts".
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftPrefersLabelledGlobals) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_unlabelled_used(result, host_groups), 0u)
+        << "SOFT minimize must pack onto labelled host groups when that is feasible";
+    EXPECT_EQ(count_host_groups_used(result, host_groups), 1u);
 }
 
 // Multi-solution enumeration must honour the HARD host-group cap on every returned mapping, for both engines.

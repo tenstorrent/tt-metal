@@ -922,16 +922,19 @@ def test_demo(
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        # Also save the avg decode performance for the 128 iterations (excluding the compile time).
+        # With stop_at_eos the last batch can end before 128 iterations; average over the ones that ran.
+        num_iterations_for_avg = min(128, iteration)
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
+            for i in range(1, num_iterations_for_avg)
         )
         benchmark_data.add_measurement(
             profiler,
             0,
             "inference_decode",
             "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
+            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
             step_warm_up_num_iterations=None,
             target=None,
         )

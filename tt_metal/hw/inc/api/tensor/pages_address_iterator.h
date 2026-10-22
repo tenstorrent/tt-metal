@@ -31,6 +31,10 @@ public:
     PagesAddressIteratorSharded(
         const Accessor& accessor, uint32_t start_page_id = 0, uint32_t stride = 1, uint8_t noc = noc_index) :
         accessor(accessor), current_page_id(start_page_id), stride_(stride), noc(noc) {
+        if constexpr (kLazy) {
+            update_current_page();
+            return;
+        }
         if (current_page_id < accessor.dspec().tensor_volume()) {
             // Pages per step within a run; 0 disables the fast path.
             const uint32_t page_stride = accessor.contiguous_page_stride();
@@ -56,6 +60,10 @@ public:
         current_page_id += stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
+            return *this;
+        }
+        if constexpr (kLazy) {
+            update_current_page();
             return *this;
         }
 
@@ -86,6 +94,10 @@ public:
         current_page_id += steps * stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
+            return *this;
+        }
+        if constexpr (kLazy) {
+            update_current_page();
             return *this;
         }
 
@@ -121,6 +133,10 @@ public:
     bool operator>=(const PagesAddressIteratorSharded& other) const { return !(*this < other); }
 
 private:
+    // The address generator serves this accessor: don't track the software address (see
+    // detail::lazy_page_addr_v); a page computes it only if asked.
+    static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
+
     const Accessor& accessor;
     uint32_t current_page_id = 0;   // current page id
     uint64_t current_noc_addr = 0;  // current NOC address for this page
@@ -131,7 +147,10 @@ private:
     uint32_t run_pages_left_ = 0;
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
-    void update_current_page() { current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor); }
+    void update_current_page() {
+        current_page =
+            AccessorPage<Accessor>(kLazy ? detail::kLazyNocAddr : current_noc_addr, current_page_id, &accessor, noc);
+    }
 
     void set_noc_addr(uint32_t page_id) { current_noc_addr = detail::transfer_noc_addr(accessor, page_id, 0, noc); }
 
@@ -247,8 +266,13 @@ private:
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
     void update_current_page() {
-        auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
-        current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor);
+        if constexpr (detail::lazy_page_addr_v<Accessor>) {
+            // The address generator serves the transfer; the page computes its software address only if asked.
+            current_page = AccessorPage<Accessor>(detail::kLazyNocAddr, current_page_id, &accessor, noc);
+        } else {
+            auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
+            current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor, noc);
+        }
     }
 };
 

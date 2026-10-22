@@ -279,4 +279,120 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S
         /*num_consumers=*/1);
 }
 
+// A DFB size override between two enqueues must reach the device, even when fast dispatch replays cached
+// commands. A stale ring still passes data, so probe kernels report the config the device holds.
+TEST_F(UnitMeshAnyDispatchFixture, DataflowBufferSizeOverrideReenqueue) {
+    constexpr uint32_t extent_record_words = 8;
+    constexpr uint32_t extent_record_bytes = extent_record_words * sizeof(uint32_t);
+    constexpr uint32_t initial_entry_size = 1024;
+    constexpr uint32_t initial_num_entries = 16;
+    constexpr uint32_t override_entry_size = 2048;
+    constexpr uint32_t override_num_entries = 8;
+
+    distributed::MeshDevice& mesh_device = this->device();
+    const experimental::NodeCoord node{0, 0};
+    const CoreCoord core{0, 0};
+    const experimental::DFBSpecName DFB_NAME{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+
+    experimental::DataMovementHardwareConfig producer_hw;
+    if (mesh_device.arch() == ARCH::QUASAR) {
+        producer_hw.config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+            .disable_dfb_implicit_sync_for = {DFB_NAME}};
+    } else {
+        producer_hw.config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+    }
+
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .compile_time_args = {{"num_tc_snapshots", 1u}, {"rotate_tc", 0u}, {"credits_to_post", 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config = producer_hw,
+    };
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = DFB_NAME,
+            .accessor_name = "in",
+            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+        }},
+        .compile_time_args =
+            {{"num_tc_snapshots", 1u},
+             {"rotate_tc", 0u},
+             {"drain_producer_rotate_credits", 0u},
+             {"drain_last_tc_credit", 0u},
+             {"num_producers", 1u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "dfb_size_override_reenqueue",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {{
+            .unique_id = DFB_NAME,
+            .entry_size = initial_entry_size,
+            .num_entries = initial_num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        }},
+        .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
+    };
+
+    const distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    Program& program = mesh_workload.get_programs().at(device_range);
+
+    const uint32_t producer_result_l1 = top_of_l1_scratch_addr(mesh_device, 2 * extent_record_bytes);
+    const uint32_t consumer_result_l1 = producer_result_l1 + extent_record_bytes;
+
+    experimental::ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        {.kernel = PRODUCER,
+         .runtime_arg_values =
+             experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_result_l1}})},
+        {.kernel = CONSUMER,
+         .runtime_arg_values =
+             experimental::MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_result_l1}})},
+    };
+
+    // With one producer and one consumer, every arch reports the whole ring as local, with stride == entry_size:
+    // {entry_size, stride_size, total_num_entries, total_size_bytes, local_num_entries, local_size_bytes,
+    //  ring_span_bytes, ring_span_num_entries}.
+    auto enqueue_and_expect_extent = [&](uint32_t entry_size, uint32_t num_entries) {
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
+        const uint32_t total_size_bytes = entry_size * num_entries;
+        const std::vector<uint32_t> expected = {
+            entry_size,
+            entry_size,
+            num_entries,
+            total_size_bytes,
+            num_entries,
+            total_size_bytes,
+            total_size_bytes,
+            num_entries};
+        for (const uint32_t result_l1 : {producer_result_l1, consumer_result_l1}) {
+            std::vector<uint32_t> record;
+            slow_dispatch::ReadFromL1(mesh_device, core, result_l1, extent_record_bytes, record);
+            EXPECT_EQ(record, expected) << (result_l1 == producer_result_l1 ? "producer" : "consumer");
+        }
+    };
+
+    experimental::SetProgramRunArgs(program, run_params);
+    enqueue_and_expect_extent(initial_entry_size, initial_num_entries);
+
+    run_params.dfb_run_overrides.push_back(
+        {.dfb = DFB_NAME, .entry_size = override_entry_size, .num_entries = override_num_entries});
+    experimental::SetProgramRunArgs(program, run_params);
+    enqueue_and_expect_extent(override_entry_size, override_num_entries);
+}
+
 }  // namespace tt::tt_metal

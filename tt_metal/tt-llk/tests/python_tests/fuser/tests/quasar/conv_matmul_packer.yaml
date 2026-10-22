@@ -20,7 +20,7 @@ operations:
         in1: "weights"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "conv_out"
         block_size: [64, 64]
