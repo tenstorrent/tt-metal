@@ -152,8 +152,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else. A pipeline can be built
-# with other shifts: a distillation adapter is trained against one sigma grid and says so in its card.
+# Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
+# need other shifts.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -403,8 +403,7 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
             "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
-    # Servers derive the fabric they open from this preset's topology, so the override has to live
-    # here for the fabric and the pipeline's CCLs to agree.
+    # Overridden here because servers open their fabric from this preset; fabric and CCLs must agree.
     override = os.environ.get("MINIMAX_H3_TOPOLOGY")
     if override:
         topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
@@ -533,8 +532,7 @@ class MiniMaxH3Pipeline:
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
         if topology is None:
-            # A ring collective on a line fabric has no forwarding direction and aborts, so the open
-            # fabric overrides the preset's Ring.
+            # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
             fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
@@ -570,8 +568,7 @@ class MiniMaxH3Pipeline:
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
-        # Set for the duration of `warmup`, whose short generations compile and capture but whose
-        # output is discarded.
+        # True during `warmup`, whose output is discarded.
         self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the

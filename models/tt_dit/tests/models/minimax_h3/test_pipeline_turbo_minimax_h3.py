@@ -1,28 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end generation under a lightx2v MiniMax-H3-Turbo adapter, at the adapter's own working point.
+"""End-to-end generation under a lightx2v MiniMax-H3-Turbo (or HyperFlow) adapter at its own working point.
 
-Two properties of these adapters are silent when wrong, and both are read from the file rather than
-assumed:
+Env: MINIMAX_H3_TURBO_LORA_PATH (required), MINIMAX_H3_TURBO_KEYFRAME (fl2va), MINIMAX_H3_TURBO_TASK
+(fl2va|t2va), MINIMAX_H3_TURBO_POINT (768p|544p|hyperflow), MINIMAX_H3_TURBO_NFE (4|8).
 
-**Scale lives in the file's metadata, not in its tensors.** The diffusers publish carries no
-per-target ``.alpha``, only ``__metadata__["alpha"]``; the real scale is ``alpha / rank`` (0.0625 for
-every published Turbo adapter, corroborated by the publisher's own ComfyUI conversion, which states
-``training_scale: 0.0625``). Loading at 1 applies every delta 16x too strong -- and because nothing
-about that is structurally invalid, it produces a video rather than an error.
-``h3_adapter_loader`` derives it, so this test only records what the loader resolved.
-
-**The 768p variants were distilled against video shift 6**, not the checkpoint's 12 (audio stays 3);
-the 544p variants keep 12/3. A wrong shift is a valid schedule over the wrong sigma grid: it
-completes, and it costs quality rather than correctness. The canvas and its shifts therefore travel
-together in ``WORKING_POINTS`` rather than being independently settable.
-
-The ``hyperflow`` working point runs the HyperFlow 8-step file the same way, at the checkpoint's own
-shifts; its sigma grid and interval conditioning come from the file's header.
-
-Quality is recorded, not gated: the bars elsewhere are calibrated against the 49-forward base model
-and a 4- or 8-forward student has no reason to reproduce them.
+Scale is ``__metadata__["alpha"] / rank`` (0.0625 for Turbo), resolved by the loader; 1.0 would be 16x too
+strong yet still produce video. 768p was distilled at video shift 6, 544p and HyperFlow at 12 (audio 3).
+Quality is recorded, not gated.
 """
 
 from __future__ import annotations
@@ -54,7 +40,7 @@ from .common_av import (
     weights_dir,
 )
 
-# Each adapter names one canvas and one pair of shifts, and the two travel together.
+# A canvas and its shifts travel together: a wrong shift still completes, just on the wrong sigma grid.
 WORKING_POINTS = {
     "768p": {"size": (768, 1344), "video_shift": 6.0, "audio_shift": 3.0},
     "544p": {"size": (544, 960), "video_shift": 12.0, "audio_shift": 3.0},
@@ -69,9 +55,7 @@ DURATIONS_S = (5, 10, 15)
 SEED = 0
 PROMPT = CALIBRATED_FOX_PROMPT
 
-# NFE from the model card, plus the terminal sigma: `num_inference_steps` counts grid points.
-# 4 and 8 are the adapter's only distilled working points; any other count is a valid schedule over
-# the wrong sigma grid -- it completes and records a number off the validated operating point, so reject it.
+# `num_inference_steps` counts grid points (NFE + terminal sigma). Only 4 and 8 were distilled.
 NUM_FORWARDS = int(os.environ.get("MINIMAX_H3_TURBO_NFE", 4))
 if NUM_FORWARDS not in TURBO_NUM_FORWARDS:
     raise ValueError(f"MINIMAX_H3_TURBO_NFE must be one of {TURBO_NUM_FORWARDS}, got {NUM_FORWARDS}")
@@ -85,11 +69,7 @@ DEVICE_BOUND_TARGETS = 52 * 4
 
 
 def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
-    """The blended embedding on device against float32 torch over the same fused weights.
-
-    Both embedders are float32 on device and fused on host in float32; this is the check that the
-    adapter's float32 time-embedder deltas survive to the blend rather than being rounded away.
-    """
+    """Device two-time blend vs float32 torch: the adapter's float32 embedder deltas must not round away."""
     transformer = pipeline._transformer
     two_time = transformer.two_time
     assert two_time is not None, "a HyperFlow adapter is bound but the transformer has no endpoint embedder"
@@ -156,8 +136,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         audio_shift=AUDIO_SHIFT,
     )
 
-    # Construction warms the 5 s rung only, and the 4x8 preset does not bucket or trace, so a longer
-    # clip would otherwise pay its kernel compiles inside the measured call.
+    # Construction warms only the 5 s rung; warm this duration so compiles stay out of the measurement.
     with pipeline.quiet():
         pipeline(
             PROMPT,
@@ -182,8 +161,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         profiler=benchmark_profiler,
     )
 
-    # The adapter reached the device: `load_h3_adapter_into` raises on a target it cannot place, so
-    # what is left to confirm is that it bound anything at all and bound the whole of it.
+    # `load_h3_adapter_into` raises on unplaceable targets; confirm something (and for HyperFlow, all) bound.
     handle = pipeline.adapter
     assert handle is not None and len(handle) > 0, "the transformer was built without an adapter bound"
     logger.info(f"adapter {handle.name}: {len(handle)} bound targets")

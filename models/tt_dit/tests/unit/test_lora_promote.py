@@ -18,8 +18,7 @@ def _rmse(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=mesh_device_config_to_string, indirect=True)
 def test_promoted_fuse_delta_survives_eviction(mesh_device: ttnn.MeshDevice) -> None:
-    """A promoted layer merges its delta exactly once across evict -> reload -> reapply, and a
-    reapply while still resident does not merge it a second time."""
+    """Delta merges exactly once across resident reapply and evict -> reload -> reapply."""
     torch.manual_seed(0)
     K, N, rank, scale = 512, 1024, 8, 0.02
     torch_linear = torch.nn.Linear(K, N, bias=True).to(torch.bfloat16)

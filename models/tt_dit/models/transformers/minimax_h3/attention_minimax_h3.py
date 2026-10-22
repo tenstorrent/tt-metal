@@ -501,8 +501,7 @@ class MiniMaxH3Attention(Module):
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
         # running as a separate op. Only on ring topologies -- on a line the unfused path is faster,
         # which is the same condition WanAttention uses.
-        # The swept block sizes are sized to the fused op's circular buffers; handed to the unfused
-        # matmul they overrun L1 at long sequence lengths, so that path takes the generic config.
+        # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(

@@ -27,9 +27,7 @@ import torch
 def shift_sigmas(sigmas: torch.Tensor, shift: float) -> torch.Tensor:
     """The exponential shift ``s * sigma / (1 + (s - 1) * sigma)``, mapping 0 to 0 and 1 to 1.
 
-    Module-level because a caller handing :meth:`MiniMaxH3Scheduler.set_timesteps` an explicit grid
-    has to shift it itself -- that path takes its grid verbatim -- and a second copy of this formula
-    is a silent-wrong-schedule bug waiting to happen.
+    Public because an explicit grid passed to :meth:`MiniMaxH3Scheduler.set_timesteps` is used verbatim.
     """
     if shift <= 0:
         raise ValueError(f"shift must be positive, got {shift}")

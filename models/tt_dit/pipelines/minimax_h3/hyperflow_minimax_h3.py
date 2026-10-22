@@ -1,25 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sampling contract a HyperFlow adapter publishes in its own safetensors header.
+"""The sampling contract a HyperFlow adapter publishes in its safetensors header.
 
-A distillation adapter that only replaces weights needs nothing from the pipeline but a step count.
-HyperFlow needs three more things, and all three are facts about the *adapter*, not about the
-request, so they travel in the weights file rather than in a call argument:
-
-**A fixed sigma grid.** The adapter was distilled to sample on one 9-point grid -- 8 forwards -- and
-any other grid is a different problem than the one it solves. ``num_inference_steps`` therefore stops
-being a request parameter: it is read off the file, and a caller asking for another value is refused
-rather than quietly served a grid the weights were never trained on.
-
-**Interval conditioning.** Every step is conditioned on the ``(t, r)`` interval it integrates, not on
-the point ``t``, with ``r_i = 1 - sigma_{i+1}``. ``r`` is embedded by a second, adapted copy of
-``time_embedder`` that the base checkpoint does not have.
-
-**A blend gate.** ``emb_t + gate * (emb_r - emb_t)``, where ``gate`` comes from the header.
-
-The shifts are read and *asserted*, not applied: a pipeline built at other shifts cannot reproduce
-the grid, so a mismatch is the wrong file or the wrong pipeline, not a warning.
+A fixed raw sigma grid (9 points, 8 forwards; any other step count is refused), interval conditioning
+on ``(t, r)`` with ``r_i = 1 - sigma_{i+1}`` via a second adapted ``time_embedder``, and a blend gate
+``emb_t + gate * (emb_r - emb_t)``. The shifts are asserted against the pipeline's, never applied.
 """
 
 from __future__ import annotations
@@ -35,19 +21,14 @@ from .scheduler import shift_sigmas
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-#: Header entry that marks a file as carrying a sampling contract at all. Its absence means a plain
-#: adapter -- FastH3 and friends -- which the pipeline runs at a caller-supplied step count.
+#: Header entry marking a sampling contract; without it the adapter runs at a caller-supplied step count.
 MARKER_KEY = "hyperflow"
 
 _REQUIRED_KEYS = ("hyperflow_version", "hyperflow_gate", "hyperflow_sigmas")
 
 
 def validate_sigmas(sigmas: Sequence[float] | torch.Tensor) -> torch.Tensor:
-    """Return ``sigmas`` as a flat float32 CPU tensor after checking it is a rectified-flow grid.
-
-    The same contract :meth:`MiniMaxH3Scheduler.set_timesteps` enforces on an explicit grid, checked
-    here so a malformed header fails while reading the file rather than eight stack frames later.
-    """
+    """``sigmas`` as a flat float32 CPU tensor, checked as a rectified-flow grid at header-read time."""
     grid = torch.as_tensor(sigmas, dtype=torch.float32).flatten().cpu()
     if grid.numel() < 2:
         raise ValueError(f"a sigma grid needs at least two points, got {grid.numel()}")
@@ -60,11 +41,7 @@ def validate_sigmas(sigmas: Sequence[float] | torch.Tensor) -> torch.Tensor:
 
 @dataclass(frozen=True)
 class MiniMaxH3HyperFlow:
-    """One adapter's sampling contract, parsed and validated.
-
-    ``sigmas`` is the *raw* grid, before either modality's shift. Both shifts are applied here rather
-    than stored pre-shifted so the grid in the header stays the one the adapter was distilled on.
-    """
+    """One adapter's sampling contract. ``sigmas`` is the raw grid, before either modality's shift."""
 
     version: str
     gate: float
@@ -82,11 +59,9 @@ class MiniMaxH3HyperFlow:
         video_shift: float,
         audio_shift: float,
     ) -> MiniMaxH3HyperFlow | None:
-        """Parse an adapter's header, or ``None`` when it publishes no sampling contract.
+        """Parse an adapter's header, or ``None`` when :data:`MARKER_KEY` is absent.
 
-        Only the *absence* of :data:`MARKER_KEY` yields ``None``. A file that claims the contract and
-        then omits part of it raises: the half-read alternative is a two-time adapter sampled on a
-        50-point single-time grid, which produces video rather than an error.
+        A partial contract raises: a two-time adapter on the default grid silently produces bad video.
         """
         metadata = dict(metadata or {})
         if metadata.get(MARKER_KEY, "").lower() != "true":
@@ -123,16 +98,11 @@ class MiniMaxH3HyperFlow:
 
     @property
     def num_forwards(self) -> int:
-        """Model evaluations, one fewer than the grid points -- the terminal sigma has none."""
+        """One fewer than the grid points: the terminal sigma has no forward."""
         return len(self.sigmas) - 1
 
     def assert_shifts(self, *, video_shift: float, audio_shift: float) -> None:
-        """Refuse a grid trained at shifts this pipeline cannot reproduce.
-
-        The shift is what maps the raw grid onto each modality's schedule, so training and inference
-        disagreeing on it means every step lands at a noise level the adapter never saw. There is no
-        shift override here to reconcile them with, which makes this the wrong file, not a warning.
-        """
+        """Refuse a grid trained at other shifts: every step would land at a noise level never trained on."""
         if (self.video_shift, self.audio_shift) != (video_shift, audio_shift):
             msg = (
                 f"adapter was distilled at scheduler shifts (video {self.video_shift:g}, audio "
@@ -150,19 +120,14 @@ class MiniMaxH3HyperFlow:
     def assert_supports_subfolder(self, subfolder: str) -> None:
         """Refuse a checkpoint partition the adapter does not list. An empty list claims every one.
 
-        ``task`` and partition are not the same gate: an adapter may be distilled for ``ref2va``
-        prompting yet carry deltas only for the ``transformer/`` weights, and ranks that never saw
-        ``transformer_ref/`` produce video rather than an error when added to it.
+        Separate from the task gate: a ``ref2va`` adapter may only carry deltas for ``transformer/``.
         """
         if self.subfolders and subfolder not in self.subfolders:
             msg = f"adapter is compatible with {list(self.subfolders)}, not {subfolder!r}"
             raise ValueError(msg)
 
     def assert_forwards(self, num_inference_steps: int | None) -> None:
-        """Refuse a caller-supplied step count that is not the adapter's own.
-
-        ``None`` means the caller deferred to the adapter, which is the normal path.
-        """
+        """Refuse a caller-supplied step count that is not the adapter's own; ``None`` defers to it."""
         if num_inference_steps is not None and int(num_inference_steps) != self.num_grid_points:
             msg = (
                 f"this adapter samples a fixed {self.num_grid_points}-point grid "
@@ -171,21 +136,14 @@ class MiniMaxH3HyperFlow:
             raise ValueError(msg)
 
     def modality_sigmas(self, shift: float) -> torch.Tensor:
-        """The adapter's grid under one modality's shift, ready for ``set_timesteps(sigmas=...)``.
+        """The grid under one modality's shift, for ``set_timesteps(sigmas=...)``.
 
-        No ``unique_consecutive`` here, unlike the scheduler's own ``linspace`` path: an 8-forward
-        grid is far too coarse for the shift to collapse neighbours, and silently dropping a point
-        would change the step count the adapter was distilled for.
+        No ``unique_consecutive``: dropping a point would change the distilled step count.
         """
         return shift_sigmas(validate_sigmas(self.sigmas), shift)
 
     def endpoints(self, sigmas: torch.Tensor) -> torch.Tensor:
-        """The endpoint of every step, ``r_i = 1 - sigma_{i+1}``, on a shifted grid.
-
-        Pairs with ``MiniMaxH3Scheduler.timesteps == 1 - sigmas[:-1]``: step ``i`` carries its rows
-        from ``t_i`` to ``r_i``, so the endpoint of one step is the next step's timestep -- and the
-        last step's endpoint is 1.0, a clean sample.
-        """
+        """Each step's endpoint ``r_i = 1 - sigma_{i+1}`` on a shifted grid: the next step's timestep, 1.0 last."""
         return 1.0 - sigmas[1:].to(torch.float32)
 
 

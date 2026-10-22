@@ -87,7 +87,7 @@ MINIMAX_H3_MAX_REFERENCE_PATCHES = MINIMAX_H3_MAX_REFERENCE_BLOCK_PATCHES * (
     * len(sample_reference_video_frames(np.zeros((MINIMAX_H3_MAX_NUM_FRAMES, 1, 1, 3), np.uint8))[1])
 )
 
-# MiniMax API limits on an fl2va keyframe, enforced by the server; the decodable canvases span them.
+# MiniMax API limits on an fl2va keyframe (server-enforced).
 MINIMAX_H3_KEYFRAME_MIN_SIDE = 256
 MINIMAX_H3_KEYFRAME_MAX_SIDE = 5760
 
@@ -238,11 +238,7 @@ def _validate_explicit_canvas(height: int, width: int) -> None:
 
 @dataclass(frozen=True)
 class MiniMaxH3ReferenceInfo:
-    """What admission needs to know about one ref2va reference, read from its container.
-
-    `size` is the `(width, height)` of an image or video; `fps` the frame rate a video reports;
-    `audio_channels` the channel count of an audio reference or of a video's soundtrack.
-    """
+    """Container metadata for one ref2va reference; `size` is `(width, height)`."""
 
     name: str
     kind: str
@@ -260,11 +256,7 @@ def admit_request(
     keyframe_sizes: Mapping[str, tuple[int, int]] | None = None,
     references: Sequence[MiniMaxH3ReferenceInfo] | None = None,
 ) -> None:
-    """Reject a request outside the served envelope from its metadata alone, so it can be refused before queueing.
-
-    `validate_request` applies the same rules to the decoded inputs. `keyframe_sizes` maps a keyframe's
-    name to its `(width, height)`.
-    """
+    """Reject an unserved request from metadata alone, before queueing; `validate_request` checks decoded inputs."""
     if aspect_ratio is not None:
         minimax_h3_parse_aspect_ratio(aspect_ratio)
     if duration_s is not None:

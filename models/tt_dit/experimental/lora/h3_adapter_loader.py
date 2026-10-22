@@ -2,40 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Adapter loader for on-device fuse-mode LoRA on the MiniMax-H3 transformer.
+Fuse-mode LoRA loader for ``MiniMaxH3Transformer3DModel``.
 
-Registers a LoRA safetensors file's A/B pairs into the LoRA-aware Linear modules of a
-``MiniMaxH3Transformer3DModel``; ``bind_active`` then merges ``scale * B@A`` into the device weight,
-so the forward path stays a plain matmul and costs nothing per step.
+The device weights are already permuted/fused, and ``register_lora`` does not transform ``B``, so each
+``B`` gets the same transforms here: ``rope_channel_permutation`` (Q/K), ``_interleave_heads`` (fused
+``to_qkv``) and ``prepare_for_fused_swiglu`` (``ff1``; mandatory, since the mixin's swiglu guard misses it).
 
-Why this differs from the Wan and LTX loaders
----------------------------------------------
-Same shape of problem -- the on-device weight is already permuted and fused, so a LoRA ``B`` must be
-pre-transformed identically or its delta lands in the wrong rows -- but H3 applies three transforms
-where LTX applies two:
-
-  - ``rope_channel_permutation``: Q and K only. Imported from the model rather than re-derived here,
-    because a second copy of a channel permutation is a silent wrong-answer waiting to happen.
-  - ``_interleave_heads``: folds Q/K/V into the fused ``to_qkv`` with heads interleaved so column
-    parallel sharding lands device ``d``'s q, k and v heads contiguously.
-  - ``prepare_for_fused_swiglu``: ``ff1`` packs ``[gate|up]`` into interleaved tile pairs. LTX's FFNs
-    need no transform; H3's does, and forgetting it swaps which half gets the silu.
-
-``to_out`` and ``ff2`` are untouched by ``_prepare_torch_state``, so their adapters register directly.
-
-``LoRAMixin.register_lora`` takes ``B`` already in the destination weight's layout and does not
-transform it, so every transform above has to happen here. Its swiglu guard does not catch ``ff1``
-(``ColParallelLinear`` clears ``activation_fn`` once it sets ``fuse_swiglu``), which is why the pack
-below is mandatory rather than belt-and-braces.
-
-Scale
------
-``alpha / rank``, taken from a per-target ``.alpha`` tensor when the file carries one (kohya) and
-otherwise from the file's ``__metadata__`` (the diffusers publishes of lightx2v's Turbo adapters put
-it there). Absent from both, the scale is 1 -- never ``alpha == rank``, which would silently rescale
-an adapter that publishes a plain ``W + B@A`` contract.
-
-``.diff`` / ``.diff_b`` direct deltas are unsupported; unmapped keys are raised, never skipped.
+Scale is ``alpha / rank`` from a per-target ``.alpha`` tensor, else ``__metadata__`` (lightx2v Turbo),
+else 1 -- never assume ``alpha == rank``. Unmapped keys and ``.diff`` deltas raise.
 """
 from __future__ import annotations
 
@@ -52,15 +26,12 @@ from .promote import promote_to_lora
 
 _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.", "model.")
 
-# PEFT interposes the adapter name (``.default``) before ``.weight``; kohya spells the slots
-# ``lora_down``/``lora_up``. Both reach the same pair.
+# PEFT (``.lora_A.default.weight``) and kohya (``lora_down``/``lora_up``) spellings.
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
 
-# The two block stacks an H3 adapter can address, mapped to their attribute path on the transformer.
 _BLOCK_RE = re.compile(r"^(?P<stack>transformer_blocks|token_refiner\.refiner_blocks)\.(?P<idx>\d+)\.(?P<rest>.+)$")
 
-# Leaf names as the adapter spells them, against the attribute that holds them on device.
 _QKV_SUBS = {"attn.to_q": "q", "attn.to_k": "k", "attn.to_v": "v"}
 _SINGLETONS = {
     "attn.to_out.0": ("attn", "to_out", None),
@@ -68,13 +39,8 @@ _SINGLETONS = {
     "ff.net.2": ("ff", "ff2", None),
 }
 
-# Targets that hang off the transformer rather than a block. `time_embedder` is a plain replicated
-# `Linear`, whose `_prepare_torch_state` only transposes, so its B needs no transform.
-#
-# It is held in float32 on purpose -- every block reads the one `temb`, so rounding it early biases
-# all 50 blocks identically at every step -- while `register_lora` uploads A and B as bfloat16. An
-# adapter that targets it therefore merges a bf16-rounded delta into an fp32 weight. Whether that is
-# acceptable is the adapter's call, not this loader's, but it is not free.
+# Non-block targets; B needs no transform. `time_embedder` is fp32 (one `temb` feeds every block) but
+# `register_lora` uploads bf16 A/B, so a device-side merge is bf16-rounded -- see `h3_host_deltas`.
 _GLOBALS = {
     "time_embedder.linear_1": ("time_embedder", "linear_1"),
     "time_embedder.linear_2": ("time_embedder", "linear_2"),
@@ -83,7 +49,7 @@ _GLOBALS = {
 
 @dataclass
 class H3AdapterHandle:
-    """Bank indices assigned per module path, so a caller can bind or drop the whole adapter."""
+    """Bank index per module path."""
 
     name: str
     indices: dict[str, int] = field(default_factory=dict)
@@ -102,9 +68,8 @@ def load_h3_adapter_into(
 ) -> H3AdapterHandle:
     """Register one adapter file into ``transformer`` and bind it.
 
-    ``scale`` multiplies the adapter's own ``alpha / rank``; it is the caller's strength knob, not a
-    substitute for the published scale. Targets under ``host_prefixes`` are left to the caller, which
-    folds them on host through :func:`h3_host_deltas`.
+    ``scale`` multiplies the file's ``alpha / rank``. Targets under ``host_prefixes`` are skipped (see
+    :func:`h3_host_deltas`).
     """
     name = name or path
     raw, metadata = _read(path)
@@ -171,11 +136,9 @@ def load_h3_adapter_into(
 
 
 def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) -> dict[str, torch.Tensor]:
-    """``scale * alpha / rank * B @ A`` in float32 for every target under ``prefixes``, keyed by its
-    ``<module>.weight`` state-dict name.
+    """fp32 ``scale * alpha / rank * B @ A`` per target under ``prefixes``, keyed ``<module>.weight``.
 
-    For targets whose device weight is float32: ``register_lora`` uploads A and B as bfloat16, which
-    would round a delta the adapter publishes in float32.
+    For fp32 device weights, which ``register_lora``'s bf16 upload would round.
     """
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
@@ -194,7 +157,7 @@ def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
 
 
 def _file_alpha(metadata: dict[str, str]) -> float | None:
-    """The file-level alpha, which is where a diffusers publish puts it when the tensors do not."""
+    """File-level alpha from ``__metadata__`` (diffusers publishes)."""
     raw = metadata.get("alpha") or metadata.get("training_alpha") or metadata.get("lora_alpha")
     return None if raw is None else float(raw)
 
@@ -265,9 +228,8 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
     perm = rope_channel_permutation(attn.head_dim, attn.rotary_dim)
     a_fused = torch.cat([qkvs[slot]["A"] for slot in ("q", "k", "v")], dim=0)
 
-    # Block-diagonal B over the stacked rank, so each source's delta only reaches its own columns.
-    # q/k/v fuse into one register_lora call, so each source's own alpha/rank is folded into its block
-    # here: a single scale on the call would apply to_q's alpha to all three and misscale a differing k or v.
+    # Block-diagonal B over the stacked rank. Per-source alpha/rank is folded into each block, since one
+    # register_lora scale would apply to_q's alpha to k and v too.
     padded = []
     for position, slot in enumerate(("q", "k", "v")):
         b = qkvs[slot]["B"]
@@ -299,9 +261,5 @@ def _interleave_heads_rows(tensors, n_local_heads: int, head_dim: int, n_dev: in
 
 
 def _pack_swiglu_rows(tensor: torch.Tensor) -> torch.Tensor:
-    """Mirror of `ColParallelLinear._prepare_torch_state`'s swiglu packing on the row (out) axis.
-
-    `prepare_for_fused_swiglu` reorders the last axis, so the [2N, rank] B is transposed into the
-    orientation the base weight has when it is packed and transposed back.
-    """
+    """Mirror of `ColParallelLinear._prepare_torch_state`'s swiglu packing on the row (out) axis."""
     return prepare_for_fused_swiglu(tensor.T, ndev=1).T

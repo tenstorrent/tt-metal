@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU golden tests for the H3 adapter loader's silent wrong-answer paths: per-target alpha scaling,
-file-alpha fallback, and the fused-QKV validation. No device -- the fused register is driven with a
-capturing stub so the delta scaling can be asserted without a transformer or hardware."""
+"""CPU tests for H3 adapter-loader alpha scaling and fused-QKV validation (no device; stubbed to_qkv)."""
 
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ IN_DIM = 5
 
 
 class _CaptureQKV:
-    """Stands in for `to_qkv`; records the (A, B, scale) register_lora would fuse."""
+    """Records register_lora's (A, B, scale)."""
 
     def __init__(self):
         self.calls: list[tuple[torch.Tensor, torch.Tensor, float]] = []
@@ -60,7 +58,6 @@ def _col_block(b_fused, position):
 
 
 def test_fused_folds_each_sources_own_alpha():
-    """Per-target alphas must scale their own q/k/v columns -- not all three by to_q's alpha."""
     qkvs = _qkv()
     base = lambda slot: f"transformer_blocks.0.attn.to_{slot}"  # noqa: E731
 
@@ -75,16 +72,15 @@ def test_fused_folds_each_sources_own_alpha():
     )
     b2 = attn2.to_qkv.calls[0][1]
 
-    # alpha/rank == 1 for every slot in run 1, so run 2's column blocks are run 1's times each slot's factor.
+    # Run 1 has alpha/rank == 1, so run 2's blocks are run 1's times each slot's factor.
     for pos, slot in enumerate(("q", "k", "v")):
         torch.testing.assert_close(_col_block(b2, pos), _col_block(b1, pos) * factors[slot])
 
-    # The caller strength is what reaches register_lora; the alpha is already folded into B.
+    # Alpha is folded into B; only the caller strength reaches register_lora.
     assert scale1 == 1.0
 
 
 def test_fused_file_alpha_fallback_scales_every_slot():
-    """With no per-target alphas, the file alpha applies uniformly (alpha/rank)."""
     qkvs = _qkv(seed=1)
     attn_unit = _attn()
     _register_fused(attn_unit, qkvs, 1.0, "a", {}, float(RANK), "transformer_blocks", 0)

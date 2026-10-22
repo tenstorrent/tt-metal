@@ -174,12 +174,7 @@ def reference_kind(index: int, entry: Any) -> str:
 
 
 def check_reference_kinds(kinds: list[str]) -> None:
-    """Enforce the per-request reference limits on the modality of each entry, in request order.
-
-    The "audio cannot be alone" rule is the reference's: an audio reference has to be paired with at
-    least one image or video, because a ref2va request with no visual reference has nothing to
-    condition the picture on.
-    """
+    """Enforce the per-request reference limits; audio alone leaves the picture nothing to condition on."""
     if not kinds:
         raise ValueError("ref2va needs at least one reference; use a t2va call for text-only requests")
     for kind, limit in (

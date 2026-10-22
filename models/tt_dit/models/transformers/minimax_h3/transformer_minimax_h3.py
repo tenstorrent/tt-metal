@@ -50,10 +50,8 @@ class MiniMaxH3TimestepEmbedding(Module):
 class MiniMaxH3TwoTime:
     """Interval `(t, r)` conditioning: `temb = emb_t + gate * (emb_r - emb_t)`.
 
-    `embedder` embeds the endpoint `r` and is an adapted copy of `time_embedder` that the base
-    checkpoint does not carry. A dataclass rather than a child module on purpose: a registered child
-    becomes part of the transformer's cached weight set, and every existing cache would then be
-    incomplete.
+    Not a child module on purpose: a registered child would join the cached weight set and invalidate
+    every existing cache.
     """
 
     embedder: MiniMaxH3TimestepEmbedding

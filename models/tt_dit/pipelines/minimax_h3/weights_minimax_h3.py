@@ -159,12 +159,10 @@ AUDIO_SHIFT_ENV = "MINIMAX_H3_AUDIO_SHIFT"
 
 @dataclass(frozen=True)
 class AdapterSettings:
-    """What a generation needs to know about its adapter, resolved from arguments and environment.
+    """Adapter settings resolved from arguments and environment.
 
-    `lora_strength` multiplies the adapter's own `alpha / rank`; the loader applies that published
-    scale itself, so 1.0 means "as trained". A deployment that used to pass the published scale
-    here (0.0625 for the lightx2v Turbo files) would now apply it twice, which produces a video
-    rather than an error -- hence the dedicated variable name instead of inheriting the old one.
+    `lora_strength` multiplies the file's `alpha / rank` (applied by the loader), so 1.0 is "as trained";
+    passing the published 0.0625 here would apply it twice.
     """
 
     lora_path: Path | None
@@ -182,11 +180,9 @@ def resolve_adapter_settings(
     default_video_shift: float,
     default_audio_shift: float,
 ) -> AdapterSettings:
-    """Explicit arguments win; unset ones fall back to the environment, then to the checkpoint's defaults.
+    """Explicit arguments win, then the environment, then the checkpoint's defaults.
 
-    The shifts are resolved here with the adapter because they travel with it: a distilled adapter is
-    trained against one sigma grid, and a wrong shift is a valid schedule over the wrong grid. It
-    completes and costs quality, so nothing downstream can catch it.
+    Shifts travel with the adapter: a wrong one is a valid schedule over the wrong grid, so nothing catches it.
     """
     env = os.environ
     path = lora_path or env.get(LORA_PATH_ENV) or None

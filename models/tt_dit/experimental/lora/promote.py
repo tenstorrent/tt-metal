@@ -37,9 +37,8 @@ _PROMOTED_CACHE: dict[type, type] = {}
 def _promoted_class(base_cls: type) -> type:
     cls = _PROMOTED_CACHE.get(base_cls)
     if cls is None:
-        # Base-first MRO resolves ``deallocate_weights`` to ``Module``'s and skips the mixin's, so a
-        # promoted layer would keep ``_delta_applied`` through an eviction and ``reapply_after_load``
-        # would never merge the delta into the reloaded base weights.
+        # Base-first MRO would pick ``Module.deallocate_weights``, keeping ``_delta_applied`` across an
+        # eviction so ``reapply_after_load`` never re-merges the delta.
         def deallocate_weights(self) -> None:
             self._forget_device_lora_state()
             base_cls.deallocate_weights(self)

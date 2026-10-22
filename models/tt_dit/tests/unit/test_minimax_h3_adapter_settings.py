@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only tests for the MiniMax-H3 adapter settings resolver: argument precedence, environment
-fallbacks and the checkpoint defaults. These are the knobs a serving deployment reaches the pipeline
-through, and every one of them is silent when wrong -- a mis-scaled or mis-shifted adapter produces a
-video, not an error."""
+"""Host-only tests for the MiniMax-H3 adapter settings resolver (args > env > checkpoint defaults).
+A mis-scaled or mis-shifted adapter still produces video, so these are checked here."""
 
 from pathlib import Path
 

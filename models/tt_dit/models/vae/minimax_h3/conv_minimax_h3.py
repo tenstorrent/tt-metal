@@ -207,10 +207,8 @@ class MiniMaxH3CausalConv3d(Module):
             w_factor=self.width_factor,
         )
 
-        # The blocking tables are tuned at one temporal tap, but the op sizes its circular buffers
-        # from the input's T extent too, so at three taps the tuned H block overflows L1 at compile
-        # time. Scaling H down by the taps holds the footprint near the single-tap value the
-        # tables were tuned against. Only the multi-tap encoder (ref2va video references) is hit.
+        # Blocking tables are tuned at one temporal tap, but CBs scale with input T, so multi-tap
+        # (ref2va encoder) overflows L1; shrink H_out_block by the tap count to compensate.
         if temporal_taps > 1 and self.conv_config.H_out_block > 1:
             self.conv_config = ttnn.Conv3dConfig(
                 weights_dtype=self.conv_config.weights_dtype,

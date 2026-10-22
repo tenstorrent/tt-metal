@@ -126,8 +126,7 @@ _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1_175_000_000, "l1_small_size": _L1_SMALL}
-# The pipeline reads the open fabric and switches every CCL to Linear on FABRIC_1D. Opt-in: both 4x8
-# rows match a 32-device Blackhole cluster, and the line row is a comparison point, not a default.
+# Opt-in: both 4x8 rows match a 32-device Blackhole cluster; the line row is a comparison point.
 _line_8k = {**line_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _LINE_OPT_IN = pytest.mark.skipif(
     os.environ.get("MINIMAX_H3_LINE_FABRIC") != "1", reason="set MINIMAX_H3_LINE_FABRIC=1 to run the line-fabric row"
@@ -155,8 +154,7 @@ GALAXY_MESHES = [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING_TRACED, MESH_4X8_R
 
 
 def fabric_topology() -> ttnn.Topology:
-    """The CCL topology the open fabric supports, for a test that builds its own `CCLManager` on a
-    `GALAXY_MESHES` row: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
+    """CCL topology for the open fabric: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
     return ttnn.Topology.Linear if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D else ttnn.Topology.Ring
 
 
