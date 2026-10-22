@@ -27,7 +27,7 @@ def _record(case, out):
         f.write(f"{case} {hashlib.sha256(out.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:16]}\n")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [pytest.param({"l1_small_size": 24576}, id="l1s")], indirect=True)
 @pytest.mark.parametrize("case", list(CASES))
 def test_tab(device, case):
     kind, (n, c, h, w), k, s, p = CASES[case]
