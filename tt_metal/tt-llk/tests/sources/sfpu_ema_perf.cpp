@@ -48,6 +48,7 @@ static constexpr std::uint32_t EMA_OUTPUT_DST_INDEX = 1;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -63,6 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -108,6 +110,7 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -129,6 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -205,6 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -214,6 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -225,6 +231,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // The EMA output always lands in dst tile 1.
                     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

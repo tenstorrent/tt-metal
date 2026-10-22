@@ -221,6 +221,36 @@ The harness computes every metric of the shared engine, [tools/python/tt_llk_per
 
 A metric whose counters this architecture does not expose, or whose counter group was not captured in the run, is empty in the CSV, never 0. Counters that exist on Wormhole only (per-engine packer busy), Blackhole only (L1 banks 2-5) or Quasar only (thread 3, the INSTISSUE class, the thread-ORed stall reasons, unpacker 2) make their metrics empty on the other chips; every L1 and NoC metric is empty on Quasar, whose only L1 measurement is the dynamic `l1_client_*` column (`helpers/metrics.py` appends it through `compute_l1_client_metrics`).
 
+### L1 contention without `L1_CONGESTION`
+
+Three deterministic views replace the single `L1_CONGESTION` sample (its free-running unpack and pack streams lock
+into contention orbits picked by the start phase, so its value is not reproducible under unrelated code changes):
+
+- `mean(COUPLING)` in every report (no counters needed): `mean(L1_TO_L1)` minus the slowest isolate stage on the
+  `TILE_LOOP` row, per tile in the `.post.csv`. It is what the production-shaped pipeline loses to running its stages
+  together: L1 contention between the streams, the per-section hand-offs and the pipeline fill. A run narrowed with
+  `LLK_PERF_RUN_TYPES` takes the slowest of the isolates it measured, so compare it between runs of the same run types.
+  Add `COUPLING` to the gate's `run_types` to gate on it.
+- Contention inside `L1_TO_L1` (counters): `l1_wait_per_word_ratio` is the request cycles the TDMA clients waited for
+  a bank per word they moved; `l1_packer_ports_backpressure_pct` the refused share of the Wormhole packer ports (port
+  8 and the TDMA bundles of ports 2 and 3; packer 1 shares port 1 with unpacker 1, `l1_port1_backpressure_pct`).
+- Per-stream L1 demand (counters): the words each stream moves per tile in `UNPACK_ISOLATE` and `PACK_ISOLATE`, and the
+  load the two would put on port 1 and on the 16 banks at their isolate pace (above 1: they cannot both run at full
+  speed, the case `L1_CONGESTION` measured).
+
+Wormhole exposes 8 of its L1 client ports per run (`LLK_PERF_L1_MUX_GROUP`), so a full capture is two counter passes
+of the same tests, then one merge:
+
+```bash
+export LLK_PERF_RUN_TYPES=L1_TO_L1,UNPACK_ISOLATE,PACK_ISOLATE
+LLK_PERF_L1_MUX_GROUP=0 PERF_RUN_TAG=g0 pytest --compile-producer --dump-perf-counters ...  # then --compile-consumer
+LLK_PERF_L1_MUX_GROUP=1 PERF_RUN_TAG=g1 pytest --compile-producer --dump-perf-counters ...  # its own RUNNER_TEMP
+python helpers/perf/l1_contention.py ../../perf_data/runs/g0 ../../perf_data/runs/g1 -o l1_contention.csv
+```
+
+A rerun gives the same counter values, and capturing counters leaves the timing unchanged. A NOP added to INIT moves
+only port 3, which carries the TRISC1/2 instruction fetches, by at most 2 cycles per run.
+
 ---
 
 ## Notes and Caveats

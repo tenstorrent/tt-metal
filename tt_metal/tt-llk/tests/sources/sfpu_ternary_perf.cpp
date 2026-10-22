@@ -34,6 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // are compile-time constants emitted into params.h, so nothing is read from params.
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -48,6 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -95,6 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr DataFormat MATH_FORMAT_RAW  = static_cast<DataFormat>(formats.math);
     constexpr DataFormat MATH_FORMAT_ENUM = (MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MATH_FORMAT_RAW;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -105,6 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -236,6 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -246,6 +251,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -263,6 +269,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -48,6 +48,63 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// The PACK_ISOLATE and L1_CONGESTION pack loops release every dest section as tile_regs_release does in production
+// (Wormhole only for now: without the drain its four packers can lock into their slow pattern for the whole loop)
+#if defined(ARCH_WORMHOLE)
+constexpr bool PERF_PACK_SECTION_RELEASE = true;
+#else
+constexpr bool PERF_PACK_SECTION_RELEASE = false;
+#endif
+
+// LLK_PERF_OOL threads run INIT and the code after the loop out of line at the end of the kernel code (sections.ld), by
+// value and noipa, so changes to them cannot move the loop. The other threads keep INIT inline.
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY) // INIT measurement build: INIT's body out of line, timed by counters.h init_zone
+#define LLK_INIT_BEGIN \
+    {                  \
+        auto _llk_init_body_ = [=]() __attribute__((noipa, section(".llk_init_body")))
+#define LLK_INIT_END                                     \
+    ;                                                    \
+    llk_perf::init_zone<PERF_RUN_TYPE>(_llk_init_body_); \
+    }
+#define LLK_INIT_ZONE_END() llk_perf::init_zone_end()
+#define LLK_INIT_PREP_END                                                                 \
+    ;                                                                                     \
+    llk_perf::init_zone<PERF_RUN_TYPE, decltype(_llk_init_body_), true>(_llk_init_body_); \
+    }
+#elif defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
+#define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_INIT_END   ()
+#else
+#define LLK_INIT_BEGIN
+#define LLK_INIT_END
+#endif
+// An INIT block that goes on to prepare the loop's data (pack_dest_bank fills dest): INIT's zone ends at
+// LLK_INIT_ZONE_END(), after the thread's own init, and the block closes with LLK_INIT_PREP_END instead of LLK_INIT_END
+#if !(defined(LLK_DBG_BARRIER) && defined(LLK_PERF_INIT_ONLY))
+#define LLK_INIT_ZONE_END()
+#define LLK_INIT_PREP_END LLK_INIT_END
+#endif
+// The code after the measured loop (uninit): placed like INIT, but never timed as INIT in the INIT measurement build.
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
+#define LLK_UNINIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_UNINIT_END   ()
+#else
+#define LLK_UNINIT_BEGIN
+#define LLK_UNINIT_END
+#endif
+
+// Kernels with inline INIT: the code after the loop out of line, so it cannot move the loop, and opaque INIT copies of
+// values INIT and the loop share, so INIT's code cannot change the loop's registers.
+#if defined(LLK_DBG_BARRIER)
+#define LLK_POST_LOOP_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_POST_LOOP_END   ()
+#define LLK_PERF_OPAQUE(v)  asm volatile("" : "+r"(v))
+#else
+#define LLK_POST_LOOP_BEGIN
+#define LLK_POST_LOOP_END
+#define LLK_PERF_OPAQUE(v)
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
 // UNPACK_ISOLATE's math mock. Every other caller (L1_CONGESTION, Blackhole, Quasar) keeps the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>

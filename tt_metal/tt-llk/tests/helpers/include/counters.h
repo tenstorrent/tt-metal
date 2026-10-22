@@ -527,12 +527,79 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
+// A peer of the pack thread in PACK_ISOLATE, at its TILE_LOOP zone: holds its epilogue until pack is done (profiler.h).
+constexpr bool holds_quiet(PerfRunType run_type, bool tile_loop)
+{
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+    // With the release schedule every other thread starts before the measured one, so none of their start-up is in the
+    // window; held at their TILE_LOOP end, none of their epilogue is either. L1_TO_L1 ends at pack's end: unpack and math
+    // hold until pack is done.
+    if (run_type == PerfRunType::L1_TO_L1)
+    {
+        return tile_loop && llk_barrier::THREAD_ID != 2;
+    }
+    return tile_loop && is_single_thread_runtype(run_type) && !is_measured_thread(run_type);
+#else
+    return tile_loop && run_type == PerfRunType::PACK_ISOLATE && !is_measured_thread(run_type);
+#endif
+}
+
+// The thread that ends the held peers' wait after its TILE_LOOP: the measured thread, or pack in L1_TO_L1.
+constexpr bool releases_holds(PerfRunType run_type)
+{
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+    return run_type == PerfRunType::L1_TO_L1 ? llk_barrier::THREAD_ID == 2 : is_measured_thread(run_type);
+#else
+    return run_type == PerfRunType::PACK_ISOLATE && is_measured_thread(run_type);
+#endif
+}
+
 // The thread that reads the last zone of a single thread run type after run_kernel: the measured thread itself, whose
 // window has ended, so no peer polls for it. Span run types read in their exit rendezvous.
 constexpr bool is_reader_thread(PerfRunType run_type)
 {
     return is_single_thread_runtype(run_type) && is_measured_thread(run_type);
 }
+
+#if defined(LLK_DBG_BARRIER) && defined(LLK_BARRIER_ON_TRISC) && !defined(LLK_PERF_INIT_ONLY)
+// The order in which BRISC releases the threads from the TILE_LOOP park, each by its own flush (barrier.h schedule):
+// threads that only wait or idle first, the measured thread last, so every one starts from the same state whatever code
+// ran before the park, and the measured window holds no other thread's start-up. 0: all three released together.
+constexpr std::uint32_t release_schedule(PerfRunType run_type)
+{
+    switch (run_type)
+    {
+        case PerfRunType::UNPACK_ISOLATE:
+            return llk_barrier::schedule(2, 1, 0); // idle pack, the math mock that consumes, unpack
+        case PerfRunType::MATH_ISOLATE:
+            return llk_barrier::schedule(2, 0, 1); // idle pack, the unpack mock that produces, math
+        case PerfRunType::PACK_ISOLATE:
+            return llk_barrier::schedule(0, 1, 2); // idle unpack and math, pack
+        case PerfRunType::L1_TO_L1:
+            return llk_barrier::schedule(2, 1, 0); // pack and math wait for data, unpack starts the chain
+        default:
+            return 0;
+    }
+}
+
+// The last thread of a schedule names it to BRISC and arms the counters after its release, so they count its window only.
+// The INIT measurement build keeps the plain release (its TILE_LOOP is not reported): its code stays as it was, so the
+// INIT helpers placed after run_kernel do not move.
+constexpr bool releases_last(PerfRunType run_type)
+{
+    return release_schedule(run_type) != 0 && ((release_schedule(run_type) >> 4) & 3) == llk_barrier::THREAD_ID;
+}
+#else
+constexpr std::uint32_t release_schedule(PerfRunType)
+{
+    return 0;
+}
+
+constexpr bool releases_last(PerfRunType)
+{
+    return false;
+}
+#endif
 
 #if defined(PERF_COUNTERS_COMPILED)
 namespace detail
@@ -571,7 +638,17 @@ struct perf_counter_scoped
             detail::reader_here = true;
         }
 #endif
-        llk_barrier::rendezvous(
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (LOOP_PAD && releases_last(RUN_TYPE))
+        {
+            llk_barrier::announce_schedule(release_schedule(RUN_TYPE));
+        }
+#endif
+#if defined(LLK_PERF_INIT_ONLY)
+        llk_barrier::rendezvous<LOOP_PAD ? llk_barrier::PARK_LOOP : llk_barrier::PARK_INIT_TS>(
+#else
+        llk_barrier::rendezvous<LOOP_PAD>(
+#endif
             llk_barrier::is_action_thread(),
             [zid]
             {
@@ -586,9 +663,34 @@ struct perf_counter_scoped
                         read_pending_zone();
                     }
                 }
-                arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
+                if constexpr (!(LOOP_PAD && release_schedule(RUN_TYPE) != 0))
+                {
+                    arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
+                }
 #endif
             });
+#if defined(PERF_COUNTERS_COMPILED)
+        if constexpr (LOOP_PAD && releases_last(RUN_TYPE)) // released last, by its own flush: the window starts here
+        {
+            arm_all_counters(zone_id);
+        }
+#endif
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (holds_quiet(RUN_TYPE, LOOP_PAD)) // after the entry release: the level the pack thread flips when done
+        {
+#if !defined(LLK_PERF_INIT_ONLY) // opaque, as quiet_wait_here (profiler.h): the kernel compiles as if it were not there
+            asm volatile(
+                "addi  sp, sp, -16\n\tsw    t0, 0(sp)\n\tsw    t1, 4(sp)\n\t"
+                "lui   t0, %%hi(%[sem])\n\tlw    t1, %%lo(%[sem])(t0)\n\tandi  t1, t1, 0xff\n\tsw    t1, %[seen]\n\t"
+                "lw    t1, 4(sp)\n\tlw    t0, 0(sp)\n\taddi  sp, sp, 16"
+                : [seen] "=m"(llk_profiler::quiet_seen)
+                : [sem] "i"(PC_BUF_BASE + 4 * (ckernel::PC_BUF_SEMAPHORE_BASE + llk_barrier::RELEASE_SEM))
+                : "memory");
+#else
+            llk_profiler::quiet_seen = llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM));
+#endif
+        }
+#endif
         ckernel::fence_compiler();
     }
 
@@ -611,6 +713,12 @@ struct perf_counter_scoped
         }
         else
         {
+#if defined(LLK_DBG_BARRIER)
+            if constexpr (LOOP_PAD && releases_holds(RUN_TYPE)) // pack's TILE_LOOP has ended: let the held peers go on
+            {
+                llk_barrier::detail::flip(llk_barrier::RELEASE_SEM);
+            }
+#endif
             llk_barrier::rendezvous(
                 llk_barrier::is_action_thread(),
                 [zid]
@@ -651,11 +759,133 @@ inline void read_last_zone()
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
-// One measured scope: the zone's timing and, counters on, its counter window. Without the profiler there is no zone.
-#if defined(LLK_PROFILER)
-#define START_PERF_MEASURE(zone_name) \
-    MEASURE_PERF_COUNTERS(zone_name)  \
-    ZONE_SCOPED(zone_name)
+// INIT measurement build (LLK_PERF_INIT_ONLY, launched by perf/core.py): times INIT's body from fixed sections ahead of
+// main; the spin after the end read and the closing rendezvous keep every thread's epilogue out of the other INITs.
+#if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+namespace llk_perf
+{
+#if defined(LLK_TRISC_MATH)
+extern "C" char __llk_init_body_end[]; // sections.ld
+#endif
+
+// INIT ends inside its body, read at the end of the body (init_measurement_no_zone), so the trampoline's return is not
+// timed: the prefetch stream's run past the body cannot meet the return line in the icache
+inline std::uint32_t init_end_ts[2] = {0, 0};
+
+// no .balign as at the trampoline's read: inside the body its padding would change with the code before it
+__attribute__((always_inline)) inline void read_init_end(std::uint32_t (&ts)[2])
+{
+    std::uint32_t lo, hi;
+    asm volatile("lui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])"
+                 : [l] "=&r"(lo), [h] "=&r"(hi)
+                 : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
+                 : "memory");
+    ts[0] = lo;
+    ts[1] = hi;
+}
+
+// LLK_INIT_ZONE_END (perf.h): INIT's end in a block that goes on to prepare the loop's data
+inline std::uint32_t init_zone_end_ts[2] = {0, 0};
+
+__attribute__((always_inline)) inline void init_zone_end()
+{
+    ckernel::tensix_sync(); // the thread's own init done, as PROFILER_SYNC ends every other INIT
+    read_init_end(init_zone_end_ts);
+}
+
+// ZONE_END: the body ended INIT's zone at LLK_INIT_ZONE_END (LLK_INIT_PREP_END)
+template <PerfRunType RUN_TYPE, typename F, bool ZONE_END = false>
+__attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
+{
+#if defined(LLK_TRISC_MATH)
+    // math's prefetch stops one line past INIT's body, so the wrong-path fetches after its ret do not hold both MSHRs
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = reinterpret_cast<std::uint32_t>(__llk_init_body_end) + 15;
+#endif
+    const bool opened = !llk_profiler::is_buffer_full();
+    if (opened)
+    {
+        llk_profiler::zone_reserve();
+    }
+    std::uint32_t end_lo, end_hi;
+    // the id and its profiler_meta entry on one line: MARKER_ID hashes the file name and line
+    PROFILER_META(MARKER_FULL("INIT")) constexpr std::uint16_t init_id = MARKER_ID("INIT");
+    {
+        const perf_counter_scoped<RUN_TYPE, false> counters(LLK_PERF_ZONE_ID_("INIT"));
+        body();
+        asm volatile( // INIT has ended in the body: this read and spin only hold every thread's epilogue
+            ".balign 16\n\tlui %[h], %%hi(%[c])\n\tlw %[l], %%lo(%[c])(%[h])\n\tlw %[h], %%lo(%[c] + 8)(%[h])\n\t"
+            "li t0, 2048\n1:\n\taddi t0, t0, -1\n\tbnez t0, 1b"
+            : [l] "=&r"(end_lo), [h] "=&r"(end_hi)
+            : [c] "i"(RISCV_DEBUG_REG_WALL_CLOCK_L)
+            : "t0", "memory");
+        end_lo = ZONE_END ? init_zone_end_ts[0] : init_end_ts[0];
+        end_hi = ZONE_END ? init_zone_end_ts[1] : init_end_ts[1];
+        if (opened)
+        {
+            std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
+            asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(init_id));
+            llk_profiler::zone_record(
+                static_cast<std::uint16_t>(id),
+                (static_cast<std::uint64_t>(llk_barrier::init_start_ts[1]) << 32) | llk_barrier::init_start_ts[0],
+                (static_cast<std::uint64_t>(end_hi) << 32) | end_lo);
+        }
+    }
+    if constexpr (!exit_barrier_for(RUN_TYPE)) // no INIT exit rendezvous: hold here until every INIT has ended
+    {
+        llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
+    }
+    ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
+#if defined(LLK_TRISC_MATH)
+    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = 0;
+#endif
+}
+} // namespace llk_perf
+
+namespace llk_perf
+{
+struct init_measurement_second_object // START_PERF_MEASURE("INIT")'s second object: math's head start runs once
+{
+    init_measurement_second_object()
+    {
+    }
+};
+
+struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measurement build: the trampoline opens the zone
+{
+    explicit init_measurement_no_zone(std::uint32_t) // the top of INIT's body, where math's init starts as in trisck.cc
+    {
+#if defined(LLK_TRISC_MATH)
+        ckernel::icache_prefetch_head_start();
+#endif
+    }
+
+    init_measurement_no_zone()
+    {
+    }
+
+    ~init_measurement_no_zone() // the end of INIT's body: INIT's end
+    {
+        read_init_end(init_end_ts);
+    }
+};
+} // namespace llk_perf
+
+// The rest of the kernel runs as in the TILE_LOOP build (its TILE_LOOP zone is recorded but not reported), so every
+// peer's work that INIT starts or waits for (data INIT unpacks or computes, semaphores a loop posts) completes.
+#define START_PERF_MEASURE(zone_name)                                                                                                              \
+    const std::conditional_t<LLK_IS_TILE_LOOP_(zone_name), llk_perf::perf_counter_scoped<PERF_RUN_TYPE, true>, llk_perf::init_measurement_no_zone> \
+        PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));                                                                                 \
+    PROFILER_META(MARKER_FULL(zone_name))                                                                                                          \
+    const std::conditional_t<                                                                                                                      \
+        LLK_IS_TILE_LOOP_(zone_name),                                                                                                              \
+        llk_profiler::zone_scoped<MARKER_ID(zone_name), true, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name))>,                 \
+        llk_perf::init_measurement_second_object>                                                                                                  \
+        _zone_scoped_;
+#elif defined(LLK_PROFILER)
+#define START_PERF_MEASURE(zone_name)                  \
+    LLK_ZONE_PRERESERVE_(LLK_IS_TILE_LOOP_(zone_name)) \
+    MEASURE_PERF_COUNTERS(zone_name)                   \
+    ZONE_SCOPED_Q(zone_name, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)))
 #else
 #define START_PERF_MEASURE(zone_name) MEASURE_PERF_COUNTERS(zone_name)
 #endif

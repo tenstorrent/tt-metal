@@ -32,10 +32,12 @@ from helpers.perf.core import (
     _prune_runs,
     _refresh_latest,
     _reject_duplicate_keys,
+    add_pipeline_coupling,
     assert_zones_dont_overlap,
     combine_perf_reports,
     postprocess_tile_loop,
 )
+from helpers.perf.l1_contention import summarize
 from helpers.perf.schema import (
     MARKER,
     MEAN,
@@ -127,6 +129,39 @@ def test_report_columns_conform_to_output_schema():
         stat_column("MATH_ISOLATE", STD),
     ]:
         assert expected in combined.columns, f"missing expected column {expected!r}"
+
+
+def test_pipeline_coupling_is_l1_to_l1_minus_the_slowest_stage():
+    frame = pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [50.0, 100.0],
+            stat_column("UNPACK_ISOLATE", MEAN): [40.0, 60.0],
+            stat_column("MATH_ISOLATE", MEAN): [45.0, 80.0],
+            stat_column("PACK_ISOLATE", MEAN): [30.0, float("nan")],
+        }
+    )
+    coupling = add_pipeline_coupling(frame)[stat_column("COUPLING", MEAN)]
+    assert pd.isna(coupling[0]), "INIT rows carry no coupling"
+    assert (
+        coupling[1] == 20.0
+    ), "a missing stage is skipped, the slowest present one counts"
+    # Without isolates (or without L1_TO_L1) there is nothing to compare: no column, so the schema stays per-test.
+    only_pipeline = pd.DataFrame(
+        {"marker": ["TILE_LOOP"], stat_column("L1_TO_L1", MEAN): [1.0]}
+    )
+    assert (
+        stat_column("COUPLING", MEAN)
+        not in add_pipeline_coupling(only_pipeline).columns
+    )
+    # The report the run writes carries it, and per tile after post-processing like the other timing columns.
+    combined = _build(_fake_formats())
+    assert stat_column("COUPLING", MEAN) in combined.columns
+    post = postprocess_tile_loop(combined.copy())
+    tile = post[post["marker"] == "TILE_LOOP"].iloc[0]
+    assert (
+        tile[stat_column("COUPLING", MEAN)] == 0.0
+    )  # L1_TO_L1 20 - MATH_ISOLATE 20, divided by 4 tiles
 
 
 def test_report_without_formats_still_conforms():
@@ -1130,3 +1165,31 @@ def test_quasar_schema_drops_every_l1_client_metric_column():
         for base in (key, stat_column(key, MEAN), stat_column(key, STD)):
             assert metric_column("SFPU_ISOLATE", base) in QSR_DROPPED
     assert metric_column("L1_TO_L1", "l1_client_invalid_0_pct") not in QSR_DROPPED
+
+
+def test_l1_contention_splits_pipeline_waits_from_stream_demand():
+    frame = pd.DataFrame(
+        {
+            "tiles": [4.0],
+            "L1_TO_L1:wait0": [2.0],
+            "L1_TO_L1:wait1": [3.0],
+            "UNPACK_ISOLATE:wait0": [1.0],
+            "PACK_ISOLATE:wait1": [0.5],
+            "UNPACK_ISOLATE:words0": [48.0],
+            "UNPACK_ISOLATE:words1": [16.0],
+            "PACK_ISOLATE:words1": [32.0],
+            "PACK_ISOLATE:words8": [32.0],
+            "UNPACK_ISOLATE": [100.0],
+            "PACK_ISOLATE": [200.0],
+        }
+    )
+    out = summarize(frame).iloc[0]
+    assert out["l2l_wait_per_tile"] == 5.0
+    # what the isolates do not wait on their own
+    assert out["l2l_cross_wait_per_tile"] == 3.5
+    assert out["unpack_words_per_tile"] == 64.0 and out["pack_words_per_tile"] == 64.0
+    # port 1 at the isolate pace: 16 words x 4 tiles in 100 cycles plus 32 x 4 in 200
+    assert out["saturation_port1_load"] == pytest.approx(1.28)
+    assert out["saturation_bank_load"] == pytest.approx(
+        (64 * 4 / 100 + 64 * 4 / 200) / 16
+    )

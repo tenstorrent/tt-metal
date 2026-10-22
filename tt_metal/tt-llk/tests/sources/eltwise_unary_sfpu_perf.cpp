@@ -48,6 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -64,6 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -123,6 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const DataCopyType data_copy_type = DataCopyType::A2D;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -147,6 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FUSED_SORT>(formats.math);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -309,6 +313,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const auto& buffer_Res          = params.buffer_Res;
 #endif
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -321,6 +326,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -339,6 +345,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
             }
