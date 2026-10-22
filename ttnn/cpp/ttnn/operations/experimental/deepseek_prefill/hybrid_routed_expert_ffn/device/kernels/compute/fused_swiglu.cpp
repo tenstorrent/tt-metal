@@ -1213,7 +1213,12 @@ void kernel_main() {
         }  // end chunk loop
 
 #ifdef FUSE_BIAS
-        // Pop this expert's biases so the reader can refill for the next expert.
+        // Pop this expert's biases so the reader can refill for the next expert. An expert
+        // with no chunks never waited on them above, so wait first: a pop ahead of the
+        // reader's push would let the next expert's wait_front pass early.
+        CircularBuffer(cb_gate_bias).wait_front(g_in1_per_core_w);
+        CircularBuffer(cb_up_bias).wait_front(g_in1_per_core_w);
+        CircularBuffer(cb_down_bias).wait_front(d_in1_per_core_w);
         CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
         CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
         CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
