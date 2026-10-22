@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Contracts: (1) every case the codegen scope or call contract rejects falls back to native and matches
-# reshape_force_native; (2) a demoted case runs native; (3) a routed tile-rows call traces and replays new data;
+# reshape_force_native; (2) a demoted case runs native; (3) routed tile-rows and LCM calls trace and replay new data;
 # (4) a small row-major call keeps its program key when the L1 frontier moves; (5) the row-major cases the merge
 # gate's test_reshape_codegen.py leaves out are bit-exact, route as fitted, and key the CB depth live L1 picks; (6) so
 # are the segment-map and LCM TILE cases it leaves out; (7) a routed call runs with the least free L1 native runs
@@ -144,6 +144,24 @@ def test_reshape_routes_tile_rows_case_under_trace(device):
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
     assert_equal(fresh.reshape(out_shape), ttnn.to_torch(out))
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32768}], indirect=True)
+def test_reshape_routes_lcm_case_under_trace(device):
+    shape, out_shape, dtype = [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32
+    xt = _to_device(device, _make_input(shape, dtype), dtype, ttnn.TILE_LAYOUT)
+    _force_codegen(xt, out_shape)
+    entries = device.num_program_cache_entries()
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    out = ttnn.reshape(xt, out_shape)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    # Auto must reuse the codegen program: trace capture cannot compile a new one.
+    assert device.num_program_cache_entries() == entries
+    fresh = _make_input(shape, dtype, seed=1).float()
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(fresh, dtype=dtype, layout=ttnn.TILE_LAYOUT), xt)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
+    _assert_bits(fresh.reshape(out_shape), ttnn.to_torch(out), dtype)
 
 
 @pytest.mark.parametrize("placement", [ttnn.L1_MEMORY_CONFIG, _DRAM], ids=["l1", "dram"])
@@ -312,8 +330,6 @@ _TILE_PATHS = [
     ("tile_mapped_int32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.int32),
     ("tile_mapped_uint16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.uint16),
     ("tile_mapped_wide", [1, 8, 64, 1000], [1, 8, 1000, 64], ttnn.bfloat16),
-    ("lcm_int32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.int32),
-    ("lcm_uint32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint32),
     ("lcm_many_chunks", [1, 1, 2048, 1024], [1, 1, 4096, 512], ttnn.float32),
 ]
 
@@ -404,7 +420,7 @@ def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
 _TILE_ROUTES = [
     # One LCM chunk of two tiles against a native round.
     ("tile_lcm", [1, 1, 32, 64], [1, 1, 64, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
-    ("tile_width_lcm_int32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.int32, ttnn.TILE_LAYOUT, "codegen"),
+    ("tile_split_lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_unaligned_width_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_unaligned_width_uint16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
 ]
@@ -460,7 +476,7 @@ def _native_runs_with(device, x, out_shape, free_bytes):
 _L1_FLOOR = [
     ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, 32 * 1024),
     ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
-    ("lcm_fp32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
+    ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
     ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 32 * 1024),
 ]
 

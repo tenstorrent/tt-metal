@@ -88,7 +88,10 @@ _PATHS = [
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     # LCM: a width change tile rows does not win, through the compute engine, which round-trips 32-bit data unchanged.
-    ("lcm_fp32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT),
+    # 64 chunks of two input tiles, at most one per core against native's two output tiles each.
+    ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    ("lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT),
+    ("lcm_uint32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint32, ttnn.TILE_LAYOUT),
     # Row-major stick program: dividing widths.
     ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     # Row-major stick program, non-aligned: 6 B source sticks repacked by RISC copies, merged 8 to one and split back.
@@ -205,8 +208,11 @@ _ROUTES = [
     # Width change: tile rows saves only 2x the reads on far fewer cores, and bf16 cannot take the LCM kernel.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
-    # The same width change in fp32: one core's LCM chunk of six input tiles against native's single round.
-    ("tile_width_lcm", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
+    # The same width change in fp32: one core's LCM chunk of six input tiles is within the LCM margin of native's
+    # single round, so it stays native.
+    ("tile_width_lcm_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "native"),
+    # A width split in fp32: a chunk of two input tiles per core against native's two output tiles per core.
+    ("tile_split_lcm", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
 ]
@@ -388,9 +394,9 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
 
 
 def test_reshape_codegen_bf16_never_takes_lcm(device):
-    # The LCM kernel turns bf16 NaN into Inf. This width change takes it in fp32; in bf16 both the forced and the
+    # The LCM kernel turns bf16 NaN into Inf. This width split takes it in fp32; in bf16 both the forced and the
     # routed call must keep every NaN payload.
-    in_shape, out_shape, dtype = [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16
+    in_shape, out_shape, dtype = [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16
     source = _make(in_shape, dtype)
     assert torch.isnan(source).any()
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)

@@ -114,9 +114,9 @@ bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
     return !read_cut && !reads_saved && !whole_halves;
 }
 
-// The LCM kernel moves a tile through untilize and tilize about 6x faster than native's reader and writer finish an
-// output tile: about 0.85 us against 5 us per round (measured on Blackhole).
-constexpr uint64_t kLcmTileSpeedup = 6;
+// The LCM kernel moves a tile through untilize and tilize about 5.9x faster than native's reader and writer finish an
+// output tile: about 0.85 us against 5 us per round (measured on Blackhole), rounded down for margin.
+constexpr uint64_t kLcmTileSpeedup = 5;
 
 bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
     const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.out_tiles;
