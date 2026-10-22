@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Watcher and assert builds do not fit the kernel config buffer at O3.
+#if defined(WATCHER_ENABLED) || defined(ENABLE_LLK_ASSERT) || defined(LIGHTWEIGHT_KERNEL_ASSERTS)
+#pragma GCC optimize("Os")
+#endif
+
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
