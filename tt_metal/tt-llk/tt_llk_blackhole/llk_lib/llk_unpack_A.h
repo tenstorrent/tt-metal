@@ -298,6 +298,7 @@ inline void _llk_unpack_A_mop_config_(
  * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
  *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
  *       MOVD2A or MOVB2A.
+ * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
