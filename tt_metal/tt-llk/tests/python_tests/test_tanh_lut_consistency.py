@@ -39,6 +39,7 @@ bfloat16 out there while being ~2048 fp32 ulp of non-monotonicity.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -349,6 +350,33 @@ def test_golden_matches_kernel_table():
             f"golden={actual!r}, table gives {expected!r}. "
             "Update UnarySFPUGolden._tanh_derivative_lut and tanh_derivative_init together."
         )
+
+
+def test_golden_pins_the_non_finite_inputs():
+    """`_tanh_derivative_lut(+/-inf) == 0` and `_tanh_derivative_lut(nan)` is NaN.
+
+    test_golden_matches_kernel_table probes finite values only, so these two arms
+    were otherwise exercised by the edge sweep alone, on hardware. +/-inf take the
+    saturated tail on purpose: sech^2(+/-inf) = 0, and the kernel guards them to the
+    same value. A NaN must come back a NaN: abs(NaN) fails every breakpoint test, so
+    without an arm of its own the golden falls into that tail and reports 0 for an
+    input the kernel propagates -- which it once did, silently.
+    """
+    golden = get_golden_generator(UnarySFPUGolden)
+
+    for x in (float("inf"), float("-inf")):
+        actual = golden._tanh_derivative_lut(x)
+        assert actual == 0.0, (
+            f"golden gives {actual!r} for tanh_derivative_lut({x}), expected 0.0: the "
+            "saturated tail is 1 - 1.0^2, and the kernel's +/-inf guard lands there too."
+        )
+
+    actual = golden._tanh_derivative_lut(float("nan"))
+    assert math.isnan(actual), (
+        f"golden gives {actual!r} for tanh_derivative_lut(nan), expected NaN: the NaN "
+        "arm in UnarySFPUGolden._tanh_derivative_lut has been lost and abs(NaN) is "
+        "falling through to the saturated tail."
+    )
 
 
 def test_derivative_is_monotone_and_in_range():

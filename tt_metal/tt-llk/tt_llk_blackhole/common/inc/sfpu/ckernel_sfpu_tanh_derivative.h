@@ -32,6 +32,26 @@ inline void _calculate_tanh_derivative_(const int iterations)
 
         if constexpr (!WITH_PRECOMPUTED_TANH)
         {
+            // The tail pair is (A=0, B=1.0) and the lut evaluates A*|x| + B, so +-inf would
+            // come out of it as 0 * inf + 1 = NaN. Move them onto the finite tail first: the
+            // lut returns exactly 1.0 there and the result is 0 = sech^2(+-inf), as for every
+            // finite |x| >= 3. A NaN input stays NaN. Guarding the input rather than the
+            // result because the six table registers leave no LReg to keep it live past the lut.
+            //
+            // The breakpoints are the lut mode's, not the table's: sfpi::lut's 6-entry default
+            // is SFPLUTFP32's TABLE1, whose last split is |x| = 3.0, and the only other 6-entry
+            // mode, TABLE2, splits at 4.0, so either mode reads this input from the tail pair.
+            // What the value relies on is that pair staying (A=0, B=1.0), which makes the lut
+            // exactly 1.0 and 1 - lut^2 exactly 0, and the lut staying in a 6-entry mode. A
+            // re-fit of tanh_derivative_init cannot move a breakpoint; one that changes the
+            // tail pair breaks this.
+            constexpr float SATURATED_TAIL_INPUT = 4.0f;
+            v_if (sfpi::is_inf(val))
+            {
+                val = SATURATED_TAIL_INPUT;
+            }
+            v_endif;
+
             val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
         }
 
