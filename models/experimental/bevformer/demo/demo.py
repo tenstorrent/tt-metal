@@ -253,7 +253,6 @@ def run_demo(args):
         build_reference_bevformer,
         frame_metas,
         random_image_batch,
-        to_conv_layout,
     )
     from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
     from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
@@ -343,7 +342,7 @@ def run_demo(args):
             scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds, args.score_threshold)
             return tt_model.get_bboxes(scores, labels, boxes, valid)
 
-        tt_image = to_conv_layout(first_images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_image = ttnn.from_torch(first_images, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         prepared = tt_model.prepare_frame(first_metas)
         *_, prev_bev = tt_model(tt_image, prepared)
         ttnn.synchronize_device(device)
@@ -353,7 +352,7 @@ def run_demo(args):
         # Compile the path that consumes a previous BEV. Keep the preparation frame's BEV as the
         # timed sequence's initial state, so warming frame 1 does not advance temporal history.
         warm_images, warm_metas, warm_token = load_frame(1)
-        warm_image = to_conv_layout(warm_images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        warm_image = ttnn.from_torch(warm_images, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         prepared = tt_model.prepare_frame(warm_metas, prepared)
         warm_outputs = tt_model(warm_image, prepared, prev_bev=prev_bev)
         warm_detections = detect_frame(*warm_outputs[:2])
@@ -367,7 +366,7 @@ def run_demo(args):
             traced = TTBEVFormerTrace(
                 tt_model,
                 device,
-                to_conv_layout(warm_images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+                ttnn.from_torch(warm_images, device=None, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
                 prepared,
                 prev_bev,
                 score_threshold=args.score_threshold,
@@ -379,7 +378,7 @@ def run_demo(args):
             # Host work only, so the prefetch thread can run it: the frame's images in the image
             # buffer's layout, its metas and its token.
             images, metas, token = load_frame(index)
-            return to_conv_layout(images, None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), metas, token
+            return ttnn.from_torch(images, device=None, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), metas, token
 
         def prefetched_inputs(index):
             # host_inputs plus the frame's other inputs as host tensors, all ahead of the device.

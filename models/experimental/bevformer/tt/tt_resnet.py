@@ -383,7 +383,7 @@ class TTResNet:
             act_block_h=stem_act_block_h,
             dealloc_act=True,
             input_dtype=ttnn.bfloat16,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=ttnn.TILE_LAYOUT,
         )
 
         # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
@@ -440,8 +440,18 @@ class TTResNet:
         return TTBottleneck.dram_convs(layer["dram_activation"], layer["dram_input"] and j == 0)
 
     def __call__(self, x):
+        """``x`` the images, ``(N, 3, H, W)`` bfloat16 ROW_MAJOR in DRAM, as torch lays them out."""
         signpost(header="TTNN ResNet Forward Start")
         signpost(header="ResNet Stem Start")
+        # The stem conv reads its input through conv2d's DRAM slicing, which fetches a ROW_MAJOR
+        # tensor one pixel at a time, millions of reads whatever the channel count; a TILE input is
+        # read in tiles. Tilizing NCHW, whose rows are image rows, is cheap; the permute to NHWC then
+        # writes TILE directly, and its (1, 1, N*H*W, 3) view is free as W is a tile multiple.
+        n, c, h, w = x.shape
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        nhwc = ttnn.permute(x, (0, 2, 3, 1))
+        ttnn.deallocate(x)
+        x = ttnn.reshape(nhwc, (1, 1, n * h * w, c))
         x, out_h, out_w = self.conv1(x)
         pool = self.maxpool_args
         x = ttnn.max_pool2d(
