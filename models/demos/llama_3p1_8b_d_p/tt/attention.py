@@ -3,8 +3,8 @@
 
 """Full-causal GQA and attention output projection for Llama-3.1 Galaxy prefill."""
 
-import os
 import math
+import os
 from collections.abc import Mapping
 
 import torch
@@ -426,7 +426,7 @@ class FullCausalAttention:
             q_chunk_size=int(os.getenv("LOCAL_LLAMA_RING_Q", "128")),
             k_chunk_size=int(os.getenv("LOCAL_LLAMA_RING_K", "512")),
             exp_approx_mode=False,
-            max_k_splits=int(os.getenv("LOCAL_LLAMA_RING_KSPLIT", "1")),
+            k_splits=int(os.getenv("LOCAL_LLAMA_RING_KSPLIT", "1")),
             segmented_accumulation=os.getenv("LOCAL_LLAMA_RING_SEG") == "1",
             matmul_math_fidelity=getattr(ttnn.MathFidelity, os.environ["LOCAL_LLAMA_RING_FID"])
             if "LOCAL_LLAMA_RING_FID" in os.environ

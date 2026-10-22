@@ -48,8 +48,10 @@ def projection_configs(x, weight, mesh_device, name):
         grid = mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         # Widest divisor of N as gemma4_d_p/tt/mlp.py, or the full grid width as its attention projections.
-        grid_x = grid.x if os.getenv("LOCAL_LLAMA_GMM_FULLX") == "1" else max(
-            d for d in range(1, grid.x + 1) if n_tiles % d == 0
+        grid_x = (
+            grid.x
+            if os.getenv("LOCAL_LLAMA_GMM_FULLX") == "1"
+            else max(d for d in range(1, grid.x + 1) if n_tiles % d == 0)
         )
         force_2d = name in os.getenv("LOCAL_LLAMA_GMM_2D", "").split(",")
         program_config = None if force_2d else prefill_1d_matmul_program_config(x, weight, grid)

@@ -13,7 +13,6 @@ import torch
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 
-
 _FUSED_RESOURCES = {}
 
 
