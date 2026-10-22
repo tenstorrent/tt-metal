@@ -83,18 +83,32 @@ def zones(path):
     return out
 
 
-def project(path, model, logits_first=None):
+def project(path, model, logits_first=None, offsets=None):
+    """Per device (dev, LoudBox end, planner end, Galaxy SE path, Galaxy chain). offsets {dev: us from its row's last
+    launch, <= 0}: every time is then from the row's last launch (skew-corrected), else from the device's own start
+    (eager); a chip's compute still never finishes before its own start + its compute alone."""
     u = U[model]
     after = not logits_first if logits_first is not None else LOGITS_AFTER_GATHER[model]
     res = []
     for dev, e in zones(path).items():
-        gu, ds = e["SE-GU"], e["SE-DOWNRS"]
-        front = max(gu - 1.5 * u * E_GATHER, GU_ALONE[model])
+        sh = offsets.get(int(dev), 0.0) if offsets else 0.0
+        gu, ds, rp = e["SE-GU"] + sh, e["SE-DOWNRS"] + sh, e.get("SE-RPLAN", 0.0) + sh
+        end = max(v for k, v in e.items() if k.endswith("-KERNEL")) + sh
+        front = max(gu - 1.5 * u * E_GATHER, GU_ALONE[model] + sh)
         se = front + (ds - gu) - 1.5 * u
         shift = (gu - front) if after else 0.0
-        chain = e.get("SE-RPLAN", 0.0) - shift + CHAIN_GROWTH[model]
-        res.append((dev, ds, e.get("SE-RPLAN", 0.0), se, chain))
+        chain = rp - shift + CHAIN_GROWTH[model]
+        res.append((dev, end, rp, se, chain))
     return res
+
+
+def offsets_of(path, rows):
+    """{dev: its launch offset from its row's last launch (<= 0)}."""
+    out = {}
+    for devs, st in zip(rows, launch_skew(path, rows)):
+        for d, o in zip(devs, st):
+            out[d] = o - max(st)
+    return out
 
 
 def launch_skew(path, rows):
@@ -132,16 +146,21 @@ if __name__ == "__main__":
         ):
             print(f"row {devs}: start offsets {st} us (spread {max(st):.1f})")
         sys.exit(0)
-    res = project(sys.argv[1], sys.argv[2], bool(int(sys.argv[3])) if len(sys.argv) > 3 else None)
-    for dev, ds, rp, se, ch in res:
-        print(f"dev {dev}: LoudBox SE end {ds:6.1f} planner end {rp:6.1f} | Galaxy SE {se:6.1f} chain {ch:6.1f}")
-    print(
-        f"Galaxy-projected head: {max(max(se, ch) for *_, se, ch in res):.0f} us "
-        f"(SE path {max(se for *_, se, _ in res):.0f}, routing chain {max(ch for *_, ch in res):.0f})"
-    )
+    import json
+    import os
+
+    lf = bool(int(sys.argv[3])) if len(sys.argv) > 3 else None
+    mp = os.path.join(os.path.dirname(sys.argv[1]), "head_map.json")  # (test_head_se3: [[dev by TP position] a row])
+    rows = json.load(open(mp)) if os.path.exists(mp) else None
     f = floors(sys.argv[2])
-    head = max(max(se, ch) for *_, se, ch in res)
-    print(
-        f"Galaxy floors: links {f['links']:.0f} us, compute {f['compute']:.0f}, routing chain {f['chain']:.0f} -> head "
-        f"{f['head']:.0f} us; projected / floor {head / f['head']:.2f}x"
-    )
+    for name, off in [("skew-corrected", offsets_of(sys.argv[1], rows) if rows else None), ("eager", None)]:
+        if name == "skew-corrected" and off is None:
+            continue
+        res = project(sys.argv[1], sys.argv[2], lf, off)
+        lb = max(end for _, end, *_ in res)
+        head = max(max(se, ch) for *_, se, ch in res)
+        print(
+            f"{name}: LoudBox {lb:.0f} us | Galaxy-projected {head:.0f} us (SE path {max(se for *_, se, _ in res):.0f}, "
+            f"routing chain {max(ch for *_, ch in res):.0f}) = {head / f['head']:.2f}x the Galaxy floor {f['head']:.0f}"
+        )
+    print(f"Galaxy floors: links {f['links']:.0f} us, compute {f['compute']:.0f}, routing chain {f['chain']:.0f}")
