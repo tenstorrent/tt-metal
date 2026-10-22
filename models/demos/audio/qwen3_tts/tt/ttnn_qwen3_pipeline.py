@@ -711,6 +711,7 @@ class Qwen3TTSPipeline:
             self.release()
             self.device.clear_program_cache()
             self.codec.forget_programs()
+            self.predictor.forget_programs()
             self.last_timings["program_cache_cleared"] = True
 
         started = time.time()
