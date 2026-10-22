@@ -102,8 +102,14 @@ void bind_indexer_score(nb::module_& mod) {
                 across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
                 remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
                 Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
+            kv_len_tensor: optional 1-element UINT32 row-major DRAM tensor holding the valid key prefix in ELEMENTS
+                (tile-aligned; values above T are clamped to T): the TRACE-SAFE form of ``kv_len``. A host ``kv_len`` is
+                a runtime argument that a trace replay never re-applies; this tensor is read ON-DEVICE by the reader at
+                the start of every dispatch, so ONE captured program scores (and writes) a key prefix that grows from
+                replay to replay and its cost follows the prefix. Mutually exclusive with ``kv_len``; the causal
+                geometry (``chunk_start_idx``) stays a host scalar.
 
-        Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
+        Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf (columns >= kv_len are left unwritten).
         )doc",
         &ttnn::experimental::indexer_score_dsa,
         nb::arg("q"),
@@ -119,7 +125,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt,
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("kv_len_tensor") = std::nullopt);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,

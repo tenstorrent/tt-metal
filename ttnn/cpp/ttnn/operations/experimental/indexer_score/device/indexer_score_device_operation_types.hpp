@@ -161,6 +161,14 @@ struct tensor_args_t {
     // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
     std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
     bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
+    // TRACE-SAFE valid key length of the CLASSIC (unfused) op: a 1-element uint32 row-major DRAM tensor holding the
+    // valid prefix of k in ELEMENTS (like the scalar ``kv_len``: tile-aligned, only columns [0, kv_len) are scored
+    // and written). The reader reads it on-device at the start of every dispatch, so ONE captured program scores
+    // a prefix that grows from replay to replay -- the host scalar ``kv_len`` is a runtime argument that a trace
+    // replay does not re-apply. Values above T are clamped to T. The causal geometry stays the host scalar
+    // (chunk_start_idx). Mutually exclusive with ``kv_len``; not combinable with the fused ring path.
+    std::optional<Tensor> kv_len_tensor{std::nullopt};
+    bool has_kv_len_tensor() const { return kv_len_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

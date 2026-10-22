@@ -109,7 +109,11 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    // Classic path only, TRACE-SAFE: 1-element uint32 row-major DRAM tensor holding the valid key prefix in elements
+    // (the on-device form of ``kv_len``: read by the reader at the start of every dispatch, so one captured program
+    // scores a prefix that grows from replay to replay). Mutually exclusive with kv_len.
+    const std::optional<ttnn::Tensor>& kv_len_tensor = std::nullopt);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale

@@ -340,6 +340,26 @@ void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_ar
     validate_valid_end_metadata(attrs, t);
 }
 
+// Classic-path on-device kv_len (see tensor_args_t::kv_len_tensor): container checks only, the value is read on-device.
+void validate_kv_len_tensor(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!t.has_kv_len_tensor()) {
+        return;
+    }
+    TT_FATAL(
+        !attrs.has_fused_ring(),
+        "indexer_score: kv_len_tensor is supported on the classic (unfused) path only; the fused ring derives its "
+        "valid extent from chunk_start_idx_tensor / valid_end_tensor");
+    TT_FATAL(
+        !attrs.kv_len.has_value(),
+        "indexer_score: kv_len and kv_len_tensor are mutually exclusive (the scalar is a runtime argument a trace "
+        "replay never re-applies; pass the tensor for a captured program)");
+    TT_FATAL(
+        !t.has_chunk_start_metadata() && !t.has_valid_end_metadata() && !t.has_cache_slot_metadata(),
+        "indexer_score: kv_len_tensor cannot be combined with the fused-ring metadata tensors");
+    TT_FATAL(attrs.block_size == 0, "indexer_score: kv_len_tensor does not support block-max-pooling");
+    validate_scalar_metadata_tensor(*t.kv_len_tensor, t.q, "kv_len_tensor");
+}
+
 // Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
 // value is read on-device, so only the container and the recomposition terms can be checked here.
 void validate_cache_slot_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
@@ -435,6 +455,8 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         // Metadata presence selects kernels with additional CBs and accessor arguments. Its value remains dynamic.
         tensor_args.has_chunk_start_metadata(),
         tensor_args.has_valid_end_metadata(),
+        // On-device kv_len (classic path): selects the metadata reader branch + the two mailbox CBs. Value dynamic.
+        tensor_args.has_kv_len_tensor(),
         // Reading the slot on-device changes the reader binary, so the PRESENCE is hashed. The layer terms
         // are NOT: cache_batch_idx is hash-excluded so one program serves every slot and layer, and hashing
         // the layer index would fork it per layer (21 programs at L78), each fork allocating two more
@@ -472,6 +494,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
     validate_metadata_mode(attrs, tensor_args);
+    validate_kv_len_tensor(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 }
 
@@ -506,6 +529,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
     validate_metadata_mode(attrs, tensor_args);
+    validate_kv_len_tensor(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
@@ -926,7 +950,9 @@ ttnn::Tensor launch_indexer_score(
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0) {
+    uint32_t index_cache_layer_idx = 0,
+    // Classic path only: valid key length read on-device (see tensor_args_t::kv_len_tensor).
+    std::optional<ttnn::Tensor> kv_len_tensor = std::nullopt) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -1155,6 +1181,7 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.chunk_start_idx_tensor = std::move(chunk_start_idx_tensor);
     tensor_args.valid_end_tensor = std::move(valid_end_tensor);
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
+    tensor_args.kv_len_tensor = std::move(kv_len_tensor);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1175,7 +1202,8 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    const std::optional<ttnn::Tensor>& kv_len_tensor) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -1196,7 +1224,15 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        block_cyclic_cache_tp_sharded);
+        block_cyclic_cache_tp_sharded,
+        /*k_local=*/std::nullopt,
+        /*fused_ring=*/std::nullopt,
+        /*chunk_start_idx_tensor=*/std::nullopt,
+        /*valid_end_tensor=*/std::nullopt,
+        /*cache_batch_idx_tensor=*/std::nullopt,
+        /*index_cache_num_layers=*/1,
+        /*index_cache_layer_idx=*/0,
+        kv_len_tensor);
 }
 
 ttnn::Tensor indexer_score_msa(
