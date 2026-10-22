@@ -14,8 +14,9 @@ namespace ttnn {
 //    (or is remote to this host, as in multi-host LOCAL dumps);
 //  - shards the label calls replicas of each other (coordinates that differ only along Replicate axes) have the
 //    same size and, with `compare_replica_contents`, the same bytes.
-// Device ops relabel their outputs, so a label can be wrong, and anything that keeps one copy per replica group (the
-// flatbuffer writer, tt-train's checkpoint gather) would then drop a shard silently; those callers run this first.
+// Device ops relabel their outputs, so a label can be wrong, and anything that keeps one copy per replica group
+// would then drop a shard silently. The flatbuffer writer runs this first; it is exported for any other caller that
+// keeps one copy per group, such as a checkpoint gather that composes a tensor by its label.
 void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_contents = true);
 
 }  // namespace ttnn
