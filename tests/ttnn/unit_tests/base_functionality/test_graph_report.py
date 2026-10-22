@@ -491,6 +491,76 @@ class TestImportReportMultiFileOperationIds:
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
 
 
+class TestImportReportRankCompleteness:
+    """import_report over graph_capture_<r>_of_<N>.json: every rank of one run must be present."""
+
+    @staticmethod
+    def _write_rank_captures(report_dir, rank_world_pairs):
+        report_dir.mkdir(exist_ok=True)
+        graph = TestImportReportMultiFileOperationIds._minimal_single_op_graph()
+        for rank, world_size in rank_world_pairs:
+            report = _make_report(graph, metadata={"rank": rank - 1, "world_size": world_size})
+            with open(report_dir / f"graph_capture_{rank}_of_{world_size}.json", "w") as f:
+                json.dump(report, f)
+
+    def test_all_ranks_present_imports_every_rank(self, tmp_path):
+        report_dir = tmp_path / "reports_in"
+        self._write_rank_captures(report_dir, [(1, 2), (2, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        try:
+            ranks = [r for (r,) in conn.execute("SELECT DISTINCT rank FROM operations ORDER BY rank")]
+            assert ranks == [0, 1]
+        finally:
+            conn.close()
+
+    def test_missing_rank_raises_and_names_missing_file(self, tmp_path, expect_error):
+        """Only rank 0's own capture is visible, as on a host-local report directory."""
+        report_dir = tmp_path / "reports_in"
+        self._write_rank_captures(report_dir, [(1, 4), (3, 4)])
+        with expect_error(ValueError, r"2 of 4 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert "graph_capture_2_of_4.json" in str(excinfo.value)
+        assert "graph_capture_4_of_4.json" in str(excinfo.value)
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_mixed_world_sizes_raises(self, tmp_path, expect_error):
+        """A stale capture from an earlier run with a different world size is left in the directory."""
+        report_dir = tmp_path / "reports_in"
+        self._write_rank_captures(report_dir, [(1, 2), (2, 2), (1, 4)])
+        with expect_error(ValueError, r"different world sizes \[2, 4\]"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    def test_rank_captures_are_imported_in_numeric_order(self, tmp_path, monkeypatch):
+        """graph_capture_10_of_10 is imported last, not between _1_ and _2_ as a plain string sort would put it."""
+        report_dir = tmp_path / "reports_in"
+        self._write_rank_captures(report_dir, [(rank, 10) for rank in range(1, 11)])
+        imported_names = []
+        report_rank = graph_report._report_rank
+
+        def _recording_report_rank(report, path):
+            imported_names.append(path.name)
+            return report_rank(report, path)
+
+        monkeypatch.setattr(graph_report, "_report_rank", _recording_report_rank)
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert imported_names == [f"graph_capture_{rank}_of_10.json" for rank in range(1, 11)]
+
+    def test_files_without_rank_suffix_are_not_checked(self, tmp_path):
+        """Loose *.json captures carry no world size, so there is nothing to check them against."""
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        report = _make_report(TestImportReportMultiFileOperationIds._minimal_single_op_graph(), metadata={"rank": 3})
+        with open(report_dir / "graph_capture.json", "w") as f:
+            json.dump(report, f)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("SELECT DISTINCT rank FROM operations").fetchall() == [(3,)]
+        finally:
+            conn.close()
+
+
 @pytest.fixture
 def single_relu_python_io():
     """python_io sidecar for single_relu_mock_graph with a minimal stack trace.

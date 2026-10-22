@@ -157,13 +157,16 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                 ttnn.graph.end_graph_capture_to_file(str(json_path))
                 if ttnn.distributed_context_is_initialized():
                     ttnn.distributed_context_barrier()
-                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                    import_report(report_path, report_path)
-                    (report_path / "graph_capture.json").unlink(missing_ok=True)
-                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                        p.unlink(missing_ok=True)
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
+                try:
+                    if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
+                        import_report(report_path, report_path)
+                        (report_path / "graph_capture.json").unlink(missing_ok=True)
+                        for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                            p.unlink(missing_ok=True)
+                finally:
+                    # Release the other ranks even if rank 0's import raised, or they wait here forever.
+                    if ttnn.distributed_context_is_initialized():
+                        ttnn.distributed_context_barrier()
 
             if enable_detailed_buffer_report:
                 ttnn.graph.disable_detailed_buffer_tracing()
@@ -322,7 +325,8 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
     Prefer ``graph_capture_<rank>_of_<world>.json`` (multi-host). The loose glob
     ``graph_capture_*_of_*.json`` also matches sidecars like
     ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
-    keep only names that match the main capture file pattern.
+    keep only names that match the main capture file pattern. Those captures must
+    come from a single run and cover every rank (see ``_check_rank_captures_complete``).
 
     Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
     """
@@ -336,7 +340,9 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
             m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", p.name, re.IGNORECASE)
             return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
-        return sorted(main_captures, key=_capture_sort_key)
+        main_captures = sorted(main_captures, key=_capture_sort_key)
+        _check_rank_captures_complete(report_path, [_capture_sort_key(p) for p in main_captures])
+        return main_captures
     skip = {"config.json"}
     return sorted(
         p
@@ -346,6 +352,31 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
     )
+
+
+def _check_rank_captures_complete(report_path: Path, rank_and_world_sizes: list[tuple[int, int]]) -> None:
+    """Raise unless ``graph_capture_<r>_of_<N>.json`` names cover ranks 1..N of exactly one world size.
+
+    Rank 0 merges whatever capture files it can see in its own report directory, so a rank whose file landed
+    elsewhere (a host-local report directory, or a timestamped directory name that differs between hosts)
+    would otherwise just be missing from the DB with no error.
+    """
+    world_sizes = sorted({world_size for _, world_size in rank_and_world_sizes})
+    if len(world_sizes) > 1:
+        raise ValueError(
+            f"Graph capture files in {report_path} come from runs with different world sizes {world_sizes}; "
+            "remove the stale graph_capture_*_of_*.json files before importing"
+        )
+    world_size = world_sizes[0]
+    found = {rank for rank, _ in rank_and_world_sizes}
+    missing = sorted(set(range(1, world_size + 1)) - found)
+    if missing:
+        missing_names = ", ".join(f"graph_capture_{rank}_of_{world_size}.json" for rank in missing)
+        raise ValueError(
+            f"Graph capture files for {len(missing)} of {world_size} ranks are missing from {report_path}: "
+            f"{missing_names}. Every rank must write to the same report directory (a filesystem shared by all "
+            "hosts, and the same report_path on every rank)"
+        )
 
 
 def _remove_stale_database_if_needed(db_path: Path) -> None:
@@ -2277,6 +2308,9 @@ def import_report(
 
     _remove_stale_database_if_needed(db_path)
 
+    # Before touching the DB, so a missing rank fails the import without leaving an empty database behind.
+    report_files = _discover_report_json_files(report_path)
+
     # Create graphs directory if generating SVGs
     graphs_dir = None
     if generate_svgs:
@@ -2294,8 +2328,6 @@ def import_report(
 
         create_database_schema(cursor)
         save_database_schema_version(cursor)
-
-        report_files = _discover_report_json_files(report_path)
 
         total_stats = {
             "files": 0,
@@ -2319,7 +2351,8 @@ def import_report(
         # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
         import_index_by_rank: dict[int, int] = {}
 
-        for idx, rpath in enumerate(sorted(report_files)):
+        # Keep the discovery order: a plain sort would put graph_capture_10_of_16 before graph_capture_2_of_16.
+        for idx, rpath in enumerate(report_files):
             stats = {}
             with open(rpath, "r") as f:
                 report = json.load(f)
