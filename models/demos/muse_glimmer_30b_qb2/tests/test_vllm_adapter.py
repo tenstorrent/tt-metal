@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm import MuseGlimmerForConditionalGeneration
+from models.demos.muse_glimmer_30b_qb2.tt.generator_vllm import MuseGlimmerForConditionalGeneration
 
 LAYERS = 52
 SLOTS = 4

@@ -17,8 +17,8 @@ import torch
 from safetensors import safe_open
 
 import ttnn
-from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import MeshCCLManager, MultichipDecoder
-from models.autoports.meta_models_muse_glimmer_30b.tt.precision import decoder_policy, load_precision_config
+from models.demos.muse_glimmer_30b_qb2.tt.multichip_decoder import MeshCCLManager, MultichipDecoder
+from models.demos.muse_glimmer_30b_qb2.tt.precision import decoder_policy, load_precision_config
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 

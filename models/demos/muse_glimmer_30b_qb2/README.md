@@ -53,5 +53,5 @@ Long-prompt prefill (~1.3-1.5K tok/s, prefix caching off) is the main performanc
 ## Test
 
 ```bash
-pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_vllm_adapter.py
+pytest models/demos/muse_glimmer_30b_qb2/tests/test_vllm_adapter.py
 ```

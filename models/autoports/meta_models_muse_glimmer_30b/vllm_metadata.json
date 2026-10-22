@@ -1,4 +1,0 @@
-{
-  "arch": "MuseGlimmerForConditionalGeneration",
-  "main_class": "models.autoports.meta_models_muse_glimmer_30b.tt.generator_vllm:MuseGlimmerForConditionalGeneration"
-}

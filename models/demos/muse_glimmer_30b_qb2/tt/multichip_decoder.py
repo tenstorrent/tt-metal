@@ -12,7 +12,7 @@ Inherited chunking keeps arbitrary logical lengths and append positions valid.
 import math
 
 import ttnn
-from models.autoports.meta_models_muse_glimmer_30b.tt.optimized_decoder import OptimizedDecoder
+from models.demos.muse_glimmer_30b_qb2.tt.optimized_decoder import OptimizedDecoder
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
 

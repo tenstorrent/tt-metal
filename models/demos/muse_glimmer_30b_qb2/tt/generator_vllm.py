@@ -8,8 +8,8 @@ import os
 import torch
 
 import ttnn
-from models.autoports.meta_models_muse_glimmer_30b.tt.generator import MuseGlimmerGenerator
-from models.autoports.meta_models_muse_glimmer_30b.tt.model import REVISION, MuseGlimmerModel
+from models.demos.muse_glimmer_30b_qb2.tt.generator import MuseGlimmerGenerator
+from models.demos.muse_glimmer_30b_qb2.tt.model import REVISION, MuseGlimmerModel
 
 
 class MuseGlimmerForConditionalGeneration:
@@ -70,7 +70,7 @@ class MuseGlimmerForConditionalGeneration:
         model = MuseGlimmerModel(mesh_device, layer_indices=indices)
         obj = cls(model, max_batch_size)
         if os.environ.get("MUSE_PHASE_EVENTS"):
-            from models.autoports.meta_models_muse_glimmer_30b.tt.benchmark_timing import install
+            from models.demos.muse_glimmer_30b_qb2.tt.benchmark_timing import install
 
             install(
                 obj,
