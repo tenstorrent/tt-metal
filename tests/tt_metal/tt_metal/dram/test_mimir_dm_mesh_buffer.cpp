@@ -176,7 +176,8 @@ TEST_P(MimirDmMeshBufferDram, WriteRead) {
         make_interleaved_dram_buffer(*mesh, kUpstreamBytes, kUpstreamPageBytes);
 
     std::vector<uint32_t> source(kUpstreamWords);
-    std::iota(source.begin(), source.end(), 0xabcd0000u);
+    // Seeded per run: the emulator's DRAM keeps the last run's data at the same address.
+    std::iota(source.begin(), source.end(), 0xabcd0000u ^ (mimir_test_seed() * 0x9E3779B9u));
     distributed::EnqueueWriteMeshBuffer(command_queue, mesh_buffer, source);
 
     std::vector<uint32_t> destination;
