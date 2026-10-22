@@ -915,8 +915,7 @@ BuiltProgram build_program(
         start_tile_id,
         total_num_tiles);
 
-    BuiltProgram built;
-    built.program = std::move(program);
+    BuiltProgram built{std::move(program)};
     built.reader_kernel = reader_kernel;
     built.writer_kernel = writer_kernel;
     built.compute_kernel = compute_kernel;
