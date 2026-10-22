@@ -238,7 +238,11 @@ def _enumerate_representable(
     `normal_only` leaves out the subnormals (zero stays): the ULP sweep feeds none,
     because the unpack path flushes them and a golden that does not is then measuring
     the flush rather than the op. Off by default, so a caller that wants every bit
-    pattern (the specials sweeps) still gets them.
+    pattern (the specials sweeps) still gets them. Not meant to be combined with
+    `offset`, or with a `max_elements` that binds, on float32: the walk applies both
+    over every representable value, subnormals included, before they are dropped, so
+    `offset` would count subnormals there and a binding cap would return fewer than
+    `max_elements` values. The 16-bit formats drop them first. No caller combines them.
 
     The 16-bit formats are small, so we list all 2^16 possible values and keep
     the ones in range. float32 has far too many for that, so we walk only the
@@ -287,7 +291,8 @@ def _enumerate_representable(
     if stimuli_format != DataFormat.Float32:
         # The 16-bit formats enumerate their whole domain first, so they skip and stride
         # here -- the offset first, as the float32 walk does: `offset` counts in-range
-        # values, not strided samples. (No in-cell phase: no sweep strides them.)
+        # values (normal ones, under `normal_only`), not strided samples. (No in-cell
+        # phase: no sweep strides them.)
         vals = vals[offset::stride]
     vals = vals[:max_elements]
 

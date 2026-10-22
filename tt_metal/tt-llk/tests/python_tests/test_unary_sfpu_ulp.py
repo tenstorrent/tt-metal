@@ -52,7 +52,6 @@ from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     FLUSH_SUBNORMAL_OUTPUTS,
-    MEASURED_ARCH,
     Metric,
     accuracy_contract,
     domains_of,
@@ -77,14 +76,12 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.ulp import ulp_distance, ulp_stats
-from helpers.ulp_domains import partition
+from helpers.ulp_domains import largest_figure, partition
 from helpers.ulp_sweep import (
     band_mask,
-    binade_maxima,
     domain_figures,
     entry_readings,
-    floor_covered,
-    floored_distance,
+    floored_profile,
     golden_input,
     near_zero_floor,
     nonfinite_failures,
@@ -95,6 +92,7 @@ from helpers.ulp_sweep import (
     sweep_cells,
     sweep_spec,
 )
+from helpers.ulp_table import MEASURED_ARCH
 from helpers.utils import _record_ulp_measurement, passed_test
 
 #: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
@@ -102,7 +100,7 @@ from helpers.utils import _record_ulp_measurement, passed_test
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else
-    # (sfpu_accuracy_budget.MEASURED_ARCH), so off it every cell resolves to tolerance,
+    # (ulp_table.MEASURED_ARCH), so off it every cell resolves to tolerance,
     # nothing can fail, and the headroom report would hold another chip's figures
     # against this table's. --ulp-emit refuses off Wormhole for the same reason.
     pytest.mark.skipif(
@@ -327,6 +325,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
                 distance,
                 mask=mask,
                 nonfinite=verdict.nonfinite,
+                required=True,
             )
         if ulp_sweep.EMIT:
             ulp_sweep.record_unmeasurable(mathop, key, verdict)
@@ -349,18 +348,19 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # is drawn on those same lanes, so an entry's figure is the cell's residual over
         # fewer lanes.
         floor = near_zero_floor(golden, result, distance, mask, out_fmt)
-        covered = floor_covered(golden, result, mask, floor[1] if floor else None)
-        judged = mask & ~covered
         # The profile counts a lane the floor covers as ranked at 0 steps: it is held,
         # by the floor, so it draws no edge of its own, and the entry it falls in is
         # figured over the lanes outside the floor, as the cell is.
-        bins = binade_maxima(x, floored_distance(distance, covered), mask, present)
+        judged, bins = floored_profile(
+            golden, result, x, distance, mask, present, floor[1] if floor else None
+        )
         drawn = domain_figures(partition(bins, ceiling), x, distance, mask, judged)
         _record_ulp_measurement(
             distance,
             mask=mask,
             bins=bins,
             readings=entry_readings(drawn, x, distance, mask, judged),
+            required=True,
         )
         ulp_sweep.record(mathop, key, int(stats["max"]), floor=floor, domains=drawn)
         return
@@ -370,8 +370,8 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             # Measured, not gated. The JSONL row is what `--ulp-measure` would have
             # written from inside passed_test, which this branch returns before; a
             # tolerance cell is held against its row's `measured` figure by the headroom
-            # report.
-            _record_ulp_measurement(distance, mask=mask)
+            # report, which judges only the cells it reads: the record is required.
+            _record_ulp_measurement(distance, mask=mask, required=True)
             # A skip, not a pass: nothing here judged the cell. Without --ulp-measure
             # there is no record for the headroom report either, and a regression would
             # show green.
@@ -403,14 +403,12 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # the comparisons below record nothing of their own -- then hold each gateable entry
     # to its figure over the lanes outside the floor, and the ranked lanes a null entry
     # leaves unjudged to the row's largest.
-    covered = floor_covered(golden, result, mask, floor_atol)
-    judged = mask & ~covered
+    judged, bins = floored_profile(
+        golden, result, x, distance, mask, present, floor_atol
+    )
     readings = entry_readings(domains, x, distance, mask, judged)
     _record_ulp_measurement(
-        distance,
-        mask=mask,
-        bins=binade_maxima(x, floored_distance(distance, covered), mask, present),
-        readings=readings,
+        distance, mask=mask, bins=bins, readings=readings, required=True
     )
     if not gated:
         pytest.skip(
@@ -418,7 +416,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             f"{int(stats['max'])} ULP over {lanes} lanes. The headroom report holds each "
             "entry to its figure."
         )
-    largest = max(d.ulp for d in domains if d.ulp is not None)
+    largest = largest_figure(domains)
     failed = []
     inside = torch.zeros_like(mask)
     for entry, reading in zip(domains, readings):
@@ -431,8 +429,17 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # `judged`, and held to the figure by steps like any other.
         band = band_mask(entry, x, judged)
         inside |= band
-        if entry.ulp > ceiling or not bool(band.any()):
-            continue  # measured, not gated; or every lane of it held by the floor
+        if entry.ulp > ceiling:
+            continue  # measured, not gated: the headroom report holds it
+        if not bool(band.any()):
+            # Every ranked lane held by the floor passes; an entry that ranks no lane at
+            # all any more -- its lanes left the mask -- judged nothing, so it fails.
+            if not bool(band_mask(entry, x, mask).any()):
+                failed.append(
+                    f"x in [{entry.low:g}, {entry.high:g}): no lane ranked against "
+                    f"its figure {entry.ulp}"
+                )
+            continue
         if not passed_test(
             golden,
             result,

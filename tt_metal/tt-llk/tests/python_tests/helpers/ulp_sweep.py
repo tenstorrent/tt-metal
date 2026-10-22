@@ -36,6 +36,7 @@ from helpers.ulp_domains import (
     usable_budget_ceiling,
 )
 from helpers.ulp_table import (
+    MEASURED_ARCH,
     TABLE_PATH,
     BudgetKey,
     Metric,
@@ -947,9 +948,9 @@ Recorded = Union[int, "Floored", Unmeasurable]
 #: ``input_format``, ``output_format``, ``approx_mode`` and ``dest_acc``).
 MEASURED: Dict[MathOperation, Dict[BudgetKey, Recorded]] = {}
 
-#: The list each measured cell was recorded with, beside its figure in ``MEASURED``. The
-#: reading that wins a cell keeps its list; a cell read twice with unequal readings,
-#: one of them floored, or parked as unmeasurable, keeps none (:func:`record`).
+#: The list each measured cell was recorded with, beside its figure in ``MEASURED``. A
+#: cell read twice keeps its list only while both readings are the same; one read with
+#: unequal readings or lists, or parked as unmeasurable, keeps none (:func:`record`).
 DOMAINS: Dict[MathOperation, Dict[BudgetKey, Tuple[Domain, ...]]] = {}
 
 #: The widest ``near_zero_atol`` the emitter writes on its own. A cell whose only
@@ -1032,10 +1033,11 @@ def floor_covered(
         return torch.zeros_like(mask)
     from helpers.ulp import ulp_elementwise_valid
 
-    covered = ulp_elementwise_valid(
-        golden, result, 0, near_zero_atol=atol, selected=mask
+    # The covered mask does not depend on the budget.
+    _, _, covered = ulp_elementwise_valid(
+        golden, result, max_ulp=0, near_zero_atol=atol, selected=mask
     )
-    return covered[2].reshape(mask.shape) & mask
+    return covered.reshape(mask.shape) & mask
 
 
 def floored_distance(distance: torch.Tensor, covered: torch.Tensor) -> torch.Tensor:
@@ -1046,6 +1048,25 @@ def floored_distance(distance: torch.Tensor, covered: torch.Tensor) -> torch.Ten
     return torch.where(
         covered.reshape(distance.shape), torch.zeros_like(distance), distance
     )
+
+
+def floored_profile(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    x: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    present: torch.Tensor,
+    atol: Optional[float],
+) -> Tuple[torch.Tensor, Dict[int, Bin]]:
+    """``(judged, bins)`` for a cell held with a near-zero floor of *atol*, or none: the
+    ranked lanes outside the floor, which a list's entries are figured and gated on, and
+    the binade profile with the lanes the floor covers ranked at 0 steps. The emitter
+    calls it with the floor it measured, the gate with the row's, so the gate judges
+    exactly the lanes the emitter figured."""
+    covered = floor_covered(golden, result, mask, atol)
+    bins = binade_maxima(x, floored_distance(distance, covered), mask, present)
+    return mask & ~covered, bins
 
 
 def _binade_index(x: torch.Tensor) -> torch.Tensor:
@@ -1158,8 +1179,10 @@ def record(
 
     A repeat comes from :func:`merge_measured` folding in another xdist worker's
     reading. ``max`` is the polarity that cannot hide error, and a cell already recorded
-    unmeasurable stays so, though its worst lane still counts. Two readings with floors
-    that differ keep the worst lane with no floor."""
+    unmeasurable stays so, though its worst lane still counts. Two readings that differ
+    in figure, floor or list keep the worst lane with no floor and no list: either list
+    holds only its own reading's worst lane per entry, and the other's may lie in
+    another entry. A cell that lost its list keeps none, whatever reading comes next."""
     cells = MEASURED.setdefault(op, {})
     lists = DOMAINS.setdefault(op, {})
     current = cells.get(key)
@@ -1167,16 +1190,11 @@ def record(
         cells[key] = _with_measured(current, max_ulp)
         return
     new = Floored(max_ulp, *floor) if floor else max_ulp
-    if current is None or current == new:
-        cells[key] = new
-        if domains or current is None:
-            lists[key] = tuple(domains)
-    elif isinstance(new, Floored) or isinstance(current, Floored):
+    if current is None:
+        cells[key], lists[key] = new, tuple(domains)
+    elif current != new or lists.get(key) != tuple(domains):
         cells[key] = max(_max_of(new), _max_of(current))
-        lists.pop(key, None)  # two readings, one list of neither: none
-    elif new > current:
-        cells[key] = new
-        lists[key] = tuple(domains)
+        lists.pop(key, None)
 
 
 def record_unmeasurable(
@@ -1268,7 +1286,6 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> "WriteReport
     ``ValueError``, not an :class:`EmitRefused`): the table on disk does not load, or
     the rewrite would not read back, or would not resolve, once written."""
     import pytest
-    from helpers.sfpu_accuracy_budget import MEASURED_ARCH
 
     if arch != MEASURED_ARCH:
         raise WrongArch(arch)
@@ -1454,6 +1471,19 @@ class IncompleteGrid(EmitRefused):
         )
 
 
+class KeptRowCollides(EmitRefused):
+    """A row the write keeps (:func:`_kept`) has the key of a row the emit writes for
+    *op*: one would silently replace the other, and whether the cells collapsed onto
+    that key decided which."""
+
+    def __init__(self, op: MathOperation, key: BudgetKey):
+        self.op, self.key = op, key
+        super().__init__(
+            f"{op.name} {key.describe()}: a kept row has the key this emit writes. "
+            "Nothing written -- give the kept row a key no measured cell collapses to."
+        )
+
+
 class AmbiguousCollapse(EmitRefused):
     """Collapsing the recorded cells would merge two different decisions onto *key*."""
 
@@ -1479,7 +1509,9 @@ def _kept(row: Row, measured: Set[Tuple[DataFormat, DataFormat]]) -> bool:
 
 def write_table(path=TABLE_PATH) -> WriteReport:
     """Replace, in the table at *path*, every row of each measured ``(input, output)``
-    pair with what the sweep measured, and write it back."""
+    pair with what the sweep measured, and write it back. A kept row never displaces a
+    measurement: one with the key of an emitted row is refused (:class:`KeptRowCollides`),
+    so an emitted row always outranks a kept row pinning its pair."""
     table = load_table(path)
     written: Dict[MathOperation, Tuple[Row, ...]] = {}
     for op, cells in MEASURED.items():
@@ -1490,8 +1522,9 @@ def write_table(path=TABLE_PATH) -> WriteReport:
             decision.row(key)
             for key, decision in _collapse(_decide(cells, DOMAINS.get(op))).items()
         )
-        written[op] = table[op] = kept + tuple(
-            row for row in emitted if row.key not in taken
-        )
+        for row in emitted:
+            if row.key in taken:
+                raise KeptRowCollides(op, row.key)
+        written[op] = table[op] = kept + emitted
     write_table_file(table, path)
     return WriteReport(Path(path), written)

@@ -33,7 +33,6 @@ from helpers.llk_params import (
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     DEFAULT,
-    MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
@@ -57,7 +56,7 @@ from helpers.ulp import (
 )
 from helpers.ulp_domains import Domain, Problem
 from helpers.ulp_sweep import _verdict, sweep_cells
-from helpers.ulp_table import TABLE_PATH, Row, load_table
+from helpers.ulp_table import MEASURED_ARCH, TABLE_PATH, Row, load_table
 from helpers.ulp_testing import TANH_DOMAINS, refused
 from helpers.utils import passed_test
 
@@ -678,6 +677,31 @@ def test_the_measure_recorder_writes_the_nonfinite_count_the_headroom_report_rea
         nonfinite=7,
     )
     assert [cell.nonfinite for cell in read_cells(read()).values()] == [7]
+
+
+def test_a_record_the_sweep_requires_fails_rather_than_being_dropped(
+    tmp_path, monkeypatch
+):
+    """The headroom report judges only the cells it reads, so a sweep record that would
+    be dropped fails its cell; a functional driver's is only lost."""
+    from helpers.ulp import ulp_distance
+    from helpers.utils import RecordDropped, _record_ulp_measurement
+
+    read = _measure_rows(tmp_path, monkeypatch)
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    reading = dict(
+        distance=ulp_distance(golden, golden.clone()),
+        mask=torch.ones(32, dtype=torch.bool),
+    )
+    _record_ulp_measurement(**reading)  # no query pending: dropped
+    with pytest.raises(RecordDropped):  # allow-pytest.raises: host-only test
+        _record_ulp_measurement(**reading, required=True)
+    assert read() == []
+    accuracy_contract(
+        MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+    )
+    _record_ulp_measurement(**reading, required=True)
+    assert len(read()) == 1
 
 
 def _measure_rows(tmp_path, monkeypatch):

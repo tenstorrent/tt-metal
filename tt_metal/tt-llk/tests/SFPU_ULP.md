@@ -203,9 +203,11 @@ MyOp:
 - {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 ```
 
-Every row records what was measured: a `domains` list on every cell the sweep drives,
-or a `measured` figure on the rest. A figure *is* the gate: there is no headroom over
-it. A row's `note` is for people; no code reads it. Five verdicts:
+Every row records what was measured: a `domains` list on every swept cell with a
+per-element figure, a plain row with a `measured` figure on the rest (a cell the sweep
+cannot measure, one where no entry would carry a figure, a cell it does not drive). A
+figure *is* the gate: there is no headroom over it. A row's `note` is for people; no
+code reads it. Five verdicts:
 
 - **`domains: [{low: L, high: H, ulp: U}, …]`** — every cell with a per-element ULP,
   one list over the whole swept range ("Where an op holds its figure", below). An entry
@@ -256,7 +258,8 @@ of a 16-bit input and over the `Float32` stride. Then run the host guards, which
 cd tests/python_tests
 LLK_HARDWARE_FREE=1 CHIP_ARCH=wormhole pytest -c pytest.ini --rootdir=. --confcutdir=. \
   -p helpers.llk_pytest_plugin \
-  test_ulp_table.py test_ulp_domains.py test_ulp_budget_diff.py \
+  test_ulp_budget_diff.py ../hardware_free/accuracy/test_ulp_table.py \
+  ../hardware_free/accuracy/test_ulp_domains.py \
   ../hardware_free/accuracy/test_sfpu_accuracy_budget.py \
   ../hardware_free/accuracy/test_ulp_sweep.py -q
 ```

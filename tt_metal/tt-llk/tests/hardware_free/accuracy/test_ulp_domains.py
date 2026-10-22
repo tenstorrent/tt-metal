@@ -24,6 +24,7 @@ from helpers.ulp_domains import (
     check_domains,
     contract_of,
     entries_of,
+    largest_figure,
     partition,
     usable_budget_ceiling,
 )
@@ -234,6 +235,11 @@ def test_a_list_implies_its_whole_cell_contract():
     """Gated at its largest figure when every figure is within the ceiling."""
     assert contract_of(TANH_DOMAINS, BF16) == (False, 10)
     assert contract_of(TANH_DOMAINS[:1] + (Domain(-1, INF, 5),), BF16) == (True, 5)
+
+
+def test_a_null_entry_is_held_to_the_largest_figure_of_its_list():
+    """The one rule the sweep, ``diff`` and ``headroom`` read a null entry by."""
+    assert largest_figure((Domain(-INF, 0, 2), Domain(0, 1), Domain(1, INF, 7))) == 7
 
 
 def test_the_ceilings_are_the_rtol_they_replace():

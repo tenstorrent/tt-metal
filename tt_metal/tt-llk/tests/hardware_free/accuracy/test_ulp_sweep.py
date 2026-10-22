@@ -28,6 +28,7 @@ from helpers.ulp_sweep import (
     AmbiguousCollapse,
     Floored,
     IncompleteGrid,
+    KeptRowCollides,
     SessionNotClean,
     Unmeasurable,
     WrongArch,
@@ -189,17 +190,37 @@ def test_a_floor_row_is_regenerated_from_the_measurement(tmp_path):
 def test_a_declared_tolerance_row_survives_and_is_not_shadowed(tmp_path):
     """An op-wide `atol` row and a pinned one are judgements no measurement re-derives:
     both are kept, and the emitted numberless tolerance rows fall back to the op-wide
-    `atol` in the registry rather than retracting it."""
+    `atol` in the registry rather than retracting it. The emitted rows of the pinned
+    pair are more specific than it, so they hold its cells."""
     path = tmp_path / "budget.yaml"
     wide = Row(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05)
     pinned = Row(input=F16, output=F16, metric=Metric.TOLERANCE, atol=0.2)
     write_table_file({GELU: (wide, pinned)}, path)
     _record_grid(GELU, F16B, F16B, 100)
-    _record_grid(GELU, F16, F16, 100)
+    for approx in ApproximationMode:  # two figures: the pair's cells do not collapse
+        for dest in DestAccumulation:
+            record(GELU, cell_key(F16, F16, approx, dest), 3 if approx is NO else 4)
     write_table(path)
     after = _rows(path)
     assert after[wide.key] == wide and after[pinned.key] == pinned
-    assert after[_pair(F16B, F16B)].metric is Metric.TOLERANCE
+    # `approx` splits F16 -> F16, so it stays pinned on every pair of the op.
+    assert after[_pair(F16B, F16B, approx_mode=NO)].metric is Metric.TOLERANCE
+    assert after[_pair(F16, F16, approx_mode=NO)].measured == 3
+
+
+def test_a_kept_row_with_the_key_an_emit_writes_is_refused(tmp_path):
+    """The pair's cells all agree and collapse onto the pinned row's own key: one row
+    would silently replace the other, and only whether the cells happened to agree
+    decided which. Nothing is written."""
+    path = tmp_path / "budget.yaml"
+    pinned = Row(input=F16, output=F16, metric=Metric.TOLERANCE, atol=0.2)
+    write_table_file({GELU: (pinned,)}, path)
+    _record_grid(GELU, F16, F16, 3)
+    before = path.read_text()
+    with pytest.raises(KeptRowCollides) as e:  # allow-pytest.raises: host-only test
+        write_table(path)
+    assert (e.value.op, e.value.key) == (GELU, pinned.key)
+    assert path.read_text() == before
 
 
 def test_an_op_not_yet_in_the_table_is_written(table):
@@ -561,10 +582,27 @@ def test_a_list_survives_the_xdist_merge_and_a_differing_reading_drops_it():
     assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
     MEASURED.clear()
     DOMAINS.clear()
+    # The worse reading's list would hold only its own worst lanes: 5 below zero, from
+    # the first reading, is not in _ONE's figure there. And a list once dropped stays
+    # dropped, whatever reading arrives next.
     record(GELU, _CELL, 5, domains=_TWO)
     record(GELU, _CELL, 9, domains=_ONE)
     record(GELU, _CELL, 2, domains=_TWO)
-    assert (MEASURED[GELU][_CELL], DOMAINS[GELU][_CELL]) == (9, _ONE)
+    assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
+
+
+@pytest.mark.parametrize("order", [1, -1], ids=["a,b", "b,a"])
+def test_two_readings_with_one_maximum_and_different_lists_keep_no_list(order):
+    """Both read 5 at worst, in different entries: either list alone would hold the
+    other reading's entry to a figure it measured over. Which list survived used to
+    depend on the order the workers' readings arrived in."""
+    a = (Domain(-_INF, 0, 3), Domain(0, _INF, 5))
+    b = (Domain(-_INF, 0, 5), Domain(0, _INF, 1))
+    for domains in (a, b)[::order]:
+        record(GELU, _CELL, 5, domains=domains)
+    assert MEASURED[GELU][_CELL] == 5 and _CELL not in DOMAINS[GELU]
+    record(GELU, _CELL, 5, domains=a)
+    assert _CELL not in DOMAINS[GELU]
 
 
 def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
@@ -701,9 +739,8 @@ def test_the_sweeps_own_zero_padding_is_not_data():
 
     fmt = DataFormat.Float16_b
     swept = swept_value_count(fmt)
-    pad_lanes = (
-        2**16 - 65025
-    )  # the 254 subnormals are not fed, nor the inf/NaN patterns
+    # the 254 subnormals are not fed, nor the inf/NaN patterns
+    pad_lanes = 2**16 - _BFLOAT16_SWEPT_VALUES
     src = torch.zeros(swept + pad_lanes, dtype=torch.bfloat16)
     pad = padding_lanes(src, fmt)
     assert int(pad.sum()) == pad_lanes
@@ -1057,11 +1094,8 @@ def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
     """`sweep_cells` applies only the Dest promotion off Wormhole, not Blackhole's or
     Quasar's format support. A ULP row naming another `arch` would bind on that arch and
     send those unsupported cells to the device: add the filters with the row."""
-    from helpers.sfpu_accuracy_budget import (
-        _SFPU_ACCURACY_BUDGET,
-        MEASURED_ARCH,
-        Metric,
-    )
+    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
+    from helpers.ulp_table import MEASURED_ARCH
 
     elsewhere = [
         (op.name, key)
@@ -1090,6 +1124,10 @@ def test_the_sweep_tile_count_holds_every_swept_value():
 #: the 256 subnormal ones, which the sweep does not feed. (65,025 distinct bf16 *values*,
 #: zero included: -0.0 and +0.0 are two cells but one value.)
 _FLOAT32_WALK_SAMPLES = 65024
+
+#: The Float16_b sweep's value count, likewise by hand: the 65,024 nonzero normal bit
+#: patterns and one zero (+0.0 and -0.0 are one value); no subnormal.
+_BFLOAT16_SWEPT_VALUES = 65025
 
 
 def test_the_float32_walk_is_pinned_end_to_end():
@@ -1140,7 +1178,7 @@ def test_the_float32_walk_is_pinned_end_to_end():
 
 @pytest.mark.parametrize(
     "fmt, count",
-    [(F16B, 65025), (F16, 61441), (F32, 65024)],
+    [(F16B, _BFLOAT16_SWEPT_VALUES), (F16, 61441), (F32, _FLOAT32_WALK_SAMPLES)],
     ids=lambda v: v.name if isinstance(v, DataFormat) else str(v),
 )
 def test_the_sweep_feeds_every_normal_value_and_zero_and_nothing_else(fmt, count):
@@ -1548,11 +1586,10 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     writes. The knobs are lowered so a tiny tensor can split."""
     import helpers.ulp_domains as rule
     from helpers.ulp_sweep import (
-        binade_maxima,
         domain_figures,
         entry_readings,
         floor_covered,
-        floored_distance,
+        floored_profile,
     )
 
     monkeypatch.setattr(rule, "DOMAIN_MIN_BIN_LANES", 1)
@@ -1563,10 +1600,14 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     distance = torch.tensor([1, 2, 1, 1, 0, 0, 9, 8, 1, 1])
     ranked = torch.ones(10, dtype=torch.bool)
     present = torch.ones(10, dtype=torch.bool)
-    covered = torch.zeros(10, dtype=torch.bool)
-    covered[3] = True  # -1.25 is ranked, and a floor covers it: held at 0 steps
-    judged = ranked & ~covered
-    bins = binade_maxima(x, floored_distance(distance, covered), ranked, present)
+    # -1.25 is ranked, and a floor covers it -- a tiny answer off by less than the
+    # floor -- so it is held at 0 steps.
+    golden = x.to(torch.float32)
+    golden[3] = 1e-7
+    result = golden.clone()
+    result[3] = 0.0
+    judged, bins = floored_profile(golden, result, x, distance, ranked, present, 1e-6)
+    assert judged.tolist() == [i != 3 for i in range(10)]
     assert bins[rule.binade(-3.0)] == (2, 2, 2) and bins[rule.binade(1.5)] == (1, 1, 9)
     assert bins[rule.binade(-1.25)] == (2, 2, 1)  # -1.5 shares the binade
     spans = rule.partition(bins, usable_budget_ceiling(F16B))

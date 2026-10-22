@@ -12,7 +12,6 @@ import yaml
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
-from helpers.sfpu_accuracy_budget import MEASURED_ARCH
 from helpers.ulp_budget_diff import (
     _KIND_TEXT,
     _MAX_ROWS,
@@ -33,6 +32,7 @@ from helpers.ulp_domains import (
     binade,
 )
 from helpers.ulp_table import (
+    MEASURED_ARCH,
     BudgetKey,
     Measurement,
     Metric,
@@ -406,6 +406,22 @@ def test_a_widened_floor_beside_an_all_past_list_is_a_regression():
     ]
 
 
+def test_a_widened_floor_where_an_entry_comes_within_the_ceiling_is_a_regression():
+    """7 steps past bf16's ceiling to 6 within it reads as newly gated, but both figures
+    are measured outside the floor: widened from 1e-7 to 1e-3, it can forgive far more
+    than the one step the entry gained."""
+    past = (TANH_DOMAINS[0], Domain(-1, 1, 7), TANH_DOMAINS[2])
+    gated = (TANH_DOMAINS[0], Domain(-1, 1, 6), TANH_DOMAINS[2])
+    changes = compare(
+        _tanh(past, near_zero_atol=1e-7), _tanh(gated, near_zero_atol=1e-3)
+    )
+    assert [(c.kind, c.segment) for c in changes] == [
+        (Kind.FLOOR_WIDENED, (-INF, -1.0)),
+        (Kind.FLOOR_WIDENED, (-1.0, 1.0)),
+        (Kind.FLOOR_WIDENED, (1.0, INF)),
+    ]
+
+
 def test_a_list_re_emitted_as_an_unmeasurable_row_raises_the_baseline():
     """Past the ceiling nothing is gated, and the plain row's figures sit at or below
     the list's -- but it lets the headroom report excuse lanes the list did not."""
@@ -592,6 +608,21 @@ def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure(middle, ver
     assert _verdicts(table, _tanh_measured([*readings, stray])) == [verdict]
     fits = Reading(1.0, INF, 2, 5)
     assert _verdicts(table, _tanh_measured([*readings, fits])) == []
+
+
+def test_a_sweep_record_drawn_over_another_list_fails_rather_than_going_unjudged():
+    """One reading over the whole input against a three-entry list: the record was made
+    against another table, and no entry of this one was read -- the past-ceiling middle
+    one has no other check. A functional driver's record, with no readings or profile at
+    all, is only not judged."""
+    whole = [Reading(-INF, INF, 1000, 65025)]
+    headroom = judge(_tanh(), [_tanh_measured(whole)])
+    assert [(f.verdict, f.entry) for f in headroom.findings] == [
+        (Verdict.NOT_READ, entry) for entry in TANH_DOMAINS
+    ]
+    assert headroom.regressions == 3
+    functional = judge(_tanh(), [_tanh_measured([])])
+    assert (functional.findings, functional.unjudged) == ([], 3)
 
 
 def test_a_list_cell_that_lost_every_lane_is_a_regression():

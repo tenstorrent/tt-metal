@@ -615,8 +615,12 @@ def _consume_ulp_query() -> None:
         budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
+class RecordDropped(RuntimeError):
+    """A record the caller required was not written under ``--ulp-measure``."""
+
+
 def _record_ulp_measurement(
-    distance, *, mask, nonfinite: int = 0, bins=None, readings=()
+    distance, *, mask, nonfinite: int = 0, bins=None, readings=(), required=False
 ) -> None:
     """Append the worst measurable lane of one comparison as a
     :class:`~helpers.ulp_table.Measurement`, filed under ``accuracy_contract``'s last
@@ -628,21 +632,29 @@ def _record_ulp_measurement(
     *nonfinite* is how many lanes the hardware and the golden disagree about being
     finite; *bins* the sweep's per-binade profile (``ulp_sweep.binade_maxima``);
     *readings* its readings over each entry of the table's list. A failed write warns
-    once and is otherwise ignored.
+    once and is otherwise ignored -- unless *required*: the sweep's records are what the
+    headroom report judges its tolerance cells and past-ceiling entries on, and it can
+    judge only the cells it reads, so a sweep record that is not written raises
+    :class:`RecordDropped` instead.
     """
     global _ULP_MEASURE_WARNED
     if not _ULP_MEASURE_PATH:
         return
+
+    def dropped(why: str) -> None:
+        if required:
+            raise RecordDropped(f"--ulp-measure: no record written: {why}")
+
     from . import sfpu_accuracy_budget as budget
     from .ulp_table import Measurement
 
     query, budget.LAST_QUERY = budget.LAST_QUERY, None
     ambiguous, budget.PENDING_AMBIGUOUS = budget.PENDING_AMBIGUOUS, False
     if query is None or ambiguous or query.test != budget._current_test():
-        return
+        return dropped("no single accuracy_contract query of this test is pending")
     key = query.key
     if _promoted(key.input_format, key.output_format, key.dest_acc, key.arch):
-        return
+        return dropped(f"{key.describe()} runs with another dest_acc")
     stats = ulp_stats(distance, mask)
     measurement = Measurement(
         op=query.op,
@@ -662,6 +674,7 @@ def _record_ulp_measurement(
         if not _ULP_MEASURE_WARNED:
             _ULP_MEASURE_WARNED = True
             logger.warning("--ulp-measure: cannot write {}: {}", _ULP_MEASURE_PATH, exc)
+        dropped(f"cannot write {_ULP_MEASURE_PATH}: {exc}")
 
 
 # Per-format params for _mxfp_block_aware_compare:

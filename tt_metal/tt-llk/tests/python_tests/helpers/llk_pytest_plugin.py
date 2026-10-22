@@ -526,7 +526,7 @@ def pytest_configure(config):
 
     if config.getoption("--ulp-emit"):
         from . import ulp_sweep
-        from .sfpu_accuracy_budget import MEASURED_ARCH
+        from .ulp_table import MEASURED_ARCH
 
         if TestConfig.CHIP_ARCH != MEASURED_ARCH:
             # finish_emit refuses this too, but only at session end: emit bypasses the

@@ -33,9 +33,8 @@ from .ulp import (  # re-exported: the step gates read it here
     FLUSH_SUBNORMAL_OUTPUTS,
 )
 from .ulp_domains import Domain, usable_budget_ceiling
-from .ulp_table import (  # MEASURED_ARCH, _winner, steps_bind: the guard reads them there
+from .ulp_table import (
     DEFAULT,
-    MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,

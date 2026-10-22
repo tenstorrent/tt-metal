@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from .format_config import DataFormat
 
@@ -170,18 +170,33 @@ def binade_edges(index: int) -> Tuple[float, float]:
 Bin = Tuple[int, int, int]
 
 
-def _step_class(worst: int, ceiling: float):
+class BinClass(Enum):
+    """What :func:`partition` makes of one binade: too sparse to say (it takes a
+    neighbour's class), too few lanes ranked, within the ceiling, or past it. With
+    :data:`DOMAIN_CLASS_BITS` set, a gateable binade is an integer step class."""
+
+    PENDING = auto()
+    UNRANKED = auto()
+    GATEABLE = auto()
+    PAST = auto()
+
+
+#: A binade's class: a :class:`BinClass`, or a step class under ``DOMAIN_CLASS_BITS``.
+Class = Union[BinClass, int]
+
+
+def _step_class(worst: int, ceiling: float) -> Class:
     if worst > ceiling:
-        return "past"
+        return BinClass.PAST
     if DOMAIN_CLASS_BITS is None:
-        return "gateable"
+        return BinClass.GATEABLE
     return 1 + int(math.floor(math.log2(max(worst, 1)) / DOMAIN_CLASS_BITS))
 
 
-def _looseness(cls) -> float:
-    if cls == "past":
+def _looseness(cls: Class) -> float:
+    if cls is BinClass.PAST:
         return _INF
-    return 0.0 if cls == "gateable" else float(cls)
+    return 0.0 if cls is BinClass.GATEABLE else float(cls)
 
 
 def partition(
@@ -208,19 +223,19 @@ def partition(
         if present < DOMAIN_MIN_BIN_LANES:
             cls = None
         elif ranked < DOMAIN_MIN_BIN_LANES:
-            cls = "unranked"
+            cls = BinClass.UNRANKED
         else:
             cls = _step_class(worst, ceiling)
         labelled.append([index, ranked, cls])
     last = None
     for row in labelled:
         if row[2] is None:
-            row[2] = last if last is not None else "pending"
+            row[2] = last if last is not None else BinClass.PENDING
         else:
             last = row[2]
-    nxt = "unranked"
+    nxt = BinClass.UNRANKED
     for row in reversed(labelled):
-        if row[2] == "pending":
+        if row[2] is BinClass.PENDING:
             row[2] = nxt
         else:
             nxt = row[2]
@@ -238,7 +253,7 @@ def partition(
             (
                 i
                 for i, r in enumerate(runs)
-                if r["cls"] not in ("unranked", "past")
+                if r["cls"] not in (BinClass.UNRANKED, BinClass.PAST)
                 and r["ranked"] < DOMAIN_MIN_LANES
             ),
             key=lambda i: runs[i]["ranked"],
@@ -249,7 +264,7 @@ def partition(
                 j
                 for j in (i - 1, i + 1)
                 if 0 <= j < len(runs)
-                and runs[j]["cls"] != "unranked"
+                and runs[j]["cls"] is not BinClass.UNRANKED
                 and _looseness(runs[j]["cls"]) >= own
             ]
             if not candidates:
@@ -292,7 +307,7 @@ def partition(
             low = 0.0
         if 0 < abs(high) <= smallest:
             high = 0.0
-        ranked = r["cls"] != "unranked"
+        ranked = r["cls"] is not BinClass.UNRANKED
         if out and not low < high:
             # A run of nothing but the zero lane, snapped to [0, 0): dropped rather than
             # written empty. The next entry's `low` is pulled down to 0 below, so under
@@ -356,8 +371,15 @@ def check_domains(domains: Tuple[Domain, ...]) -> None:
         raise TableError(Problem.NO_FIGURE, domains)
 
 
+def largest_figure(domains: Tuple[Domain, ...]) -> int:
+    """The largest figure of a checked list (:func:`check_domains` guarantees one): what
+    the ranked lanes of its null entries are held to, by the sweep, ``diff`` and
+    ``headroom`` alike, and the whole cell's figure."""
+    return max(d.ulp for d in domains if d.ulp is not None)
+
+
 def contract_of(domains: Tuple[Domain, ...], ceiling: float) -> Tuple[bool, int]:
     """``(gated, figure)``: the whole-cell contract a checked list implies -- gated at
     its largest figure when every figure is within *ceiling*, tolerance otherwise."""
-    figure = max(d.ulp for d in domains if d.ulp is not None)
+    figure = largest_figure(domains)
     return figure <= ceiling, figure

@@ -164,7 +164,7 @@ class BudgetKey:
             # and match nothing.
             if value is not None and not isinstance(value, expected):
                 raise TableError(Problem.NOT_A_MEMBER, value)
-        # Cached: `matches` is validate_registry's hot loop.
+        # Cached: `matches` is validate_contracts' hot loop (resolve_variant, _winner).
         object.__setattr__(self, "_values", values)
 
     @property
