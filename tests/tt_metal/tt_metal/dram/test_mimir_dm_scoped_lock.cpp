@@ -8,9 +8,10 @@
 // read after the producer moved TL1 under its cache; the observer of a flush is the consumer's read through the
 // uncached alias, which reads TL1 past every cache. The host seeds the region, waits for both status lines with a
 // wall-clock deadline, and checks the consumer's result lines. Locked lines must read NEW, as upstream. Unlocked lines
-// are negative controls and must read OLD: the consumer's cached reads in LockedRangeOnly, which stay cached because
-// the acquire invalidates only the locked lines, and the consumer's uncached reads in FlushOnRelease, which see TL1
-// because the producer discards its unlocked dirty lines instead of writing them back.
+// are negative controls and must read OLD: the consumer's cached reads in both invalidate cases, which stay cached
+// because the acquire invalidates only the locked lines, and the consumer's uncached reads in FlushOnRelease, which see
+// TL1 because the producer discards its unlocked dirty lines instead of writing them back. FlushOnRelease also needs
+// the locked lines in TL1 at the producer's first read after the release, as upstream reads them at once.
 
 #include <gtest/gtest.h>
 
@@ -187,11 +188,12 @@ std::string poll_name(uint32_t poll) {
 std::string status_detail(const std::vector<uint32_t>& status) {
     const uint32_t flags = status[abi::kStatusFlags];
     return fmt::format(
-        "kernel code {} flags [peer {} landed {}], last poll {} {}, cycles wait {} poll {}, flag observed {}, "
-        "kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})",
+        "kernel code {} flags [peer {} landed {} at first read {}], last poll {} {}, cycles wait {} poll {}, flag "
+        "observed {}, kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})",
         code_name(status[abi::kStatusCode]),
         (flags & abi::kFlagPeerSignalled) != 0,
         (flags & abi::kFlagLanded) != 0,
+        (flags & abi::kFlagLandedAtFirstRead) != 0,
         poll_name(status[abi::kStatusLastPoll]),
         status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
         status[abi::kStatusWaitCycles],
@@ -366,11 +368,12 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
             << label << ": the producer's uncached stores are not in TL1. " << observed;
         EXPECT_EQ(slice(cached_after, first, count), slice(new_values, first, count))
             << label << ": a locked line still read stale through the cache after acquire. " << observed;
-        if (clm_case == ClmCase::LockedRangeOnly) {
-            EXPECT_EQ(outside_slice(cached_after, first, count), outside_slice(old_values, first, count))
-                << label << ": an unlocked line missed the cache after acquire. " << observed;
-        }
+        EXPECT_EQ(outside_slice(cached_after, first, count), outside_slice(old_values, first, count))
+            << label << ": an unlocked line missed the cache after acquire. " << observed;
     } else {
+        EXPECT_NE(producer_status[abi::kStatusFlags] & abi::kFlagLandedAtFirstRead, 0u)
+            << label << ": the locked lines were not in TL1 at the producer's first read after release. "
+            << producer_detail;
         EXPECT_EQ(slice(uncached_after, first, count), slice(new_values, first, count))
             << label << ": a locked line did not reach TL1 after release. " << observed;
         EXPECT_EQ(outside_slice(uncached_after, first, count), outside_slice(old_values, first, count))

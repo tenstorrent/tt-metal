@@ -60,6 +60,10 @@ static void for_each_line(uint32_t data_offset, uint32_t num_bytes, LineOp line_
     }
 }
 
+static void invalidate_l1_lines(uint32_t data_offset, uint32_t num_bytes) {
+    for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l1_dcache(line); });
+}
+
 static void invalidate_lines(uint32_t data_offset, uint32_t num_bytes) {
     for_each_line(data_offset, num_bytes, [](uint32_t line) {
         invalidate_l1_dcache(line);
@@ -67,24 +71,38 @@ static void invalidate_lines(uint32_t data_offset, uint32_t num_bytes) {
     });
 }
 
-static bool is_store_mode(uint32_t mode) { return mode <= abi::kModeL2InvalidateLine || mode == abi::kModeProducer; }
+static bool is_store_mode(uint32_t mode) {
+    return mode <= abi::kModeL2InvalidateLine || mode == abi::kModeProducer || mode == abi::kModeL1InvalidateFull;
+}
+
+static bool is_fresh_read_mode(uint32_t mode) {
+    return mode == abi::kModeInvalidateFreshRead || mode == abi::kModeL2InvalidateFreshRead;
+}
 
 static bool is_write_path_mode(uint32_t mode) {
     return mode >= abi::kModeWriteUncached1B && mode <= abi::kModeWriteCachedFastFlush;
 }
 
-static void run_store_mode(uint32_t mode, uint32_t data_offset, uint32_t num_bytes) {
+// Inlined so that no call frame sits on the stack across the whole-L1 D$ discard of kModeL1InvalidateFull.
+static inline __attribute__((always_inline)) void run_store_mode(
+    uint32_t mode, uint32_t data_offset, uint32_t num_bytes) {
     switch (mode) {
         case abi::kModeL1FlushLine:
             for_each_line(data_offset, num_bytes, [](uint32_t line) { flush_l1_dcache(line); });
+            invalidate_l1_lines(data_offset, num_bytes);
             flush_l2_cache_range(data_offset, num_bytes);
             break;
         case abi::kModeL1FlushFull:
             flush_l1_dcache(0);
+            invalidate_l1_lines(data_offset, num_bytes);
             flush_l2_cache_range(data_offset, num_bytes);
             break;
         case abi::kModeL1InvalidateLine:
-            for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l1_dcache(line); });
+            invalidate_l1_lines(data_offset, num_bytes);
+            flush_l2_cache_range(data_offset, num_bytes);
+            break;
+        case abi::kModeL1InvalidateFull:
+            invalidate_l1_dcache(0);
             flush_l2_cache_range(data_offset, num_bytes);
             break;
         case abi::kModeL2FlushLine:
@@ -96,6 +114,7 @@ static void run_store_mode(uint32_t mode, uint32_t data_offset, uint32_t num_byt
         case abi::kModeL2InvalidateLine:
             flush_l1_dcache(0);
             for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l2_cache_line(line); });
+            flush_l2_cache_range(data_offset, num_bytes);
             break;
         default: break;
     }
@@ -128,7 +147,6 @@ static void run_write_path(uint32_t mode, uint32_t data_offset, uint32_t num_wor
         } else if (mode == abi::kModeWriteCachedRangeFlush) {
             flush_l2_cache_range(data_offset, num_bytes);
         } else {
-            asm volatile("fence" ::: "memory");
             volatile uint64_t* flush_register = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
             for (uint32_t line = data_offset & ~(abi::kLineBytes - 1); line < data_offset + num_bytes;
                  line += abi::kLineBytes) {
@@ -139,6 +157,14 @@ static void run_write_path(uint32_t mode, uint32_t data_offset, uint32_t num_wor
     if (mode == abi::kModeWriteCachedFastFlush) {
         asm volatile("fence" ::: "memory");
     }
+}
+
+static bool wait_for_flag(uint32_t flag_offset, uint32_t flag_value, uint64_t budget_cycles) {
+    uint32_t wait_cycles = 0;
+    return cce_test::poll_bounded(
+        [flag_offset, flag_value] { return *uncached<uint32_t>(flag_offset) == flag_value; },
+        budget_cycles,
+        wait_cycles);
 }
 
 static bool args_valid(uint32_t mode, uint32_t data_offset, uint32_t num_words, uint32_t flag_offset, uint64_t budget) {
@@ -167,7 +193,9 @@ void kernel_main() {
     const uint32_t num_bytes = num_words * sizeof(uint32_t);
 
     uint32_t code = abi::kCodeDone;
+    uint32_t cached_before = 0;
     uint32_t uncached_before = 0;
+    uint32_t warm_old = 0;
     uint32_t stale_before = 0;
     uint32_t flag_ready = 0;
     uint32_t cycles = 0;
@@ -176,9 +204,18 @@ void kernel_main() {
         code = abi::kCodeBadArgs;
     } else {
         const uint64_t start = read_cycle_counter();
-        if (is_store_mode(mode)) {
+        if (mode == abi::kModeProducer) {
+            flag_ready = wait_for_flag(flag_offset, abi::kFlagWarmed, budget_cycles) ? 1 : 0;
+        }
+        if (mode == abi::kModeProducer && flag_ready == 0) {
+            code = abi::kCodeFlagTimeout;
+        } else if (is_store_mode(mode)) {
+            if (mode == abi::kModeL1InvalidateFull) {
+                flush_l1_dcache(0);
+            }
             store_words(cached<uint32_t>(data_offset), num_words, value);
             asm volatile("fence rw, rw" ::: "memory");
+            cached_before = check_words(cached<uint32_t>(data_offset), num_words, value).matches;
             uncached_before = check_words(uncached<uint32_t>(data_offset), num_words, value).matches;
             run_store_mode(mode, data_offset, num_bytes);
             if (mode == abi::kModeProducer) {
@@ -189,27 +226,27 @@ void kernel_main() {
             if (mode == abi::kModeNoFlush) {
                 invalidate_lines(data_offset, num_bytes);
             }
-        } else if (mode == abi::kModeInvalidateFreshRead || mode == abi::kModeConsumer) {
-            check_words(cached<uint32_t>(data_offset), num_words, old_value);
-            if (mode == abi::kModeInvalidateFreshRead) {
+        } else if (is_fresh_read_mode(mode) || mode == abi::kModeConsumer) {
+            warm_old = check_words(cached<uint32_t>(data_offset), num_words, old_value).matches;
+            if (mode == abi::kModeConsumer) {
+                asm volatile("fence r, w" ::: "memory");
+                *uncached<uint32_t>(flag_offset) = abi::kFlagWarmed;
+                flag_ready = wait_for_flag(flag_offset, abi::kFlagReady, budget_cycles) ? 1 : 0;
+                asm volatile("fence r, rw" ::: "memory");
+            } else {
                 store_words(uncached<uint32_t>(data_offset), num_words, value);
                 asm volatile("fence rw, rw" ::: "memory");
                 flag_ready = 1;
-            } else {
-                uint32_t flag_wait_cycles = 0;
-                flag_ready = cce_test::poll_bounded(
-                                 [flag_offset] { return *uncached<uint32_t>(flag_offset) == abi::kFlagReady; },
-                                 budget_cycles,
-                                 flag_wait_cycles)
-                                 ? 1
-                                 : 0;
-                asm volatile("fence r, rw" ::: "memory");
             }
             if (flag_ready == 0) {
                 code = abi::kCodeFlagTimeout;
             } else {
                 stale_before = check_words(cached<uint32_t>(data_offset), num_words, old_value).matches;
-                invalidate_lines(data_offset, num_bytes);
+                if (mode == abi::kModeL2InvalidateFreshRead) {
+                    for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l2_cache_line(line); });
+                } else {
+                    invalidate_lines(data_offset, num_bytes);
+                }
                 check = check_words(cached<uint32_t>(data_offset), num_words, value);
             }
         } else {
@@ -228,6 +265,8 @@ void kernel_main() {
     status[abi::kStatusObserved] = check.observed;
     status[abi::kStatusFlagReady] = flag_ready;
     status[abi::kStatusCycles] = cycles;
+    status[abi::kStatusCachedBefore] = cached_before;
+    status[abi::kStatusWarmOld] = warm_old;
     asm volatile("fence w, w" ::: "memory");
     status[abi::kStatusMagic] = abi::kDoneMagic;
 }
