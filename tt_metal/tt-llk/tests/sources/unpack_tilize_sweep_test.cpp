@@ -70,13 +70,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // A narrow tile is 32x16: 2 faces stacked vertically (2x1 grid), which the legacy helper would make 1x2.
+    const ckernel::TensorShape tensor_shape = params.NARROW_TILE ? ckernel::make_tensor_shape(FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, 1)
+                                                                 : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     // Copy srca to dest with tilize flag
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+        llk_test_pack_mode_v<false, TILIZE>>(tensor_shape, formats.math);
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -86,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
+                tile, formats.math, formats.math, tensor_shape);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

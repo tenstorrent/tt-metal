@@ -174,12 +174,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Step 1: copy the two seeds (unpacked into SrcA by unpack step 1, in this order) into DEST. X goes to
     // DEST[DST_TILE] (the op scales it in place) and the column source P to DEST[SRC_TILE].
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(
-        DST_TILE, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(
-        SRC_TILE, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, tensor_shape);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, tensor_shape);
 
     // Step 2: SDPA column-broadcast SrcA+SrcB-reuse eltwise.
     //   init     -> program addr_mods + the [MOVD2A, MOVD2A, ELWMUL] SRCB_BCAST_COL MOP.
