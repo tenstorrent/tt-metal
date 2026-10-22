@@ -204,6 +204,8 @@ class LayerNorm(LightweightModule):
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
+        if self.norm_type == LayerNormTypes.RMSNORM:
+            weight = self.weight_distributed if distributed else self.weight
 
         if self.norm_type == LayerNormTypes.LAYERNORM:
             if distributed:
@@ -238,7 +240,7 @@ class LayerNorm(LightweightModule):
                     memory_config=memory_config,
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                 )
-        if LayerNormTypes.RMSNORM:
+        if self.norm_type == LayerNormTypes.RMSNORM:
             if distributed:
                 x = self._distributed_rmsnorm(
                     x,
