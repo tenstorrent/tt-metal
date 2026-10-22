@@ -260,3 +260,33 @@ def test_agmm_bar(mesh_device, device_params):
             )
         )
         ttnn.deallocate(x)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_tp_gather(mesh_device, device_params):
+    """The fused head's x all-gather (models/demos/moe_block/tt/tp_gather.py: line multicasts) vs ttnn.all_gather."""
+    from models.demos.moe_block.tt.tp_gather import tp_gather_prepare
+
+    for name in os.environ.get("TPG_CASES", "glm_x_ag,k3_x_ag").split(","):
+        shape, _, _ = CASES[name]
+        _, x = _dev(mesh_device, shape, 1)
+        run = tp_gather_prepare(mesh_device, *shape, num_links=int(os.environ.get("TPG_LINKS", "2")))
+        res = {}
+        ref = _host(mesh_device, ttnn.all_gather(x, dim=3, cluster_axis=1), (2, 3))
+        for cname, f in {
+            "ttnn": lambda: ttnn.all_gather(x, dim=3, cluster_axis=1),
+            "tp_gather": lambda: run(x),
+        }.items():
+            us, out = _time(mesh_device, f)
+            y = _host(mesh_device, out, (2, 3))
+            ttnn.deallocate(out)
+            res[cname] = (us, (y - ref).abs().max().item())
+        logger.info(
+            f"TPG {name} shard {shape}: "
+            + "; ".join(f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err {v[1]})" for k, v in res.items())
+        )
+        ttnn.deallocate(x)

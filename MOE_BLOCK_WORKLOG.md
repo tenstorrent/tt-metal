@@ -158,3 +158,33 @@ GLM-5.3-Flash 4739 -> **4088 us**, K3 (E 448) 8496 -> **7353 us** at chunk 5120 
 - Top remaining costs: experts + combine (GLM 2089 / K3 2859), the x all-gather over TP (354 / 609: ttnn only, no
   width-gather alternative), K3's shared expert (949) and its width reduce-scatter (731), the dispatch (452 / 414),
   K3's latent down / up (409 / 377: ttnn mm, lin2d's 93 / 89 us were at 320 rows).
+
+## 2026-10-22 (pm): the fused head - one custom program per chip (in progress)
+
+User decisions: one fully custom fused head program (no descriptor merging of existing ops, no sub-devices); fabric
+UNICAST only - all-gather-type streams store-and-forward through the head's own fabric workers (a multicast path only
+as an off-by-default probe); HiFi2 for the shared expert.
+
+### The bar for x all-gather -> shared expert gate / up
+ttnn.all_gather + the block's mm2d linear (HiFi2, bf8 weights): **GLM-Flash 468 us, K3 1021 us** (test_agmm_bar).
+The fused gather-over-K matmul ops (all_gather_minimal_matmul_async; the strided / all_gather_matmul_async variants share
+its kernels) do not build on FABRIC_2D: their kernels use the 1D LowLatencyPacketHeader helpers
+(matmul_dataflow_common.hpp: "cannot convert HybridMeshPacketHeader* to LowLatencyPacketHeader*"), and the block needs
+FABRIC_2D (dispatch, combine). So the bar is the separate path.
+
+### Building block 1: the x all-gather over K by the head's own fabric workers (models/demos/moe_block/tt/tp_gather.py)
+A port per (direction, link) (combine_rf.fabric_all_gather_py.plan's placement), store-and-forward one hop at a time:
+its own columns first, then each shard the upstream port landed (read back from x_full once the arrival counter covers
+it). A packet is a run of tiles consecutive in one DRAM bank in x AND in x_full (row tile r, bank b, tiles b, b + 8, ..;
+needs H / TP / 32 a multiple of the 8 banks), so the width concat costs nothing. Fused write + increment every 8th
+packet; a fence per call (no writes into a neighbour before it started the call).
+| x all-gather, us (exact vs ttnn) | GLM-Flash [2560, 1024] | K3 [2560, 1792] |
+|---|---|---|
+| ttnn.all_gather | 355 | 602 |
+| tp_gather, store-and-forward | **336** | **585** |
+| (probe, not kept: line multicast, 2 links / 1 link) | 341 / 670 | 599 / - |
+**The TP links bound it**: one link halves the rate (670 vs 341 us): ~15.6 GB/s a link a direction at 200G with 8 KB
+packets, so the 2-link 4-chip line's busiest hop (2 shards) puts the x all-gather's floor at ~335 / ~590 us. The x
+all-gather cannot get faster on this box - only hidden under compute. Same for the shared expert's reduce-scatter
+(~335 / ~590 us floor). So the fused head's TP links carry ~730 us (GLM-Flash) / ~1350 us (K3) of unavoidable traffic,
+and the head is bounded below by that, against today's 1352 / 3309 us serial heads.
