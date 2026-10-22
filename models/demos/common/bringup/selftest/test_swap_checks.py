@@ -356,3 +356,39 @@ def test_a_waived_step_covers_the_block_out_of_its_swap_test(gspec, noise, monke
     monkeypatch.setenv(IMPL_ENV, "stub")
     M.reset("T")
     assert not run_swap_test(s, "blk", SWAPPED)
+
+
+def test_a_topk_step_is_compared_as_a_set_not_by_position():
+    """F160: DeepSeek-V4.1 swap indexer: the reference returns ascending ids, the device's top-k returns them by score;
+    a positional match gave 0.0015 for the same set. Index steps compare per-row overlap."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.testing import noise_floor as NF
+    from models.demos.common.bringup.testing.component import step_mode
+
+    ids = torch.arange(64).reshape(4, 16)  # a top-k's ids: integer rows without repeats (the DS41 step's kind is "op")
+    dev = ids.flip(-1)  # the same sets, another order
+    op = SimpleNamespace(kind="op")
+    assert step_mode(None, op, ids) == step_mode("match", op, ids) == "topk_overlap"
+    assert NF.value(step_mode(None, op, ids), dev, ids) == 1.0 and NF.value("match", dev, ids) < 0.1
+    assert step_mode(None, op, ids.float()) == "pcc"
+    assert step_mode(None, op, torch.zeros(4, 16, dtype=torch.long)) == "match"  # repeats: not a top-k
+
+
+def test_a_waiver_reaches_an_index_step_but_not_a_wrong_one(gspec):
+    """F161: DeepSeek-V4.1 swap enc_source_14: the owner-delegated indexer waiver (bf16 top-k scores) never reached
+    the integer-output path of the per-step check. A waived top-k passes when it overlaps the CPU's structurally;
+    a reversed / unrelated id set still fails."""
+    from models.demos.common.bringup.testing.component import _waive_index
+
+    s = gspec()
+    cpu = torch.stack([torch.randperm(512)[:64] for _ in range(8)])
+    near = cpu.clone()
+    near[:, -1] = (cpu[:, -1] + 1) % 512  # one flip per row: a precision gap
+    other = torch.stack([torch.randperm(512)[:64] for _ in range(8)])  # a wrong module
+    assert not _waive_index(s, "blk", "indexer", False, near, cpu, "swap_indexer")
+    s.data.setdefault("tests", {})["waivers"] = {"indexer": "bf16 top-k scores (owner)"}
+    assert _waive_index(s, "blk", "indexer", False, near, cpu, "swap_indexer")
+    assert got()["swap_indexer_waived"] == 1
+    assert not _waive_index(s, "blk", "indexer", False, other, cpu, "swap_indexer")
+    assert _waive_index(s, "blk", "indexer", True, other, cpu, "swap_indexer")  # passing checks are untouched
