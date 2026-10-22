@@ -10,17 +10,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
-    KDA_PREPARATION_MEMORY_CONFIG,
+    KDA_PREPARATION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
+    l1_when_it_fits,
+    preparation_bytes,
 )
 
 
@@ -109,25 +116,26 @@ def _prepare_chunk_terms(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    gate_scale: float,
+    beta_logits_column_offset: int,
+    memory_config: ttnn.MemoryConfig,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
+    # Chunk preparation reads each head's logit column in place from the token-major projection and activates it.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
         v,
         gate,
-        beta_by_chunk,
+        beta,
         geometry.heads,
-        memory_config=KDA_PREPARATION_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_config.preparation,
         output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        gate_scale=gate_scale,
+        beta_logits_column_offset=beta_logits_column_offset,
     )
     return _PreparedChunks(*outputs)
 
@@ -229,6 +237,16 @@ def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
     return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
 
 
+def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
+    """Ethernet links between neighbours on the SP axis; 0 for a system the link table does not know."""
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
+
+    try:
+        return get_num_links(device, sequence_parallel_axis)
+    except (KeyError, ValueError):
+        return 0
+
+
 def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,
@@ -237,6 +255,7 @@ def distributed_prefix(
     compute_config: ttnn.DeviceComputeKernelConfig,
     actual_start: ttnn.Tensor,
     local_rows: int,
+    gather_buffer: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
@@ -245,13 +264,31 @@ def distributed_prefix(
     applies them with FP32 accumulation. Return the local entry state and the replicated final
     carry on each independent TP line.
     """
-    output_memory = KDA_OUTPUT_MEMORY_CONFIG
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
+    device = packed.device()
+    _, batch_heads, key_dim, row_width = tuple(packed.shape)
+    # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
+    chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
+    if gather_buffer is not None:
+        # The gather lands in the persistent DRAM buffer, so only the chain's outputs count against L1.
+        output_memory = l1_when_it_fits(device, chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE)
+        gathered = ttnn.experimental.high_bw_all_gather(
+            packed,
+            dim=0,
+            output_tensor=gather_buffer,
+            cluster_axis=sequence_parallel_axis,
+            num_links=KDA_HIGH_BW_PREFIX_GATHER_LINKS,
+        )
+    else:
+        gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * packed.logical_volume() * packed.element_size()
+        output_memory = l1_when_it_fits(
+            device, gathered_bytes + chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE
+        )
+        gathered = ttnn.all_gather(
+            packed,
+            dim=0,
+            cluster_axis=sequence_parallel_axis,
+            memory_config=output_memory,
+        )
     return ttnn.experimental.kda.chain_affine_transforms(
         gathered,
         initial_state,
@@ -408,6 +445,7 @@ def _scan_sp_grouped_chunks(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    gather_buffer: ttnn.Tensor | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -432,6 +470,7 @@ def _scan_sp_grouped_chunks(
             compute_config=compute_config.affine_prefix,
             actual_start=actual_start,
             local_rows=geometry.local_rows,
+            gather_buffer=gather_buffer,
         )
     else:
         head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
@@ -510,7 +549,10 @@ class KDARecurrence:
         key_dim: int,
         value_dim: int,
         batch: int = 1,
+        gate_scale: float = 1.0,
     ) -> None:
+        # Preparation multiplies the gate by gate_scale before its cumulative sum.
+        self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -542,6 +584,17 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
+        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
+        # and chunk preparation's DRAM writes.
+        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
+        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
+        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
+            grid = device.compute_with_storage_grid_size()
+            logger.warning(
+                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
+                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
+                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
+            )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
@@ -555,6 +608,27 @@ class KDARecurrence:
                 raise ValueError("summary_group_chunks must divide the constructed local chunk count")
             self._groups = self._geometry.num_chunks // self._summary_group_chunks
             self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
+        # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
+        # one-group-per-head summary gathers them directly.
+        self._gather_buffer = None
+        if (
+            self._sequence_parallel
+            and program_config.high_bw_prefix_gather
+            and grouped
+            and self._groups == 1
+            and _sp_links(device, sequence_parallel_axis) >= KDA_HIGH_BW_PREFIX_GATHER_LINKS
+        ):
+            self._gather_buffer = ttnn.from_torch(
+                torch.zeros(
+                    (tuple(device.shape)[sequence_parallel_axis], batch * heads, key_dim, key_dim + value_dim),
+                    dtype=torch.bfloat16,
+                ),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -573,9 +647,15 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        beta_logits_column_offset: int,
+        release_gate: bool,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
-        if tuple(beta.shape) != (geometry.batch, geometry.local_rows, geometry.heads):
+        # Beta's logits are a column window of a wider projection.
+        if (
+            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
+            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+        ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
             ("q", q, geometry.heads * geometry.key_dim),
@@ -601,7 +681,13 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            gate_scale=self._gate_scale,
+            beta_logits_column_offset=beta_logits_column_offset,
+            memory_config=self._preparation_memory,
         )
+        if release_gate:
+            # Only chunk preparation reads the gate; freeing it here lowers L1 use during the scans.
+            ttnn.deallocate(gate)
         return prepared, state, geometry
 
     @staticmethod
@@ -623,8 +709,16 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        beta_logits_column_offset: int,
+        release_gate: bool = False,
     ) -> RecurrenceResult:
-        """Execute the constructed graph using caller-owned state and chronology."""
+        """Execute the constructed graph using caller-owned state and chronology.
+
+        ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
+        pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
+        With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
+        read it.
+        """
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -634,6 +728,8 @@ class KDARecurrence:
             initial_state=initial_state,
             actual_start=actual_start,
             actual_end=actual_end,
+            beta_logits_column_offset=beta_logits_column_offset,
+            release_gate=release_gate,
         )
         result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
@@ -696,4 +792,5 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            gather_buffer=self._gather_buffer,
         )

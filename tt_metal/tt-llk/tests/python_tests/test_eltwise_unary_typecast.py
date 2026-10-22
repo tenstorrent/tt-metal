@@ -14,7 +14,6 @@ import math
 import struct
 
 import torch
-from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -234,6 +233,7 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
 _FP32_EXP_BIAS = 127
 _FP32_MANTISSA_BITS = 23
 _FP32_SIGN_BIT = 1 << 31
+_UINT32_WRAP = 1 << 32
 
 
 def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
@@ -279,9 +279,6 @@ def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
     return patterns
 
 
-# Blackhole only: the Wormhole calculate_typecast_fp32_to_uint8 still shifts by
-# (exp - 23) & 31 (https://github.com/tenstorrent/tt-llk/issues/1701 item 15).
-@blackhole_only
 def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
     # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
@@ -302,7 +299,10 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     assert len(patterns) <= src_A.numel()
     bits = patterns + [0] * (src_A.numel() - len(patterns))
     src_A = (
-        torch.tensor([b - (1 << 32) if b >> 31 else b for b in bits], dtype=torch.int32)
+        torch.tensor(
+            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+            dtype=torch.int32,
+        )
         .view(torch.float32)
         .to(src_A.dtype)
     )
