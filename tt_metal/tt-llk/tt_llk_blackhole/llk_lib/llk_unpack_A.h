@@ -270,7 +270,7 @@ inline void _llk_unpack_A_mop_config_(
                 if (tensor_shape.face_r_dim < FACE_R_DIM)
                 {
                     // Datacopy moves all 16 rows of a face.
-                    _llk_unpack_clear_srca_banks_();
+                    _llk_unpack_clear_src_banks_<SrcA>();
                 }
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
