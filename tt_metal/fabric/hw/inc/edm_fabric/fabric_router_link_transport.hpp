@@ -11,6 +11,8 @@
 // Interface:
 //   is_busy()                        - transport can't accept a new command yet
 //   send_packet(src, dest, bytes)    - send bytes to the remote address. Requires !is_busy()
+//   send_with_context_switch(...)    - same, but blocks (context switching) until the transport accepts it.
+//                                      For the handshake and other cold paths.
 //   remote_update_ptr_val<id>(val)   - increment remote stream reg. Requires !is_busy()
 //   remote_update_ptr_val(id, val)   - same, runtime stream id
 
@@ -31,6 +33,10 @@ struct EthTxqLinkTransport {
     // Assumes !is_busy() -- PLEASE CHECK BEFORE CALLING
     static FORCE_INLINE void send_packet(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
         internal_::eth_send_packet_bytes_unsafe(TXQ_ID, src_addr, dest_addr, num_bytes);
+    }
+
+    static FORCE_INLINE void send_with_context_switch(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+        internal_::eth_send_packet<true>(TXQ_ID, src_addr >> 4, dest_addr >> 4, num_bytes >> 4);
     }
 
     // Assumes !is_busy()
