@@ -377,3 +377,29 @@ def test_commit_only_refuses_when_the_tasks_files_changed(sandbox):
     assert res.verdict == "COMMIT_PENDING" and any("changed since its gate passed" in ln for ln in res.lines)
     led.reset(["A.1"])
     assert led.status("A.1") == "TODO" and "commit_pending" not in led.state()["A.1"]
+
+
+def test_commit_only_takes_a_fix_to_the_files_the_hook_named(sandbox):
+    """F154: the hook names a file (DeepSeek-V4.1 P.18: prefer-expect-error on a fork unit test); fixing it is the
+    change it asks for and commits without a re-run. A change to any other task file still needs the gate."""
+    from models.demos.common.bringup.core.gate import commit_only
+
+    refusing_hook(sandbox, "src/test_x.py:3: use the expect_error fixture")
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    (sandbox.repo / "src/test_x.py").write_text("raises\n")
+    led = sandbox.tasks(
+        task("A.1", counted(record_cmd(pcc_out=0.995), sandbox), metrics={"pcc_*": ">= 0.99"}, paths=["src"])
+    )
+    assert run_gate(sandbox.spec, led, "A.1", commit=True).verdict == "COMMIT_PENDING"
+    (sandbox.repo / "bringup/REFUSE").unlink()
+    (sandbox.repo / "src/test_x.py").write_text("expect_error\n")
+    (sandbox.repo / "src/impl.py").write_text("x = 2\n")
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "COMMIT_PENDING" and any("src/impl.py (not named by the hook)" in ln for ln in res.lines)
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "PASS" and res.commit, res.summary()
+    assert any("as the hook asked (F154): src/test_x.py" in ln for ln in res.lines)
+    assert (sandbox.repo / "runs.txt").read_text() == "run\n"
+    assert "src/test_x.py" in sandbox.git("show", "--name-only", "--format=", "HEAD").split()
