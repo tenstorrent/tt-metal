@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
@@ -42,7 +43,6 @@ pytestmark = [
     pytest.mark.timeout(900),
 ]
 
-_SEQUENCE = 5120
 _REPETITIONS = 10
 _TIMING_SAMPLES = 5
 _LOUDBOX_PERF_SKU = "bh_loudbox"
@@ -80,27 +80,27 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
 _GALAXY_PERF_REFERENCE_MS = 1.456
-_GALAXY_ROWS_PER_CHIP = 640
-_GALAXY_HEADS_PER_CHIP = 24
-_GALAXY_ACTUAL_START = 4 * _GALAXY_ROWS_PER_CHIP + 320
+_GALAXY_TP = 4
+_GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
+_GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # QuietBox SP2xTP2 runs Galaxy's per-chip workload: 640 rows and 24 heads per chip, so the chunk shrinks to 1280
 # tokens and the synthetic config halves the global head count. Every per-chip shape, L1 placement and program
 # config then matches Galaxy, and the chunk starts 320 rows into a device as on Galaxy. The SP chain is 2 ranks
 # instead of 8, and the 11x10 grid splits each head's values over 2 cores instead of 4.
-_QUIETBOX_SEQUENCE = 2 * _GALAXY_ROWS_PER_CHIP
+_QUIETBOX_SEQUENCE = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP
 _QUIETBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
-_QUIETBOX_ACTUAL_START = _GALAXY_ROWS_PER_CHIP + 320
+_QUIETBOX_ACTUAL_START = PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # QuietBox SP4xTP1 runs the same per-chip workload over a 4-rank SP ring: 2560 tokens of Galaxy's 24 heads per chip.
 # With one TP rank the output projection writes its result to DRAM and skips the TP reduce-scatter;
 # test_kimi_k3_tp_reduce_scatter_perf times that collective on its own.
-_QUIETBOX_SP4_SEQUENCE = 4 * _GALAXY_ROWS_PER_CHIP
+_QUIETBOX_SP4_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
 _QUIETBOX_SP4_NUM_HEADS = _GALAXY_HEADS_PER_CHIP
-_QUIETBOX_SP4_ACTUAL_START = _GALAXY_ROWS_PER_CHIP + 320
+_QUIETBOX_SP4_ACTUAL_START = PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # LoudBox SP4xTP2 runs the same per-chip workload on a 2560-token chunk. The SP chain is 4 ranks and the TP
 # reduce-scatter 2; the 11x10 grid splits each head's values over 2 cores as on QuietBox.
-_LOUDBOX_SEQUENCE = 4 * _GALAXY_ROWS_PER_CHIP
+_LOUDBOX_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
 _LOUDBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
-_LOUDBOX_ACTUAL_START = 2 * _GALAXY_ROWS_PER_CHIP + 320
+_LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # LoudBox SP8xTP1 runs Galaxy's SP chain and chunk with Galaxy's 24 heads per chip. Its 8 chips close into a ring, as
 # Galaxy's SP axis does, and so do QuietBox SP4xTP1's 4; FABRIC_1D_RING rings only mesh axis 0, so SP takes that axis.
 # As on QuietBox SP4xTP1, it skips the TP reduce-scatter, which test_kimi_k3_tp_reduce_scatter_perf times on its own.
@@ -154,11 +154,15 @@ def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, ma
         ("SP8xTP1", _LOUDBOX_PERF_SKU),
         ("TP4-linear", _LOUDBOX_PERF_SKU),
         ("TP4-ring", _QUIETBOX_PERF_SKU),
-        ("SP8xTP4", _LOUDBOX_PERF_SKU),
+        # The Galaxy gate needs no KDA_PERF_SKU opt-in.
+        ("SP8xTP4", None),
     ],
 )
 def test_synthetic_performance_uses_two_sided_margin(layout, sku, monkeypatch, expect_error) -> None:
-    monkeypatch.setenv("KDA_PERF_SKU", sku)
+    if sku is None:
+        monkeypatch.delenv("KDA_PERF_SKU", raising=False)
+    else:
+        monkeypatch.setenv("KDA_PERF_SKU", sku)
     reference_ms = _perf_reference_ms(layout)
     margin = _PERF_MARGIN
     _assert_within_margin(layout, reference_ms * (1 - 0.99 * margin), reference_ms, margin)
@@ -316,9 +320,9 @@ def test_synthetic_kimi_k3_perf(
     device_reference_ms = None if report_only else _device_perf_reference_ms(layout)
     reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout)
     sequence, num_heads, actual_start = {
-        "SP8xTP4": (_SEQUENCE, None, _GALAXY_ACTUAL_START),
+        "SP8xTP4": (PREFILL_CHUNK_TOKENS, None, _GALAXY_ACTUAL_START),
         "SP4xTP2": (_LOUDBOX_SEQUENCE, _LOUDBOX_NUM_HEADS, _LOUDBOX_ACTUAL_START),
-        "SP8xTP1": (_SEQUENCE, _GALAXY_HEADS_PER_CHIP, _GALAXY_ACTUAL_START),
+        "SP8xTP1": (PREFILL_CHUNK_TOKENS, _GALAXY_HEADS_PER_CHIP, _GALAXY_ACTUAL_START),
         "SP2xTP2": (_QUIETBOX_SEQUENCE, _QUIETBOX_NUM_HEADS, _QUIETBOX_ACTUAL_START),
         "SP4xTP1": (_QUIETBOX_SP4_SEQUENCE, _QUIETBOX_SP4_NUM_HEADS, _QUIETBOX_SP4_ACTUAL_START),
     }[layout]
@@ -333,7 +337,7 @@ def test_synthetic_kimi_k3_perf(
         cache_weights=False,
     )
     assert (layer.active_seq_len_local, layer.config.num_heads) == (
-        _GALAXY_ROWS_PER_CHIP,
+        PREFILL_CHUNK_TOKENS_PER_CHIP,
         _GALAXY_HEADS_PER_CHIP,
     ), f"{layout} must run Galaxy's per-chip workload"
     if device_reference_ms is not None:
@@ -425,7 +429,7 @@ def test_kimi_k3_tp_reduce_scatter_perf(
         4,
         expected_topology,
     ), f"must reduce-scatter over 4 TP ranks on a {expected_topology}"
-    rows, hidden_size = _GALAXY_ROWS_PER_CHIP, KimiK3Config.EMB_SIZE
+    rows, hidden_size = PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE
     input_memory_config = l1_when_it_fits(mesh_device, rows * hidden_size * 2, KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE)
     assert input_memory_config == ttnn.L1_MEMORY_CONFIG, "Galaxy keeps the partial sums in L1"
 

@@ -14,6 +14,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
@@ -29,14 +30,14 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     to_sp_input,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
-_SEQUENCE = 5120
 _PCC_THRESHOLD = 0.9995
-_GALAXY_ROWS_PER_CHIP = _SEQUENCE // 8
-_GALAXY_HEADS_PER_CHIP = 24
+_GALAXY_TP = 4
+_GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 
 # Valid interval [start, start + length) of one prefill call, from the local rows L
 # per SP rank and the capacity C. Full intervals place the sequence on every rank
@@ -75,7 +76,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             (8, 1),
             1,
             fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
-            _SEQUENCE,
+            PREFILL_CHUNK_TOKENS,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="SP8xTP1-ring",
@@ -84,7 +85,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             (4, 1),
             1,
             fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
-            4 * _GALAXY_ROWS_PER_CHIP,
+            4 * PREFILL_CHUNK_TOKENS_PER_CHIP,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
             id="SP4xTP1-ring",
@@ -93,7 +94,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             (8, 4),
             1,
             torus_xy_device_params(),
-            _SEQUENCE,
+            PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
@@ -134,7 +135,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     )
     if num_heads is not None:
         assert (layer.active_seq_len_local, layer.config.num_heads) == (
-            _GALAXY_ROWS_PER_CHIP,
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
             _GALAXY_HEADS_PER_CHIP,
         ), f"{layout} must run Galaxy's per-chip workload"
 
