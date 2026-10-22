@@ -21,6 +21,7 @@ struct H2DSocketDramRecvAccess;
 namespace tt::tt_metal::distributed {
 
 class H2DSocketImpl;
+class MeshDevice;
 struct HDSocketDescriptor;
 
 /**
