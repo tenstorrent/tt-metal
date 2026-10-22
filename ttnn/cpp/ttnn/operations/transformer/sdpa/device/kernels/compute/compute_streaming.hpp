@@ -3674,10 +3674,13 @@ void sdpa_ring_v2(
  * from column 0, with apply_col_bias (one bias row of Sk_chunk_t tiles in cb_sol_bias, waited for and popped).
  * The step never pops cb_kt_in / cb_v_in.
  *
- * Frozen max (static_max): S2 + the S3 copy run only on a step whose group is entirely uninitialized (the first
- * step of a head on the forced block 0 of piece 0), S4 never; see the M4 notes in the status doc. Dynamic path:
- * S2-S4 every step. Per-step scratches are reserved / pushed / popped at full capacity (pointers back at base);
- * the in-place slot packs of a step are drained (PACK_DONE post + take) before the step returns.
+ * Running max, every step (S2-S4): the max S5 subtracts is this step's row max merged with the slot's stored max,
+ * so every input of the exp is <= 0. That is a hard requirement, not a precision choice: the pack-thread
+ * approximate exp (exp_packthread_tile<true, InputClamping::None>, ckernel_sfpu_exp.h) saturates for inputs above
+ * +0.72 and relies on the packer ReLU for inputs below -88, so any max that is not an upper bound of the scores it
+ * is subtracted from (M5's frozen first-step max) produces wrong weights. Per-step scratches are reserved / pushed
+ * / popped at full capacity (pointers back at base); the in-place slot packs of a step are drained (PACK_DONE
+ * post + take) before the step returns.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -3702,8 +3705,7 @@ template <
     uint32_t cb_sol_bias,
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
-    uint32_t stats_cap,
-    bool static_max>
+    uint32_t stats_cap>
 static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     const uint8_t* slots,
     const uint32_t n_slots,
@@ -3741,11 +3743,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     const auto run_col = [&](uint32_t g, uint32_t s) -> uint32_t {
         return static_cast<uint32_t>(run_cols[g * kMaxRuns + s]);
     };
-    uint32_t group_mask = 0;
     uint32_t q_wait_tiles = 0;
     for (uint32_t g = 0; g < n_slots; ++g) {
         ASSERT(n_runs[g] >= 1 && width_of(g) <= Wmax);
-        group_mask |= 1u << slots[g];
         const uint32_t t = (static_cast<uint32_t>(slots[g]) + 1) * q_chunk_tiles;
         q_wait_tiles = t > q_wait_tiles ? t : q_wait_tiles;
     }
@@ -3825,15 +3825,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
-    const bool run_stats = static_max ? (initialized_mask & group_mask) == 0 : true;
-    ASSERT(!static_max || run_stats || (initialized_mask & group_mask) == group_mask);
-    // The max the exp of S5 subtracts: this step's row max (fresh in the scratch) or the slot's frozen max.
-    const uint32_t cb_step_max = run_stats ? cb_max_scratch : cb_max_in;
-    if (!run_stats) {
-        CircularBuffer(cb_qkt_im).wait_front(qk_cap);
-    } else {
+    // S5 subtracts cb_max_scratch: this step's row max merged with the slot's stored max (S2), an upper bound of
+    // every score it is subtracted from, so the exp's inputs are <= 0 (see the function comment).
+    CircularBuffer(cb_qkt_im).wait_front(qk_cap);
+    {
         // ---- S2: row max over each member's W_g columns, eltwise-max with the slot's stored max, into the scratch.
-        CircularBuffer(cb_qkt_im).wait_front(qk_cap);
         CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
         configure_single_tile_pack(cb_max_scratch);
         for (uint32_t g0 = 0; g0 < n_slots; g0 += stat_slots_per_acq) {
@@ -3957,7 +3953,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
             salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
                 cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, slots[g], slots[g], slots[g]);
         }
-    }  // run_stats: S2-S4
+    }  // S2-S4
 
     // ---- S5: in-place exp of the scores (sub_exp_block_bcast_cols pattern), per member over its W_g columns. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
@@ -4004,7 +4000,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
                 if (uu > 0) {
                     flush();
                 }
-                sub_bcast_cols_init_short_custom(cb_qkt_im, cb_step_max, cw);
+                sub_bcast_cols_init_short_custom(cb_qkt_im, cb_max_scratch, cw);
                 init_cw = cw;
             }
             for (uint32_t c0 = 0; c0 < w; c0 += cw) {
@@ -4017,7 +4013,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                     sub_tiles_bcast_cols_custom(
                         cb_qkt_im,
-                        cb_step_max,
+                        cb_max_scratch,
                         (g * Sq_chunk_t + r) * Wmax + c0,
                         slots[g] * Sq_chunk_t + r,
                         uu_tiles + r * cw,
@@ -4115,10 +4111,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     // before the unpack thread leaves the step: post on the pack thread after its last pack, take on the unpack
     // thread here, so the token never outlives the step.
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
-    if (run_stats) {
-        CircularBuffer(cb_max_scratch).pop_front(stats_cap);
-        CircularBuffer(cb_exp_max_diff).pop_front(stats_cap);
-    }
+    CircularBuffer(cb_max_scratch).pop_front(stats_cap);
+    CircularBuffer(cb_exp_max_diff).pop_front(stats_cap);
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
@@ -4190,8 +4184,6 @@ template <
     uint32_t sol_resident_slots,
     uint32_t sol_res_block_words,
     uint32_t kv_cb_pages,
-    // M4: frozen max (each slot's max is its first step's row max; no per-step max / alpha / rescale).
-    bool sol_static_max,
     typename MaskCtx>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
@@ -4348,8 +4340,7 @@ void sdpa_ring_resident(
             cb_sol_bias,
             v_cb_physical_width_t,
             kQkCap,
-            kStatsCap,
-            sol_static_max>(slots, n_slots, run_cols, n_runs, run_w, initialized, apply_col_bias);
+            kStatsCap>(slots, n_slots, run_cols, n_runs, run_w, initialized, apply_col_bias);
         for (uint32_t g = 0; g < n_slots; ++g) {
             initialized |= 1u << slots[g];
         }
