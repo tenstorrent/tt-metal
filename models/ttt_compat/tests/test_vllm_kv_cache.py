@@ -45,7 +45,7 @@ def _make_ttnn_mock():
 def test_per_layer_allocates_one_kv_pair_per_unique_tensor(dp_model):
     """Each unique ``tensor_idx`` allocates one (k, v) pair; layers that
     share a ``tensor_idx`` reuse the same handles."""
-    from models.tt_transformers.tt import generator_vllm
+    from models.ttt_compat.tt import generator_vllm
 
     # Layers 0, 1, 2 all use tensor_idx=0,1,2 respectively → three buffers.
     per_layer = [
@@ -70,7 +70,7 @@ def test_shared_tensor_idx_reuses_one_buffer(dp_model):
     """Layers sharing a ``tensor_idx`` (HMA tensor sharing) point at the
     same underlying ttnn handles and only one allocation runs per
     ``tensor_idx``."""
-    from models.tt_transformers.tt import generator_vllm
+    from models.ttt_compat.tt import generator_vllm
 
     # Layers 0 and 2 share tensor 0; layer 1 has its own tensor 1.
     per_layer = [
@@ -95,7 +95,7 @@ def test_per_layer_keys_cache_filename_on_tensor_idx(dp_model):
     """Cache filenames must distinguish independent buffers even when
     shapes are identical, so on-disk caches can't collide across layers
     that don't share a ``tensor_idx``."""
-    from models.tt_transformers.tt import generator_vllm
+    from models.ttt_compat.tt import generator_vllm
 
     per_layer = [
         ((4, 2, 32, 64), torch.bfloat16, 0),
@@ -117,7 +117,7 @@ def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
     calling ``allocate_vllm_kv_cache_per_layer`` with a per-layer triple
     list (each layer its own ``tensor_idx``), so existing single-group
     callers keep working unchanged."""
-    from models.tt_transformers.tt import generator_vllm
+    from models.ttt_compat.tt import generator_vllm
 
     shape = (4, 2, 32, 64)
     dtype = torch.bfloat16

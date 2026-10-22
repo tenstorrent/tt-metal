@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
+from models.ttt_compat.tt.common import precompute_mistral_vision_freqs
 
 
 def compute_gather_cos_sin(dhead, max_patches_per_side, theta, scale_factor, orig_context_len):

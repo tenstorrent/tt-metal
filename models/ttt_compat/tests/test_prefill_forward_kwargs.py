@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
 
 BLOCK_SIZE = 32
 MAX_PREFILL_CHUNK_SIZE = 2048

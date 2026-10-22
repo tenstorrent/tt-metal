@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 DTYPE = "bfp8"  # opaque here: the stub's weight_cache_path ignores it; marker stores str(dtype)
 

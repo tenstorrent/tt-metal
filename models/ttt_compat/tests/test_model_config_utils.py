@@ -8,8 +8,8 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model_config import (
     ModelArgs,
     TensorGroup,
     compute_galaxy_padded_vocab_size,
@@ -72,7 +72,7 @@ def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_
     args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
     args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
     args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
-    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.ttt_compat.tt.model_config.is_blackhole", lambda: False)
 
     assert args.use_minimal_prefill_matmul(seq_len)
     assert args.use_minimal_qkv_prefill_matmul(seq_len)
@@ -133,7 +133,7 @@ def test_compute_padded_vocab_size_rejects_invalid_num_devices(expect_error):
     ],
 )
 def test_parse_optimizations_accepts_either_section(optimizations):
-    from models.tt_transformers.tt.model_config import parse_optimizations
+    from models.ttt_compat.tt.model_config import parse_optimizations
 
     assert callable(parse_optimizations(optimizations))
 
@@ -230,7 +230,7 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
     ],
 )
 def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
-    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: False)
+    monkeypatch.setattr("models.ttt_compat.tt.model_config.is_wormhole_b0", lambda: False)
     args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
     rows, cols = ModelArgs.find_grid(args, n_tiles)
     assert rows <= grid_y and cols <= grid_x

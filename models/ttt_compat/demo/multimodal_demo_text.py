@@ -13,11 +13,11 @@ from transformers import AutoProcessor
 
 import ttnn
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 from models.common.llama_models import GeneratorText
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
+from models.ttt_compat.tt.generator import Generator
 
 
 @pytest.mark.parametrize(

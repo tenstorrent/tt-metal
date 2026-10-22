@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import ttnn
-from models.tt_transformers.tt import ccl as tt_transformers_ccl
+from models.ttt_compat.tt import ccl as tt_transformers_ccl
 
 
 @pytest.mark.parametrize("configuration", ["omitted", "none", "custom"])

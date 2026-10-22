@@ -12,8 +12,8 @@ from torch import nn
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.ttt_compat.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
+from models.ttt_compat.tt.prefetcher import Prefetcher
 from ttnn import replicate_tensor_to_mesh_mapper
 
 
@@ -414,7 +414,7 @@ def get_rot_mats_hf(
         layout: Device tensor layout. Decode caches for :class:`HfRotarySetup` use
             ``ROW_MAJOR``; prefill uses the default ``TILE`` layout.
     """
-    from models.tt_transformers.tt.common import precompute_freqs
+    from models.ttt_compat.tt.common import precompute_freqs
 
     # Generate HF-format cos/sin directly
     # precompute_freqs returns cos/sin in shape [seq_len, head_dim//2]

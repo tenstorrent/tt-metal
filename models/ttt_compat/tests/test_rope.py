@@ -4,8 +4,8 @@
 
 import torch
 
-from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
-from models.tt_transformers.tt.rope import RotaryEmbedding, rotary_embedding_factory
+from models.ttt_compat.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
+from models.ttt_compat.tt.rope import RotaryEmbedding, rotary_embedding_factory
 
 
 class TestRope:

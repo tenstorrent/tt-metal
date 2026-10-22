@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 @torch.no_grad()

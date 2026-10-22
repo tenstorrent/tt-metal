@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 
 @pytest.mark.parametrize("trace_enabled", [False, True])

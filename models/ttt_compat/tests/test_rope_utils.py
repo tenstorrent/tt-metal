@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.tt_transformers.tt.rope import get_batch_size_per_device_group
+from models.ttt_compat.tt.rope import get_batch_size_per_device_group
 
 
 @pytest.mark.parametrize(

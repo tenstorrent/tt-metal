@@ -20,7 +20,7 @@ import torch
 
 from models.common.sampling import SamplingParams, slice_sampling_params
 from models.common.sampling.tt_log_probs import LogProbsResult
-from models.tt_transformers.tt.generator import (
+from models.ttt_compat.tt.generator import (
     Generator,
     batched_prefill_padded_batch,
     gather_batched_prefill_samples,
@@ -164,7 +164,7 @@ def test_sequential_layer_pages_select_request_not_physical_slot():
 def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(
     monkeypatch, compact, sample, existing_decode_state, prompt_len, padded_len
 ):
-    from models.tt_transformers.tt import generator as generator_module
+    from models.ttt_compat.tt import generator as generator_module
 
     generator = object.__new__(Generator)
     generator.data_parallel = 1

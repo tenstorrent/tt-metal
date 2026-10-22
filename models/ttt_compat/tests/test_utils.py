@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from loguru import logger
 
-from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
+from models.ttt_compat.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 
 
 def _extract_dtype_from_state_dict(model):

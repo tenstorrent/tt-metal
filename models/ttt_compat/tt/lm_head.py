@@ -9,8 +9,8 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
-from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.common import Mode
 
 
 def _lm_head_cache_file_name(

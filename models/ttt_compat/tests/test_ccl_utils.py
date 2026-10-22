@@ -6,7 +6,7 @@ import pytest
 
 import ttnn
 from models.common import tt_ccl as common_tt_ccl
-from models.tt_transformers.tt import ccl as tt_transformers_ccl
+from models.ttt_compat.tt import ccl as tt_transformers_ccl
 
 
 class FakeMeshDevice:

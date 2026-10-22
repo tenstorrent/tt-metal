@@ -46,7 +46,7 @@ def pytest_runtest_protocol(item, nextitem):
     yield
     if nextitem is not None and getattr(nextitem, "module", None) is getattr(item, "module", None):
         return
-    model_config = sys.modules.get("models.tt_transformers.tt.model_config")
+    model_config = sys.modules.get("models.ttt_compat.tt.model_config")
     if model_config is not None:
         for attr in vars(model_config.ModelArgs).values():
             cache_clear = getattr(attr, "cache_clear", None)

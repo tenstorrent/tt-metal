@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
+from models.ttt_compat.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
 
 
 class TTMistral3PatchMerger(LightweightModule):

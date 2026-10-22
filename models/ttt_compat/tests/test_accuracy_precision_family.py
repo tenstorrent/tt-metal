@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from models.tt_transformers.tt.model_config import ModelOptimizations, PrecisionSetting, TensorGroup
+from models.ttt_compat.tt.model_config import ModelOptimizations, PrecisionSetting, TensorGroup
 
 
 def test_krikri_accuracy_uses_the_llama3_settings():

@@ -10,8 +10,8 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gpt_oss.tt.model import Model as GptOssModel
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
 
 
 @pytest.fixture(autouse=True)

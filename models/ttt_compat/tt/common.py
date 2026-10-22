@@ -901,9 +901,9 @@ def create_tt_model(
     use_prefetcher=False,
     use_hf_rope=False,
 ):
-    from models.tt_transformers.tt.model import Transformer
-    from models.tt_transformers.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.prefetcher import Prefetcher
+    from models.ttt_compat.tt.model import Transformer
+    from models.ttt_compat.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.prefetcher import Prefetcher
 
     num_tensors = 5 if use_prefetcher else 0
     prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None

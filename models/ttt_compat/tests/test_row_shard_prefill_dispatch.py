@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 START, MESSAGE, END, CHANNEL, USER, ASSISTANT = 200006, 200008, 200007, 200005, 1428, 173781
 CHAT = [START, USER, MESSAGE, 62316, 40617, 13, END, START, ASSISTANT]

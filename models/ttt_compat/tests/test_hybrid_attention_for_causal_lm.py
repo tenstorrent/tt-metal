@@ -42,7 +42,7 @@ def test_spec_emits_one_entry_per_layer():
     bounded-sliding-cache decode bug is fixed."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     layers = ["sliding_attention"] * 5 + ["full_attention"] + ["sliding_attention"] * 5
     spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers))
@@ -59,7 +59,7 @@ def test_spec_gemma3_27b_pattern():
     """All layers are FullAttentionSpec while kv cache groups are disabled."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     pattern = ["sliding_attention"] * 5 + ["full_attention"]
     layers = pattern * 10  # 60 layers
@@ -74,7 +74,7 @@ def test_spec_gemma3_27b_pattern():
 def test_spec_gpt_oss_alternating_pattern():
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     layers = ["sliding_attention", "full_attention"] * 12  # 24 layers
     spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers))
@@ -89,7 +89,7 @@ def test_spec_uniform_full_attention_still_works():
     """All-full layer_types → single-type config; spec generation still succeeds."""
     from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(["full_attention"] * 4))
     assert all(isinstance(v, FullAttentionSpec) for v in spec.values())
@@ -97,7 +97,7 @@ def test_spec_uniform_full_attention_still_works():
 
 
 def test_spec_propagates_kv_heads_and_head_size():
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     spec = HybridAttentionForCausalLM.get_kv_cache_spec(
         _make_vllm_config(["full_attention", "sliding_attention"], num_kv_heads=4, head_size=256)
@@ -111,7 +111,7 @@ def test_spec_propagates_kv_heads_and_head_size():
 
 
 def test_spec_missing_layer_types_raises():
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     cfg = _make_vllm_config(["full_attention"])
     cfg.model_config.hf_config.text_config.layer_types = None
@@ -121,7 +121,7 @@ def test_spec_missing_layer_types_raises():
 
 
 def test_spec_unknown_layer_type_raises():
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     cfg = _make_vllm_config(["full_attention", "rotary_chunked_xyz"])
 
@@ -133,7 +133,7 @@ def test_subclass_must_override_prefill_and_decode():
     """The base class's prefill_forward / decode_forward are explicit
     NotImplementedError stubs — subclasses must provide model-specific
     routing that consumes ``page_tables_per_group``."""
-    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+    from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
     instance = HybridAttentionForCausalLM.__new__(HybridAttentionForCausalLM)
 

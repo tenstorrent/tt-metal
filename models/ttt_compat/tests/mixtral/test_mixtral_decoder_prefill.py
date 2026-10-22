@@ -13,14 +13,14 @@ from transformers.models.mixtral.modeling_mixtral import (
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, get_prefill_rot_mat, get_rot_transformation_mat
-from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode, get_prefill_rot_mat, get_rot_transformation_mat
+from models.ttt_compat.tt.decoder import TransformerBlock as TtTransformerBlock
+from models.ttt_compat.tt.model_config import ModelArgs
 
 from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
+# pytest models/ttt_compat/tests/mixtral/test_mixtral_decoder_prefill.py
 
 
 def convert2ref(state_dict):

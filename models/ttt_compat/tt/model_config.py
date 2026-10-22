@@ -24,7 +24,7 @@ from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
 from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
 from models.common.weight_cache import marker_path as _wc_marker_path
 from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     Mode,
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
@@ -39,8 +39,8 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
     rope_scaling_model_factory,
 )
-from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf  # Minimal addition for Mistral vision
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.load_checkpoints import convert_vision_meta_to_hf  # Minimal addition for Mistral vision
+from models.ttt_compat.tt.load_checkpoints import (
     check_checkpoint_index,
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
@@ -55,7 +55,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.ttt_compat.tt.prefetcher import Prefetcher
 
 _HF_LAYER_KEY_RE = re.compile(r"^model\.layers\.(\d+)\.")
 
@@ -585,41 +585,41 @@ class ModelArgs:
     LOCAL_LLAMA_PARAMS = {
         k: str(_REPO_ROOT / v)
         for k, v in {
-            "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
-            "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
-            "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
-            "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-            "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
-            "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+            "LLAMA3_2_1B_PARAMS": "models/ttt_compat/model_params/Llama-3.2-1B-Instruct",
+            "LLAMA3_2_3B_PARAMS": "models/ttt_compat/model_params/Llama-3.2-3B-Instruct",
+            "LLAMA3_1_8B_PARAMS": "models/ttt_compat/model_params/Llama-3.1-8B-Instruct",
+            "LLAMA3_2_11B_PARAMS": "models/ttt_compat/model_params/Llama-3.2-11B-Vision-Instruct",
+            "LLAMA3_1_70B_PARAMS": "models/ttt_compat/model_params/Llama-3.1-70B-Instruct",
+            "LLAMA3_2_90B_PARAMS": "models/ttt_compat/model_params/Llama-3.2-90B-Vision-Instruct",
         }.items()
     }
 
     LOCAL_HF_PARAMS = {
         k: str(_REPO_ROOT / v)
         for k, v in {
-            "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
-            "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
-            "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
-            "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
-            "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-            "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-            "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
-            "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
-            "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
-            "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
-            "Qwen2.5-VL-7B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
-            "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
-            "Phi-4": "models/tt_transformers/model_params/phi-4",
-            "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
-            "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
-            "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
-            "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
-            "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
-            "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
-            "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
-            "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
-            "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
-            "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
+            "Llama-3.1-8B-Instruct": "models/ttt_compat/model_params/Llama-3.1-8B-Instruct",
+            "Llama-3.1-70B-Instruct": "models/ttt_compat/model_params/Llama-3.1-70B-Instruct",
+            "Llama-3.2-1B-Instruct": "models/ttt_compat/model_params/Llama-3.2-1B-Instruct",
+            "Llama-3.2-3B-Instruct": "models/ttt_compat/model_params/Llama-3.2-3B-Instruct",
+            "Llama-3.2-11B-Instruct": "models/ttt_compat/model_params/Llama-3.2-11B-Vision-Instruct",
+            "Llama-3.2-11B-Vision-Instruct": "models/ttt_compat/model_params/Llama-3.2-11B-Vision-Instruct",
+            "Llama-3.2-90B-Instruct": "models/ttt_compat/model_params/Llama-3.2-90B-Vision-Instruct",
+            "Llama-3.2-90B-Vision-Instruct": "models/ttt_compat/model_params/Llama-3.2-90B-Vision-Instruct",
+            "Mistral-7B-Instruct-v0.3": "models/ttt_compat/model_params/Mistral-7B-Instruct-v0.3",
+            "Qwen2.5-VL-3B-Instruct": "models/ttt_compat/model_params/Qwen2.5-VL-3B-Instruct",
+            "Qwen2.5-VL-7B-Instruct": "models/ttt_compat/model_params/Qwen2.5-VL-7B-Instruct",
+            "Qwen2.5-VL-32B-Instruct": "models/ttt_compat/model_params/Qwen2.5-VL-32B-Instruct",
+            "Phi-4": "models/ttt_compat/model_params/phi-4",
+            "Qwen2.5-VL-72B-Instruct": "models/ttt_compat/model_params/Qwen2.5-VL-72B-Instruct",
+            "Qwen3-VL-32B-Instruct": "models/ttt_compat/model_params/Qwen3-VL-32B-Instruct",
+            "Qwen3-32B": "models/ttt_compat/model_params/Qwen3-32B",
+            "EXAONE-4.5-33B": "models/ttt_compat/model_params/EXAONE-4.5-33B",
+            "Qwen2.5-72B-Instruct": "models/ttt_compat/model_params/Qwen2.5-72B-Instruct",
+            "Qwen2.5-32B-Instruct": "models/ttt_compat/model_params/Qwen2.5-32B-Instruct",
+            "Meta-Llama-3-8B": "models/ttt_compat/model_params/Meta-Llama-3-8B",
+            "Meta-Llama-3-8B-Instruct": "models/ttt_compat/model_params/Meta-Llama-3-8B",
+            "Qwen3.6-27B": "models/ttt_compat/model_params/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "models/ttt_compat/model_params/LFM2.5-VL-1.6B",
         }.items()
     }
 

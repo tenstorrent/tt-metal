@@ -13,14 +13,14 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
-from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
-from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode, copy_host_to_device
+from models.ttt_compat.tt.decoder import TransformerBlock
+from models.ttt_compat.tt.distributed_norm import DistributedNorm
+from models.ttt_compat.tt.embedding import Embedding, ScaledEmbedding
+from models.ttt_compat.tt.lm_head import LMHead
+from models.ttt_compat.tt.model_config import TensorGroup
+from models.ttt_compat.tt.rope import HfRotarySetup, RotarySetup
 
 
 def _get_trace_rope_table_len(max_seq_len, trace_prefill_seq_lens):

@@ -11,9 +11,9 @@ from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm as RefRM
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.load_checkpoints import HF_LAYER_NORM_KEYS, load_hf_state_dict_filtered
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.load_checkpoints import HF_LAYER_NORM_KEYS, load_hf_state_dict_filtered
+from models.ttt_compat.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 

@@ -9,8 +9,8 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model import (
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model import (
     Transformer,
     _get_trace_rope_table_len,
     _pad_prefill_rope_tables,

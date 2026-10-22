@@ -6,8 +6,8 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.ttt_compat.tt.common import Mode
 
 
 def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:

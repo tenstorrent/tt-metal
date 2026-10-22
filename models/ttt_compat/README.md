@@ -174,16 +174,16 @@ These are some example commands on how to run the demo. For more information abo
 
 ```
 # Batch-1
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-1"
 
 # Batch-32
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-32"
 
 # Long context with custom parameters
-pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
+pytest models/ttt_compat/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
 
 # Long-context
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and long"
 ```
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
@@ -252,9 +252,9 @@ The `simple_text_demo.py` script includes the following main modes of operation 
 - `long-context`: Runs a large prompt (64k tokens) for a single user
 - `reasoning-1`: Runs a reasoning prompt for a single user (generates up to 15k tokens)
 
-If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/tt_transformers/demo/simple_text_demo.py`. For convenience we list all the supported params below:
+If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/ttt_compat/demo/simple_text_demo.py`. For convenience we list all the supported params below:
 
-- `input_prompts (string)`: input json file with prompts to process. See `models/tt_transformers/demo/*.json` for a list of input files
+- `input_prompts (string)`: input json file with prompts to process. See `models/ttt_compat/demo/*.json` for a list of input files
 - `instruct (bool)`: Whether to use Llama instruct weights or general weights
 - `repeat_batches (int)`: Number of consecutive batches of users to run (default: 1)
 - `max_seq_len (int)`: Maximum context length supported by the model (refer to the table above)
@@ -264,7 +264,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
-- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]. Applied uniformly across all decoders unless an override config exists in `models/tt_transformers/model_params/<model-name>`
+- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]. Applied uniformly across all decoders unless an override config exists in `models/ttt_compat/model_params/<model-name>`
 - `decoder_config_file (DecodersPrecision)`: Fine-grained optimization control that allows specifying a configuration file to set different settings for each decoder.
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
@@ -272,19 +272,19 @@ Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling 
 ---
 
 ### Optimization overrides
-Some models require a unique set of optimizations defined in `models/tt_transformers/model_params/<model-name>`. To override the default optimizations, you can define files named `models/tt_transformers/tt/model_config/PERFORMANCE_DECODER_CONFIG_FILENAME` and `models/tt_transformers/tt/model_config/ACCURACY_DECODER_CONFIG_FILENAME` in the appropriate `models/tt_transformers/model_params/<model-name>` directory to override the `ModelOptimizations.performance` and `ModelOptimizations.accuracy` optimizations respectively. For example, to override the default "performance" optimizations for Llama3.1-8B-Instruct, a file named `performance_decoder_config.json` has been created in the `models/tt_transformers/model_params/Llama3.1-8B-Instruct` directory. The content to write in override files is described in [the custom optimizations section](#custom-optimizations). Optimizations are applied with the following prioritization:
+Some models require a unique set of optimizations defined in `models/ttt_compat/model_params/<model-name>`. To override the default optimizations, you can define files named `models/ttt_compat/tt/model_config/PERFORMANCE_DECODER_CONFIG_FILENAME` and `models/ttt_compat/tt/model_config/ACCURACY_DECODER_CONFIG_FILENAME` in the appropriate `models/ttt_compat/model_params/<model-name>` directory to override the `ModelOptimizations.performance` and `ModelOptimizations.accuracy` optimizations respectively. For example, to override the default "performance" optimizations for Llama3.1-8B-Instruct, a file named `performance_decoder_config.json` has been created in the `models/ttt_compat/model_params/Llama3.1-8B-Instruct` directory. The content to write in override files is described in [the custom optimizations section](#custom-optimizations). Optimizations are applied with the following prioritization:
 1. from override config (if it exists)
 2. from the `optimizations` argument
 
 ---
 
 ### Custom input arguments
-To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/tt_transformers/demo/conftest.py`.
+To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/ttt_compat/demo/conftest.py`.
 
 An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
 
 ```
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0 --max_seq_len 2048
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0 --max_seq_len 2048
 ```
 
 ---
@@ -293,18 +293,18 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 To apply the same settings across all decoders, the `optimizations` argument can be used. `optimizations` offers a wide range of configurations for precision and math fidelity. The user can override the configurations of the data types of the weight tensors and activation tensors and the math fidelity of the kernels that works on those tensors, using the `--optimizations` argument on the command line. For example:
 
 ```
-pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
+pytest models/ttt_compat/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
 ```
 
-Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Centralized performance and accuracy targets are defined in [models/model_targets.yaml](../model_targets.yaml). The `lt` utility can still export markdown snapshots for local Pareto analysis.
+Please refer to [model_config.py](models/ttt_compat/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Centralized performance and accuracy targets are defined in [models/model_targets.yaml](../model_targets.yaml). The `lt` utility can still export markdown snapshots for local Pareto analysis.
 
 To apply non-uniform settings across the decoders, the user can provide a JSON file using the `decoder_config_file` argument to specify the configuration for each decoder. For example
 
 ```
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --decoder_config_file 'models/tt_transformers/demo/config_16_decoders.json'
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-1" --decoder_config_file 'models/ttt_compat/demo/config_16_decoders.json'
 ```
 
-When a component is not specified (e.g., FF2 is missing for decoder 2 in `models/tt_transformers/demo/config_16_decoders.json`), the baseline configuration is used for that component.
+When a component is not specified (e.g., FF2 is missing for decoder 2 in `models/ttt_compat/demo/config_16_decoders.json`), the baseline configuration is used for that component.
 
 ---
 
@@ -314,7 +314,7 @@ See [models/model_targets.yaml](../model_targets.yaml) for expected performance 
 Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
 
 ```
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
+pytest models/ttt_compat/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
 ```
 
 ---

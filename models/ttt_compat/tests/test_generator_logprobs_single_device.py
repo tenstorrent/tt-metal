@@ -4,7 +4,7 @@
 
 """Layer-3 regression for PR #57765: Generator.process_decode_output_host must NOT fall back
 to the ``torch.ones(logits_i.shape)`` placeholder in
-[models/tt_transformers/tt/generator.py](../tt/generator.py) when the sampling op
+[models/ttt_compat/tt/generator.py](../tt/generator.py) when the sampling op
 returned real per-token logprobs. The exact bug this PR fixes was that on 1x1 meshes the
 sampling op emitted ``(tokens, None)`` even with logprobs enabled (the calculator only
 supported 8/32-device meshes), triggering that fallback for every prefill and decode step.
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 # ---------------------------------------------------------------------------
 # Stubs for self.model[i] / self.model_args[i]

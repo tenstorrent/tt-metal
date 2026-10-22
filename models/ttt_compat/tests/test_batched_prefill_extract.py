@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.model import Transformer
 
 
 @pytest.mark.parametrize("mesh_device", [len(ttnn.get_device_ids())], indirect=True)

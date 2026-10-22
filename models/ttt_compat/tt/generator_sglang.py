@@ -10,9 +10,9 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+from models.ttt_compat.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
 def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
