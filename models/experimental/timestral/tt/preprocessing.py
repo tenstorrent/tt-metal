@@ -4,7 +4,7 @@
 """Host-side preparation and postprocessing for one Timestral decode block (no ttnn import).
 
 reference : models/experimental/timestral/reference/src/timestral/model.py (``_predict_context_only``)
-    scaled, loc, scale = causal per-patch normalization + asinh   # float64 statistics
+    scaled, loc, scale = causal per-patch normalization + asinh   # float64 per-patch statistics
     tokens = [values, missing] per patch, then h forecast-query tokens
     time mask: causal over valid keys; with every key valid it is exactly ``tril``, so the
         device runs ``is_causal=True`` with no mask
@@ -79,6 +79,25 @@ def uniform_group_size(group_ids: Tensor) -> int:
     return int(sizes[0])
 
 
+def causal_patch_stats(data: Tensor, observed: Tensor, patch_size: int, minimum_scale: float) -> tuple[Tensor, Tensor]:
+    """Per-patch ``(loc, scale)`` ``(R, L)`` of ``causal_patch_loc_scale`` without global stabilization:
+    the mean and Bessel std of every observed value up to each patch end. float64 per-patch sums of the
+    values shifted by the row's first observed value replace the per-step Welford cumsum."""
+    rows, t = data.shape
+    w = observed.to(torch.float64).reshape(rows, t // patch_size, patch_size)
+    first = observed.to(torch.uint8).argmax(dim=-1, keepdim=True)
+    shift = torch.where(observed.any(dim=-1, keepdim=True), data.gather(-1, first).to(torch.float64), 0.0)
+    xs = (data.to(torch.float64) - shift).reshape_as(w) * w
+    n = w.sum(-1).cumsum(-1)
+    s1 = xs.sum(-1).cumsum(-1)
+    s2 = (xs * xs).sum(-1).cumsum(-1)
+    mean = s1 / n.clamp_min(1.0)
+    variance = (s2 - s1 * mean).clamp_min(0.0) / (n - 1.0).clamp_min(1.0)
+    loc = torch.where(n > 0, shift + mean, 0.0)
+    scale = variance.sqrt().clamp_min(minimum_scale)
+    return loc.to(data.dtype), scale.to(data.dtype)
+
+
 def rope_tables(positions: Tensor, inv_freq: Tensor) -> tuple[Tensor, Tensor]:
     """``SinCosRoPE`` tables ``(rows, S, head_dim)`` for integer ``positions`` ``(rows, S)``."""
     freqs = positions[..., None].to(torch.float32) * inv_freq[None, None, :].to(torch.float32)
@@ -126,13 +145,16 @@ def prepare_inputs(
     inputs = inputs.to(torch.float32)
     observed = observed.to(torch.bool)
 
-    loc, scale = causal_patch_loc_scale(
-        inputs.unsqueeze(1), observed.unsqueeze(1), ps, config.minimum_scale, config.stabilize_with_global
+    if config.stabilize_with_global:
+        loc, scale = causal_patch_loc_scale(inputs.unsqueeze(1), observed.unsqueeze(1), ps, config.minimum_scale, True)
+        loc, scale = loc[:, 0, ::ps], scale[:, 0, ::ps]
+    else:
+        loc, scale = causal_patch_stats(inputs, observed, ps, config.minimum_scale)
+    patch_observed = observed.reshape(rows, ll, ps)
+    values = apply_affine_asinh_masked(
+        inputs.reshape(rows, ll, ps), loc[..., None], scale[..., None], patch_observed, use_asinh=config.use_asinh
     )
-    loc, scale = loc.squeeze(1), scale.squeeze(1)
-    scaled = apply_affine_asinh_masked(inputs, loc, scale, observed, use_asinh=config.use_asinh)
-    values = scaled.reshape(rows, ll, ps)
-    missing = (~observed).reshape(rows, ll, ps).to(scaled.dtype)
+    missing = (~patch_observed).to(values.dtype)
     tokens = torch.zeros(rows, ll + h, 2 * ps, dtype=torch.float32)
     tokens[:, :ll] = torch.cat([values, missing], dim=-1)
 
@@ -153,8 +175,7 @@ def prepare_inputs(
         positions = positions[:1]
     cos, sin = rope_tables(positions, inv_freq)
 
-    anchor_loc = loc.unflatten(-1, (ll, ps))[..., 0][:, ll - 1 : ll]
-    anchor_scale = scale.unflatten(-1, (ll, ps))[..., 0][:, ll - 1 : ll]
+    anchor_loc, anchor_scale = loc[:, ll - 1 : ll], scale[:, ll - 1 : ll]
     return TimestralHostInputs(
         tokens=tokens,
         num_context_patches=ll,

@@ -78,9 +78,12 @@ def upload(device, t: torch.Tensor, *, dtype=None, layout=None):
     """Host tensor -> device DRAM (bf16 tiles by default)."""
     import ttnn
 
+    dtype = ttnn.bfloat16 if dtype is None else dtype
+    # torch rounds fp32 -> bf16 bit-identically to from_torch, about 10x faster.
+    host_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     return ttnn.from_torch(
-        t.detach().to(torch.float32).contiguous(),
-        dtype=ttnn.bfloat16 if dtype is None else dtype,
+        t.detach().to(host_dtype).contiguous(),
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT if layout is None else layout,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

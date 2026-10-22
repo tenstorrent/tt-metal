@@ -33,6 +33,9 @@ from models.experimental.timestral.common.timestral_src import REFERENCE_COMMIT,
 from models.experimental.timestral.tests.golden_helpers import load_checkpoint, series
 
 STEADY_ITERS = 5
+# Back-to-back forwards slow the device down (paper shape: about 470 -> 505 ms over five runs), so
+# device_s would follow host-side speedups; the split idles this long before each timed forward.
+DEVICE_SETTLE_S = 0.3
 CPU_CACHE_DIR = WEIGHTS_DIR / ".cpu_reference"
 _CPU_CACHE: dict[str, tuple[float, torch.Tensor]] = {}
 
@@ -152,16 +155,21 @@ def test_predict_block_perf(mesh_device, shape_name, precision_name):
         steady.append(seconds)
     steady_s = statistics.median(steady)
 
-    start = time.perf_counter()
-    prepared = tt.prepare_inputs(context, observed, group_ids, h)
-    prepare_s = time.perf_counter() - start
-    device_inputs, upload_s = _sync_time(mesh_device, lambda: tt.upload_inputs(prepared))
-    out, device_s = _sync_time(mesh_device, lambda: tt.forward_device(device_inputs))
-    start = time.perf_counter()
-    tt.postprocess(out, prepared)
-    postprocess_s = time.perf_counter() - start
-    ttnn.deallocate(out)
-    tt.deallocate_inputs(device_inputs)
+    splits = []
+    for _ in range(STEADY_ITERS):
+        start = time.perf_counter()
+        prepared = tt.prepare_inputs(context, observed, group_ids, h)
+        prepare_s = time.perf_counter() - start
+        device_inputs, upload_s = _sync_time(mesh_device, lambda: tt.upload_inputs(prepared))
+        time.sleep(DEVICE_SETTLE_S)
+        out, device_s = _sync_time(mesh_device, lambda: tt.forward_device(device_inputs))
+        start = time.perf_counter()
+        tt.postprocess(out, prepared)
+        postprocess_s = time.perf_counter() - start
+        ttnn.deallocate(out)
+        tt.deallocate_inputs(device_inputs)
+        splits.append((prepare_s, upload_s, device_s, postprocess_s))
+    prepare_s, upload_s, device_s, postprocess_s = (statistics.median(column) for column in zip(*splits))
 
     cpu_s, expected = _cpu_reference(model, shape)
     normalized = lambda q: torch.asinh((q - prepared.anchor_loc[..., None]) / prepared.anchor_scale[..., None])
@@ -181,7 +189,7 @@ def test_predict_block_perf(mesh_device, shape_name, precision_name):
         f"\n  speedup:      {cpu_s / steady_s:.1f}x vs CPU"
         f"\n  pcc:          {pcc_norm:.5f} normalized, {pcc_raw:.5f} raw"
         f"\n  split:        prepare {prepare_s:.3f}  upload {upload_s:.3f}  device {device_s:.3f}"
-        f"  postprocess {postprocess_s:.3f}"
+        f"  postprocess {postprocess_s:.3f}  (medians of {STEADY_ITERS}; {DEVICE_SETTLE_S} s idle before each forward)"
     )
     _record(
         {
@@ -202,6 +210,7 @@ def test_predict_block_perf(mesh_device, shape_name, precision_name):
             "upload_s": upload_s,
             "device_s": device_s,
             "postprocess_s": postprocess_s,
+            "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
         }
     )
     assert pcc_norm >= 0.98, f"{shape.name}/{precision_name}: normalized PCC {pcc_norm}"

@@ -17,6 +17,7 @@ from models.experimental.timestral.tests.golden_helpers import SEED, load_checkp
 from models.experimental.timestral.tt.preprocessing import (
     TimestralHostInputs,
     _block_diagonal,
+    causal_patch_stats,
     forecast_token_layout,
     postprocess_head,
     prepare_inputs,
@@ -30,6 +31,7 @@ from timestral.masks import (  # noqa: E402
     build_forecast_time_mask,
     build_two_stream_variate_mask,
 )
+from timestral.scaler import causal_patch_loc_scale  # noqa: E402
 
 R, L, H = 6, 5, 3
 S = L + H
@@ -157,6 +159,29 @@ def test_forecast_token_layout_matches_concat():
         keep, add = forecast_token_layout(rep.forecast_query, L, H)
         got = rep.patch_proj(tokens) * keep + add
     torch.testing.assert_close(got, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("case", ["offset", "missing", "constant"])
+def test_causal_patch_stats_matches_upstream(case):
+    """Per-patch shifted sums give the upstream per-step Welford statistics at every patch end."""
+    ps, rows, t = 8, 16, 64
+    torch.manual_seed(SEED)
+    x = torch.randn(rows, t) * 3 + 5
+    observed = torch.ones(rows, t, dtype=torch.bool)
+    if case == "offset":
+        x = x + 1e6
+    if case == "missing":
+        x = x * torch.linspace(0.1, 50, t)
+        observed = torch.rand(rows, t) > 0.3
+        observed[:4, : 3 * ps + 3] = False  # late start
+        observed[4:6] = False  # never observed
+        observed[6:8, : t - 1] = False  # last step only
+    if case == "constant":
+        x = torch.full((rows, t), 7.25)
+    loc, scale = causal_patch_loc_scale(x.unsqueeze(1), observed.unsqueeze(1), ps, 1e-6, False)
+    got_loc, got_scale = causal_patch_stats(x, observed, ps, 1e-6)
+    torch.testing.assert_close(got_loc, loc[:, 0, ::ps], rtol=1e-6, atol=0.0)
+    torch.testing.assert_close(got_scale, scale[:, 0, ::ps], rtol=1e-6, atol=0.0)
 
 
 def test_uniform_group_size_rejects_ragged_packing(expect_error):
