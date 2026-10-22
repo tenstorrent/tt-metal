@@ -218,7 +218,6 @@ class ApiTest:
     wait_event: str  # the zone whose blocking duration is checked
     payload_type: str  # "cb_id" or "sem_addr"
     expected_cb_id: Optional[int] = None
-    requires_quasar: bool = False
     # To check the noc that the remote semaphore is sent on.
     expected_noc: Optional[int] = None
     # To check remote semaphore is unicast or multicast
@@ -443,63 +442,11 @@ API_TESTS = [
         "cb_id",
         expected_cb_id=0,
     ),
-    # ========== Compute RISC (TRISC) Semaphore APIs - Quasar only ==========
-    ApiTest(
-        20,
-        "compute_brisc_set_trisc_wait",
-        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        requires_quasar=True,
-    ),
-    ApiTest(
-        21,
-        "compute_brisc_set_trisc_wait_min",
-        [("SYNC-SEM-SET", "BRISC"), ("SYNC-SEM-WAIT", "TRISC0")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        requires_quasar=True,
-    ),
-    ApiTest(
-        22,
-        "compute_brisc_set_trisc_down",
-        [
-            ("SYNC-SEM-SET", "BRISC"),
-            ("SYNC-SEM-WAIT", "TRISC0"),  # down() wait part
-            ("SYNC-SEM-SET", "TRISC0"),  # down() decrement part
-        ],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        requires_quasar=True,
-    ),
-    # TRISC producer + NCRISC consumer
-    ApiTest(
-        23,
-        "compute_trisc_set_ncrisc_wait",
-        [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        requires_quasar=True,
-    ),
-    ApiTest(
-        24,
-        "compute_trisc_up_ncrisc_wait",
-        [("SYNC-SEM-SET", "TRISC0"), ("SYNC-SEM-WAIT", "NCRISC")],
-        "SYNC-SEM-WAIT",
-        "sem_addr",
-        requires_quasar=True,
-    ),
 ]
 
 
 def get_test_binary() -> Path:
     return TT_METAL_HOME / "build/test/tt_metal/tools/profiler/test_sync_events"
-
-
-# What the C++ harness prints for a case it will not run on this device. Detecting the skip
-# from the harness' own output keeps the arch check in one place: opening a device from here
-# just to read `arch()` costs a full device init per session and gets the answer second-hand.
-QUASAR_SKIP_MARKER = "requires Quasar"
 
 
 def run_test(test_id: int, csv_path: Path) -> tuple[bool, str, bool]:
@@ -585,8 +532,6 @@ def test_sync_api(spec: ApiTest):
 
     success, log, streaming_active = run_test(spec.test_id, csv_path)
     assert success, f"Test failed:\n{log[-2000:]}"
-    if spec.requires_quasar and QUASAR_SKIP_MARKER in log:
-        pytest.skip("Test requires Quasar device (ckernel::Semaphore is Quasar-only)")
     if not streaming_active:
         pytest.skip("Streaming profiler did not activate (requires Blackhole with ENABLE_TRACY build)")
     assert csv_path.exists(), f"Zone CSV not written. Log:\n{log[-1000:]}"

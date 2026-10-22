@@ -58,6 +58,24 @@ ttnn::Tensor fused_msda_from_offsets_py(
         memory_config);
 }
 
+bool can_use_fused_msda_from_offsets_l1_value_py(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& reference_points,
+    const ttnn::Tensor& sampling_offsets,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    const std::string& reference_mode,
+    bool align_corners) {
+    return ttnn::experimental::can_use_fused_msda_from_offsets_l1_value(
+        value,
+        reference_points,
+        sampling_offsets,
+        attention_weights,
+        spatial_shapes,
+        parse_reference_mode(reference_mode),
+        align_corners);
+}
+
 }  // namespace
 
 void bind_fused_msda(nb::module_& mod) {
@@ -131,9 +149,9 @@ void bind_fused_msda(nb::module_& mod) {
               (x, y) in [0, 1]. float32 keeps the sampling position sub-pixel on wide maps.
               The 4-D box form is rejected, not reinterpreted.
             * :attr:`sampling_offsets`: (B, Q, H, L, P, 2) or packed (B, Q, H, L*P*2)
-              ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the op applies
-              scale_l on the SFPU (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when
-              align_corners is set).
+              ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the op accounts
+              for scale_l (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when align_corners is
+              set).
             * :attr:`attention_weights`: as in fused_msda
             * :attr:`spatial_shapes`: as in fused_msda
             * :attr:`reference_mode`:
@@ -144,8 +162,10 @@ void bind_fused_msda(nb::module_& mod) {
             * :attr:`memory_config`: output memory config
 
         Returns:
-            (B, Q, H*D) ROW_MAJOR bfloat16, identical to calling fused_msda on the
-            equivalent materialized locations.
+            (B, Q, H*D) ROW_MAJOR bfloat16, equivalent to calling fused_msda on the
+            materialized locations, up to rounding.
+
+        Constraints: as fused_msda, including each level's H_l and W_l <= 256.
         )doc";
 
     ttnn::bind_function<"fused_msda_from_offsets", "ttnn.experimental.">(
@@ -161,6 +181,32 @@ void bind_fused_msda(nb::module_& mod) {
         nb::arg("reference_mode") = "level",
         nb::arg("align_corners") = false,
         nb::arg("memory_config") = nb::none());
+
+    const auto* l1_value_fit_doc =
+        R"doc(
+        Return whether fused_msda_from_offsets can safely stage value and output
+        in interleaved L1 under the device's current allocator state.
+
+        The check counts value staged as ROW_MAJOR (not counted again when it is
+        already ROW_MAJOR in L1) and the bfloat16 output, each rounded up to the
+        allocator's per-bank granule, plus the operation's circular buffers, under
+        the 95% program-L1 margin. value may still be TILE or in DRAM. The answer
+        reflects the allocator's current state; call it right before the op and do
+        not cache it.
+        )doc";
+
+    ttnn::bind_function<"can_use_fused_msda_from_offsets_l1_value", "ttnn.experimental.">(
+        mod,
+        l1_value_fit_doc,
+        &can_use_fused_msda_from_offsets_l1_value_py,
+        nb::arg("value"),
+        nb::arg("reference_points"),
+        nb::arg("sampling_offsets"),
+        nb::arg("attention_weights"),
+        nb::arg("spatial_shapes"),
+        nb::kw_only(),
+        nb::arg("reference_mode") = "level",
+        nb::arg("align_corners") = false);
 }
 
 }  // namespace ttnn::operations::experimental::fused_msda::detail
