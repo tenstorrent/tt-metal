@@ -1340,8 +1340,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                     writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), worker_signaler_index, 1);
             } else {
-                // Backward writers never issue the local-slice signal, but retain the writer ABI.
-                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_extra_args, 1, 0, 0);
+                // Backward writers never issue the local-slice signal, but retain the writer ABI. The worker
+                // count MUST equal the signaler's worker-core list length (one forward worker per link): the
+                // kernel's OpSignaler skips num_workers_to_sync * 2 coordinate words, while
+                // push_all_gather_fused_op_rt_args emits one pair per listed core. A count of 1 left the
+                // backward writer's arg cursor 2 * (num_links - 1) words short, so everything parsed after the
+                // signaler block (the neighbour DRAM bank table, 2026-10-21) was read from inside the
+                // receiver-core coordinates: the table came up "enabled" with Tensix coordinates and every
+                // backward payload write was redirected off DRAM while the arrival signal still landed
+                // (fused dense op at PCC 0.71 with the backward half of the ring never written).
+                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                    writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), 0, 0);
             }
         }
         writer_args.append(writer_extra_args);
