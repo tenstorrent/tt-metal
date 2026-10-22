@@ -228,6 +228,7 @@ def _variant(
     blaze_compat=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
+    extra_templates=(),
 ):
     """
     Build the stimulus and the TestConfig for one variant. Returns (config, rows).
@@ -276,6 +277,7 @@ def _variant(
                 reinit_after_copy=reinit_after_copy,
                 blaze_compat=blaze_compat,
             ),
+            *extra_templates,
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -936,8 +938,9 @@ def test_topk_xl_local_sort_early_exit(K, sort_direction):
 
 
 # The topk_large_indices column body (k <= 64): each column keeps the top 64 of its members over all chunks.
-@parametrize(K=[1024], num_chunks=[2, 4], sort_direction=list(TopKSortDirection))
-def test_topk_xl_rebuild_columns(K, num_chunks, sort_direction):
+@parametrize(num_chunks=[2, 4], sort_direction=list(TopKSortDirection))
+def test_topk_xl_rebuild_columns(num_chunks, sort_direction):
+    K = 1024
     result, rows = _run(
         K,
         num_chunks=num_chunks,

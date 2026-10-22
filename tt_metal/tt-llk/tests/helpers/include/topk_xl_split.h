@@ -4,6 +4,7 @@
 //
 // The fused K = 512, 1024 or 2048 topk_xl chunk split across threads: copy and face transposes on MATH, SFPU work on PACK.
 // Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
+// topk_large_indices_split.hpp in ttnn carries the same schedule: change both together.
 
 #pragma once
 
@@ -51,7 +52,8 @@ constexpr bool paired_head(const std::uint32_t num_chunks)
 template <std::uint32_t K>
 constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
 
-// Chunks alternate DEST banks (bank 1 starts at tile 4) so MATH's face moves never share a bank with PACK's SFPU work.
+// Chunks alternate DEST banks (bank 1 starts at tile 4): the two in-flight chunks sit in distinct tiles, and the next row's first
+// chunk can be copied into bank 1 while this row finishes. Stage 6's merge still reads the previous survivor in the other chunk's bank.
 template <std::uint32_t K>
 constexpr std::uint32_t slot_tile(const std::uint32_t from_last)
 {
@@ -264,51 +266,52 @@ inline void wait_start()
     ckernel::sfpu::_topk_xl_split_sfpu_init_<K, true>();
 }
 
-template <std::uint32_t K, std::uint32_t stage>
+// mirror_last: the last chunk's rebuild (stages 7 and 8) writes ascending, as for a mirrored segment of an op.
+template <std::uint32_t K, bool mirror_last, std::uint32_t stage>
 inline __attribute__((always_inline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t num_chunks)
 {
-    using namespace ckernel::sfpu;
     const std::uint32_t tile_offset = chunk_tile<K>(chunk, num_chunks) << 6;
     const bool ascending            = chunk > 0;
+    const bool rebuild_dir          = mirror_last && chunk + 1 == num_chunks;
     switch (stage)
     {
         case 0:
-            _topk_xl_split_stamp_<K>(tile_offset, chunk);
+            ckernel::sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk);
             if constexpr (K == 2048)
             {
-                _topk_xl_split_sort_head_2048_(tile_offset, ascending);
+                ckernel::sfpu::_topk_xl_split_sort_head_2048_(tile_offset, ascending);
             }
             else if constexpr (K == 1024)
             {
-                _topk_xl_split_sort_head_1024_(tile_offset, ascending);
+                ckernel::sfpu::_topk_xl_split_sort_head_1024_(tile_offset, ascending);
             }
             else
             {
-                _topk_xl_split_sort_head_512_<true>(tile_offset, ascending);
+                ckernel::sfpu::_topk_xl_split_sort_head_512_<true>(tile_offset, ascending);
             }
             break;
         case 1:
-            _topk_xl_split_stride2_<K, 4>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_stride2_<K, 4>(tile_offset, ascending);
             break;
         case 2:
-            _topk_xl_split_columns_<K, 0x5050>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_columns_<K, 0x5050>(tile_offset, ascending);
             break;
         case 3:
-            _topk_xl_split_stride2_<K, 8>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_stride2_<K, 8>(tile_offset, ascending);
             break;
         case 4:
-            _topk_xl_split_columns_<K, 0x5500>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_columns_<K, 0x5500>(tile_offset, ascending);
             break;
         case 5:
-            _topk_xl_split_stride2_<K, 16>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_stride2_<K, 16>(tile_offset, ascending);
             break;
         case 6:
-            _topk_xl_split_columns_<K, 0>(tile_offset, ascending);
+            ckernel::sfpu::_topk_xl_split_columns_<K, 0>(tile_offset, ascending);
             if constexpr (K == 512)
             {
                 if (chunk > 0 && num_chunks == 2)
                 {
-                    _topk_xl_split_merge_<K, 64, true>(0);
+                    ckernel::sfpu::_topk_xl_split_merge_<K, 64, true>(0);
                     break;
                 }
             }
@@ -317,150 +320,150 @@ inline __attribute__((always_inline)) void sfpu_stage(const std::uint32_t chunk,
                 switch ((num_chunks - 1 - chunk) & 3)
                 {
                     case 1:
-                        _topk_xl_split_merge_<K, survivor_distance<K>(1), true>(tile_offset);
+                        ckernel::sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(1), true>(tile_offset);
                         break;
                     case 3:
-                        _topk_xl_split_merge_<K, survivor_distance<K>(3), true>(tile_offset);
+                        ckernel::sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(3), true>(tile_offset);
                         break;
                     default:
-                        _topk_xl_split_merge_<K, survivor_distance<K>(0), true>(tile_offset);
+                        ckernel::sfpu::_topk_xl_split_merge_<K, survivor_distance<K>(0), true>(tile_offset);
                         break;
                 }
             }
             break;
         case 7:
-            _topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, false);
+            ckernel::sfpu::_topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
         default:
-            _topk_xl_split_columns_<K, 0>(survivor_tile<K>(chunk, num_chunks) << 6, false);
+            ckernel::sfpu::_topk_xl_split_columns_<K, 0>(survivor_tile<K>(chunk, num_chunks) << 6, rebuild_dir);
             break;
     }
 }
 
 // One SFPU part. K 1024 and 2048 take it as a call so that each stage body exists once whatever the schedule (their pack code
 // fills TRISC2); K 512 keeps every step inline in the straight-line slot.
-template <std::uint32_t K, std::uint32_t stage>
+template <std::uint32_t K, bool mirror_last, std::uint32_t stage>
 inline __attribute__((always_inline)) void sfpu_step_inline(const std::uint32_t chunk, const std::uint32_t num_chunks)
 {
     take_math_token();
-    sfpu_stage<K, stage>(chunk, num_chunks);
+    sfpu_stage<K, mirror_last, stage>(chunk, num_chunks);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
-template <std::uint32_t K, std::uint32_t stage>
+template <std::uint32_t K, bool mirror_last, std::uint32_t stage>
 inline __attribute__((noinline, noclone)) void sfpu_step_call(const std::uint32_t chunk, const std::uint32_t num_chunks)
 {
-    sfpu_step_inline<K, stage>(chunk, num_chunks);
+    sfpu_step_inline<K, mirror_last, stage>(chunk, num_chunks);
 }
 
-template <std::uint32_t K, std::uint32_t stage>
+template <std::uint32_t K, bool mirror_last, std::uint32_t stage>
 inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks)
 {
     if constexpr (K == 512)
     {
-        sfpu_step_inline<K, stage>(chunk, num_chunks);
+        sfpu_step_inline<K, mirror_last, stage>(chunk, num_chunks);
     }
     else
     {
-        sfpu_step_call<K, stage>(chunk, num_chunks);
+        sfpu_step_call<K, mirror_last, stage>(chunk, num_chunks);
     }
 }
 
 // PACK's steps of chunk slot c1 in decode_step's order: chunk c1's stages 0 to 4 between chunk c1 - 1's stages 5 to 8
 // (7 and 8 only for a merged chunk).
-template <std::uint32_t K>
+template <std::uint32_t K, bool mirror_last>
 inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const std::uint32_t num_chunks)
 {
     const bool cur = c1 < num_chunks, prev = c1 > 0, prev_merged = c1 > 1;
     if (cur)
     {
-        sfpu_step<K, 0>(c1, num_chunks);
+        sfpu_step<K, mirror_last, 0>(c1, num_chunks);
     }
     if (prev)
     {
-        sfpu_step<K, 5>(c1 - 1, num_chunks);
+        sfpu_step<K, mirror_last, 5>(c1 - 1, num_chunks);
     }
     if (cur)
     {
-        sfpu_step<K, 1>(c1, num_chunks);
+        sfpu_step<K, mirror_last, 1>(c1, num_chunks);
     }
     if (prev)
     {
-        sfpu_step<K, 6>(c1 - 1, num_chunks);
+        sfpu_step<K, mirror_last, 6>(c1 - 1, num_chunks);
     }
     if (cur)
     {
-        sfpu_step<K, 2>(c1, num_chunks);
+        sfpu_step<K, mirror_last, 2>(c1, num_chunks);
     }
     if (prev_merged)
     {
-        sfpu_step<K, 7>(c1 - 1, num_chunks);
+        sfpu_step<K, mirror_last, 7>(c1 - 1, num_chunks);
     }
     if (cur)
     {
-        sfpu_step<K, 3>(c1, num_chunks);
+        sfpu_step<K, mirror_last, 3>(c1, num_chunks);
     }
     if (prev_merged)
     {
-        sfpu_step<K, 8>(c1 - 1, num_chunks);
+        sfpu_step<K, mirror_last, 8>(c1 - 1, num_chunks);
     }
     if (cur)
     {
-        sfpu_step<K, 4>(c1, num_chunks);
+        sfpu_step<K, mirror_last, 4>(c1, num_chunks);
     }
 }
 
 // Paired head: chunks 0 and 1 stages 0 to 6 side by side, then slot 2 with chunk 1's stages 7 and 8 two steps early.
-template <std::uint32_t K>
+template <std::uint32_t K, bool mirror_last>
 inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks)
 {
-    sfpu_step<K, 0>(0, num_chunks);
-    sfpu_step<K, 0>(1, num_chunks);
-    sfpu_step<K, 1>(0, num_chunks);
-    sfpu_step<K, 1>(1, num_chunks);
-    sfpu_step<K, 2>(0, num_chunks);
-    sfpu_step<K, 2>(1, num_chunks);
-    sfpu_step<K, 3>(0, num_chunks);
-    sfpu_step<K, 3>(1, num_chunks);
-    sfpu_step<K, 4>(0, num_chunks);
-    sfpu_step<K, 4>(1, num_chunks);
-    sfpu_step<K, 5>(0, num_chunks);
-    sfpu_step<K, 5>(1, num_chunks);
-    sfpu_step<K, 6>(0, num_chunks);
-    sfpu_step<K, 6>(1, num_chunks);
+    sfpu_step<K, mirror_last, 0>(0, num_chunks);
+    sfpu_step<K, mirror_last, 0>(1, num_chunks);
+    sfpu_step<K, mirror_last, 1>(0, num_chunks);
+    sfpu_step<K, mirror_last, 1>(1, num_chunks);
+    sfpu_step<K, mirror_last, 2>(0, num_chunks);
+    sfpu_step<K, mirror_last, 2>(1, num_chunks);
+    sfpu_step<K, mirror_last, 3>(0, num_chunks);
+    sfpu_step<K, mirror_last, 3>(1, num_chunks);
+    sfpu_step<K, mirror_last, 4>(0, num_chunks);
+    sfpu_step<K, mirror_last, 4>(1, num_chunks);
+    sfpu_step<K, mirror_last, 5>(0, num_chunks);
+    sfpu_step<K, mirror_last, 5>(1, num_chunks);
+    sfpu_step<K, mirror_last, 6>(0, num_chunks);
+    sfpu_step<K, mirror_last, 6>(1, num_chunks);
     const bool cur = num_chunks > 2;
     if (cur)
     {
-        sfpu_step<K, 0>(2, num_chunks);
+        sfpu_step<K, mirror_last, 0>(2, num_chunks);
     }
-    sfpu_step<K, 7>(1, num_chunks);
+    sfpu_step<K, mirror_last, 7>(1, num_chunks);
     if (cur)
     {
-        sfpu_step<K, 1>(2, num_chunks);
+        sfpu_step<K, mirror_last, 1>(2, num_chunks);
     }
-    sfpu_step<K, 8>(1, num_chunks);
+    sfpu_step<K, mirror_last, 8>(1, num_chunks);
     if (cur)
     {
-        sfpu_step<K, 2>(2, num_chunks);
-        sfpu_step<K, 3>(2, num_chunks);
-        sfpu_step<K, 4>(2, num_chunks);
+        sfpu_step<K, mirror_last, 2>(2, num_chunks);
+        sfpu_step<K, mirror_last, 3>(2, num_chunks);
+        sfpu_step<K, mirror_last, 4>(2, num_chunks);
     }
 }
 
 // Every SFPU part of one Dst section in MATH's step order, survivor left fused in sequence 0.
-template <std::uint32_t K>
+template <std::uint32_t K, bool mirror_last = false>
 inline void pack_row(const std::uint32_t num_chunks)
 {
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
     std::uint32_t c1 = 0;
     if (paired_head<K>(num_chunks))
     {
-        pack_head<K>(num_chunks);
+        pack_head<K, mirror_last>(num_chunks);
         c1 = 3;
     }
     for (; c1 <= num_chunks; c1++)
     {
-        pack_slot<K>(c1, num_chunks);
+        pack_slot<K, mirror_last>(c1, num_chunks);
     }
 }
 
