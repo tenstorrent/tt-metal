@@ -227,7 +227,7 @@ void run_push_and_pop(
     experimental::SetProgramRunArgs(receiver_program, run_args);
 
     const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
-    Program sender_program = CreateProgram();
+    Program sender_program = CreateProgram(mesh_device);
     for (size_t s = 0; s < set.pipes.size(); ++s) {
         experimental::PrefetcherPipe& pipe = set.pipes[s];
         const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe));
@@ -821,7 +821,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
     const uint32_t dram_alignment = allocator->get_alignment(BufferType::DRAM);
     const auto dst_l1_base = static_cast<uint32_t>(align(drisc_pattern_base(*mesh_device_), dram_alignment));
     const std::vector<CoreCoord> senders = mesh_device_->impl().dram_sender_logical_cores(device, kOwnBank);
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     for (const CoreCoord& sender : senders) {
         const KernelHandle kernel = CreateKernel(
             program,
