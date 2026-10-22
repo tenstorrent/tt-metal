@@ -738,3 +738,98 @@ def test_unpack_A_targeted_tensor_shape_coverage(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# Face transpose alone with Float32 unpack to dest: the path the compute API's transpose_wh_init
+# uses for 32-bit data (it transposes within faces on the math thread). Within-face transpose with
+# unpack to dest is wrong on every tile shape, so _llk_unpack_A_init_ asserts it (tt-llk#1702).
+# Only 16x16 and 32x32: _llk_unpack_A_init_ asserts transpose_of_faces on 2-face tiles.
+@pytest.mark.parametrize(
+    "tile_dimensions",
+    [[16, 16], [32, 32]],
+    ids=lambda dims: f"{dims[0]}x{dims[1]}",
+)
+def test_unpack_A_transpose_of_faces_unpack_to_dest(tile_dimensions):
+    formats = input_output_formats([DataFormat.Float32], same=True)[0]
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.num_faces_r_dim * tile_shape.num_faces_c_dim
+    dest_acc = DestAccumulation.Yes
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=tile_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=tile_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
+    golden_tensor = get_golden_generator(TransposeGolden).transpose_faces(
+        src_A, formats.output_format, tile_dimensions, num_faces
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        tile_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/unpack_A_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(StochasticRounding.No),
+            BROADCAST_TYPE(BroadcastType.None_),
+            ACC_TO_DEST(False),
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
+            PARTIAL_FACE(
+                partial_a=False,
+                partial_face_pack=False,
+                partial_b=False,
+                partial_face_math=False,
+            ),
+            DISABLE_SRC_ZERO_FLAG(False),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(Transpose.Yes),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            NUM_BLOCKS(num_blocks),
+            INPUT_DIMENSIONS(1, 1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    # Transpose only moves data, so the result must match the golden exactly.
+    assert torch.equal(
+        golden_tensor.to(format_dict[formats.output_format]), res_tensor
+    ), "Result does not match golden"
