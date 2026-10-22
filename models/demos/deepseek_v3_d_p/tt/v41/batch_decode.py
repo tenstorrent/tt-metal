@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 NEG_INF = float("-inf")
+JOIN_MIN_WIDTH = 8192  # the narrowest join index (tokens); doubles up to the pool's max_seq_len
 
 
 @dataclass
@@ -200,8 +201,17 @@ class TtV41BatchDecoder(TtV41Decoder):
         )
         self.capture = None
         self.eager_count = 0
-        self.join_traces: dict[tuple[int, int], SubDeviceTraceController] = {}
-        self.join_buffers: dict = {}
+        # a join's compressed index is as wide as the prompt's bucket, not the pool: at a 1M pool
+        # the full-width index was ~200 MB of host sharding and copies per join, 65 ms on the path
+        # between two prefills at c32; captures are per (state, slot, width)
+        self.join_widths = []
+        w = JOIN_MIN_WIDTH
+        while w < self.pool.max_seq_len:
+            self.join_widths.append(w)
+            w *= 2
+        self.join_widths.append(self.pool.max_seq_len)
+        self.join_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
+        self.join_buffers: dict[int, dict] = {}  # width -> the index buffers
         self.last_join: dict = {}
 
     # --- users -------------------------------------------------------------------------------------------------
@@ -221,8 +231,9 @@ class TtV41BatchDecoder(TtV41Decoder):
             n = hash_.layout.max_ngram_size - 1
             user.engram_history = hash_.token_map[tokens[-n:].to(torch.int64)].clone()
         t0 = time.time()
-        inputs = self.pool.join_inputs(slot, state)
-        trace = self.join_traces.get((id(state), slot))
+        width = self.join_width(state.start)
+        inputs = self.pool.join_inputs(slot, state, width)
+        trace = self.join_traces.get((id(state), slot, width))
         if trace is None:
             idx = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
             self.pool.join_ops(slot, state, idx)
@@ -230,32 +241,48 @@ class TtV41BatchDecoder(TtV41Decoder):
                 ttnn.deallocate(t)
             mode = "eager"
         else:
-            self._stage_join(inputs)
+            self._stage_join(inputs, width)
             trace.replay(blocking=False)
             mode = "replay"
-        self.last_join = {"mode": mode, "s": round(time.time() - t0, 4)}
+        self.last_join = {"mode": mode, "s": round(time.time() - t0, 4), "width": width}
         self.slots[slot] = user
 
-    def _stage_join(self, inputs: dict) -> None:
-        if not self.join_buffers:
-            self.join_buffers = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
+    def join_width(self, start: int) -> int:
+        """The join index width (tokens) of a prompt of ``start`` tokens: the smallest of ``join_widths`` at or
+        above it."""
+        for w in self.join_widths:
+            if start <= w:
+                return w
+        raise AssertionError(f"a prompt of {start} tokens beyond the pool's {self.pool.max_seq_len}")
+
+    def _stage_join(self, inputs: dict, width: int) -> None:
+        buffers = self.join_buffers.get(width)
+        if buffers is None:
+            self.join_buffers[width] = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
             return
         for k, v in inputs.items():
-            ttnn.copy_host_to_device_tensor(v, self.join_buffers[k])
+            ttnn.copy_host_to_device_tensor(v, buffers[k])
 
-    def capture_join(self, state: V41PrefillState, slot: int) -> None:
-        """Capture the join of ``state`` into ``slot`` (their tensors are persistent; the index buffers are
-        uploaded per join), so later joins of the pair replay it: a join is ~60 small ops, 20 to 80 ms issued
-        eagerly."""
-        key = (id(state), slot)
+    def capture_join(self, state: V41PrefillState, slot: int, width: int | None = None) -> None:
+        """Capture the join of ``state`` into ``slot`` at index ``width`` (default: every width of
+        ``join_widths``; their tensors are persistent, the index buffers are uploaded per join), so later joins
+        of the triple replay it: a join is ~60 small ops, 20 to 80 ms issued eagerly."""
+        if width is None:
+            for w in self.join_widths:
+                self.capture_join(state, slot, w)
+            return
+        key = (id(state), slot, width)
         if key in self.join_traces:
             return
-        self._stage_join(self.pool.join_inputs(slot, state))
+        self._stage_join(self.pool.join_inputs(slot, state, width), width)
+        # each width's scatter is its own program (the row count is a runtime argument of a generic op): compile
+        # it with one eager join before the capture, which cannot load binaries
+        self.pool.join_ops(slot, state, self.join_buffers[width])
         controller = SubDeviceTraceController(self.mesh_device)
         ttnn.synchronize_device(self.mesh_device)
         controller.begin_capture()
         try:
-            self.pool.join_ops(slot, state, self.join_buffers)
+            self.pool.join_ops(slot, state, self.join_buffers[width])
         finally:
             controller.end_capture()
         self.join_traces[key] = controller

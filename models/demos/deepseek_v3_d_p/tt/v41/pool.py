@@ -273,13 +273,17 @@ class V41DecodePool:
         if source in self.index_k_blocks:
             scatter_rows(keys, self.index_k_blocks[source], idx, dst_base=dst_base, stride=stride, rows=rows)
 
-    def join_inputs(self, slot: int, state: V41PrefillState) -> dict:
+    def join_inputs(self, slot: int, state: V41PrefillState, width: int | None = None) -> dict:
         """The host index tensors of ``join``: per rank (the slot's rank gets the rows, the others the sentinel)
         the ring slots of the carry's 128 rows (position ``state.start - 128 + k`` at ring slot ``(step + k) %
         RING``, so the next step's token, at ``step % RING``, replaces position ``start - 128``), per ratio the
-        compressed rows written so far (sentinel past them), the slot's row of the carry buffers."""
+        compressed rows written so far (sentinel past them), the slot's row of the carry buffers. ``width``
+        (tokens, default the pool's ``max_seq_len``; at least ``state.start``): the compressed index covers
+        ``width // ratio`` rows, so a join of a short prompt uploads a short index."""
         rank, u = divmod(slot, self.users)
         assert 0 <= rank < self.sp, slot
+        width = self.max_seq_len if width is None else width
+        assert state.start <= width <= self.max_seq_len, (state.start, width, self.max_seq_len)
 
         def index(n: int, values: torch.Tensor):
             host = torch.full((self.sp, 1, 1, n), -1, dtype=torch.int32)  # -1: the sentinel as uint32
@@ -292,12 +296,12 @@ class V41DecodePool:
             "row": index(1, torch.tensor([u])) if carried else index(1, torch.zeros(0)),
         }
         for ratio in sorted({self.config.compress_ratio(src) for src in self.slots if src >= 0}):
-            inputs[f"comp{ratio}"] = index(self.max_seq_len // ratio, torch.zeros(state.start // ratio))
+            inputs[f"comp{ratio}"] = index(width // ratio, torch.zeros(state.start // ratio))
         return inputs
 
     def join_ops(self, slot: int, state: V41PrefillState, idx: dict) -> None:
         """The device ops of ``join`` on the index buffers ``idx`` (as ``join_inputs``, on device): the same graph
-        for every state of the geometry and every step (capturable per state and slot)."""
+        for every state of the geometry and every step (capturable per state, slot and index width)."""
         assert state.compressed_kv_format == self.kv_format, (state.compressed_kv_format, self.kv_format)
         assert state.geometry.max_seq_len <= self.max_seq_len, (state.geometry.max_seq_len, self.max_seq_len)
         cfg, g = self.config, state.geometry
@@ -305,7 +309,7 @@ class V41DecodePool:
         for src in state.kv:
             ratio = cfg.compress_ratio(src)
             comp, cap = idx[f"comp{ratio}"], self.slots[src].cap
-            n = min(cap, g.compressed_rows(ratio))
+            n = min(cap, g.compressed_rows(ratio), comp.shape[3])  # the index width bounds the rows copied
             base = u * self.slots[src].rows + self.comp_row(src)
             scatter_rows(
                 state.kv[src], self.kv[src], comp, src_base=g.kv_row_of_compressed(0), dst_base=base, stride=1, rows=n

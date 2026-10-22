@@ -332,7 +332,7 @@ class DeepseekV41ForCausalLM:
         self.decoder.join(slot, prompt[: state.start], state)
         logger.info(
             f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
-            f"({self.decoder.last_join.get('mode')})"
+            f"({self.decoder.last_join.get('mode')} width {self.decoder.last_join.get('width')})"
         )
 
     def _capture_prefill(self, state: V41PrefillState, n: int) -> V41PrefillTrace:
