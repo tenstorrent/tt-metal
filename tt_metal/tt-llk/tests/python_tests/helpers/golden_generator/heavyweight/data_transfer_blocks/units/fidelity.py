@@ -28,9 +28,14 @@ from helpers.llk_params import MathFidelity, format_dict
 from ..storage import truncate_mantissa
 from .pack import UnmodelledHardwareWarning
 
-#: Phases each MathFidelity runs. The FPU decomposes a multiply into partial
-#: products (AH_BH, AL_BH, AH_BL, AL_BL) accumulated across passes, and
-#: fidelity chooses how many of them to run.
+#: How many phases a multiply runs at each fidelity.
+#:
+#: The multiplier is narrower than a src datum, so it cannot take two whole
+#: mantissas at once. It cuts each operand into a high half and a low half,
+#: multiplies the halves against each other one pair at a time, and adds the
+#: four partial products up. Each of those is a phase, and fidelity is simply
+#: how many of them you pay for -- LoFi runs one and drops the rest, HiFi4
+#: runs all four.
 FIDELITY_PHASES = {
     MathFidelity.LoFi: 1,
     MathFidelity.HiFi2: 2,
@@ -38,27 +43,36 @@ FIDELITY_PHASES = {
     MathFidelity.HiFi4: 4,
 }
 
-#: Which half of each operand a phase uses, in FPU phase order.
+#: Which half of each operand a phase multiplies, in the order the FPU runs
+#: them. Biggest term first, which is what makes stopping early cheap rather
+#: than catastrophic: a reduced fidelity drops the terms that were
+#: contributing least.
 PHASE_OPERAND_HALVES = (
-    ("hi", "hi"),  # AH_BH — the most significant partial product
-    ("lo", "hi"),  # AL_BH
-    ("hi", "lo"),  # AH_BL
-    ("lo", "lo"),  # AL_BL — the least significant
+    ("hi", "hi"),  # A-high x B-high -- the biggest term, and all LoFi runs
+    ("lo", "hi"),  # A-low  x B-high
+    ("hi", "lo"),  # A-high x B-low
+    ("lo", "lo"),  # A-low  x B-low  -- the smallest, only HiFi4 pays for it
 )
 
 
 def fidelity_phases(math_fidelity: MathFidelity) -> range:
-    """The phase indices a multiply at `math_fidelity` runs.
+    """The phase numbers to loop over for a multiply at `math_fidelity`.
 
-    Trivial on its own; it exists so the invariant that goes with it is written
-    once. **Every phase reads the original srcA/srcB**, not the previous
-    phase's sliced operands. Feeding a phase the previous phase's output zeroes
-    every phase after the first, which turns fidelity into a silent no-op --
-    the result still looks plausible, just more accurate than the device.
+    One table lookup, so the reason it is a function at all is the warning
+    below -- written here once instead of at every call site.
 
-    The operations do not share the loop itself: matmul nests a K-face loop
-    inside each phase (one Dest write per MVMUL) and eltwise does not, so they
-    have genuinely different shapes.
+    **Every phase multiplies the original srcA and srcB.** The tempting mistake
+    is to hand each phase what the one before it produced, as though the halves
+    were a remainder being whittled down. They are not: every phase cuts its
+    halves out of the full operand again. Chain them and each phase after the
+    first comes out zero -- and that does not read as a bug, because the answer
+    still looks reasonable. It is just more accurate than the device, and
+    fidelity has quietly stopped meaning anything.
+
+    Only the phase numbers are shared, not the loop around them. An
+    element-wise multiply writes Dest once per phase; a matmul writes once per
+    phase *per K face*. Those are genuinely different loops, so neither op
+    borrows the other's.
     """
     return range(FIDELITY_PHASES[math_fidelity])
 
