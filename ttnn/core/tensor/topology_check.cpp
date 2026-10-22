@@ -49,6 +49,14 @@ void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_con
         "Topology mesh coords size {} should match distribution shape size {}",
         mesh_coords.size(),
         mesh_shape.mesh_size());
+    TT_FATAL(
+        placements.size() == mesh_shape.dims(),
+        "Tensor topology has {} placement(s) for a {}-dimensional distribution shape ({}): one placement per "
+        "distribution dimension is required. Relabel the tensor with update_tensor_topology() so the label matches "
+        "how the shards were produced.",
+        placements.size(),
+        mesh_shape.dims(),
+        describe(topology));
 
     // Every populated local shard has to be reachable through the label, or whatever keeps one copy per replica group
     // leaves it out. Remote coordinates (multi-host) hold no data on this host and are exempt.

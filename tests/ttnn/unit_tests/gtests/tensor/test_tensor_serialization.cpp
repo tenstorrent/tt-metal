@@ -702,6 +702,18 @@ TEST(TensorSerializationFlatbufferGuardTest, ShardOutsideLabelRejected) {
     expect_dump_rejected(test_file, tensor, "does not cover");
 }
 
+// A label with one placement for a 2-D distribution shape says nothing about the second axis, so it cannot group the
+// shards; it is rejected before any grouping, with or without the byte compare.
+TEST(TensorSerializationFlatbufferGuardTest, PlacementCountMismatchRejected) {
+    auto restore_config = scoped_replica_check(false);
+    TemporaryFile test_file("placement_count_mismatch.tensorbin");
+    const std::vector<MeshCoordinate> coords = all_coords(MeshShape(2, 2));
+    const TensorTopology label(MeshShape(2, 2), Placements{shard_on(0)}, coords);
+    Tensor tensor = make_host_tensor(MeshShape(2, 2), coords, {{0.0f}, {1.0f}, {2.0f}, {3.0f}}, label);
+
+    expect_dump_rejected(test_file, tensor, "one placement per distribution dimension");
+}
+
 // One HostBuffer emplaced at both coordinates shares one copy on disk whatever the label says: the pointer lookup
 // runs before the label-driven group lookup, so under a Shard label (two different replica groups, nothing to
 // compare) the file still holds a single copy. This is the fully replicated mapper path, which aliases one buffer.
