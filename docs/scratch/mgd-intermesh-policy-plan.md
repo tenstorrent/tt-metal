@@ -41,6 +41,11 @@ The design carries the policy per connection, end to end:
    `allowed_port_types` and `preferred_port_types` in `Channels` (section 7). Without them,
    every edge still gets an **implicit tie-break preference** from a built-in cable order,
    added by the mapper like its other implicit preferred constraints (section 7.6).
+6. **Inter-mesh binding moves to the mapper.** With demands and cable rules in the mapper,
+   choosing which physical channels realize each inter-mesh connection moves there too, behind
+   `resolve_inter_mesh_binding` and `TopologyMapper::get_inter_mesh_binding()`. The control
+   plane keeps direction assignment for now, as a pure function every rank runs on the same
+   plan, so the rank-0 gather and broadcast go away (section 10).
 
 So yes, STRICT / RELAXED can be a required constraint instead of a solver argument, for the
 whole solve or per edge. The MGD side and the solver side land together, in one PR (section 9):
@@ -712,7 +717,240 @@ overloads, so the PR doesn't have to touch them.
 - **Regression.** `TopologyMapperUtilsTest`, `MeshGraphDescriptorTests`, control-plane
   suites and the CPU-only fabric suites, unchanged for uniform MGDs.
 
-## 10. Open questions
+## 10. Inter-mesh binding in the topology mapper
+
+With per-pair demands and cable rules in the mapper, the control plane's inter-mesh
+resolution is mostly a second, separate solve of the same problem. This section moves the
+**binding** (which physical channels realize each inter-mesh connection) into the topology
+mapper behind an API, and leaves **direction assignment** (which logical port, N/E/S/W/Z, each
+channel gets) in the control plane for now, as a pure function that can move later.
+
+### 10.1 What the control plane does today
+
+`generate_intermesh_connectivity` (`control_plane.cpp:3580`) runs after the mapper and does
+five things:
+
+| Step | Where | What |
+|---|---|---|
+| Gather | `generate_port_descriptor_table` (`:3737`), `gather_intermesh_cables_for_exit_nodes` (`:3649`) | each rank lists its exit-node cables toward each neighbor rank from the PSD; filters by MPI ownership, by requested exit nodes (device-level), and by `is_ethernet_link_up` (`:3725`); fatals if one src chip cables to more than one dst chip on a neighbor mesh (`:3696`) |
+| Send to rank 0 | `forward_descriptors_to_controller` | MPI gather of every rank's `PortDescriptorTable` |
+| Pair | `pair_logical_intermesh_ports` (`:4144`), rank 0 only | joins both sides of each cable by `connection_hash`; budgets per boundary (mesh-level) or per exit chip (device-level); work list boundary-major (device-level) or round-robin (mesh-level); places channels in three phases: `assign_z` boundaries claim Z, others take N/E/S/W, then overflow onto leftover Z; one neighbor mesh per (chip, direction) |
+| Broadcast and apply | `forward_intermesh_connections_from_controller`, `convert_port_descriptors_to_intermesh_connections` (`:4476`) | every rank maps each `(mesh, port_id, hash)` back to its physical channel |
+| Check and load | `:3613` shortfall, `validate_requested_intermesh_connections` (`:3818`), `rebuild_intermesh_exit_maps_from_connections` (`:3549`), `load_intermesh_connections` | STRICT shortfall throws, RELAXED warns; exit maps; routing tables |
+
+The single-host path, `generate_intermesh_connections_on_local_host` (`:4588`), is a different
+greedy algorithm for the same job.
+
+Meanwhile the mapper has already done most of the thinking. It solves on rank 0 with the full
+PSD (`TopologyMapper::build_mapping`, `topology_mapper.cpp:491`), chooses which chips are exit
+nodes (`add_exit_node_constraints`), and broadcasts the result to every rank. The control plane
+then re-derives the cables from scratch, with its own MPI round trip and its own rules. The
+two can disagree: the mapper can accept a placement that the control plane's pairing can't
+bind (for example the one-dst-chip-per-src fatal, or a direction with too few ports), and the
+failure only shows up after the mapping is fixed.
+
+### 10.2 What moves
+
+| Concern | Today | After |
+|---|---|---|
+| Which cables exist between two mapped meshes | control plane, per rank, then gathered | mapper, from the full PSD on rank 0 |
+| Liveness (`is_ethernet_link_up`) | checked per rank during gather | each rank reports its down inter-mesh channels in the chip info it **already sends** to rank 0 before the solve (`topology_mapper.cpp:515`); the mapper excludes them |
+| Budgets per boundary / per exit chip, STRICT vs RELAXED | `pair_logical_intermesh_ports` | mapper, from the demand table (section 2) |
+| Cable type preference | none | mapper (section 7) |
+| One dst chip per (src chip, neighbor mesh) | fatal at gather | a binding rule: the mapper picks one dst chip per src chip (most allowed channels, then best tier), so cabling that has more than one no longer fails |
+| Port capacity per chip | implicit in `find_free_dir` | an explicit capacity model, shared with the seat solve (10.4) |
+| Placement that can't be bound | throws in the control plane | the mapper rejects the placement and tries the next one, as it already does for intra-mesh failures (`failing_pair_out`) |
+| Direction / port assignment (Z claim, N/E/S/W, overflow) | `pair_logical_intermesh_ports`, rank 0 | **stays in the control plane**, extracted as a pure function run on every rank (10.5) |
+| Applying to ETH channels, routing tables, link health, shortfall policy, validation | control plane | control plane, reading the mapper's binding |
+
+### 10.3 API
+
+```cpp
+// tt-metalium/experimental/fabric/inter_mesh_binding.hpp
+
+// One bound physical channel of an inter-mesh connection.
+struct InterMeshChannelBinding {
+    FabricNodeId src;                 // exit node on the lower mesh id of the boundary
+    FabricNodeId dst;                 // peer exit node
+    tt::tt_metal::AsicID src_asic;
+    tt::tt_metal::AsicID dst_asic;
+    std::uint8_t src_chan = 0;        // physical ETH channels
+    std::uint8_t dst_chan = 0;
+    tt::tt_metal::PortType port_type = tt::tt_metal::PortType::UNKNOWN;
+    std::size_t connection_hash = 0;  // std::hash<ExitNodeConnection>, as today
+    bool strict = true;               // fills the STRICT part of the demand, else the RELAXED part
+};
+
+// Everything decided for one mesh pair.
+struct InterMeshBoundaryBinding {
+    MeshId a;                          // a < b
+    MeshId b;
+    InterMeshChannelDemand demand;     // section 4
+    std::size_t live_channels = 0;     // physical channels available after liveness
+    std::vector<InterMeshChannelBinding> channels;  // chosen, in a deterministic order
+    bool assign_z = false;             // MGD assign_z_direction, for direction assignment
+    std::vector<std::string> warnings; // RELAXED shortfall, zero-link, tier fallbacks
+};
+
+struct InterMeshBindingPlan {
+    std::vector<InterMeshBoundaryBinding> boundaries;  // sorted by (a, b)
+    const InterMeshBoundaryBinding* find(MeshId a, MeshId b) const;
+    std::vector<FabricNodeId> exit_nodes(MeshId from, MeshId to) const;
+    std::size_t strict_shortfall() const;              // > 0 means the plan is invalid under STRICT
+};
+
+// What the binding may use.
+struct InterMeshBindingOptions {
+    std::set<std::size_t> excluded_connection_hashes;  // down links reported by the ranks
+    PortTypeRules port_type_rules;                     // section 7.7
+    PortCapacityModel port_capacity;                   // 10.4
+};
+
+// Pure: no cluster, no MPI. Same inputs, same plan, on any rank or in a CPU-only test.
+InterMeshBindingPlan resolve_inter_mesh_binding(
+    const MeshGraph& mesh_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const std::map<FabricNodeId, tt::tt_metal::AsicID>& fabric_node_to_asic,
+    const InterMeshBindingOptions& options);
+```
+
+`TopologyMapper` calls it after the mapping is final, keeps the plan, broadcasts it with the
+chip info it already broadcasts, and exposes it:
+
+```cpp
+const InterMeshBindingPlan& TopologyMapper::get_inter_mesh_binding() const;
+```
+
+Callers that build a control plane without the mapper (custom fabric topology) call
+`resolve_inter_mesh_binding` themselves with their mapping; it is the same function.
+
+### 10.4 How the binding is chosen
+
+Per boundary, the candidates are the PSD cables between the mapped ASICs of the two meshes,
+minus excluded hashes and disallowed port types, grouped into **links** (one link = one
+(src chip, dst chip) pair and its channels). Then, deterministically (sorted by chip id, then
+channel):
+
+1. **Device-level pins first.** Each device-level connection takes its `count` channels from its
+   pinned link, best cable tier first. A STRICT pin that can't be filled makes the plan invalid;
+   a RELAXED one warns.
+2. **One dst chip per src chip and neighbor mesh.** Among a src chip's links into one neighbor
+   mesh, keep one: most allowed channels, then best tier, then lowest dst chip id.
+3. **Mesh-level demand.** Fill `strict` channels, then up to `relaxed` more, from the remaining
+   links. Order: today's round-robin across boundaries and links (so a shared exit chip is not
+   drained by whichever boundary comes first), with cable tier as the tie-break within a round.
+4. **Capacity.** A chip's channels toward one neighbor mesh must fit in one logical direction,
+   and the neighbors on one chip must fit in its directions, one neighbor per direction (the
+   rule `find_free_dir` enforces today). The `PortCapacityModel` holds, per chip, the
+   directions it has edge ports in and their port counts, built from
+   `MeshGraph::get_mesh_edge_ports_to_chip_id` (`mesh_graph.cpp:560-615`), plus which
+   boundaries are `assign_z`. Before accepting a channel the binding checks that a direction
+   assignment still exists, by calling the direction-assignment function (10.5) on the partial
+   plan. That function is cheap (a few dozen channels per chip at most), so the check costs
+   little.
+5. **Result.** `strict_shortfall()` is the STRICT channels the plan couldn't place. If it is
+   non-zero, the mapper treats the placement as failed and enumerates the next one, the same
+   way `complete_intra_mesh_for_placement` reports a failing mesh pair. Only when no placement
+   binds does the mapper fail, with a message naming the boundary, the demand, and the live
+   channels found.
+
+The seat solve uses the same `PortCapacityModel` when it counts links between two footprints
+(`AdjacencyMatrixCache` / `saturated_link_count`), so a seating it accepts has enough
+placeable channels, not just enough cables.
+
+### 10.5 Direction assignment: extracted now, moved later
+
+The three placement phases of `pair_logical_intermesh_ports` (Z claim for `assign_z`,
+N/E/S/W, overflow onto leftover Z) become a pure function:
+
+```cpp
+// tt_metal/fabric/intermesh_port_assignment.hpp
+// Assigns a logical port (direction, index) on both sides of every bound channel.
+// Pure and deterministic; returns std::nullopt if no assignment exists.
+std::optional<AnnotatedIntermeshConnections> assign_intermesh_ports(
+    const InterMeshBindingPlan& plan, const PortCapacityModel& port_capacity);
+```
+
+In this step the **control plane** calls it, on every rank, on the broadcast-identical plan. No
+rank-0 pairing and no second broadcast are needed, because every rank computes the same
+answer from the same input. The mapper calls the same function only as the feasibility check
+in 10.4 and discards the ports.
+
+Moving direction assignment into the mapper later is then a small change: the mapper keeps the
+ports it already computed, `InterMeshChannelBinding` gains `src_port` / `dst_port`, and the
+control plane stops calling the function. Doing it later is useful for two reasons:
+- the seat solve could then reject placements that have enough channels but no valid
+  direction assignment, instead of only checking capacity per chip;
+- direction choices could join the solve's objective, for example to keep a ring's inter-mesh
+  hops on consistent directions.
+
+### 10.6 What the control plane keeps
+
+`generate_intermesh_connectivity` becomes:
+
+```cpp
+void ControlPlane::generate_intermesh_connectivity() {
+    const auto& plan = topology_mapper_->get_inter_mesh_binding();
+    enforce_inter_mesh_shortfall_policy(plan);       // STRICT throws (FSD: records), RELAXED warns
+    auto intermesh_connections = assign_intermesh_ports(plan, port_capacity_model());
+    TT_FATAL(intermesh_connections.has_value(), "...");  // the mapper already checked it
+    apply_intermesh_connections_to_local_chips(*intermesh_connections, plan);  // ETH chan directions, chan_to_peer
+    validate_requested_intermesh_connections(*intermesh_connections);
+    rebuild_intermesh_exit_maps_from_connections(*intermesh_connections);
+    routing_table_generator_->load_intermesh_connections(*intermesh_connections);
+}
+```
+
+Single-host and multi-host take the same path. Removed:
+`generate_port_descriptor_table`, `gather_intermesh_cables_for_exit_nodes`,
+`get_requested_exit_nodes`, `forward_descriptors_to_controller`,
+`forward_intermesh_connections_from_controller`, `pair_logical_intermesh_ports` (its body moves
+to `assign_intermesh_ports`), `generate_intermesh_connections_on_local_host`, and
+`PortDescriptor` / `PortDescriptorTable`. `convert_port_descriptors_to_intermesh_connections`
+shrinks to `apply_intermesh_connections_to_local_chips`, which looks up channels in the plan
+instead of re-reading the PSD.
+
+**A link that goes down between the solve and fabric init.** Each rank re-checks
+`is_ethernet_link_up` on its own bound channels. A bound channel that is now down is reported
+through `LinkHealth` like any downed link. All ranks agree on the verdict through one
+all-reduce of the down hashes, the only MPI step left in inter-mesh setup, and the STRICT /
+RELAXED / FSD policy then applies on every rank.
+
+### 10.7 Implications
+
+| Area | Effect |
+|---|---|
+| Consistency | The mapper and the control plane can no longer disagree: a placement the mapper accepts is bindable by construction |
+| MPI | One gather and one broadcast of port descriptors go away; the binding rides on the existing chip-info broadcast; one small all-reduce for late link-downs |
+| Single-host | Uses the same algorithm as multi-host. Bindings that the old single-host greedy chose differently can change; the golden report lists them |
+| Cabling with several dst chips per src chip | Works instead of fataling |
+| Testing | `resolve_inter_mesh_binding` and `assign_intermesh_ports` are pure, so CPU-only tests can run them on PSD fixtures without a cluster or MPI |
+| Debugging | The plan can be dumped next to the existing `asic_to_fabric_node_mapping_rank_*.yaml` as `inter_mesh_binding.yaml`: every boundary, its demand, and each bound channel with its cable type |
+| Parity | With uniform policies, no cable data, and cabling that the old path accepted, multi-host bindings are identical to today's: same candidates, same round-robin or boundary-major order, same phases |
+
+### 10.8 Implementation
+
+One PR, after the policy PR (it needs the demand table and the port-type rules):
+
+| Area | Change |
+|---|---|
+| New | `inter_mesh_binding.hpp/.cpp` (types, `resolve_inter_mesh_binding`, `PortCapacityModel`); `intermesh_port_assignment.hpp/.cpp` (`assign_intermesh_ports`, moved from `pair_logical_intermesh_ports`) |
+| Mapper | down-link hashes in the chip info sent to rank 0; binding after the final mapping; rejected placements feed the enumerator; plan in the chip-info broadcast; `get_inter_mesh_binding()`; seat solve uses `PortCapacityModel`; `inter_mesh_binding.yaml` dump |
+| Control plane | the new `generate_intermesh_connectivity`; the removals in 10.6; late link-down all-reduce |
+
+Tests:
+- **Parity.** For every multi-host golden in the control-plane and CPU-only fabric suites, the
+  new path gives the same `AnnotatedIntermeshConnections` as today.
+- **Binding.** Device-level pins filled first; the one-dst-chip rule picks the larger link
+  instead of fataling; round-robin keeps a shared exit chip from being drained; cable tiers
+  break ties; excluded hashes are never bound.
+- **Capacity.** A placement whose channels fit per chip but have no direction assignment is
+  rejected by the mapper, and the next placement is tried.
+- **Multi-host.** Every rank gets the same plan; a link that goes down after the solve gives the
+  same verdict on every rank.
+- **Single-host.** Golden report of bindings that differ from the old single-host greedy.
+
+## 11. Open questions
 
 1. **Device-level RELAXED.** Should the named chips stay pinned as exit nodes (proposed), or
    should RELAXED also let the link move to other chips?
@@ -738,3 +976,10 @@ overloads, so the PR doesn't have to touch them.
     cluster type?
 11. **Strength of the implicit default.** Tie-break below preferred node hits (proposed), or
     above them, so cables can outrank a PGD-preferred layout?
+12. **Binding in the solve or after it.** Section 10 binds after each candidate placement and
+    rejects failures. Should channel selection instead be encoded in the seat solve, so the
+    solver never proposes an unbindable placement?
+13. **When to move direction assignment.** Right after section 10 lands, or only once a solve
+    objective needs it (ring direction consistency)?
+14. **Late link-downs.** One all-reduce and the existing policy (proposed), or re-run the binding
+    on the surviving links, which needs a second broadcast?
