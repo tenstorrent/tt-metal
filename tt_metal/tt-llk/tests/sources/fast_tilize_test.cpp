@@ -238,11 +238,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_UNINIT_BEGIN
     {
         _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
     }
-    LLK_INIT_END;
+    LLK_UNINIT_END;
 }
 
 #endif
@@ -263,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res        = params.buffer_Res;
 #endif
 
-    std::uint32_t use_32bit_dest = formats.unpack_A_dst == ckernel::to_underlying(DataFormat::Tf32);
+    LLK_INIT_CONST std::uint32_t use_32bit_dest = formats.unpack_A_dst == ckernel::to_underlying(DataFormat::Tf32);
     LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")

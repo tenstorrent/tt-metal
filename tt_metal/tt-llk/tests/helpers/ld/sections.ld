@@ -54,18 +54,18 @@ SECTIONS
    */
   PROVIDE (__executable_start = __firmware_start);
   /* The harness code goes ahead of the kernel, so it cannot move it (zone helpers in fixed slots, then main). The
-     loader writes only .init and .text (ElfLoader.SECTIONS_TO_LOAD), so this stays in .init. */
+     loader writes only .init and .text (ElfLoader.SECTIONS_TO_LOAD), so this stays in .init. Wormhole perf TILE_LOOP
+     builds keep only a jump to _start and the zone helpers here; the rest of the harness goes to .llk_spill. */
   .init __firmware_start :
   {
-    /* INIT measurement build (LLK_PERF_INIT_ONLY): the loader starts the core at .init's first word, a jump to _start
-       (kernel_placement.h); then the helpers INIT calls (.text.llk_init_callee.<n>: the functions GCC left out of line,
+    /* Wormhole perf builds: the loader starts the core at .init's first word, a jump to _start (kernel_placement.h).
+       INIT measurement build (LLK_PERF_INIT_ONLY): then the helpers INIT calls (.text.llk_init_callee.<n>: the functions GCC left out of line,
        test_config.py), INIT's body, the zone around it, at llk_init_region_at ahead of the harness, main and the kernel,
        so no code outside INIT moves them (empty in every other build) */
-    *(.text.llk_init_entry)
+    *(.text.llk_entry)
     . = DEFINED(llk_init_region_at) ? llk_init_region_at : .; /* inside the section: an offset from its start */
     *(.text.llk_init_callee .text.llk_init_callee.*)
     *(.llk_init_body)
-    PROVIDE (__llk_init_body_end = .); /* counters.h: math's TRISC_END_PC */
     *(.llk_init_tramp)
     KEEP (*(SORT_NONE(.init)))
     . = ALIGN(256);
@@ -79,17 +79,31 @@ SECTIONS
   } > REGION_CODE
   .text :
   {
-    /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees. */
+    /* run_kernel on a 2 KiB boundary (kernel_placement.h; Wormhole perf TILE_LOOP builds: on its thread's period after
+       the zone helpers), then its out of line callees: first the ones its TILE_LOOP window can run
+       (.text.llk_loop_callee.<name>, test_config.py), by name, so no other function can move them */
+    . = ALIGN(DEFINED(llk_kernel_align) ? llk_kernel_align : 1);
     *(.text.run_kernel)
     . = ALIGN(DEFINED(llk_text_tail_align) ? llk_text_tail_align : 1);
     *(.text.run_kernel.tail)
+    *(SORT_BY_NAME(.text.llk_loop_callee.*))
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
-    *(.llk_init_text) /* out of line INIT blocks (perf.h), last so they move nothing */
     . = ALIGN(DEFINED(llk_quiet_align) ? llk_quiet_align : 1); /* quiet_wait sets it: the hold on a fixed line */
     *(.llk_quiet_text) /* the PACK_ISOLATE peers' hold (profiler.h quiet_wait), after them for the same reason */
   } > REGION_CODE
+  /* Wormhole perf builds: the code no TILE_LOOP window runs (the kernel's other functions, after the libraries; INIT's
+     out of line blocks, perf.h; _start, main and the rest of the harness, test_config.py). The TILE_LOOP build puts it
+     at llk_spill_at, an L1 area of its own (kernel_placement.h; test_config.py loads it), so neither its size nor its
+     content moves a window or takes room from the pads perf/layout.py picks; other builds keep it after .text. */
+  .llk_spill (DEFINED(llk_spill_at) ? llk_spill_at : .) :
+  {
+    *(.llk_text_rest)
+    *(.llk_init_text)
+    *(.llk_harness)
+  }
+  ASSERT(DEFINED(llk_spill_at) ? SIZEOF(.llk_spill) <= llk_spill_size : ADDR(.llk_spill) + SIZEOF(.llk_spill) <= ORIGIN(REGION_CODE) + LENGTH(REGION_CODE), "the code outside the windows does not fit its area")
   .fini :
   {
     KEEP (*(SORT_NONE(.fini)))

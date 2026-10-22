@@ -19,6 +19,7 @@
 // Counter inventory, register map and register primitives are shared with the metal profiler. On Quasar
 // bank_regs() defaults to the TRISC-local window, so every thread reaches the block of its own NEO.
 #include <array>
+#include <type_traits>
 
 #include "perf_counters/hw.h"
 #include "perf_counters/inventory.h"
@@ -619,7 +620,7 @@ inline void read_last_zone()
 #endif // PERF_COUNTERS_COMPILED
 
 // The zone object of both builds: the same rendezvous, with the counter work only in counters on.
-template <PerfRunType RUN_TYPE>
+template <PerfRunType RUN_TYPE, bool LOOP_PAD = false>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
@@ -749,12 +750,14 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER)
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define LLK_IS_TILE_LOOP_(zone_name)   (llk_perf::detail::zone_name_hash(zone_name) == llk_perf::detail::zone_name_hash("TILE_LOOP"))
 #if defined(PERF_COUNTERS_COMPILED)
 #define LLK_PERF_ZONE_ID_(zone_name) llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name))
 #else
 #define LLK_PERF_ZONE_ID_(zone_name) 0u // counters off: no zone needs an id
 #endif
-#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));
+#define MEASURE_PERF_COUNTERS(zone_name) \
+    const llk_perf::perf_counter_scoped<PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)> PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));
 #else
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
@@ -764,10 +767,6 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER) && defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
 namespace llk_perf
 {
-#if defined(LLK_TRISC_MATH)
-extern "C" char __llk_init_body_end[]; // sections.ld
-#endif
-
 // INIT ends inside its body, read at the end of the body (init_measurement_no_zone), so the trampoline's return is not
 // timed: the prefetch stream's run past the body cannot meet the return line in the icache
 inline std::uint32_t init_end_ts[2] = {0, 0};
@@ -797,10 +796,6 @@ __attribute__((always_inline)) inline void init_zone_end()
 template <PerfRunType RUN_TYPE, typename F, bool ZONE_END = false>
 __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
 {
-#if defined(LLK_TRISC_MATH)
-    // math's prefetch stops one line past INIT's body, so the wrong-path fetches after its ret do not hold both MSHRs
-    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = reinterpret_cast<std::uint32_t>(__llk_init_body_end) + 15;
-#endif
     const bool opened = !llk_profiler::is_buffer_full();
     if (opened)
     {
@@ -835,9 +830,6 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
         llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
     }
     ckernel::icache_prefetch_init_end(); // trisc.cpp turned it on; the loop runs without it, as after tt-metal's first wait
-#if defined(LLK_TRISC_MATH)
-    reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE)[TRISC_END_PC_SEC1_PC_ADDR32] = 0;
-#endif
 }
 } // namespace llk_perf
 
@@ -856,6 +848,11 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
     {
 #if defined(LLK_TRISC_MATH)
         ckernel::icache_prefetch_head_start();
+#else
+        // tt-metal reaches unpack / pack init code mid-stream, so INIT starts after a 2-line lead past the cold jal
+        // entry; the restores and jal ahead of it leave the window too
+        asm volatile(".rept 8\n\tnop\n\t.endr" ::: "memory");
+        read_init_end(llk_barrier::init_start_ts);
 #endif
     }
 
