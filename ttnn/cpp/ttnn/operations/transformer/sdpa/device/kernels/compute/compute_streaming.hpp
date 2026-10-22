@@ -162,6 +162,40 @@ constexpr bool kRingStepProfilingPhases = true;
 constexpr bool kRingStepProfilingPhases = false;
 #endif
 
+// Resident-step ablation (TT_SOL_ABLATE=qk|exp|pack5|pv|stats|pack1 -> SOL_ABLATE_<X>, program factory). Timing
+// only, results wrong: the named stage's instructions are skipped while every CB, DEST and token operation stays,
+// so the op's time with a knob on, against the baseline, is that stage's share of the step.
+#ifdef SOL_ABLATE_QK
+constexpr bool kAblateQK = true;
+#else
+constexpr bool kAblateQK = false;
+#endif
+#ifdef SOL_ABLATE_EXP
+constexpr bool kAblateExp = true;
+#else
+constexpr bool kAblateExp = false;
+#endif
+#ifdef SOL_ABLATE_PACK5
+constexpr bool kAblatePack5 = true;
+#else
+constexpr bool kAblatePack5 = false;
+#endif
+#ifdef SOL_ABLATE_PV
+constexpr bool kAblatePV = true;
+#else
+constexpr bool kAblatePV = false;
+#endif
+#ifdef SOL_ABLATE_STATS
+constexpr bool kAblateStats = true;
+#else
+constexpr bool kAblateStats = false;
+#endif
+#ifdef SOL_ABLATE_PACK1
+constexpr bool kAblatePack1 = true;
+#else
+constexpr bool kAblatePack1 = false;
+#endif
+
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
 // llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
@@ -4477,7 +4511,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         const auto flush = [&]() {
             tile_regs_commit();
             tile_regs_wait();
-            sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
+            if constexpr (!kAblatePack1) {
+                sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
+            }
             tile_regs_release();
             uu = 0;
             uu_tiles = 0;
@@ -4500,10 +4536,12 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     }
                     uint32_t in0 = slots[g] * q_chunk_tiles;
                     uint32_t in1 = run_col(g, s) + q0;
-                    for (uint32_t d = 0; d < DHt; ++d) {
-                        sdpa_matmul_block_no_mop(cb_q_in, cb_kt_in, in0, in1, uu_tiles, true, cw, Sq_chunk_t, DHt);
-                        in0++;
-                        in1 += Sk_chunk_t;
+                    if constexpr (!kAblateQK) {
+                        for (uint32_t d = 0; d < DHt; ++d) {
+                            sdpa_matmul_block_no_mop(cb_q_in, cb_kt_in, in0, in1, uu_tiles, true, cw, Sq_chunk_t, DHt);
+                            in0++;
+                            in1 += Sk_chunk_t;
+                        }
                     }
                     unit_g[uu] = static_cast<uint8_t>(g);
                     unit_c0[uu] = static_cast<uint8_t>(col + q0);
@@ -4559,7 +4597,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 any_init |= slot_init(g0 + gg);
             }
-            if (any_init) {
+            if (any_init && !kAblateStats) {
                 if (last_w != 0) {
                     reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
                     last_w = 0;
@@ -4574,7 +4612,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     }
                 }
             }
-            for (uint32_t gg = 0; gg < n_g; ++gg) {
+            for (uint32_t gg = 0; gg < n_g && !kAblateStats; ++gg) {
                 const uint32_t w = W[g0 + gg];
                 if (w != last_w) {
                     if (last_w != 0) {
@@ -4607,7 +4645,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
 
         // ---- S2b: the rescale test (as sdpa_resident_piece_step). ----
-        if (n_init > 0) {
+        if (n_init > 0 && !kAblateStats) {
             // d = new - stored max of every initialized member, DEST batches of up to kDst tiles, packed to the
             // alpha scratch pages 0..nd-1 (nd <= n_slots * Sq_chunk_t <= stats_cap).
             uint32_t nd = 0;
@@ -4663,7 +4701,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         if (rescale) {
             exp_packthread_tile_init<EXP_APPROX_MODE>();
         }
-        for (uint32_t g0 = 0; g0 < n_slots; g0 += alpha_slots_per_acq) {
+        for (uint32_t g0 = 0; g0 < n_slots && !kAblateStats; g0 += alpha_slots_per_acq) {
             const uint32_t n_g = n_slots - g0 < alpha_slots_per_acq ? n_slots - g0 : alpha_slots_per_acq;
             uint32_t n_alpha = 0;
             uint32_t n_copy = 0;
@@ -4768,7 +4806,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             tile_regs_commit();
             tile_regs_wait();
             PACK((llk_pack_relu_config(ReluConfig::zero())));
-            {
+            if constexpr (!kAblateExp) {
                 constexpr int iterations = 32;
                 constexpr VectorMode vector_mode_exp = VectorMode::None;
                 for (uint32_t i = 0; i < uu_tiles; ++i) {
@@ -4776,7 +4814,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             }
-            sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
+            if constexpr (!kAblatePack5) {
+                sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
+            }
             PACK((llk_pack_relu_config(ReluConfig::none())));
             tile_regs_release();
             uu = 0;
@@ -4841,17 +4881,19 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 uint32_t col = 0;
                 for (uint32_t s = 0; s < n_runs[g]; ++s) {
                     const uint32_t rw = run_wd(g, s);
-                    for (uint32_t t = 0; t < rw; ++t) {
-                        sdpa_matmul_block_no_mop(
-                            cb_qkt_im,
-                            cb_v_in,
-                            sidx(g, 0, col + t),
-                            (run_col(g, s) + t) * vDHt + v0,
-                            0,
-                            false,
-                            pv_w,
-                            Sq_chunk_t,
-                            W[g]);
+                    if constexpr (!kAblatePV) {
+                        for (uint32_t t = 0; t < rw; ++t) {
+                            sdpa_matmul_block_no_mop(
+                                cb_qkt_im,
+                                cb_v_in,
+                                sidx(g, 0, col + t),
+                                (run_col(g, s) + t) * vDHt + v0,
+                                0,
+                                false,
+                                pv_w,
+                                Sq_chunk_t,
+                                W[g]);
+                        }
                     }
                     col += rw;
                 }
@@ -4886,9 +4928,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     sdpa_pv_mm_setup(cb_qkt_im, cb_col_identity, false, 1, Sq_chunk_t, W[g]);
                     rs_stride = W[g];
                 }
-                for (uint32_t c = 0; c < W[g]; ++c) {
-                    sdpa_matmul_block_no_mop(
-                        cb_qkt_im, cb_col_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
+                if constexpr (!kAblatePV) {
+                    for (uint32_t c = 0; c < W[g]; ++c) {
+                        sdpa_matmul_block_no_mop(
+                            cb_qkt_im, cb_col_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
+                    }
                 }
             }
             tile_regs_commit();

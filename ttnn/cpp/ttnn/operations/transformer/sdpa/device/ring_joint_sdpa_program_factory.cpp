@@ -3467,6 +3467,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
+    // Resident-step ablation, timing only (results wrong): TT_SOL_ABLATE=qk|exp|pack5|pv|stats|pack1 skips that
+    // stage's instructions in the compact step while every CB, DEST and token operation stays (compute_streaming.hpp,
+    // kAblate*). Not hashed: set it for the whole process.
+    if (sol_resident && std::getenv("TT_SOL_ABLATE")) {
+        std::string knob = std::getenv("TT_SOL_ABLATE");
+        for (auto& ch : knob) {
+            ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
+        }
+        if (!knob.empty()) {
+            compute_kernel.defines.emplace_back("SOL_ABLATE_" + knob, "1");
+            log_warning(tt::LogOp, "RingJoint resident: ablation SOL_ABLATE_{} on (timing only, results wrong)", knob);
+        }
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
