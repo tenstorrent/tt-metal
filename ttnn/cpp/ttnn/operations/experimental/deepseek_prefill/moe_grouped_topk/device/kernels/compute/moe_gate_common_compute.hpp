@@ -33,7 +33,9 @@
 
 // Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus, see the LLK header). Only
 // Blackhole ships it; elsewhere apply_score_func_add_bias keeps the stock softplus / sqrt / add sequence.
-#if __has_include("ckernel_sfpu_moe_gate_sqrt_softplus.h")
+// Gated on the arch, not on the header being found, so a missing header breaks the Blackhole build
+// instead of silently falling back to the stock bf16 softplus.
+#if defined(ARCH_BLACKHOLE)
 #define MOE_GATE_FUSED_SQRT_SOFTPLUS 1
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_moe_gate_sqrt_softplus.h"
@@ -43,12 +45,13 @@ namespace ckernel {
 ALWI void moe_gate_sqrt_softplus_add_bias_tile_init() {
     MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::moe_gate_sqrt_softplus_init)));
 }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void moe_gate_sqrt_softplus_add_bias_tile(uint32_t idst_x, uint32_t idst_bias) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_moe_gate_sqrt_softplus_add_bias,
-        (8 /* ITERATIONS */),
+        (8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst_x,
         idst_bias,
         idst_bias,
@@ -130,31 +133,6 @@ ALWI void gate_topk_rebuild(uint32_t idst, bool ascending, int m_iter, int k, in
         GATE_TOPK_TIE_ORDER>(idst, ascending, m_iter, k, logk, skip_second);
 }
 
-// Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
-// The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
-// every operand in a single format, so the bf16 gate logits/bias are upcast here (lossless) instead
-// of by a separate host-side ttnn.typecast op. When the input is already fp32 this is an identity copy.
-void upcast_tiles(uint32_t cb_in_id, uint32_t cb_out_fp32_id, uint32_t width_tiles) {
-    CircularBuffer cb_in(cb_in_id);
-    CircularBuffer cb_out(cb_out_fp32_id);
-    reconfig_data_format_srca(cb_in_id);
-    copy_init(cb_in_id);
-    pack_reconfig_data_format(cb_out_fp32_id);
-    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_in.wait_front(1);
-        tile_regs_acquire();
-        copy_tile(cb_in_id, 0, 0);
-        tile_regs_commit();
-        cb_in.pop_front(1);
-
-        cb_out.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, cb_out_fp32_id);
-        tile_regs_release();
-        cb_out.push_back(1);
-    }
-}
-
 // Applies the selected router affinity activation to each logits tile. The output CB (historically
 // "sigmoid" scores) holds the unbiased activated scores that the writer later gathers for the weights.
 template <uint32_t score_func>
@@ -193,7 +171,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     }
 }
 
-// apply_score_func + add_bias in one pass, read straight from the raw (bf16 or fp32) input CBs: bf16 is
+// Activation and bias add in one pass, read straight from the raw (bf16 or fp32) input CBs: bf16 is
 // exact through SrcA and fp32 inputs are UnpackToDestFp32, so DEST holds the exact logits and bias, and
 // no fp32 upcast pass is needed. The bias add runs on the SFPU in full fp32 (the FPU add would read the
 // activation through SrcA as TF32 first). Packs the unbiased activated scores (gathered later for the
@@ -271,45 +249,6 @@ void apply_score_func_add_bias(
     }
 }
 
-template <bool dump_biased = false>
-void add_bias(
-    uint32_t cb_sigmoid_scores_id,
-    uint32_t cb_in_bias_id,
-    uint32_t cb_biased_scores_id,
-    uint32_t width_tiles,
-    uint32_t cb_biased_dump_id = 0) {
-    CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
-    CircularBuffer cb_in_bias(cb_in_bias_id);
-    CircularBuffer cb_biased_scores(cb_biased_scores_id);
-    CircularBuffer cb_biased_dump(cb_biased_dump_id);
-    // Perform add bias on sigmoid scores
-    add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
-    cb_sigmoid_scores.wait_front(width_tiles);
-    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_in_bias.wait_front(1);
-        tile_regs_acquire();
-        add_tiles(cb_sigmoid_scores_id, cb_in_bias_id, width_tile, 0, 0);
-        tile_regs_commit();
-        cb_in_bias.pop_front(1);
-
-        cb_biased_scores.reserve_back(1);
-        if constexpr (dump_biased) {
-            cb_biased_dump.reserve_back(1);
-        }
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_biased_scores_id);
-        pack_tile(0, cb_biased_scores_id);
-        if constexpr (dump_biased) {
-            pack_tile(0, cb_biased_dump_id);
-        }
-        tile_regs_release();
-        cb_biased_scores.push_back(1);
-        if constexpr (dump_biased) {
-            cb_biased_dump.push_back(1);
-        }
-    }
-}
-
 template <bool stable_sort = false>
 void process_and_sort_tiles(
     uint32_t cb_biased_scores_id,
@@ -378,36 +317,10 @@ void process_and_sort_tiles(
     }
 }
 
+// Sums the top summed_experts_per_group rows of each group in full fp32: the top tiles are unpacked
+// straight to DEST (cb_top_experts_per_group is UnpackToDestFp32) and summed on the SFPU in index order,
+// not with an FPU add, whose SrcA/SrcB loads would truncate each summand to TF32.
 void sum_top_experts_per_group(
-    const uint32_t cb_top_experts_per_group_id,
-    const uint32_t cb_group_summed_scores_id,
-    uint32_t summed_experts_per_group) {
-    CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
-    CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
-    // sum the top experts_per_group rows for each group
-    compute_kernel_hw_startup(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
-    add_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
-    cb_top_experts_per_group.wait_front(summed_experts_per_group);
-
-    cb_group_summed_scores.reserve_back(1);
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0);
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_group_summed_scores_id);
-    pack_tile(0, cb_group_summed_scores_id);
-    tile_regs_release();
-
-    cb_group_summed_scores.push_back(1);
-    cb_top_experts_per_group.pop_front(summed_experts_per_group);
-}
-
-// sum_top_experts_per_group in full fp32: the top tiles are unpacked straight to DEST
-// (cb_top_experts_per_group is UnpackToDestFp32) and summed on the SFPU in index order, instead of an
-// FPU add whose SrcA/SrcB loads truncate each summand to TF32.
-void sum_top_experts_per_group_fp32(
     const uint32_t cb_top_experts_per_group_id,
     const uint32_t cb_group_summed_scores_id,
     uint32_t summed_experts_per_group) {
