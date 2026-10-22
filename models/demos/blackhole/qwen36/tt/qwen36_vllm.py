@@ -174,8 +174,9 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 
 class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # the spec engine's prefill is text-only: vLLM rejects visual items at admission (HTTP 400)
-        return {"image": 0, "video": 0}
+        # the spec engine prefills image / video requests too (vision rows spliced in the traced prefill); one item per
+        # request, one modality (see TT_Qwen3_5ProcessingInfo)
+        return {"image": 1, "video": 1}
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -1268,6 +1269,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         if not enable_trace:
+            # eager phase: compile + run the vision tower (built by initialize_vllm_model) BEFORE any trace exists, as
+            # the base class does; the base warmup_model_prefill is not called here.
+            self.warmup_vision()
             self._maybe_build_spec_prefix_cache()
         eng = self._engine()
         if enable_trace:
@@ -1322,19 +1326,29 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if not use_pc:
             assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
         starts = [int(x) for x in start_pos] if use_pc and start_pos is not None else None
-        if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
-            raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
+        model = self.model[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])
         rows = []
         for i in range(N):
             L = int(prompt_lens[i]) if prompt_lens is not None else tokens.shape[1]
-            if starts is None:
+            # Multimodal request: the tower runs right before this user's prefill (it stashes model-global grids), as in
+            # the non-spec batched path. Same semantics: video takes precedence, bucket checked against the warmup.
+            has_mm = any(self._has_visual(kwargs, k, i) for k in ("pixel_values", "pixel_values_videos"))
+            vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+            if vision_tokens is not None:
+                # No prefix-cache resume: recompute from 0 (a preempted / resumed request may carry start_pos > 0).
+                out = eng.prefill(
+                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=None, vision_tokens=vision_tokens
+                )
+            elif starts is None:
                 out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1])
             else:  # start_pos = num_computed_tokens (cached prefix, or a preemption resume)
                 out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i])
             rows.append(out.float().reshape(-1))
+        # Zero rope deltas, as the non-spec class: the plugin unpacks (logits, rope_deltas) for an M-RoPE model, and the
+        # per-request delta is model-side (build_request_rope sets rope.rope_delta during the prefill).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):

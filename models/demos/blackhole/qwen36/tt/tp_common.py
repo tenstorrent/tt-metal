@@ -232,10 +232,18 @@ def pack_u32_rows(segments):
 
 def rope_row_index(positions, rope_delta, table_rows):
     """RoPE table row per position for the in-trace lookup: position + rope_delta, clamped into [0, table_rows).
-    Equal to the host-computed cos/sin for every position inside the table. Outside it only rows the engine never
-    reads are affected: positions >= table_rows lie past max_model_len (junk draft / padding window rows that no
-    commit uses), and the engine never passes a negative position (inactive rows run at position 0)."""
-    idx = torch.as_tensor(positions).to(torch.int64).reshape(-1) + int(rope_delta)
+    ``rope_delta`` is a scalar (every position the same) or one delta per position (a list / tensor of the same length:
+    the rows' own M-RoPE deltas). Equal to the host-computed cos/sin for every position inside the table. Outside it only
+    rows the engine never reads are affected: positions >= table_rows lie past max_model_len (junk draft / padding window
+    rows that no commit uses), and the engine never passes a negative position (inactive rows run at position 0)."""
+    pos = torch.as_tensor(positions).to(torch.int64).reshape(-1)
+    if isinstance(rope_delta, (list, tuple, torch.Tensor)):
+        delta = torch.as_tensor(rope_delta).to(torch.int64).reshape(-1)
+        if delta.numel() != pos.numel():
+            raise ValueError(f"rope_row_index: {delta.numel()} deltas for {pos.numel()} positions")
+    else:
+        delta = int(rope_delta)
+    idx = pos + delta
     return idx.clamp(0, int(table_rows) - 1).to(torch.int32)
 
 

@@ -37,6 +37,12 @@ AUX_NUM_VALID, AUX_ACTIVE, AUX_DECLINED, AUX_KEEP, AUX_P0, AUX_CONSTS = range(6)
 CONST_SCRATCH, CONST_ROPE_DELTA, CONST_ROPE_ROWS, CONST_B, CONST_K = range(5)
 
 
+def signed_rope_delta(word):
+    """The rope delta back from its fused-aux uint32 word (fused_accept_aux_host stores ``int(delta) & 0xFFFFFFFF``)."""
+    w = int(word) & 0xFFFFFFFF
+    return w - 2**32 if w >= 2**31 else w
+
+
 def fused_fit_mode(start0, capacity, active, K):
     """Per row 'fits_all' | 'fits_none' | 'mixed': draft_rows_fit (SE:431, p + 1 + K < capacity) for the anchor
     p = start0 + m over every m in 0..K. An inactive row is reported 'fits_none' (it declines whatever m is)."""

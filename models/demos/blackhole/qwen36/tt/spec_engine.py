@@ -64,13 +64,16 @@ from models.demos.blackhole.qwen36.tt.spec_chain import (
 )
 from models.demos.blackhole.qwen36.tt.spec_fused import (
     AUX_ACTIVE,
+    AUX_CONSTS,
     AUX_DECLINED,
     AUX_KEEP,
     AUX_P0,
+    CONST_ROPE_DELTA,
     FUSED_AUX_ROWS,
     FusedGreedyDevice,
     fused_accept_aux_host,
     fused_greedy_walk,
+    signed_rope_delta,
 )
 from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
     FusedSampledDevice,
@@ -187,6 +190,21 @@ def _anchor_selector_old(m, B, T):
     return sel
 
 
+def _row_vision_of(eng):
+    """engine row -> the packed vision rows of the multimodal request in it (absent for text rows): what a re-prefill of
+    the row needs. Lives in the engine's __dict__ so an engine built without __init__ (tests) has it too."""
+    return eng.__dict__.setdefault("_row_vision_map", {})
+
+
+def _record_row_delta(eng, row, delta):
+    """Store engine row ``row``'s M-RoPE delta (request-level: 0 for text, the grid's rope_delta for a multimodal prompt)
+    where the verify / draft / join builders read it (model.set_slot_rope_delta). No-op for a model without it."""
+    model = getattr(eng, "model", None)
+    f = getattr(model, "set_slot_rope_delta", None)
+    if f is not None and getattr(model, "_slot_rope_delta", None) is not None:
+        f(int(row), 0 if delta is None else int(delta))
+
+
 def join_warm_plan(fresh_now, tokens, pt):
     """Host plan of the join's MTP slot Tp-1 warm (QWEN36_SPEC_JOIN_FAST): for the fresh rows in ascending engine-row
     order, (rows, first tokens, slots Tp-1, page-table rows [R, nb] int32). Row i is exactly what the per-row
@@ -204,14 +222,20 @@ def join_mtp_warm_host(fresh_now, tokens, pt, phys, B, scratch_block, rope_delta
     of fresh engine row u. Pack rows (uint32, as pack_u32_rows): 0 tokens [B]; 1 positions [B]; 2 RoPE table rows [B].
     A fresh row carries its first token, slot Tp-1 and its page-table row (join_warm_plan); every other physical row
     carries token 0, position 0 and the scratch block in every table entry, so its KV write lands in the scratch block.
+    ``rope_delta``: a scalar (every row) or one M-RoPE delta per ENGINE row (a list indexed like ``fresh_now``: a fresh row
+    takes its own, the padding rows 0).
     """
     rows, toks, slots, pt_rows = join_warm_plan(fresh_now, tokens, pt)
     tok, pos = [0] * B, [0] * B
+    per_row = isinstance(rope_delta, (list, tuple, torch.Tensor))
+    dl = [0] * B if per_row else int(rope_delta)
     table = torch.full((B, pt_rows.shape[1]), int(scratch_block), dtype=torch.int32)
     for i, u in enumerate(rows):
         p = int(phys[u])
         tok[p], pos[p], table[p] = toks[i], slots[i], pt_rows[i]
-    ridx = rope_row_index(pos, rope_delta, table_rows)
+        if per_row:
+            dl[p] = int(rope_delta[u])
+    ridx = rope_row_index(pos, dl, table_rows)
     return pack_u32_rows([tok, pos, ridx.tolist()]), table
 
 
@@ -1197,6 +1221,53 @@ class MTPSpecEngine:
         for u in rows:
             self._stage_table(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
+    # --- per-engine-row M-RoPE deltas (multimodal rows keep their own delta; text rows 0) ---
+    def _row_deltas(self, default=None):
+        """The rows' M-RoPE deltas: a list [B] of ints (engine row u = device row u; what the prefill recorded with
+        model.set_slot_rope_delta), or, for a model without the per-row vector (a test fake), the scalar
+        ``rope.rope_delta`` (``default`` when given), as before."""
+        f = getattr(self.model, "_spec_row_deltas", None)
+        if f is not None:
+            return f(self.B)
+        return int(self.model.rope.rope_delta if default is None else default)
+
+    def _has_row_deltas(self):
+        return getattr(getattr(self, "model", None), "_spec_row_deltas", None) is not None
+
+    def _row_delta(self, u):
+        d = self._row_deltas()
+        return int(d[u]) if isinstance(d, list) else int(d)
+
+    def _mtp_rd_kw(self, rows):
+        """kwargs of model.ttnn_mtp_decode_forward for the engine ``rows`` (None = delta 0): their own deltas; {} for a model
+        without the per-row vector (the call is then what it always was)."""
+        if not self._has_row_deltas():
+            return {}
+        return {"rope_deltas": [0 if u is None else self._row_delta(u) for u in rows]}
+
+    def _row_kw(self, u):
+        """``row=`` keyword of _warm_mtp_last for engine row ``u`` (only a model with per-row deltas needs it)."""
+        return {"row": u} if self._has_row_deltas() else {}
+
+    def _pos_rd_kw(self, per_row):
+        """Positional ``deltas`` argument of model._rope_tp_cos_sin_decode_torch for a vector of B * ``per_row`` rows
+        (user-major): each row's delta repeated ``per_row`` times; {} for a model without the per-row vector."""
+        if not self._has_row_deltas():
+            return {}
+        return {"deltas": [x for x in self._row_deltas() for _ in range(per_row)]}
+
+    def _live_rope_delta(self, active):
+        """(delta, mixed) for a fused / chain step: the delta word of the device-built rope rows. It is one scalar for the
+        whole step, so it is the COMMON delta of the live rows; ``mixed`` is True when the live rows differ (the step must
+        then take the host-built path, which has a delta per row). No live row: (0, False)."""
+        d = self._row_deltas()
+        if not isinstance(d, list):
+            return int(d), False
+        live = {d[u] for u in range(self.B) if bool(active[u])}
+        if len(live) > 1:
+            return 0, True
+        return (live.pop() if live else 0), False
+
     def _warm_mtp_last_rows(self, fresh_now, tokens, pt):
         """QWEN36_SPEC_JOIN_FAST: _warm_mtp_last for every fresh row. One row: the old single-row call. Two or more:
         ONE drafter decode over R rows (hidden rows concatenated, tokens / slots Tp-1 / page-table rows in the
@@ -1205,7 +1276,7 @@ class MTPSpecEngine:
         rows, toks, slots, pt_rows = join_warm_plan(fresh_now, tokens, pt)
         if len(rows) == 1:
             u = rows[0]
-            self._warm_mtp_last(self._last_hidden[u], toks[0], slots[0], self._mtp_pt_rows[u])
+            self._warm_mtp_last(self._last_hidden[u], toks[0], slots[0], self._mtp_pt_rows[u], **self._row_kw(u))
             return
         mesh = self.mesh
         parts = [ttnn.to_layout(self._last_hidden[u], ttnn.ROW_MAJOR_LAYOUT) for u in rows]
@@ -1218,7 +1289,9 @@ class MTPSpecEngine:
             device=mesh,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
-        _, h_next = self.model.ttnn_mtp_decode_forward(hid, toks, slots, pt_tt, need_logits=False)
+        _, h_next = self.model.ttnn_mtp_decode_forward(
+            hid, toks, slots, pt_tt, need_logits=False, **self._mtp_rd_kw(rows)
+        )
         for t in (*parts, cat, hid, pt_tt, h_next):
             ttnn.deallocate(t)
 
@@ -1314,7 +1387,17 @@ class MTPSpecEngine:
     def _replay_mtp_warm(self, fresh_now, tokens, pt):
         """Stage the pack and the page table, enqueue the MTP warm trace (no host sync)."""
         phys = {u: self._mtpw_phys[id(self._last_hidden[u])] for u in fresh_now}
-        pack, table = join_mtp_warm_host(fresh_now, tokens, pt, phys, self.B, self._scratch_block, *self._mtpw_rope)
+        # the rows' own deltas now (the scalar captured at trace prep goes stale at the next multimodal prefill)
+        pack, table = join_mtp_warm_host(
+            fresh_now,
+            tokens,
+            pt,
+            phys,
+            self.B,
+            self._scratch_block,
+            self._row_deltas(self._mtpw_rope[0]),
+            self._mtpw_rope[1],
+        )
         self._stage(pack, self._mtpw_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage_table(table, self._mtpw_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.execute_trace(self.mesh, self._mtpw_trace, cq_id=0, blocking=False)
@@ -2203,6 +2286,8 @@ class MTPSpecEngine:
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
         self._prompts.pop(slot, None)
+        _row_vision_of(self).pop(slot, None)
+        _record_row_delta(self, slot, None)  # the row's M-RoPE delta goes with its request (text rows are 0)
         self._fresh_dirty.discard(slot)
         reset_draft_skip(self, slot)
         # the leaving request may be why other rows' drafts were withheld: offer them again
@@ -2226,7 +2311,12 @@ class MTPSpecEngine:
             self._chain_drop("slot_change")  # the device remap moves the engine rows the chain state describes
         for dn in self._gdn:
             dn.remap_spec_slots(idx)
+        if (
+            getattr(getattr(self, "model", None), "_slot_rope_delta", None) is not None
+        ):  # the per-row M-RoPE deltas move with the rows
+            self.model.remap_slot_rope_delta(idx)
         new_of = {old: new for new, old in enumerate(idx)}
+        self.__dict__["_row_vision_map"] = {new_of[u]: v for u, v in _row_vision_of(self).items()}
         self._last_hidden = [self._last_hidden[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
@@ -2242,13 +2332,17 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Prefill
     # --------------------------------------------------------------------- #
-    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
+    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None):
         """Eager prefill of runner slot ``slot`` (engine row _phys[slot]), warming its MTP KV; returns host float
         logits [vocab]. Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
         The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``.
         ``start_pos`` (vLLM num_computed_tokens; None = not part of prefix caching, the unchanged path): with a GDN
         prefix-state cache on the model (B > 1) the prefill resumes from a snapshot <= start_pos (see
-        Qwen36Model.plan_spec_prefix) on the traced fast path and on the eager path; B == 1 recomputes from 0."""
+        Qwen36Model.plan_spec_prefix) on the traced fast path and on the eager path; B == 1 recomputes from 0.
+        ``vision_tokens`` (multimodal request: the packed vision rows the tower produced; None = text): spliced into the
+        image/video placeholder positions and the M-RoPE table is built with the grid. Such a request never uses the
+        prefix cache (no plan, no snapshot save / lookup): the caller passes start_pos=None, and a start_pos given anyway
+        is ignored. The drafter keeps the placeholder embedding at those positions."""
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
             self._chain_drop("prefill")
@@ -2263,9 +2357,11 @@ class MTPSpecEngine:
         if len(getattr(self, "_buckets", None) or ()) > 1:  # QWEN36_SPEC_BUCKETS
             self._claim_low_row(slot)
         self._row_gens()[self._phys[int(slot)]] += 1
-        return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos)
+        # text: the call is unchanged (no vision kwarg)
+        vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
+        return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos, **vis_kw)
 
-    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
+    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None):
         """``prefill`` of engine row ``slot``."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
@@ -2279,6 +2375,12 @@ class MTPSpecEngine:
         self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
             () if start_pos is None else (int(start_pos),)
         )
+        # A multimodal row keeps its vision rows until it is released / joined: a re-prefill (_reprefill,
+        # _reconcile_fresh_rows) needs them. A text prefill on the row clears a previous request's.
+        if vision_tokens is None:
+            _row_vision_of(self).pop(slot, None)
+        else:
+            _row_vision_of(self)[slot] = vision_tokens
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
         assert Tp + self.T <= table_capacity(
             cap_blocks, self.block_size
@@ -2289,7 +2391,13 @@ class MTPSpecEngine:
         prompt = torch.tensor([prompt_list], dtype=torch.int32)
         captured_row = [False]
         # Prefix cache (B > 1, start_pos given, cache built): (s, (cache, slot) | None, save points) or None.
-        plan = model.plan_spec_prefix(prompt[0], Tp, start_pos) if start_pos is not None and self.B > 1 else None
+        # A multimodal request bypasses the prefix cache (mirrors Qwen36Model.prefill_paged_slots): no lookup, no saves.
+        plan = (
+            model.plan_spec_prefix(prompt[0], Tp, start_pos)
+            if start_pos is not None and self.B > 1 and vision_tokens is None
+            else None
+        )
+        vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
         # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
         # to prompt[:b+1] so padded bucket rows never fuse (and write drafter KV for) tokens past b.
         mtp_prompt = [prompt_list]
@@ -2307,13 +2415,14 @@ class MTPSpecEngine:
         logits_dev = None
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
+            fast_kw.update(vis_kw)
             logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
-            logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk)
+            logits_dev = model.prefill_traced_chunked(prompt, pt_rec, Tp, on_chunk=_on_chunk, **vis_kw)
         if logits_dev is None:
             if plan is None:
-                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot)
+                logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw)
             else:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
@@ -2324,9 +2433,24 @@ class MTPSpecEngine:
             ttnn.deallocate(logits_dev)
         self._fresh[slot] = Tp
         self._active.add(slot)
+        _record_row_delta(
+            self, slot, None if vision_tokens is None else getattr(getattr(model, "rope", None), "rope_delta", 0)
+        )
         return lt.reshape(-1)[: self.vocab].float()
 
-    def _prefill_fast(self, slot, prompt_list, prompt, pt_row, Tp, on_chunk, captured_row, plan=None, mtp_prompt=None):
+    def _prefill_fast(
+        self,
+        slot,
+        prompt_list,
+        prompt,
+        pt_row,
+        Tp,
+        on_chunk,
+        captured_row,
+        plan=None,
+        mtp_prompt=None,
+        vision_tokens=None,
+    ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
         Returns host float logits [vocab], or None when no trace serves the prompt (the caller runs the eager path;
@@ -2338,7 +2462,10 @@ class MTPSpecEngine:
         traced chunk replays + short-trace tail as an uncached prompt (chunk_start = the segment's absolute start,
         GDN state carried). The scratch is snapshotted after every segment that ends at a save point pi. The drafter
         KV of [s, Tp) is warmed in the same replays (on_chunk / the spec short trace); [0, s) is already in the
-        request's cached blocks (see doc 40)."""
+        request's cached blocks (see doc 40).
+
+        ``vision_tokens`` (multimodal prompt; plan is None then): the packed vision rows, spliced per segment by
+        _fast_segment."""
         model = self.model
         batched = self.B > 1
         if plan is None:
@@ -2350,6 +2477,7 @@ class MTPSpecEngine:
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             if plan is not None:
+                assert vision_tokens is None, "a multimodal prompt bypasses the prefix cache"
                 model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
                 if s0 > 0:
                     src[0].restore(src[1])
@@ -2372,6 +2500,7 @@ class MTPSpecEngine:
                     on_chunk=on_chunk,
                     captured_row=captured_row,
                     decline_ok=(i == 0 and s0 == 0),
+                    **({} if vision_tokens is None else dict(vision_tokens=vision_tokens)),
                 )
                 if host is None:
                     return None  # only the first from-0 segment may decline, before any side effect
@@ -2408,33 +2537,66 @@ class MTPSpecEngine:
             logger.info(msg)
         return host
 
-    def _fast_segment(self, slot, mtp_list, prompt, pt_row, a, b, final, carry, on_chunk, captured_row, decline_ok):
+    def _fast_segment(
+        self,
+        slot,
+        mtp_list,
+        prompt,
+        pt_row,
+        a,
+        b,
+        final,
+        carry,
+        on_chunk,
+        captured_row,
+        decline_ok,
+        vision_tokens=None,
+    ):
         """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
         chunk trace, the tail by the spec short trace (drafter warm-up fused) or the eager masked bucket. carry: continue
         the bound GDN state (a > 0 or a restored snapshot) instead of zeroing it. ``mtp_list`` = the token list the
         drafter fuses from (the whole prompt for the final segment, prompt[:b+1] otherwise). Returns host float logits
-        [vocab] (meaningful for the final segment only), or None when decline_ok and no trace serves a short segment."""
+        [vocab] (meaningful for the final segment only), or None when decline_ok and no trace serves a short segment.
+        ``vision_tokens``: the multimodal prompt's packed vision rows; each replay / chunk splices the rows after the
+        image placeholders before its own start (model._vis_row_offset_for over the whole prompt)."""
         model = self.model
+        vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
         chunk = model._chunked_chunk_size or 2048
         n = b - a
         num_full, tail = n // chunk, n % chunk
         if num_full == 0:
             # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
             # from what it gets, which must be the whole prompt when later segments follow.
-            host = self._replay_spec_short(slot, mtp_list, prompt[:, a:], pt_row, n, a, carry, captured_row)
+            host = self._replay_spec_short(
+                slot,
+                mtp_list,
+                prompt[:, a:],
+                pt_row,
+                n,
+                a,
+                carry,
+                captured_row,
+                **self._vis_replay_kw(prompt, a, vision_tokens),
+            )
             if host is None:
                 if decline_ok:
                     return None  # no spec short trace for this length / trash-block collision: nothing staged, eager
                 pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
                 logits, hidden = model.prefill_masked_bucket(
-                    prompt[:, a:b], pt_rec, actual_len=n, chunk_start=a, return_hidden=True
+                    prompt[:, a:b],
+                    pt_rec,
+                    actual_len=n,
+                    chunk_start=a,
+                    return_hidden=True,
+                    **self._vis_replay_kw(prompt, a, vision_tokens),
                 )
                 on_chunk(hidden, a, n)
                 ttnn.deallocate(hidden)
                 host = self._read_replicated_logits(logits)
             return host
         if a == 0 and not carry:
-            model._build_request_rope(prompt, None)  # text: 1D RoPE, rope_delta 0 (the chunk loop slices it)
+            # text: 1D RoPE, rope_delta 0; multimodal: M-RoPE with the grid (the chunk loop slices it)
+            model._build_request_rope(prompt, vision_tokens)
         pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)
         cs = a + num_full * chunk
         tail_tr = model._short_trace_for(tail) if tail >= 3 else None
@@ -2444,11 +2606,21 @@ class MTPSpecEngine:
             # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
             # runs inside it (its tail slice is right for start == 0).
             logits = model._prefill_traced_chunked_tp(
-                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True
+                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True, **vis_kw
             )
             return self._read_replicated_logits(logits)
         model._prefill_traced_chunked_tp(
-            prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=False, start=a, reset_gdn=not carry
+            prompt,
+            pt_rec,
+            b,
+            num_full,
+            chunk,
+            tail,
+            on_chunk=on_chunk,
+            run_tail=False,
+            start=a,
+            reset_gdn=not carry,
+            **vis_kw,
         )
         if tail == 0:
             if (
@@ -2461,17 +2633,52 @@ class MTPSpecEngine:
             return self._read_replicated_logits(logits)
         host = None
         if tail_tr is not None:
-            host = self._replay_spec_short(slot, mtp_list, prompt[:, cs:b], pt_row, tail, cs, True, captured_row)
+            host = self._replay_spec_short(
+                slot,
+                mtp_list,
+                prompt[:, cs:b],
+                pt_row,
+                tail,
+                cs,
+                True,
+                captured_row,
+                **self._vis_replay_kw(prompt, cs, vision_tokens),
+            )
         if host is None:  # no short trace for the tail (< 3 tokens / uncaptured bucket) or a trash-block collision
             logits, hidden = model.prefill_masked_bucket(
-                prompt[:, cs:b], pt_rec, actual_len=tail, chunk_start=cs, return_hidden=True
+                prompt[:, cs:b],
+                pt_rec,
+                actual_len=tail,
+                chunk_start=cs,
+                return_hidden=True,
+                **self._vis_replay_kw(prompt, cs, vision_tokens),
             )
             on_chunk(hidden, cs, tail)
             ttnn.deallocate(hidden)
             host = self._read_replicated_logits(logits)
         return host
 
-    def _replay_spec_short(self, slot, prompt_list, tokens, pt_row, L, chunk_start, carry, captured_row):
+    def _vis_replay_kw(self, prompt, start, vision_tokens):
+        """Vision kwargs (vision_tokens, vis_row_offset) for model._replay_short_trace / prefill_masked_bucket over the
+        segment starting at absolute ``start`` of the whole ``prompt``: {} for text (the call is unchanged), else the
+        rows and the number of placeholder tokens before ``start``."""
+        if vision_tokens is None:
+            return {}
+        return dict(vision_tokens=vision_tokens, vis_row_offset=self.model._vis_row_offset_for(prompt, start))
+
+    def _replay_spec_short(
+        self,
+        slot,
+        prompt_list,
+        tokens,
+        pt_row,
+        L,
+        chunk_start,
+        carry,
+        captured_row,
+        vision_tokens=None,
+        vis_row_offset=0,
+    ):
         """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
         segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
         Tp-1 is copied into _last_hidden[slot]. Returns host float logits [vocab] or None (no trace / trash collision).
@@ -2483,8 +2690,9 @@ class MTPSpecEngine:
         inputs = mtp_prefill_inputs(
             prompt_list, chunk_start, tr.bucket, pt_row, self.block_size, self._scratch_block, tr.buf_blocks
         )
+        vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens, vis_row_offset=vis_row_offset)
         tr = model._replay_short_trace(
-            tokens, pt_row, L, strict=False, chunk_start=chunk_start, carry_gdn=carry, spec_inputs=inputs
+            tokens, pt_row, L, strict=False, chunk_start=chunk_start, carry_gdn=carry, spec_inputs=inputs, **vis_kw
         )
         if tr is None:
             # The trash block (vLLM's null block 0) is one of this request's real blocks: the traced prefill would park
@@ -2520,10 +2728,11 @@ class MTPSpecEngine:
         prompt, row, *rest = self._prompts[slot]
         logger.info(f"[spec_engine] re-prefill engine row {slot} ({len(prompt)} tokens)")
         # Same vLLM start_pos as the original prefill (its cached blocks are still the request's).
+        vis_kw = {} if slot not in _row_vision_of(self) else dict(vision_tokens=_row_vision_of(self)[slot])
         if rest:
-            self._prefill_row(slot, prompt, row, start_pos=rest[0])
+            self._prefill_row(slot, prompt, row, start_pos=rest[0], **vis_kw)
         else:
-            self._prefill_row(slot, prompt, row)
+            self._prefill_row(slot, prompt, row, **vis_kw)
 
     def _reconcile_fresh_rows(self, fresh_now, start_pos):
         """Make every fresh row's prefilled length equal to the position its first verify starts at.
@@ -2562,7 +2771,8 @@ class MTPSpecEngine:
                 f"prefill token(s) were not part of the prompt (vLLM pad_spec_decode placeholders); re-prefilling the "
                 f"row with {sp} tokens (vLLM start_pos {vstart})"
             )
-            self._prefill_row(u, prompt[:sp], row, start_pos=vstart)
+            vis_kw = {} if u not in _row_vision_of(self) else dict(vision_tokens=_row_vision_of(self)[u])
+            self._prefill_row(u, prompt[:sp], row, start_pos=vstart, **vis_kw)
             out[u] = self._fresh[u]
         return out
 
@@ -2712,11 +2922,14 @@ class MTPSpecEngine:
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(fresh_now.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
-                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+                self._warm_mtp_last(
+                    self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u], **self._row_kw(u)
+                )
             fresh = sorted(fresh_now)
             for u in fresh:
                 del self._fresh[u]
                 self._prompts.pop(u, None)
+                _row_vision_of(self).pop(u, None)  # no re-prefill from here on
                 self._fresh_dirty.discard(u)
             if set(fresh) == set(rows):
                 out = self._seed(tokens, start_pos, vpt, read_logits or read_topk or sampling is not None)
@@ -2783,11 +2996,14 @@ class MTPSpecEngine:
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(fresh_now.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
-                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+                self._warm_mtp_last(
+                    self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u], **self._row_kw(u)
+                )
         fresh = sorted(fresh_now)
         for u in fresh:
             del self._fresh[u]
             self._prompts.pop(u, None)
+            _row_vision_of(self).pop(u, None)  # no re-prefill from here on
             self._fresh_dirty.discard(u)
         if self._gdn:
             self._stage(fresh_row_select(fresh, B, T, self._kc), self._fj_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -3231,6 +3447,11 @@ class MTPSpecEngine:
         skip, skip_all = propose_skip_plan(self._no_draft, B)
         if skip_all and B == 1:
             return "skip_all", None
+        delta, mixed = self._live_rope_delta(active)
+        if (
+            mixed
+        ):  # live rows of different M-RoPE deltas: the host-built verify has a delta per row, the device words one
+            return "mixed_rope_delta", None
         try:
             aux = fused_accept_aux_host(
                 nv,
@@ -3240,7 +3461,7 @@ class MTPSpecEngine:
                 table_capacity(self._last_cap_blocks, self.block_size),
                 K,
                 int(self._scratch_block),
-                self.model.rope.rope_delta,
+                delta,
                 self.model.rope.max_seq_len,
             )
         except ValueError:
@@ -3435,6 +3656,7 @@ class MTPSpecEngine:
         """
         B, K, model = self.B, self.K, self.model
         cont = active & prev["active"]
+        rope_delta = self._live_rope_delta(active)[0]
         ovr = pack_ovr_host(
             aux[0, :B],
             aux[1, :B],
@@ -3447,7 +3669,7 @@ class MTPSpecEngine:
             model.vfy_gdn_parity(),
             K=K,
             scratch_block=int(self._scratch_block),
-            rope_delta=model.rope.rope_delta,
+            rope_delta=rope_delta,
             rope_rows=model.rope.max_seq_len,
         )
         (self._ch_g if prev["kind"] == "g" else self._ch_s).stage_ovr(ovr)
@@ -3456,7 +3678,8 @@ class MTPSpecEngine:
         if not (spec_chain_audit_enabled() and n % spec_chain_audit_every() == 0):
             return None
         exp_tok = torch.as_tensor(args[0]).to(torch.int64).reshape(-1)
-        exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2])  # at the parity the replay reads
+        # at the parity the replay reads, with the common delta the trace reads (inactive rows too)
+        exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta)
         return exp_tok, exp_aux, torch.as_tensor(aux).clone()
 
     def _chain_exec(self, prev):
@@ -3622,6 +3845,9 @@ class MTPSpecEngine:
         if skip_all and B == 1:
             return "skip_all", None, lo, hi
         host_act = active & ~cmask
+        delta, mixed = self._live_rope_delta(active)
+        if mixed:
+            return "mixed_rope_delta", None, lo, hi
         try:
             aux = fused_accept_aux_host(
                 nv,
@@ -3631,7 +3857,7 @@ class MTPSpecEngine:
                 cap,
                 K,
                 int(self._scratch_block),
-                self.model.rope.rope_delta,
+                delta,
                 self.model.rope.max_seq_len,
             )
         except ValueError:
@@ -3853,7 +4079,7 @@ class MTPSpecEngine:
                 parity,
                 K=K,
                 scratch_block=int(self._scratch_block),
-                rope_delta=model.rope.rope_delta,
+                rope_delta=self._live_rope_delta(active)[0],
                 rope_rows=model.rope.max_seq_len,
             )
             (self._ch_g if prev.kind == "g" else self._ch_s).stage_ovr(ovr)
@@ -4071,7 +4297,10 @@ class MTPSpecEngine:
         p0n = torch.where(cm, pd["p0"] + pd["counts"], h.start_host) * act
         min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
         exp_tok = self._def_tokens(h, pd).reshape(-1)
-        exp_aux = model._vfy_aux_host(model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity)
+        delta = signed_rope_delta(h.aux[AUX_CONSTS, CONST_ROPE_DELTA])  # the common delta this step's fused aux carries
+        exp_aux = model._vfy_aux_host(
+            model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
+        )
         exp_fa = h.aux.clone().to(torch.int64)
         exp_fa[AUX_P0, :B] = p0n
         read = lambda t: ttnn.to_torch(t)
@@ -4619,7 +4848,9 @@ class MTPSpecEngine:
         owned_tok = [tok_tt]
         h = anchor_hidden
         for k in range(self.K):
-            logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, [pu + k for pu in p], self._mtp_pt)
+            logits, h_next = self.model.ttnn_mtp_decode_forward(
+                h, tok_tt, [pu + k for pu in p], self._mtp_pt, **self._mtp_rd_kw(range(self.B))
+            )
             idx = draft_argmax(self.mtp, logits)  # [1,1,B,1] uint32 ROW_MAJOR
             ttnn.deallocate(logits)
             tok_tt = ttnn.reshape(idx, (B, 1))
@@ -4840,7 +5071,7 @@ class MTPSpecEngine:
         stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
         plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
         rtok, rpos, rpt = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos)
+        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos, **self._pos_rd_kw(T))
         stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
         stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
         self._stage_table(rpt, self._dr_rs_pt, ttnn.int32, rm)
@@ -4849,7 +5080,7 @@ class MTPSpecEngine:
         tok0, poss = draft_step_plan(pending, p, K)
         stage(tok0, self._dr_tok0, ttnn.uint32, rm)
         for k, pv in enumerate(poss):
-            c, s = model._rope_tp_cos_sin_decode_torch(pv)
+            c, s = model._rope_tp_cos_sin_decode_torch(pv, **self._pos_rd_kw(1))
             stage(pv, self._dr_pos[k], ttnn.int32, rm)
             stage(c, self._dr_cos[k], bf, tile)
             stage(s, self._dr_sin[k], bf, tile)
@@ -4863,9 +5094,16 @@ class MTPSpecEngine:
         _rope_tp_cos_sin_decode_torch), as indices: tests/test_spec_hostset_host.py proves it."""
         B, T, K, model = self.B, self.T, self.K, self.model
         rtok, rpos, _, real = reseed_rows_vec(ctok, cpos, m if m_kv is None else m_kv, None, T, 0, 0, need_pt=False)
-        delta, rows = model.rope.rope_delta, model.rope.max_seq_len
+        rows = model.rope.max_seq_len
         R = B * T
         steps = torch.as_tensor([int(x) for x in p], dtype=torch.int64)[None, :] + torch.arange(K)[:, None]  # [K, B]
+        d = self._row_deltas()
+        if isinstance(
+            d, list
+        ):  # the rows' own deltas: reseed rows are user-major (T per user), steps are k-major [K, B]
+            delta = [x for x in d for _ in range(T)] + d * K
+        else:
+            delta = d
         ridx = rope_row_index(
             torch.cat([rpos.to(torch.int64), steps.reshape(-1)]), delta, rows
         )  # reseed rows, then steps
@@ -5017,11 +5255,16 @@ class MTPSpecEngine:
         toks[0, :n] = torch.tensor(prompt_ids[chunk_start + 1 : chunk_start + 1 + n], dtype=torch.int32)
         self.model.ttnn_mtp_prefill_forward(hidden, toks, chunk_start, page_table_torch, valid_len=n)
 
-    def _warm_mtp_last(self, last_hidden, first_tok, slot, page_table_tt):
+    def _warm_mtp_last(self, last_hidden, first_tok, slot, page_table_tt, row=None):
         """Write the MTP KV of a user's slot Tp-1 from (its feed row, the first generated token); the
-        first draft attends to it."""
+        first draft attends to it. ``row``: the engine row (its M-RoPE delta positions the write; None = delta 0)."""
         _, h_next = self.model.ttnn_mtp_decode_forward(
-            last_hidden, int(first_tok), slot, page_table_tt, need_logits=False
+            last_hidden,
+            int(first_tok),
+            slot,
+            page_table_tt,
+            need_logits=False,
+            **self._mtp_rd_kw([row]),
         )
         ttnn.deallocate(h_next)
 
@@ -5033,7 +5276,12 @@ class MTPSpecEngine:
                 r = u * T + i
                 row = self._eager_row(self._vfeed, r)
                 _, h_next = self.model.ttnn_mtp_decode_forward(
-                    row, tok_row[i], pos_row[i] - 1, self._mtp_pt_rows[u], need_logits=False
+                    row,
+                    tok_row[i],
+                    pos_row[i] - 1,
+                    self._mtp_pt_rows[u],
+                    need_logits=False,
+                    **self._mtp_rd_kw([u]),
                 )
                 ttnn.deallocate(row)
                 ttnn.deallocate(h_next)
@@ -5079,7 +5327,7 @@ class MTPSpecEngine:
         mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
         plan = reseed_row_plan(committed_tokens, committed_positions, m, B, T)
         tok, pos, pt_rows = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos, **self._pos_rd_kw(T))
         tok_tt = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pos_tt = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pt_tt = ttnn.from_torch(pt_rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
