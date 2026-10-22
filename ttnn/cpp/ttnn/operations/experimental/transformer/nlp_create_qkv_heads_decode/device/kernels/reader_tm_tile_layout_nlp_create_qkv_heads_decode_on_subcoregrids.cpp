@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 using namespace tt::constants;
 void kernel_main() {
