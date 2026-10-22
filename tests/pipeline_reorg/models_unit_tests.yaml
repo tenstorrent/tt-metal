@@ -2401,3 +2401,36 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
+
+# MoE-LLaVA (#61885): the CLIP, SigLIP and LanguageBind/MoE-LLaVA-Qwen-1.8B-4e weights are not in the
+# shared WH cache, so they are downloaded into a job-local hub cache. Tests parametrized for the
+# other chip count skip.
+- name: MoE-LLaVA unit tests (N150)
+  cmd: |
+    set -e
+    export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N150
+    pytest --timeout 1800 models/experimental/llava/tests
+  model: moe-llava
+  model_family: LLaVA
+  skus:
+    wh_n150:
+      timeout: 90
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by keonhee-han)
+  team: models
+  budget_type: unit
+
+- name: MoE-LLaVA unit tests (N300)
+  cmd: |
+    set -e
+    export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N300
+    pytest --timeout 1800 models/experimental/llava/tests
+  model: moe-llava
+  model_family: LLaVA
+  skus:
+    wh_n300:
+      timeout: 90
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by keonhee-han)
+  team: models
+  budget_type: unit

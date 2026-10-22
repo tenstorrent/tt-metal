@@ -2080,3 +2080,39 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: e2e
+
+# MoE-LLaVA (#61885): the demo has no perf report, so it runs twice and the step timestamps of the
+# second (warm kernel cache) run give vision time, TTFT and decode speed.
+- name: MoE-LLaVA demo (N150)
+  cmd: |
+    set -e
+    export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N150
+    python models/experimental/llava/demo/demo_llava_full.py --llm-backbone qwen-moe --use-ttnn-llm --max-tokens 64
+    python models/experimental/llava/demo/demo_llava_full.py --llm-backbone qwen-moe --use-ttnn-llm --max-tokens 64
+  model: moe-llava
+  model_family: LLaVA
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by keonhee-han)
+  team: models
+  budget_type: e2e
+
+- name: MoE-LLaVA demo (N300)
+  cmd: |
+    set -e
+    export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N300
+    python models/experimental/llava/demo/demo_llava_full.py --llm-backbone qwen-moe --use-ttnn-llm --max-tokens 64
+    python models/experimental/llava/demo/demo_llava_full.py --llm-backbone qwen-moe --use-ttnn-llm --max-tokens 64
+  model: moe-llava
+  model_family: LLaVA
+  skus:
+    wh_n300:
+      timeout: 60
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by keonhee-han)
+  team: models
+  budget_type: e2e
