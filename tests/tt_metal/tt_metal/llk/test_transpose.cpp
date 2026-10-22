@@ -428,8 +428,6 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
     }
 }
 
-// transpose_tile (not transpose_dest): Float32 / Int32 go through unpack-to-dest, then an in-place
-// math transpose. One tile per acquire/commit, so SyncHalf bank flips across the 4-tile tensor.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHFloat32) {
     for (const bool dst_full_sync_en : {false, true}) {
         SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
