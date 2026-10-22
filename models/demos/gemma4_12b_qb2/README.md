@@ -1,67 +1,69 @@
-# google/gemma-4-12B-it on Blackhole QB2 (P300x2, TP4)
+# google/gemma-4-12B-it on Blackhole QB2 (P300x2)
 
-The text decoder of [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it) on the four Blackhole
-chips of a QB2, as a 1x4 mesh with tensor parallel 4. This is the output of the tt-model-bringup pipeline, all 11
-stages. Tracking issue: tenstorrent/tt-agentic-bringup-qb2#93.
-
-- **Model:** dense, 48 layers: 40 sliding-window layers (window 1024) and 8 full-attention layers.
-  - Hidden size 3840; 16 query heads.
-  - KV heads: 8 on sliding layers (head dim 256), 1 on full-attention layers (head dim 512).
-  - Tied 262K vocabulary, final logit soft-cap 30, 262,144-token native context.
-- **Not included:** the image and audio encoders.
-- **Served context:** the full 262,144 tokens, with a vLLM-owned paged KV cache.
+TTNN implementation of the [gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it) text decoder (dense,
+48 layers, 5 sliding-window (1024) : 1 full attention, 16 query heads, KV heads 8 x 256 on sliding and 1 x 512 on full
+layers, tied 262K vocabulary, final logit soft-cap 30) for the QB2 1x4 Blackhole mesh, TP4, served through vLLM with
+the [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin). Native 262,144-token context. The image and audio
+encoders are not ported. Produced by the tt-model-bringup agentic pipeline; tracking:
+tenstorrent/tt-agentic-bringup-qb2#93.
 
 ## Layout
-- `tt/model.py`: weights, config and the decoder stack.
-- `tt/generator.py`: prefill/decode API with traces and on-device sampling.
-- `tt/generator_vllm.py`: the vLLM adapter (`Gemma4AutoportForCausalLM`).
-- `tt/precision.py`: precision policies.
-  - The default is `doc/datatype_sweep/selected_precision_config.json` (`b0_lmh4_lofi`): BFP8 weights, a BFP4 LoFi
-    LM head, and a BFP8 KV cache.
-  - `GEMMA4_PRECISION_CONFIG=baseline` rolls back to the stage-7 policy.
-- `tt/sampling.py`: the device sampler. It covers top_k 1–32; anything else samples on the host.
-- `tt/*_decoder.py`: the decoder layers at each bring-up stage. `optimized_decoder.py` is the one served.
-- `tests/`: accuracy tests against HF, full-context tests, perf tests and vLLM adapter tests.
-- `doc/context_contract.json`: the served-context contract.
+
+| Path | Content |
+|---|---|
+| `tt/model.py` | 48-layer model: embedding, decoder stack, final norm, LM head, logit soft-cap |
+| `tt/multichip_decoder.py` | TP4 decoder layer: QKV / gate / up column-parallel, o_proj / down row-parallel; the full layers' single KV head is replicated on every chip |
+| `tt/optimized_decoder.py`, `tt/fused_decoder.py`, `tt/functional_decoder.py` | Single-chip layer programs, policies and constants the TP4 layer builds on |
+| `tt/generator.py`, `tt/sampling.py` | Traced decode, chunked prefill, on-device sampling (top_k 1..32) |
+| `tt/generator_vllm.py` | vLLM adapter (`Gemma4_12BQB2ForCausalLM`), vLLM-owned hybrid KV cache, decode-input reload contract v1 |
+| `tt/precision.py`, `doc/datatype_sweep/selected_precision_config.json` | Selected precision: BFP8 weights, BFP4 LoFi LM head, BFP8 KV cache. `GEMMA4_PRECISION_CONFIG=baseline` restores the pre-sweep policy (`doc/datatype_sweep/configs/baseline_stage7.json`) |
+| `vllm_metadata.json` | Architecture registration for `EXTRA_MODELS_DIR` |
+| `tests/test_vllm_adapter.py` | Device test of the adapter: resident-input decode vs reload, chunked prefill, seeded rows |
 
 ## Requirements
-- The opt-in SDPA flag `fp32_output_accumulation` (tenstorrent/tt-metal PR stacked below this one).
-  - The 8 full-attention layers turn it on for every chunked-prefill call.
-  - Without it, full-attention prefill PCC drops to 0.9865 at 131K tokens and 0.97 at 262K.
-- vllm-tt-plugin `main`, unmodified. The adapter is registered through
-  `TT_MODEL_CLASS_OVERRIDES=Gemma4UnifiedForConditionalGeneration=models.demos.gemma4_12b_qb2.tt.generator_vllm:Gemma4AutoportForCausalLM`.
 
-## Serving (tt-inference-server)
-- Spec `id_gemma4-12b-qb2_gemma-4-12B-it_p300x2`, selected with `--impl gemma4-12b-qb2`.
-- `MESH_DEVICE=P300x2`, 32 slots, block size 64, 8192-token chunked prefill, `FABRIC_1D_RING`.
-- The server default is top_k 32, so requests stay on the device sampler.
-- `reasoning-parser gemma4`.
+- tenstorrent/tt-metal#61986 (stacked below): the 8 full-attention layers pass its opt-in SDPA flag
+  `fp32_output_accumulation` on every chunked-prefill call. On one chip with this model's settings it raises the
+  attention PCC at a 262K prefix from 0.9991 to 0.9997, for about 4% more time in that attention.
+- vllm-tt-plugin `main`, unmodified, with vLLM 0.30.
 
-## Results
-CI on `bh-qb-ge` (tenstorrent/tt-agentic-bringup-qb2#93):
+## Serving
 
-| Point | TTFT | TPOT | Throughput |
-|---|---:|---:|---:|
-| 1 user, 128/128 | 40 ms | 14.5 ms (69 t/s/u) | |
-| 32 users, 128/128 | 0.91 s | 16.8 ms | 1,345 tok/s |
-| 1 user, 4096/128 | 214 ms | 15.4 ms | |
-| 32 users, 4096/128 | 2.24 s | 54.5 ms | 446 tok/s |
-| 1 user, 32768/128 | 2.59 s | 15.9 ms | |
-| 1 user, 131072/128 | 21.8 s | 17.8 ms | |
+The adapter is found through `EXTRA_MODELS_DIR=models/demos` and `vllm_metadata.json`, and selected with
+`--hf-overrides '{"architectures": ["TTGemma4_12BQB2ForCausalLM"]}'`. The tt-inference-server spec
+`--impl gemma4-12b-qb2` carries the full recipe; the essential settings are `--block-size 64 --max-num-seqs 32
+--max-model-len 262144 --max-num-batched-tokens 8192 --enable-chunked-prefill --no-enable-prefix-caching
+--reasoning-parser gemma4 --override-generation-config '{"top_k": 32}'` and the TT config
+`sample_on_device_mode=all`, `fabric_config=FABRIC_1D_RING`, `trace_region_size=0`, `prefill_chunk_alignment=8192`.
 
-| Eval (thinking on, T=1.0, top_p 0.95, top_k 20) | n | TT | Card |
-|---|---:|---:|---:|
-| GPQA Diamond | 198 | 66.7 | 78.8 |
-| AIME 2026, no tools | 30 × 4 | 71.7 | 77.5 |
-| MMLU-Pro, 16K output cap | 849 | 73.1 (65 empty answers; 79.2 without them) | 77.2 |
+The device sampler covers top_k 1..32, so the server caps the checkpoint's top_k 64 at 32. Requests it cannot serve
+(penalties, logprobs, top_k > 32) and prefill steps with an intermediate chunk sample on the host.
 
-Accuracy against HF on the AIME24 chat reference (100 tokens): top-1 95–96%, top-5 / top-100 100%.
+## Results (CI release run, 32-slot server, vllm-tt-plugin main)
+
+| Point | TTFT | Decode |
+|---|---|---|
+| 1 user, 128/128 | 36 ms | 12.3 ms/token |
+| 32 users, 128/128 | 0.89 s | 1,494 tok/s total |
+| 1 user, 4096/128 | 210 ms | 13.2 ms/token |
+| 32 users, 4096/128 | 2.23 s | 466 tok/s total |
+| 1 user, 32768/128 | 2.37 s | 13.7 ms/token |
+| 1 user, 131072/128 | 20.4 s | 15.6 ms/token |
+
+GPQA Diamond 66.7 (198 questions, thinking on; card 78.8, TT reference 65). Earlier CI runs on the same model code:
+AIME 2026 71.7 (30 x 4; card 77.5), MMLU-Pro 73.1 (849 questions, 16K output cap; card 77.2). Accuracy against HF on
+the AIME24 chat reference (100 tokens): top-1 95-96%, top-5 / top-100 100%.
 
 ## Known limitations
-- **Paged decode SDPA can read one page-table entry past a row.** This happens when `k_chunk_size` does not divide
-  `row_width * block_size`; it is an op bug.
-  - Decode uses 128-token K chunks at batch 1 and one block at batch 32.
-  - `_table_for_k_chunk` (`tt/optimized_decoder.py`) pads the row with block 0 up to a whole number of K chunks.
-    The padded keys lie past every query's causal range, and nothing is padded when the width already divides.
-  - `tests/test_optimized_decoder.py::test_decode_odd_width_page_table` pins this contract.
+
+- **Paged decode SDPA can read one page-table entry past a row** when `k_chunk_size` does not divide
+  `row_width * block_size`. `_table_for_k_chunk` (`tt/optimized_decoder.py`) pads the row with block 0 up to a whole
+  number of K chunks; the padded keys lie past every query's causal range, and nothing is padded when the width
+  already divides (vLLM's rows).
 - **Prefix caching is off.**
+
+## Test
+
+```bash
+pytest models/demos/gemma4_12b_qb2/tests/test_vllm_adapter.py
+```
