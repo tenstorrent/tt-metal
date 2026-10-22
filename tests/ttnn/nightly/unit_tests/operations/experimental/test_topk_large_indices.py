@@ -333,17 +333,18 @@ def test_topk_large_indices_row_major_640_rows_51200_k1536(device):
 
 TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 
-# Real-time-profiler baselines measured on a Blackhole dev board. The symmetric band catches both
-# regressions and unexpected speedups that should trigger baseline review.
+# Real-time-profiler baselines measured on Blackhole. The symmetric band catches both regressions and unexpected
+# speedups that should trigger baseline review. bounded_cache is a 36 us program and reads 35.6 to 36.2 us across
+# CI runners, so its baseline is the middle of that range with a wider band.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
-    # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 923_100),
-    ("bounded_cache", 2, 102400, 56320, 1536, 36_100),
+    # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns, margin)
+    ("prefill", 640, 51200, None, 1536, 923_100, TOPK_LARGE_INDICES_PERF_MARGIN),
+    ("bounded_cache", 2, 102400, 56320, 1536, 35_900, 0.015),
 ]
 
 
 @pytest.mark.parametrize(
-    "case_id,num_rows,n,valid_length,k,expected_duration_ns",
+    "case_id,num_rows,n,valid_length,k,expected_duration_ns,margin",
     TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS,
     ids=[config[0] for config in TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS],
 )
@@ -358,6 +359,7 @@ def test_topk_large_indices_production_perf_check(
     valid_length,
     k,
     expected_duration_ns,
+    margin,
 ):
     """Check production-shape duration on the marker-selected host-IOMMU perf runner."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
@@ -371,12 +373,12 @@ def test_topk_large_indices_production_perf_check(
 
     measured_out, perf_record = profile_realtime_program(device, run_topk_large_indices)
     duration_ns = perf_record["duration_ns"]
-    lower = expected_duration_ns * (1 - TOPK_LARGE_INDICES_PERF_MARGIN)
-    upper = expected_duration_ns * (1 + TOPK_LARGE_INDICES_PERF_MARGIN)
+    lower = expected_duration_ns * (1 - margin)
+    upper = expected_duration_ns * (1 + margin)
 
     logger.info(
-        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms "
-        f"(expected {expected_duration_ns / 1e6:.3f} ms, band [{lower / 1e6:.3f}, {upper / 1e6:.3f}]), "
+        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e3:.2f} us "
+        f"(expected {expected_duration_ns / 1e3:.2f} us, band [{lower / 1e3:.2f}, {upper / 1e3:.2f}]), "
         f"shape=({num_rows}, {n}), valid_length={valid_length}, k={k}, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
@@ -384,10 +386,10 @@ def test_topk_large_indices_production_perf_check(
     del measured_out
 
     assert lower <= duration_ns <= upper, (
-        f"{case_id} duration {duration_ns / 1e6:.3f} ms outside band "
-        f"[{lower / 1e6:.3f}, {upper / 1e6:.3f}] ms "
-        f"(expected {expected_duration_ns / 1e6:.3f} ms, "
-        f"margin +/- {TOPK_LARGE_INDICES_PERF_MARGIN * 100:.1f}%)"
+        f"{case_id} duration {duration_ns / 1e3:.2f} us outside band "
+        f"[{lower / 1e3:.2f}, {upper / 1e3:.2f}] us "
+        f"(expected {expected_duration_ns / 1e3:.2f} us, "
+        f"margin +/- {margin * 100:.1f}%)"
     )
 
 
