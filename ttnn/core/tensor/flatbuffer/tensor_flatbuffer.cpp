@@ -29,7 +29,6 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <unordered_map>
 
 namespace ttnn {
@@ -167,7 +166,6 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
     return tt::tt_metal::TensorTopology(dist_shape, placements, mesh_coords);
 }
 
-// Renders the topology for a diagnostic. Only evaluated on the failure path.
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
