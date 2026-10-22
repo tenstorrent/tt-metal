@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN pre-norm SwiGLU MLP (no residual; the block adds it).
+"""TTNN pre-norm SwiGLU MLP.
 
 reference : models/experimental/timestral/reference/src/timestral/layers.py
     gate, up = w12(RMSNorm(x)).chunk(2)   # gain folded into both halves
@@ -10,11 +10,15 @@ reference : models/experimental/timestral/reference/src/timestral/layers.py
 
 from __future__ import annotations
 
+import torch
+
 from models.experimental.timestral.tt.common import (
     TtTimestralPrecision,
     linear,
+    linear_residual,
     rms_norm,
     swiglu,
+    upload,
     upload_linear,
     upload_swiglu,
 )
@@ -28,15 +32,20 @@ class TtSwiGLU:
         dtype = precision.weight_dtype()
         self._w_up_gate = upload_swiglu(device, weights.w_up, weights.w_gate, dtype)
         self._w_down = upload_linear(device, weights.w_down, dtype)
+        self._ones = upload(device, torch.ones(1, weights.w_down.shape[0]))
 
-    def __call__(self, x):
-        """Flat device ``(1, 1, tokens, D)`` -> same shape; ``x`` is borrowed."""
+    def __call__(self, x, residual=None):
+        """Flat device ``(1, 1, tokens, D)`` -> same shape, plus ``residual`` (added in the down
+        matmul) when given; ``x`` and ``residual`` are borrowed."""
         import ttnn
 
         p = self.precision
         xn = rms_norm(x, self.eps, p)
         hidden = swiglu(xn, self._w_up_gate, p)
         ttnn.deallocate(xn)
-        out = linear(hidden, self._w_down, p)
+        if residual is None:
+            out = linear(hidden, self._w_down, p)
+        else:
+            out = linear_residual(hidden, self._w_down, p, residual, self._ones)
         ttnn.deallocate(hidden)
         return out

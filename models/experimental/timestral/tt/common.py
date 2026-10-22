@@ -103,14 +103,40 @@ def upload_swiglu(device, w_silu: torch.Tensor, w_mul: torch.Tensor, dtype):
     return upload(device, pairs.reshape(k, 2 * n), dtype=dtype)
 
 
+def _geometry(x, weight):
+    """``(m_tiles, k_tiles, n_tiles, grid)`` when an explicit config applies (DRAM-interleaved input,
+    tile-aligned K), else None."""
+    import ttnn
+
+    x_shape, (k, n) = tuple(x.padded_shape), tuple(weight.padded_shape)[-2:]
+    if x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded() or x.shape[-1] % TILE or x_shape[-1] != k:
+        return None
+    grid = x.device().compute_with_storage_grid_size()
+    return math.prod(x_shape[:-1]) // TILE, k // TILE, n // TILE, (grid.x, grid.y)
+
+
+def _minimal_config(geometry, precision: TtTimestralPrecision, activation=None):
+    """``minimal_matmul`` config when N leaves 2D grid columns idle and nothing is fused, else None."""
+    if geometry is None or activation is not None:
+        return None
+    m_tiles, k_tiles, n_tiles, grid = geometry
+    if program_configs.grid_columns(n_tiles, grid[0]) == grid[0]:
+        return None
+    return program_configs.minimal_matmul_config(grid, m_tiles, k_tiles, n_tiles, max_dest=_max_dest(precision))
+
+
+def _max_dest(precision: TtTimestralPrecision) -> int:
+    return 4 if precision.fp32_dest_acc_en else 8
+
+
 def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=None):
     """``x @ weight (+ bias)``, then ``activation`` ("silu" / "sigmoid"), with an explicit config
-    from ``program_configs`` (DRAM-interleaved, tile-aligned K), else the auto config."""
+    from ``program_configs``, else the auto config."""
     import ttnn
 
     kernel = precision.compute_kernel_config()
-    x_shape, (k, n) = tuple(x.padded_shape), tuple(weight.padded_shape)[-2:]
-    if x.layout != ttnn.TILE_LAYOUT or x.memory_config().is_sharded() or x.shape[-1] % TILE or x_shape[-1] != k:
+    geometry = _geometry(x, weight)
+    if geometry is None:
         return ttnn.linear(
             x,
             weight,
@@ -119,12 +145,8 @@ def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=kernel,
         )
-    m_tiles, k_tiles, n_tiles = math.prod(x_shape[:-1]) // TILE, k // TILE, n // TILE
-    grid = x.device().compute_with_storage_grid_size()
-    grid = (grid.x, grid.y)
-    max_dest = 4 if precision.fp32_dest_acc_en else 8
-    if activation is None and program_configs.grid_columns(n_tiles, grid[0]) < grid[0]:
-        config = program_configs.minimal_matmul_config(grid, m_tiles, k_tiles, n_tiles, max_dest=max_dest)
+    config = _minimal_config(geometry, precision, activation)
+    if config is not None:
         return ttnn.experimental.minimal_matmul(
             x,
             weight,
@@ -133,17 +155,41 @@ def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=kernel,
         )
+    m_tiles, k_tiles, n_tiles, grid = geometry
     config = program_configs.matmul_2d_config(
         grid,
         m_tiles,
         k_tiles,
         n_tiles,
         fused_activation=program_configs.fused_activation(activation),
-        max_dest=max_dest,
+        max_dest=_max_dest(precision),
     )
     return ttnn.linear(
         x, weight, bias=bias, program_config=config, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=kernel
     )
+
+
+def linear_residual(x, weight, precision: TtTimestralPrecision, residual, ones):
+    """``residual + x @ weight``; ``ones`` is a device ``(1, N)`` of ones. The add runs in the
+    matmul epilogue when the fused kernel allows it (residual dtype == weight dtype), else after it."""
+    import ttnn
+
+    config = _minimal_config(_geometry(x, weight), precision)
+    if config is not None and residual.dtype == weight.dtype:
+        return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            x,
+            weight,
+            1.0,
+            residual,
+            ones,
+            config=config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=precision.compute_kernel_config(),
+        )
+    out = linear(x, weight, precision)
+    y = ttnn.add(residual, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out)
+    return y
 
 
 def swiglu(x, weight, precision: TtTimestralPrecision):
@@ -157,7 +203,7 @@ def swiglu(x, weight, precision: TtTimestralPrecision):
         math.prod(x_shape[:-1]) // TILE,
         k // TILE,
         n // (2 * TILE),
-        max_dest=4 if precision.fp32_dest_acc_en else 8,
+        max_dest=_max_dest(precision),
     )
     return ttnn.experimental.minimal_matmul(
         x,

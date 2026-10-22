@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN gated attention sublayer (time or variate axis), pre-norm, no residual.
+"""TTNN gated attention sublayer (time or variate axis), pre-norm.
 
 reference : models/experimental/timestral/reference/src/timestral/layers.py (``Attention``)
     xn = RMSNorm(x)                                   # gain folded into Wqkv and Wg
@@ -16,7 +16,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.experimental.timestral.tt.common import TILE, TtTimestralPrecision, linear, rms_norm, upload_linear
+import torch
+
+from models.experimental.timestral.tt.common import (
+    TILE,
+    TtTimestralPrecision,
+    linear,
+    linear_residual,
+    rms_norm,
+    upload,
+    upload_linear,
+)
 from models.experimental.timestral.tt.weights import AttentionWeights
 
 _MAX_SDPA_CHUNK = 256
@@ -55,9 +65,11 @@ class TtAttention:
         self._wv = None if weights.is_time else upload_linear(device, weights.wv, dtype)
         self._wg = upload_linear(device, weights.wg, dtype)
         self._wo = upload_linear(device, weights.wo, dtype)
+        self._ones = upload(device, torch.ones(1, self.d_model))
 
-    def __call__(self, x, inputs: TtAttentionInputs):
-        """Flat device ``(1, 1, R * S_pad, D)`` -> same shape; ``x`` is borrowed."""
+    def __call__(self, x, inputs: TtAttentionInputs, residual=None):
+        """Flat device ``(1, 1, R * S_pad, D)`` -> same shape, plus ``residual`` (added in the wo
+        matmul) when given; ``x`` and ``residual`` are borrowed."""
         import ttnn
 
         p = self.precision
@@ -73,7 +85,10 @@ class TtAttention:
         gated = ttnn.mul(merged, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
         ttnn.deallocate(gate)
-        out = linear(gated, self._wo, p)
+        if residual is None:
+            out = linear(gated, self._wo, p)
+        else:
+            out = linear_residual(gated, self._wo, p, residual, self._ones)
         ttnn.deallocate(gated)
         return out
 

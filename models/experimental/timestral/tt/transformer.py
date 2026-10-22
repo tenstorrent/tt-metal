@@ -4,14 +4,14 @@
 """TTNN Timestral transformer block (attention sublayers of one layer kind, then the MLP).
 
 reference : models/experimental/timestral/reference/src/timestral/layers.py (``TransformerBlock``)
-    for attn in (time,) | (time, variate):   x = x + attn(x)
+    for attn in (time,) | (time, variate):   x = x + attn(x)   # residual adds run in the wo / down matmuls
     x = x + mlp(x)
 """
 
 from __future__ import annotations
 
 from models.experimental.timestral.tt.attention import TtAttention, TtAttentionInputs
-from models.experimental.timestral.tt.common import TtTimestralPrecision, add_residual
+from models.experimental.timestral.tt.common import TtTimestralPrecision
 from models.experimental.timestral.tt.mlp import TtSwiGLU
 from models.experimental.timestral.tt.weights import BlockWeights
 
@@ -24,6 +24,12 @@ class TtTransformerBlock:
 
     def __call__(self, x, inputs: TtAttentionInputs):
         """Flat device ``(1, 1, R * S_pad, D)``; consumes ``x`` and returns the new residual stream."""
+        import ttnn
+
         for attn in self.attns:
-            x = add_residual(x, attn(x, inputs))
-        return add_residual(x, self.mlp(x))
+            y = attn(x, inputs, residual=x)
+            ttnn.deallocate(x)
+            x = y
+        y = self.mlp(x, residual=x)
+        ttnn.deallocate(x)
+        return y
