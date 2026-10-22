@@ -334,7 +334,7 @@ DramRunSummary run_dram_base_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -466,7 +466,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -591,7 +591,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -753,7 +753,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -879,7 +879,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,
@@ -1043,7 +1043,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     auto brisc_kernel_config = tt_metal::DataMovementConfig{
         .processor = processor,

@@ -632,7 +632,7 @@ BuiltProgram build_program(
     const std::shared_ptr<distributed::MeshBuffer>& output_buffer,
     uint32_t total_num_tiles,
     uint32_t single_tile_size_bytes) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     const auto full_grid = mesh_device->compute_with_storage_grid_size();
     uint32_t want = full_grid.x * full_grid.y;

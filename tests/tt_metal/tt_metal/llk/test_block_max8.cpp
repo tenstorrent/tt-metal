@@ -69,7 +69,7 @@ TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservatio
     auto& mesh = *devices_.at(0);
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
     const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t buffer_bytes = tiles * tile_bytes;
     auto src_buffer = distributed::MeshBuffer::create(

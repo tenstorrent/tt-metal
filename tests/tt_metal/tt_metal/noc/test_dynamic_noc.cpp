@@ -55,8 +55,8 @@ void build_and_run_program(
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    Program program1;
-    Program program2;
+    Program program1 = CreateProgram(*device);
+    Program program2 = CreateProgram(*device);
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
@@ -215,8 +215,8 @@ void build_and_run_program_ethernet(
 
     log_info(tt::LogTest, "Starting compile of {} ethernet programs now.", NUM_PROGRAMS);
 
-    Program program1;
-    Program program2;
+    Program program1 = CreateProgram(*device);
+    Program program2 = CreateProgram(*device);
 
     // Add 2 semaphores initialized to 0 for each program, 1 per erisc
     CoreRangeSet eth_cr_set(CoreRange(eth_core, eth_core));

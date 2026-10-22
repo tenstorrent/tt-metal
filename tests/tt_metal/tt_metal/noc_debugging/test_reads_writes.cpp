@@ -81,7 +81,7 @@ void RunWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -160,7 +160,7 @@ void RunPostedWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -230,7 +230,7 @@ void RunSemaphoreIncTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -314,7 +314,7 @@ void RunSemaphoreIncMulticastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
@@ -390,7 +390,7 @@ void RunInlineWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -475,7 +475,7 @@ void RunStatefulWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -540,7 +540,7 @@ void RunStatefulReadTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -608,7 +608,7 @@ void RunFullBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -664,7 +664,7 @@ void RunAtomicBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -713,7 +713,7 @@ void RunReadsTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -785,7 +785,7 @@ void RunInterleavedReadsWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -991,7 +991,7 @@ void run_stress_write_program(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     // Fixed-size buffer regardless of num_iterations; the kernel wraps its source within SRC_SLOTS slots so a huge
     // iteration count (e.g. 100000) stays in-bounds while still generating that many distinct profiler events.
     constexpr uint32_t kBufferBytes = 4096;
@@ -1399,7 +1399,7 @@ void RunMcastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
