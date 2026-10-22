@@ -3,7 +3,7 @@ description: |
   Install the ttsim simulator binary for a given SKU from a pre-uploaded
   artifact, and export the env vars needed to run tests under the simulator
   (TT_METAL_SIMULATOR_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE,
-  TT_METAL_DISABLE_SFPLOADMACRO, TT_METAL_QUASAR_NOC_API_VERSION). The
+  TT_METAL_DISABLE_SFPLOADMACRO). The
   caller workflow is expected to have published each simulator binary as its own
   ttsim-lib-<library> artifact (see the fetch-ttsim job pattern in
   ttsim-sanity-tests-impl.yaml). Which binary a SKU gets is declared by that SKU's
@@ -88,8 +88,11 @@ runs:
           echo "TT_METAL_SIMULATOR=${{ inputs.root }}/sim/libttsim.so"
           echo "TT_METAL_SLOW_DISPATCH_MODE=1"
           echo "TT_METAL_DISABLE_SFPLOADMACRO=1"
-          echo "TT_METAL_QUASAR_NOC_API_VERSION=1"
         } >> "$GITHUB_ENV"
+        # The Quasar NoC API version is left at the runtime default (V2, the RoCC path that silicon,
+        # the emulator and craq-sim run). TT_METAL_QUASAR_NOC_API_VERSION=1 used to be exported here
+        # because libttsim_qsr.so before v1.11.2 did not implement the RoCC command-buffer register
+        # writes (#54794); the pinned release has supported them since.
 
     - name: Download ttsim binaries artifact
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
