@@ -26,7 +26,7 @@ stages. Tracking issue: tenstorrent/tt-agentic-bringup-qb2#93.
 
 ## Requirements
 - The opt-in SDPA flag `fp32_output_accumulation` (tenstorrent/tt-metal PR stacked below this one).
-  - The 8 full-attention layers turn it on for chunked prefill.
+  - The 8 full-attention layers turn it on for every chunked-prefill call.
   - Without it, full-attention prefill PCC drops to 0.9865 at 131K tokens and 0.97 at 262K.
 - vllm-tt-plugin `main`, unmodified. The adapter is registered through
   `TT_MODEL_CLASS_OVERRIDES=Gemma4UnifiedForConditionalGeneration=models.autoports.google_gemma_4_12b_it.tt.generator_vllm:Gemma4AutoportForCausalLM`.
@@ -60,6 +60,8 @@ Accuracy against HF on the AIME24 chat reference (100 tokens): top-1 95–96%, t
 ## Known limitations
 - **Paged decode SDPA can read one page-table entry past a row.** This happens when `k_chunk_size` does not divide
   `row_width * block_size`; it is an op bug.
-  - The decoder keeps `k_chunk_size = block_size` for decode, which stays inside the row for any width.
+  - Decode uses 128-token K chunks at batch 1 and one block at batch 32.
+  - `_table_for_k_chunk` (`tt/optimized_decoder.py`) pads the row with block 0 up to a whole number of K chunks.
+    The padded keys lie past every query's causal range, and nothing is padded when the width already divides.
   - `tests/test_optimized_decoder.py::test_decode_odd_width_page_table` pins this contract.
 - **Prefix caching is off.**
