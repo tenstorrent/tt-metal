@@ -44,9 +44,10 @@ def _config_id(path: Path) -> str:
     # 4×8 = 32-chip mesh (TG/Galaxy). TTMoEGate is a PER-DEVICE gate (no cross-chip comms): its weight +
     # op buffers replicate to every chip, so each chip runs the same one-token-per-core routing independently.
     # The mesh_device fixture auto-skips when fewer chips are available. (More shapes can be added here in the
-    # pytest.param form used by test_tt_moe_decode.py.)
+    # pytest.param form used by test_tt_moe_decode.py.) 1×1 covers a single chip, which on Blackhole feeds the
+    # generalized gate the router logits directly.
     "mesh_device",
-    [pytest.param((4, 8), id="4x8")],
+    [pytest.param((4, 8), id="4x8"), pytest.param((1, 1), id="1x1")],
     indirect=True,
 )
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)

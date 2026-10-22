@@ -82,6 +82,25 @@ inline void _bcast_cols_op_()
 }
 
 /**
+ * @brief Emit the bcast-col FPU op once per fidelity phase; ADDR_MOD_4 steps the phase, the last op advances and clears it.
+ *
+ * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
+ * @tparam addr_mod: addr-mod slot of the last op, with the srcA/srcB/dest strides and fidelity.clr set
+ * @tparam fidelity_phases: number of fidelity phases (1 for LoFi)
+ * @note The caller programs ADDR_MOD_4 with fidelity incr 1 and no srcA/srcB/dest increment, as
+ *       _llk_math_bcast_cols_reuse_custom_ does; _llk_math_sub_bcast_cols_compensated_init_ programs it differently.
+ */
+template <EltwiseBinaryType eltwise_binary_type, std::uint8_t addr_mod, std::uint32_t fidelity_phases>
+inline void _bcast_cols_op_phased_()
+{
+    for (std::uint32_t phase = 1; phase < fidelity_phases; phase++)
+    {
+        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_4>();
+    }
+    _bcast_cols_op_<eltwise_binary_type, addr_mod>();
+}
+
+/**
  * @brief Blocked bcast-col FPU scaffold shared by the SDPA SUB and indexer_score MUL paths.
  *
  * Single-sources the addr-mod setup, srcB face-reuse addressing, and per-tile counter resets; the two
@@ -94,10 +113,11 @@ inline void _bcast_cols_op_()
  * column instead of per (column, head). cb_qk must be head-major.
  *
  * Each 16x16 face pair (one face-row) is processed by four ops (two per face; each covers an aligned
- * 8x16 block). A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
+ * 8x16 block), and each op repeats once per fidelity phase. A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
  * face-row (F0/F1).
  *
  * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
+ * @tparam math_fidelity: MUL only; every op runs once per fidelity phase and the phases MAC into dest
  * @param ct_dim: Number of srcA column tiles processed in the block.
  * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
  * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
@@ -107,7 +127,7 @@ inline void _bcast_cols_op_()
  * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
  *       at keep.
  */
-template <EltwiseBinaryType eltwise_binary_type>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
@@ -119,31 +139,53 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
+    static_assert(
+        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise multiply");
+
+    constexpr bool high_fidelity            = is_high_fidelity(math_fidelity);
+    constexpr std::uint32_t fidelity_phases = high_fidelity ? to_underlying(math_fidelity) : 1;
+    constexpr std::uint32_t fidelity_clr    = high_fidelity ? 1 : 0;
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
     addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 8},
-        .dest = {.incr = 8},
+        .srca     = {.incr = 8},
+        .srcb     = {.incr = 8},
+        .dest     = {.incr = 8},
+        .fidelity = {.incr = 0, .clr = fidelity_clr},
     }
         .set(ADDR_MOD_7);
 
     addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 24},
-        .dest = {.incr = 8},
+        .srca     = {.incr = 8},
+        .srcb     = {.incr = 24},
+        .dest     = {.incr = 8},
+        .fidelity = {.incr = 0, .clr = fidelity_clr},
     }
         .set(ADDR_MOD_6);
 
     addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = 0x3F & -8}, // decrement srcB by 8
-        .dest = {.incr = 8},
+        .srca     = {.incr = 8},
+        .srcb     = {.incr = 0x3F & -8}, // decrement srcB by 8
+        .dest     = {.incr = 8},
+        .fidelity = {.incr = 0, .clr = fidelity_clr},
     }
         .set(ADDR_MOD_5);
+
+    if constexpr (high_fidelity)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0},
+            .srcb     = {.incr = 0},
+            .dest     = {.incr = 0},
+            .fidelity = {.incr = 1},
+        }
+            .set(ADDR_MOD_4);
+    }
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB); // reset both src counters to 0
 
@@ -164,12 +206,12 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
         {
             // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+            _bcast_cols_op_phased_<eltwise_binary_type, ADDR_MOD_7, fidelity_phases>(); // srcB: 0 -> 8
+            _bcast_cols_op_phased_<eltwise_binary_type, ADDR_MOD_5, fidelity_phases>(); // srcB: 8 -> 0
 
             // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+            _bcast_cols_op_phased_<eltwise_binary_type, ADDR_MOD_7, fidelity_phases>(); // srcB: 0 -> 8
+            _bcast_cols_op_phased_<eltwise_binary_type, ADDR_MOD_6, fidelity_phases>(); // srcB: 8 -> 32 (next face-row)
         }
 
         // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
