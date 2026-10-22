@@ -55,11 +55,6 @@ class TtFusedMTP(LightweightModule):
         it may be None only when the weights are loaded from ``weight_cache_path``.
         """
         super().__init__()
-        assert tp_axis == 1, (
-            f"tp_axis={tp_axis} unsupported: TtDistributedRmsNorm shards its weight with a hard-coded "
-            "dims=(None, 2) mapper (tt_distributed_rms_norm.py:_convert_and_cache_weight), so enorm/hnorm "
-            "shard over mesh columns whatever cluster_axis says. tp_axis=0 needs that fixed first."
-        )
         self.mesh_device = mesh_device
         self.mtp_config = mtp_config
         self.hidden_size = mtp_config.hidden_size
