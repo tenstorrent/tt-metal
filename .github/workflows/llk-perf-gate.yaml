@@ -51,7 +51,7 @@ permissions:
 
 env:
   # Stage 2 re-measures at most this many tests per arch, so its job stays short; see placement_check.py.
-  PLACEMENT_CAP: "1000"
+  PLACEMENT_CAP: "300"
 
 concurrency:
   group: llk-perf-gate-${{ github.event.pull_request.number || github.run_id }}-${{ (github.event.action == 'synchronize' || github.event.label.name == 'llk-perf-gate') && 'gate' || github.run_id }}
