@@ -8,8 +8,14 @@ no CUDA runtime or reference activation is required for generation.
 Base and SFT share the same architecture and identical prompt encoder, tokenizer,
 VAE and scheduler. Their diffusion transformer weights differ. Both variants are
 qualified separately. See [DESIGN.md](DESIGN.md) for numerical and placement
-choices, and [validation/RESULTS.md](validation/RESULTS.md) for measured PCC,
-relative RMS error, runtime, build provenance and outstanding limitations.
+choices and [tests/README.md](tests/README.md) for validation commands and asset
+requirements. Per-run reports, logs and generated images belong outside the
+source checkout; summarize validation evidence in the PR description or attach
+it as CI artifacts.
+
+Final independent 50-step image agreement has not met the current 0.99 image-PCC
+target for the tested workload. Passing component checks does not establish
+final-image accuracy.
 
 ## Scope
 
