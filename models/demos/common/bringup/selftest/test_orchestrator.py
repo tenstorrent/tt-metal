@@ -470,3 +470,24 @@ def test_a_passing_gate_is_not_redone_for_a_command_problem(orch):
     assert o.run() == DONE and o.led.status("C.1") == "PASS"
     assert [c for c in orch.calls() if ".implement." in c] == ["C.1.implement.1.md bringup-engineer"]
     assert o.led.state()["C.1"]["review"]
+
+
+def test_a_refused_commit_stops_the_run_and_resume_commits_without_a_rerun(orch, sandbox):
+    """F149: a gate that passed but whose commit git refused stops the run with no further agent attempt; the next run
+    commits it without running the gate or an agent (DeepSeek-V4.1 FIX.5: a 70 min gate re-run for a commit)."""
+    from models.demos.common.bringup.selftest.test_core import refusing_hook
+
+    refusing_hook(sandbox, "bringup/results/C.1_profile.json (613 KB) exceeds the 500 KB limit.")
+    runs = sandbox.repo / "runs.txt"
+    gate = {"cmd": f"echo run >> {runs} && {PY} tests/check.py", "metrics": {"pcc_out": ">= 0.99"}}
+    o = orch([impl_task(tests=None, gate=gate)], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}})
+    assert o.run() == STOPPED
+    assert o.led.status("C.1") == "COMMIT_PENDING" and orch.calls() == ["C.1.implement.1.md bringup-engineer"]
+    assert runs.read_text().count("run") == 2  # the pre-agent check and the gate after the agent
+    from models.demos.common.bringup import watch as W
+
+    assert W.events([ln for ln in orch.lines if "COMMIT PENDING" in ln])  # the supervisor's watch wakes on it
+    (sandbox.repo / "bringup/REFUSE").unlink()
+    assert o.run() == DONE
+    assert runs.read_text().count("run") == 2 and orch.calls() == ["C.1.implement.1.md bringup-engineer"]
+    assert o.led.status("C.1") == "PASS" and sandbox.git("log", "-1", "--format=%s") == "[toy][C.1] component"

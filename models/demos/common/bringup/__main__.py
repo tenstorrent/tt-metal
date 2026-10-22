@@ -6,6 +6,7 @@
     python -m models.demos.common.bringup status --spec S       ledger with verdicts and commits
     python -m models.demos.common.bringup next --spec S         tasks whose deps are all PASS
     python -m models.demos.common.bringup gate P2.3 --spec S [--commit] [--force]
+    python -m models.demos.common.bringup gate P2.3 --spec S --commit-only   F149: commit a passed gate git refused
     python -m models.demos.common.bringup sweep [prefix] --spec S [--commit]
     python -m models.demos.common.bringup validate --spec S     spec + ledger schema
 
@@ -24,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-from models.demos.common.bringup.core.gate import run_gate, task_commit
+from models.demos.common.bringup.core.gate import commit_only, run_gate, task_commit
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.core.spec import Spec
 
@@ -73,7 +74,10 @@ def cmd_next(a):
 @command("gate", "run one gate")
 def cmd_gate(a):
     spec, led = load(a)
-    res = run_gate(spec, led, a.task, commit=a.commit, force=a.force)
+    if a.commit_only:
+        res = commit_only(spec, led, a.task)
+    else:
+        res = run_gate(spec, led, a.task, commit=a.commit, force=a.force)
     print(led.task(a.task)["title"])
     print(res.summary())
     if res.commit:
@@ -419,6 +423,7 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--spec")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--force", action="store_true", help="run even if deps are not PASS")
+    ap.add_argument("--commit-only", action="store_true", help="gate: commit a passed gate git refused (F149)")
     ap.add_argument("--ledger-only", action="store_true", help="validate: skip the model-spec schema")
     ap.add_argument("--files", nargs="*", help="freeze: files to freeze (default: the task's 'tests')")
     ap.add_argument("--no-commit", action="store_true", help="freeze: do not commit")

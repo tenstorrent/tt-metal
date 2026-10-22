@@ -26,6 +26,9 @@ DEFERRED (F46): a component the implement agent deferred to the op code generato
 the CPU reference through the bridge (testing/cpu_bridge.py), so for its dependents it counts like PASS.
 
 REJECTED (F57): a perf pick the owner declined on its A/B report; the change was reverted. Done for its dependents.
+
+COMMIT_PENDING (F149): the gate passed but git refused its commit (a hook). Not done for its dependents until
+`gate <id> --commit-only` (or the orchestrator on resume) commits it; nothing re-runs, its outputs stay on disk.
 """
 
 from __future__ import annotations
@@ -39,7 +42,18 @@ from pathlib import Path
 
 import yaml
 
-STATUSES = ("TODO", "RUNNING", "PASS", "FAIL", "HANG", "BLOCKED", "STOPPED", "DEFERRED", "REJECTED")
+STATUSES = (
+    "TODO",
+    "RUNNING",
+    "PASS",
+    "FAIL",
+    "HANG",
+    "BLOCKED",
+    "STOPPED",
+    "DEFERRED",
+    "REJECTED",
+    "COMMIT_PENDING",
+)
 DONE_STATUSES = ("PASS", "DEFERRED", "REJECTED")  # a dependent may run after any
 
 
@@ -226,6 +240,7 @@ class Ledger:
                     e.setdefault("history", []).append({"t": now, "status": "RESET"})
                 e["status"] = "TODO"
                 e["attempts"] = 0
+                e.pop("commit_pending", None)  # F149: a rerun replaces the pending result
             self._save_state(state)
 
     def status(self, tid: str) -> str:

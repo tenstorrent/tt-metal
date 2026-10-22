@@ -10,11 +10,13 @@ A gate passes only if, in this order:
   4. the command exits 0 (exit 2 from the safe runner = HANG; the triage report is copied next to the log)
   5. every metric glob matches >= 1 recorded metric and every match meets its threshold
   6. every declared artifact exists
+A gate that passes but whose commit git refuses is COMMIT_PENDING (F149): `commit_only` commits it later, nothing re-runs.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import operator
 import os
@@ -41,7 +43,7 @@ DEFAULT_TRAILER = "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthrop
 @dataclass
 class GateResult:
     tid: str
-    verdict: str  # PASS FAIL HANG BLOCKED
+    verdict: str  # PASS FAIL HANG BLOCKED COMMIT_PENDING
     rc: int | None = None
     lines: list[str] = field(default_factory=list)
     log: Path | None = None
@@ -50,7 +52,7 @@ class GateResult:
 
     @property
     def exit_code(self) -> int:
-        return {"PASS": 0, "BLOCKED": 2}.get(self.verdict, 1)
+        return {"PASS": 0, "BLOCKED": 2, "COMMIT_PENDING": 3}.get(self.verdict, 1)
 
     def summary(self) -> str:
         return "\n".join([f"{self.verdict} {self.tid}"] + self.lines)
@@ -399,6 +401,10 @@ def run_gate(
     'on' side): recorded, checked and committed like a run of the command, without running it again."""
     task = ledger.task(tid)
     state = ledger.state()
+    if record and reuse is None and (state.get(tid) or {}).get("status") == "COMMIT_PENDING":  # F149: never re-run
+        if commit:
+            return commit_only(spec, ledger, tid)
+        return GateResult(tid, "COMMIT_PENDING", lines=[f"  passed, commit pending: `gate {tid} --commit-only`"])
     blocked = [d for d in task.get("deps", []) if not satisfied(state.get(d, {}).get("status"))]
     if blocked and not force:
         return GateResult(tid, "BLOCKED", lines=[f"  deps not PASS or DEFERRED: {blocked}"])
@@ -487,10 +493,69 @@ def run_gate(
                     commit_subject(spec, task),
                     f"Gate: PASS\n" + "\n".join(res.lines),
                 )
-        except RuntimeError as e:  # F110: a refused commit (a pre-commit hook) is a FAIL, never a PASS left uncommitted
-            hook = [ln for ln in str(e).splitlines() if ln.strip() and "Skipped" not in ln and "Passed" not in ln]
-            why = ["  the gate passed but git refused the commit (fix what the hook names, then rerun):"]
-            why += [f"    {ln}" for ln in hook[-25:]]
-            res.verdict, res.lines = "FAIL", res.lines + why
-            ledger.update(tid, status="FAIL", reason=res.lines, history_add={"t": now(), "status": "FAIL"})
+        except RuntimeError as e:  # F149: the checks passed; only the commit waits (F110 made it a FAIL and a re-run)
+            return _refused(spec, ledger, task, res, e)
+    return res
+
+
+TOO_LARGE = re.compile(r"(\S+) \((\d+) KB\) exceeds")  # scripts/check_file_size.py, the repo's large-file hook
+
+
+def task_files_key(repo: Path, task: dict) -> str:
+    """The content of the task's own files (its paths and frozen files): what a pending commit must still match."""
+    files = sorted(set(_files_under(repo, list(task.get("paths") or []))))
+    text = "\n".join(f"{f}\0{freeze.sha256_file(repo / f)}" for f in files)
+    return hashlib.sha256((text + json.dumps(task.get("frozen"), sort_keys=True)).encode()).hexdigest()[:16]
+
+
+def _refused(spec: Spec, ledger: Ledger, task: dict, res: GateResult, err: Exception, pend: dict | None = None):
+    """F149: a passed gate whose commit git refused stays COMMIT_PENDING with the hook's output; its outputs stay."""
+    tid = task["id"]
+    hook = [ln for ln in str(err).splitlines() if ln.strip() and "Skipped" not in ln and "Passed" not in ln][-25:]
+    big = [m.group(1) for ln in hook for m in [TOO_LARGE.search(ln)] if m]
+    why = [
+        "  the gate passed; git refused its commit. Nothing re-runs: fix what the hook names, then "
+        f"`python -m models.demos.common.bringup gate {tid} --commit-only --spec <spec>` (or `resume`)"
+    ]
+    if big:
+        why.append(f"  too large for the repo: {', '.join(big)} (a framework fix keeps it out of the commit)")
+    why += [f"    {ln}" for ln in hook]
+    pend = dict(pend or {"lines": res.lines, "task_files": task_files_key(spec.repo, task)})
+    pend.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), hook=hook, too_large=big)
+    ledger.update(
+        tid,
+        status="COMMIT_PENDING",
+        commit_pending=pend,
+        reason=why,
+        history_add={"t": pend["t"], "status": "COMMIT_PENDING"},
+    )
+    res.verdict, res.commit, res.lines = "COMMIT_PENDING", None, res.lines + why
+    return res
+
+
+def commit_only(spec: Spec, ledger: Ledger, tid: str) -> GateResult:
+    """F149: commit a passed gate whose commit was refused, from the outputs it left; nothing runs. Refused again: it
+    stays pending and names the files too large."""
+    task, entry = ledger.task(tid), ledger.state().get(tid, {})
+    pend = entry.get("commit_pending")
+    if entry.get("status") != "COMMIT_PENDING" or not pend:
+        return GateResult(tid, "FAIL", lines=[f"  no pending commit (status {entry.get('status', 'TODO')})"])
+    res = GateResult(tid, "PASS", 0, list(pend.get("lines") or []))
+    if pend.get("task_files") and pend["task_files"] != task_files_key(spec.repo, task):
+        res.verdict = "COMMIT_PENDING"
+        res.lines.append(f"  the task's files changed since its gate passed: not committed (`rerun --from {tid}`)")
+        return res
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    ledger.update(tid, status="PASS", commit_pending=None, reason=[], history_add={"t": now, "status": "COMMITTED"})
+    try:
+        with ledger.locked():
+            res.commit = git_commit(
+                spec,
+                stage_paths(spec, ledger, task),
+                commit_subject(spec, task),
+                "Gate: PASS (committed without a re-run, F149)\n" + "\n".join(res.lines),
+            )
+    except RuntimeError as e:
+        return _refused(spec, ledger, task, res, e, pend)
+    res.lines.append(f"  committed without a re-run (the gate passed at {pend.get('t')})")
     return res

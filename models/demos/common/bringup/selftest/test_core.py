@@ -296,18 +296,84 @@ def test_state_keeps_the_gated_metrics_and_results_keep_all(sandbox):
     assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995}
 
 
-def test_a_refused_commit_is_a_fail_not_an_uncommitted_pass(sandbox):
-    """F110: when git refuses the gate's commit (a pre-commit hook), the task is FAIL with the hook's output as the
-    reason, never PASS with its change left uncommitted (DeepSeek-V4.1 P.5: prefer-expect-error refused the commit,
-    the orchestrator crashed with P.5 marked PASS)."""
+def refusing_hook(sandbox, text: str):
+    """A pre-commit hook that refuses while bringup/REFUSE exists (the overseer's framework fix removes it)."""
     hook = sandbox.repo / ".git" / "hooks" / "pre-commit"
-    hook.write_text("#!/bin/sh\necho 'prefer-expect-error: use the expect_error fixture' >&2\nexit 1\n")
+    hook.write_text(f"#!/bin/sh\nif [ -e bringup/REFUSE ]; then echo '{text}' >&2; exit 1; fi\nexit 0\n")
     hook.chmod(0o755)
+    (sandbox.repo / "bringup").mkdir(exist_ok=True)
+    (sandbox.repo / "bringup/REFUSE").write_text("")
+
+
+def counted(cmd: str, sandbox) -> str:
+    """The gate command, appending a line to runs.txt every time it runs."""
+    return f"echo run >> {sandbox.repo / 'runs.txt'} && {cmd}"
+
+
+def test_a_refused_commit_is_pending_and_commits_without_a_rerun(sandbox):
+    """F149 (was F110): a gate whose checks pass but whose commit git refuses is COMMIT_PENDING with the hook's output,
+    never PASS with the change uncommitted (DeepSeek-V4.1 P.5) and never a FAIL that re-runs the gate (FIX.6 / FIX.5:
+    35 and 70 min of passed checks re-run for a commit). Its outputs stay; commit-only commits them, running nothing."""
+    from models.demos.common.bringup.core.gate import commit_only
+
+    refusing_hook(sandbox, "prefer-expect-error: use the expect_error fixture")
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    cmd = (
+        counted(record_cmd(pcc_out=0.995), sandbox)
+        + f" && {PY} -c \"open('bringup/results/A.1_profile.json', 'w').write('{{}}')\""
+    )
+    led = sandbox.tasks(task("A.1", cmd, metrics={"pcc_*": ">= 0.99"}, paths=["src"]), task("A.2", "true", ["A.1"]))
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "COMMIT_PENDING" and not res.commit and res.exit_code == 3
+    assert any("prefer-expect-error" in ln for ln in res.lines)
+    st = led.state()["A.1"]
+    assert st["status"] == "COMMIT_PENDING" and st["metrics"] == {"pcc_out": 0.995}
+    assert any("prefer-expect-error" in ln for ln in st["commit_pending"]["hook"])
+    assert led.runnable() == ["A.1"]  # not done: its dependent waits for the commit
+
+    # still refused: a gate run on the pending task retries the commit only; nothing runs, the outputs stay
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "COMMIT_PENDING" and (sandbox.repo / "runs.txt").read_text() == "run\n"
+    assert (sandbox.repo / "bringup/results/A.1_profile.json").exists()
+    assert (sandbox.repo / "bringup/results/A.1.json").exists()
+
+    (sandbox.repo / "bringup/REFUSE").unlink()  # the overseer's fix
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "PASS" and res.commit, res.summary()
+    assert (sandbox.repo / "runs.txt").read_text() == "run\n"
+    committed = set(sandbox.git("show", "--name-only", "--format=", "HEAD").split())
+    assert {"src/impl.py", "bringup/results/A.1.json", "bringup/results/A.1_profile.json"} <= committed
+    st = led.state()["A.1"]
+    assert st["status"] == "PASS" and not st.get("commit_pending")
+    assert sandbox.git("status", "--porcelain", "bringup", "src") == ""
+
+
+def test_commit_only_names_a_file_too_large_and_stays_pending(sandbox):
+    """F149: a refusal by the repo's large-file hook names the file; the task stays pending for the overseer's fix."""
+    from models.demos.common.bringup.core.gate import commit_only
+
+    refusing_hook(sandbox, "bringup/results/A.1_profile.json (613 KB) exceeds the 500 KB limit.")
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995), metrics={"pcc_*": ">= 0.99"}))
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "COMMIT_PENDING"
+    assert led.state()["A.1"]["commit_pending"]["too_large"] == ["bringup/results/A.1_profile.json"]
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "COMMIT_PENDING" and any("too large for the repo" in ln for ln in res.lines)
+
+
+def test_commit_only_refuses_when_the_tasks_files_changed(sandbox):
+    """F149: commit-only commits what the gate tested; a task file changed since then needs the gate."""
+    from models.demos.common.bringup.core.gate import commit_only
+
+    refusing_hook(sandbox, "refused")
     (sandbox.repo / "src").mkdir()
     (sandbox.repo / "src/impl.py").write_text("x = 1\n")
     led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995), metrics={"pcc_*": ">= 0.99"}, paths=["src"]))
-    res = run_gate(sandbox.spec, led, "A.1", commit=True)
-    assert res.verdict == "FAIL" and not res.commit
-    assert any("prefer-expect-error" in ln for ln in res.lines)
-    st = led.state()["A.1"]
-    assert st["status"] == "FAIL" and any("git refused the commit" in ln for ln in st["reason"])
+    assert run_gate(sandbox.spec, led, "A.1", commit=True).verdict == "COMMIT_PENDING"
+    (sandbox.repo / "bringup/REFUSE").unlink()
+    (sandbox.repo / "src/impl.py").write_text("x = 2\n")
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "COMMIT_PENDING" and any("changed since its gate passed" in ln for ln in res.lines)
+    led.reset(["A.1"])
+    assert led.status("A.1") == "TODO" and "commit_pending" not in led.state()["A.1"]
