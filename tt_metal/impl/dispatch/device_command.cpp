@@ -136,26 +136,7 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type) {
-    // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
-    // completion counter address from the stream index.
-    TT_ASSERT(this->ctx_ != nullptr, "DeviceCommand used without a MetalContext");
-    const auto& ctx = *this->ctx_;
-    if (!ctx.hal().has_stream_registers() &&
-        (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
-        const auto& mem_map = ctx.dispatch_mem_map();
-        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
-        const uint32_t completion_counter_offset = mem_map.get_completion_counter_offset(cq_id);
-        address = mem_map.get_dispatch_message_addr_start() + completion_counter_offset * this->l1_alignment +
-                  mem_map.get_sync_offset(stream - first_stream);
-        uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
-        new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
-        if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
-            new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
-        }
-        flags = new_flags;
-        stream = 0;
-    }
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -186,8 +167,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id) {
-    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count, cq_id);
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
+    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
         *stall_cmd = {};
@@ -551,6 +532,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t go_signal,
     uint32_t wait_stream,
     uint8_t multicast_go_offset,
+    uint32_t go_ring_slot,
     DispatcherSelect dispatcher_type) {
     uint32_t lengthB = sizeof(CQDispatchCmd);
     TT_ASSERT(
@@ -563,6 +545,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.go_signal = go_signal;
         mcast_cmd->mcast.wait_count = wait_count;
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
+        mcast_cmd->mcast.go_ring_slot = go_ring_slot;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
