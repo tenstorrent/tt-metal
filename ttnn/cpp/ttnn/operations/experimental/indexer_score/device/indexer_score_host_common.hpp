@@ -16,6 +16,8 @@
 #include <tt_stl/assert.hpp>           // TT_FATAL
 #include <tt-metalium/constants.hpp>   // tt::constants::TILE_WIDTH
 #include <tt-metalium/core_coord.hpp>  // CoreCoord
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/distributed/types.hpp"                 // ttnn::MeshCoordinate
 #include "ttnn/operations/ccl/ccl_common.hpp"         // get_linearized_index_from_physical_coord
@@ -55,6 +57,36 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
     const bool single_chunk = (qk_batch_heads == subblock_basis) && !stream_heads;
     const uint32_t qk_col_batch = (KC >= 2 && single_chunk) ? KC : 1u;
     return {qk_batch_heads, qk_col_batch};
+}
+
+// Default config: all heads resident, the widest k chunk that fits L1 (full strip path), else {} (one head at a time).
+inline IndexerScoreProgramConfig default_program_config(
+    uint32_t Hi,
+    uint32_t Tt,
+    uint32_t Dt,
+    uint32_t q_tile_bytes,
+    uint32_t k_tile_bytes,
+    uint64_t l1_budget,
+    uint32_t key_compression_ratio = 1) {
+    const uint64_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr uint64_t slack_divisor = 8;
+    for (uint32_t KC : {16u, 8u, 4u, 2u}) {  // widest k chunk first
+        if (KC > Tt) {
+            continue;
+        }
+        // Both factories' make_cb sizes at QC 1 and HB Hi with bf16 accumulation, plus an eighth of slack.
+        const uint64_t bytes = uint64_t(Hi) * Dt * q_tile_bytes + 2ull * KC * Dt * k_tile_bytes +
+                               (uint64_t(Hi) + key_compression_ratio + 1 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
+        if (bytes + bytes / slack_divisor <= l1_budget) {
+            return {tt::constants::TILE_HEIGHT, KC * tt::constants::TILE_WIDTH, 0};
+        }
+    }
+    return {};
+}
+
+// Heads per DEST pass of the gate multiply; above LoFi a 64 head bf16 DEST sum loses more than the multiply does.
+inline uint32_t gate_mul_heads_per_pass(tt::tt_metal::MathFidelity math_fidelity) {
+    return math_fidelity == tt::tt_metal::MathFidelity::LoFi ? 0u : 8u;
 }
 
 // Shared physical axis tables preserve harvested/non-contiguous coordinates.

@@ -21,7 +21,8 @@ void bind_generalized_moe_gate(nb::module_& mod) {
         Writes results into ``output_tensor`` and ``output_indices_tensor`` (same tensors are returned).
 
         Sharding / cores:
-            All five tensors are HEIGHT_SHARDED in L1 with ROW_MAJOR orientation — one shard per core.
+            All five tensors are HEIGHT_SHARDED in L1 with ROW_MAJOR orientation — one shard per core —
+            except an interleaved ``input_tensor`` (see Args), whose cores come from ``bias_tensor``'s grid.
             There is no fixed grid: the op runs on exactly the cores covered by ``input_tensor``'s shard
             grid (the caller chooses it). Each core independently gates one token over all experts, so the
             number of cores equals the leading (token) shard dimension of the input — ``batch`` in the tests
@@ -65,11 +66,14 @@ void bind_generalized_moe_gate(nb::module_& mod) {
             input_tensor: Router logits, BF16. Shard shape ``(num_blocks*32, 32)`` (num_blocks tiles stacked
                 along the height); each 32x32 tile carries one 256-expert block in its top-left 16x16 face
                 (face0) only — the rest of the tile is padding. One shard/token per core.
+                With 256 experts it can also be the router matmul's interleaved ``[1, 1, B, 256]`` TILE tensor,
+                one token row per core of the bias grid, with ROW_MAJOR bias and output shard specs.
             bias_tensor: Score-correction bias added for selection only (output scores stay unbiased), BF16.
                 Same shard spec / shape / orientation as ``input_tensor`` (transposed within each 16x16 block).
+                With an interleaved ``input_tensor`` its shard grid is the reference grid: one token per core.
             input_indices_tensor: Routing indices (the global expert id per slot), UInt16. Same sharding as
                 ``input_tensor`` — shard shape ``(num_blocks*32, 32)``, matching orientation, and a grid that
-                contains the input grid; only the dtype and contents differ. One 32x32 tile per block holds
+                contains the input grid (the bias grid for an interleaved input); only the dtype and contents differ. One 32x32 tile per block holds
                 that block's global ids (block b = arange(256) + b*256), transposed within each 16x16 block.
             output_tensor: Preallocated BF16 buffer for the normalized top-``topk`` scores. Shard shape
                 ``(32, 32)`` — a single tile per token; only the first ``topk`` entries are valid.

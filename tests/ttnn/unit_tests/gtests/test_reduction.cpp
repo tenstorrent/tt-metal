@@ -19,6 +19,8 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <tt_stl/small_vector.hpp>
@@ -772,7 +774,9 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // - Among all valid power-of-two splits, the function selects the one that
 //   minimizes the makespan score kLocalCostFactor * Wt_local +
 //   kFinalCostFactor * Wt_final (constants defined next to the sweep in
-//   topk_utils.cpp, fitted to silicon measurements). Warning to future
+//   topk_utils.cpp, fitted to silicon measurements); with tree_merge the score is
+//   kLocalCostFactor * Wt_local + kTreeRoundCostFactor * log2(num_cores) +
+//   kFinalCostFactor * Kt, and only splits wider than k qualify. Warning to future
 //   editors: a greedy first-valid / max-cores pick is NOT equivalent -- it
 //   maximizes the serial final-stage gather and measures slower on silicon,
 //   so don't simplify the sweep back to that.
@@ -794,7 +798,7 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // BH L1; e.g. a 13x10 compute grid on that box -- p150a worker grids vary
 // per unit with harvesting, 12x10 on others, which is why production code
 // queries the grid instead of assuming one). If kLocalCostFactor /
-// kFinalCostFactor or the sweep order changes, these assertions catch it
+// kFinalCostFactor / kTreeRoundCostFactor or the sweep order changes, these assertions catch it
 // even though every numerical topk test stays green.
 TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
     constexpr uint32_t l1_size = 1536 * 1024;                                       // BH L1 per core
@@ -823,14 +827,43 @@ TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
         {2048, 32, 128, 8, 2},
         {4096, 32, 256, 8, 2},
     }};
-    for (const auto& c : cases) {
-        const auto config = ttnn::prim::find_topk_core_config(
-            c.width, min_dim, c.width / 2, c.k, core_range, l1_size, value_tile_size, index_tile_size);
-        ASSERT_TRUE(config.has_value()) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->split_size, c.expected_split) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->num_cores, c.width / c.expected_split) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->selected_x, c.expected_x) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->selected_y, c.expected_y) << "W=" << c.width << " k=" << c.k;
+    // Tree merge rows: argmin of 7 * Wt_local + 3 * log2(num_cores) + 2 * Kt over the valid splits wider than k.
+    // The final core gathers only the tree's Kt surviving tiles, so 32-bit values or indices pick the same splits.
+    const std::array<Case, 7> tree_cases{{
+        {8192, 64, 128, 8, 8},
+        {8192, 50, 128, 8, 8},
+        {8192, 32, 128, 8, 8},
+        {32768, 64, 512, 8, 8},
+        {1024, 32, 64, 8, 2},
+        {2048, 32, 64, 8, 4},
+        {4096, 32, 64, 8, 8},
+    }};
+    constexpr uint32_t wide_tile_size = tt::tile_size(tt::DataFormat::UInt32);  // 4096, as fp32 values
+    const std::array<std::pair<uint32_t, uint32_t>, 4> tree_tile_sizes{{
+        {value_tile_size, index_tile_size},
+        {value_tile_size, wide_tile_size},
+        {wide_tile_size, index_tile_size},
+        {wide_tile_size, wide_tile_size},
+    }};
+    for (const bool tree_merge : {false, true}) {
+        // The non tree rows run bf16 values and uint16 indices only.
+        const size_t num_tile_sizes = tree_merge ? tree_tile_sizes.size() : 1;
+        for (size_t t = 0; t < num_tile_sizes; ++t) {
+            const auto [value_size, index_size] = tree_tile_sizes[t];
+            for (const auto& c : tree_merge ? tree_cases : cases) {
+                const auto config = ttnn::prim::find_topk_core_config(
+                    c.width, min_dim, c.width / 2, c.k, core_range, l1_size, value_size, index_size, tree_merge);
+                const std::string where = "W=" + std::to_string(c.width) + " k=" + std::to_string(c.k) +
+                                          " tree=" + std::to_string(tree_merge) +
+                                          " value_tile=" + std::to_string(value_size) +
+                                          " index_tile=" + std::to_string(index_size);
+                ASSERT_TRUE(config.has_value()) << where;
+                EXPECT_EQ(config->split_size, c.expected_split) << where;
+                EXPECT_EQ(config->num_cores, c.width / c.expected_split) << where;
+                EXPECT_EQ(config->selected_x, c.expected_x) << where;
+                EXPECT_EQ(config->selected_y, c.expected_y) << where;
+            }
+        }
     }
 
     // Grids that cannot host the multi-core layout (local rectangle + final-core
@@ -838,7 +871,7 @@ TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
     // single-core; single-row and two-row grids are the tight cases.
     for (const auto& small_range : {tt::tt_metal::CoreRange({0, 0}, {7, 0}), tt::tt_metal::CoreRange({0, 0}, {7, 1})}) {
         const auto config = ttnn::prim::find_topk_core_config(
-            2048, min_dim, 1024, 32, small_range, l1_size, value_tile_size, index_tile_size);
+            2048, min_dim, 1024, 32, small_range, l1_size, value_tile_size, index_tile_size, false);
         EXPECT_FALSE(config.has_value()) << "range=" << small_range.str();
     }
 }

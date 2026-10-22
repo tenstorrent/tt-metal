@@ -13,6 +13,10 @@
 // freshly allocated output pages hold garbage, and the contract promises zero-filled tile
 // padding, so those units exist purely to write zeros.
 //
+// When half tile units would leave cores idle, finish_units_per_tile splits each half into its two 16x16 faces
+// (four units per tile). A face unit gathers its face's 16 columns, stages them in the same half tile page and
+// writes that face only; everything below describes the half tile units.
+//
 // Per unit the gather load is SPLIT ACROSS BOTH RISCs: the reader (BRISC) owns unit rows
 // [0, 8) and the writer (NCRISC) rows [8, 16). Each side reads its own <=8 RM u32
 // index-stick segments into private scratch, zero-fills ITS row ranges of the two staging
@@ -44,6 +48,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include <algorithm>
 #include <limits>
 
 using namespace tt::constants;
@@ -77,17 +82,22 @@ constexpr uint32_t bounce_slot_bytes = 64;
 constexpr uint32_t stick_segment_bytes = TILE_WIDTH * sizeof(uint32_t);
 constexpr uint32_t stick_rows_per_risc = TILE_HEIGHT / 4;  // 8
 
+// Face units halve each core's gather latency until the busier NoC saturates; measured on a p100a over op sweep rows.
+constexpr uint32_t kNocSaturationGathers = 6144;
+constexpr uint32_t kMinHalfUnitsForFaces = 40;
+
 struct FinishWorkSplit {
     uint32_t width_tiles = 0;          // logits W_p / 32
     uint32_t total_tile_rows = 0;      // logits padded volume / W_p / 32 (all batches)
     uint32_t row_tiles_per_batch = 0;  // logits R_p / 32
     uint32_t k_tiles = 0;              // div_up(k_rounded, 32)
     uint32_t k_rounded = 0;
-    uint32_t total_units = 0;  // total_tile_rows * k_tiles * 2 (two face-pair halves per tile)
+    uint32_t units_per_tile = 2;  // 2 face-pair halves, or 4 single faces when units are scarce
+    uint32_t total_units = 0;     // total_tile_rows * k_tiles * units_per_tile
     bool index_is_u32 = false;
 };
 
-FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
+FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
     FinishWorkSplit split;
     const auto& padded = input.padded_shape();
     split.width_tiles = padded[-1] / TILE_WIDTH;
@@ -95,7 +105,8 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
     split.row_tiles_per_batch = padded[-2] / TILE_HEIGHT;
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
-    split.total_units = split.total_tile_rows * split.k_tiles * 2;
+    split.units_per_tile = finish_units_per_tile(input, indices, num_cores);
+    split.total_units = split.total_tile_rows * split.k_tiles * split.units_per_tile;
     split.index_is_u32 = ttnn::prim::padded_width_needs_uint32_indices(padded[-1]);
     return split;
 }
@@ -111,8 +122,8 @@ void set_runtime_args(
     const Tensor& indices,
     const Tensor& values_out,
     const Tensor& indices_out) {
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, /*num_cores*/ grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
 
     const uint32_t logical_rows = input.logical_shape()[-2];
@@ -155,6 +166,21 @@ void set_runtime_args(
 
 }  // namespace
 
+uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint32_t num_cores) {
+    const auto& padded = input.padded_shape();
+    const uint32_t total_tile_rows = (input.physical_volume() / padded[-1]) / TILE_HEIGHT;
+    const uint32_t k_rounded = indices.logical_shape()[-1];
+    const uint32_t half_units = total_tile_rows * tt::div_up(k_rounded, TILE_WIDTH) * 2;
+    // The reader gathers rows r % 16 < 8 of each tile row and the writer the others, each on its own NoC.
+    const uint32_t rows = input.logical_shape()[-2];
+    const uint32_t reader_rows =
+        rows / (TILE_HEIGHT / 2) * stick_rows_per_risc + std::min(rows % (TILE_HEIGHT / 2), stick_rows_per_risc);
+    const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
+    const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
+    const bool faces_fit = 2 * half_units <= num_cores;
+    return faces_fit && (noc_gathers <= kNocSaturationGathers || half_units >= kMinHalfUnitsForFaces) ? 4 : 2;
+}
+
 TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
@@ -166,8 +192,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
 
     auto program = tt::tt_metal::CreateProgram();
 
-    const auto split = compute_work_split(input, indices);
     const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto split = compute_work_split(input, indices, /*num_cores*/ grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
     const auto& all_cores = unit_split.all_cores;
 
@@ -199,7 +225,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
 
     // Reader -> writer staging: one page per face-pair half, double-buffered. The page byte
     // layout is EXACTLY the output tile's face-pair range, so the writer issues one
-    // contiguous write per page.
+    // contiguous write per page (a face unit writes its own face of it).
     const auto values_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * value_half_bytes, {{values_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(values_cb_index, value_half_bytes);
@@ -217,7 +243,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         reader_bounce_cb_index,
         values_cb_index,
         indices_cb_index,
-        split.index_is_u32 ? 1u : 0u};
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
@@ -235,7 +262,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         writer_bounce_cb_index,
         value_half_bytes,
         idx_half_bytes,
-        split.index_is_u32 ? 1u : 0u};
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
