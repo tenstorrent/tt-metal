@@ -61,8 +61,9 @@ _INTERVALS = {
     "one-token": lambda L, C: (0, 1),
 }
 # The output NRMSE bar is calibrated on whole intervals, where thousands of rows average out. A one-token output is a
-# single row, and per-row output NRMSE spreads to about 3.2% (QuietBox SP4xTP1: median 1.9%, max 3.2%).
-_INTERVAL_OUTPUT_NRMSE = {"one-token": 0.035}
+# single row, and per-row output NRMSE spreads to about 3.2% (QuietBox SP4xTP1: median 1.9%, max 3.2%). The looser
+# bar applies to the LoudBox and QuietBox rings only; Galaxy keeps 2%.
+_INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-token"): 0.035}
 
 
 @pytest.mark.parametrize(
@@ -173,7 +174,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
             nrmse=LayerNrmseThresholds(
-                output=_INTERVAL_OUTPUT_NRMSE.get(interval, 0.02),
+                output=_INTERVAL_OUTPUT_NRMSE.get((layout, interval), 0.02),
                 recurrent=0.05,
                 convolution=KIMI_K3_CONVOLUTION_NRMSE,
             ),
