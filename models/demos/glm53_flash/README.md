@@ -34,7 +34,9 @@ prompt: for prompts up to 2 K tokens the per-length traced prefill (replay time)
 traced). The sequence-parallel prefill writes a prompt into the same slot of every row, so one prefill fills 8 slots
 with the same prompt; rows with several users per row prefilled them one after another. Filling every slot with a
 distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughput (~2.2 K tok/s at 1 M, ~2 K at
-64 K) is the capacity limit, e.g. 32 distinct 1 M prompts take ~4.2 h to prefill.
+64 K) is the capacity limit, e.g. 32 distinct 1 M prompts take ~4.2 h to prefill. The users x ISL envelope of the
+memory planner (`tt/memory_plan.py`) is measured at every point: 32 x 1 M, 64 x 512 K, 128 x 256 K and 256 x 128 K
+all fit with 1.1-2.0 GiB per chip to spare.
 
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
@@ -46,6 +48,7 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 | 32  | Galaxy 8x4 (Blackhole) | 1 047 612 (user-partitioned cache) | 456-489 s | 6.6 | 33 | 210 | one run (needle depth 0.56, gen 160): 4 prompts per row prefilled one after another (each replicated to the 8 rows, 31 min to fill the 32 slots) at 2142-2296 tok/s; needle retrieved by all 32 slots, the 32 chains bit-identical over 160 tokens; decode step 152.1 ms through the regions expert path |
 | 64  | Galaxy 8x4 (Blackhole) | 525 183 (user-partitioned cache, 2 slots per chip) | 223-240 s | 5.6 | 33 | 359 | one run (needle depth 0.56, gen 32): 8 prompts per row prefilled one after another at 2187-2354 tok/s; decode step 178.2 ms; 27 of 64 slots wrote the passphrase within 32 tokens, the rest were still reasoning (quoting it) when cut: gen-160 rerun queued |
 | 128 | Galaxy 8x4 (Blackhole) | 261 769 (user-partitioned cache, 4 slots per chip) | 109-123 s | 5.3 | 33 | 681 | one run (needle depth 0.56): 16 prompts per row prefilled one after another at 2126-2400 tok/s; decode step 188.1 ms; needle retrieved by all 128 slots, users of a row bit-identical; 1.63 GiB free after the prefills |
+| 256 | Galaxy 8x4 (Blackhole) | 130 844 (user-partitioned cache, 8 slots per chip) | 55-63 s | 5.0 | 19 | 1287 | one run (needle depth 0.56): 32 prompts per row prefilled one after another at 2078-2395 tok/s; decode step 199.0 ms; needle retrieved by all 256 slots, all 256 chains bit-identical; 1.12 GiB free after the prefills |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.2 s | 6.9 | - | 14 | one run (multimodal demo): eager vision tower 90 ms + prefill; decode step 145 ms; 45 layers bfp4 experts; answer identical to HF (one-run re-measure with today's defaults queued) |
 
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
