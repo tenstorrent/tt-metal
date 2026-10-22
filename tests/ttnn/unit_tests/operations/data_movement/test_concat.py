@@ -923,10 +923,6 @@ def test_sharded_concat_rank3_width_multicore(device, layout, num_inputs, shape)
     )
 
 
-# Ragged height sharding: the flattened row count (prod of dims[:-1]) is not a multiple of the
-# shard height, so the last core runs a partial arg set. ConcatS2SRMProgramFactory sized that
-# from padded_shape()[-2], which under-counts as soon as the leading dims are not all 1 -- the
-# last core then copied too few rows and left the tail of the output shard uninitialised.
 @pytest.mark.parametrize("width", [8, 24])
 @pytest.mark.parametrize(
     "a_buffer, b_buffer, out_buffer",
@@ -950,6 +946,10 @@ def test_concat_row_major_mixed_buffer_types(device, width, a_buffer, b_buffer, 
     assert_equal(torch.cat([torch_a, torch_b], dim=-2), ttnn.to_torch(output))
 
 
+# Ragged height sharding: the flattened row count (prod of dims[:-1]) is not a multiple of the
+# shard height, so the last core runs a partial arg set. ConcatS2SRMProgramFactory sized that
+# from padded_shape()[-2], which under-counts as soon as the leading dims are not all 1 -- the
+# last core then copied too few rows and left the tail of the output shard uninitialised.
 @pytest.mark.parametrize(
     "shape",
     [
