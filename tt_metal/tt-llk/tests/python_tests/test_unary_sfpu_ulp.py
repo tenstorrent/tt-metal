@@ -135,7 +135,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
 
 def _sweep_ops():
     """Every unary op with a row in the table, gating or emitting: the row is the
-    enrolment, and an op without one has nowhere to be written."""
+    enrolment, and the sweep collects only the ops the table names."""
     return sorted(set(enrolled_ops()) & swept_unary_ops(), key=lambda op: op.name)
 
 

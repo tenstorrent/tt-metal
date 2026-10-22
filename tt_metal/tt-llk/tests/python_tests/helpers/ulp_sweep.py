@@ -848,7 +848,9 @@ def _incomplete_grids() -> list[tuple[MathOperation, DataFormat, DataFormat, int
 def finish_emit(arch, clean: bool, path: Path) -> dict[MathOperation, tuple[Row, ...]]:
     """Write this session's measurements into the table at *path*
     (:func:`write_table`) and return the rows each written op holds now, or raise
-    :class:`EmitRefused`."""
+    :class:`EmitRefused`. :func:`write_table` can also raise
+    :class:`~helpers.ulp_domains.TableError` (a ``ValueError``): the table on disk does
+    not load, or the rewrite would not read back, or would not resolve, once written."""
     if arch != MEASURED_ARCH:
         raise EmitRefused(
             f"ran on {arch.name}, but the table's unkeyed rows are "

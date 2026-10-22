@@ -435,7 +435,7 @@ def test_a_list_re_emitted_as_an_unmeasurable_row_raises_the_baseline():
     )
     changes = compare(_tanh(past), plain)
     assert [(c.kind, c.segment) for c in changes] == [(Kind.BASELINE_RAISED, None)]
-    assert changes[0].is_regression
+    assert changes[0].kind.loosens
     assert compare(plain, plain) == []
 
 

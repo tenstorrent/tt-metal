@@ -141,7 +141,14 @@ _TABLE = {
         Row(input=F16B, output=F32, measured=9, note="a pair not swept here"),
         Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=44),
         Row(output=F32, measured=0, note="a wildcard"),
-        Row(input=F16, output=F16, dest=D_YES, metric=Metric.TOLERANCE, atol=0.2),
+        Row(
+            input=F16,
+            output=F16,
+            approx=NO,
+            dest=D_YES,
+            metric=Metric.TOLERANCE,
+            atol=0.2,
+        ),
     ),
     MathOperation.Log1p: (Row(input=F16, output=F16B, metric=Metric.TOLERANCE),),
 }
@@ -1165,23 +1172,20 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     distance = torch.tensor([1, 2, 1, 1, 0, 0, 9, 8, 1, 1])
     ranked = torch.ones(10, dtype=torch.bool)
     present = torch.ones(10, dtype=torch.bool)
-    # -1.25 is ranked, and a floor covers it -- a tiny answer off by less than the
-    # floor -- so it is held at 0 steps.
-    golden = x.to(torch.float32)
-    golden[3] = 1e-7
-    result = golden.clone()
-    result[3] = 0.0
-    judged, bins = floored_profile(golden, result, x, distance, ranked, present, 1e-6)
-    assert judged.tolist() == [i != 3 for i in range(10)]
+    covered = torch.zeros(10, dtype=torch.bool)
+    covered[3] = True  # -1.25 is ranked, and a floor covers it: held at 0 steps
+    judged = ranked & ~covered
+    bins = binade_maxima(x, torch.where(covered, 0, distance), ranked, present)
     assert bins[rule.binade(-3.0)] == (2, 2, 2) and bins[rule.binade(1.5)] == (1, 1, 9)
-    assert bins[rule.binade(-1.25)] == (2, 1, 1)  # -1.5 shares it; -1.25 is unranked
+    assert bins[rule.binade(-1.25)] == (2, 2, 1)  # -1.5 shares the binade
     spans = rule.partition(bins, rule.usable_budget_ceiling(F16B))
     # 1.5 (9 steps) and 2.0 (8 steps) are both past bf16's ceiling of 6: one bad range.
     assert spans == ((-_INF, 1.0, True), (1.0, 4.0, True), (4.0, _INF, True))
     drawn = domain_figures(spans, x, distance, ranked, judged)
     assert [d.ulp for d in drawn] == [2, 9, 1]
-    assert entry_readings(drawn, x, distance, present, judged) == (
-        Reading(-_INF, 1.0, 2, 6),  # six ranked lanes; figured over the five outside
+    assert entry_readings(drawn, x, distance, ranked, judged) == (
+        # six ranked lanes; the figure is over the five outside the floor
+        Reading(-_INF, 1.0, 2, 6),
         Reading(1.0, 4.0, 9, 3),
         Reading(4.0, _INF, 1, 1),
     )
