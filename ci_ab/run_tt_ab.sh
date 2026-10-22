@@ -5,12 +5,12 @@
 # order M H H2 H2 H M; F = H plus the HiFi2 one-tile main-form key (branch mvlahovic/mm-hifi2-1x1). Guard: H == H2, H != M, H != F.
 set +e +o pipefail
 export HWLOCK_HELD=1
-cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 MM_N=${MM_N:-12}
-S=/work/ci_ab; OUT=/work/generated/mm_ab; rm -rf $OUT; mkdir -p $OUT
-python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
-SP=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
+W=${RA_W:-/work}; cd $W; export TT_METAL_HOME=$W TRACY_NO_WEB_SERVER=1 MM_N=${MM_N:-12}
+S=${RA_S:-$W/ci_ab}; OUT=$W/generated/mm_ab; rm -rf $OUT; mkdir -p $OUT
+python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=$W:$W/tools
+SP=${RA_SP:-$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")}
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' | cut -c1-60) package root $SP"
-OBJ=$(find /work/runtime /opt -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1)
+OBJ=$(find $W/runtime /opt -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1)
 suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
 declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); echo "== file $rel package copies: $(echo ${PK[$rel]} | wc -w)"; done < $S/files.txt
@@ -19,8 +19,8 @@ while read -r rel; do
   [[ -z ${PK[$rel]} ]] && { sib=$(grep "^$(dirname $rel)/" $S/files.txt | grep -v "^$rel\$" | head -1); for p in ${PK[$sib]}; do PK[$rel]+=" $(dirname $p)/$(basename $rel)"; done; echo "== new file $rel -> ${PK[$rel]}"; }
 done < $S/files.txt
 use() {
-  while read -r rel; do [[ -e "$S/v/$2/$rel" ]] || continue; cp "$S/v/$2/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$2/$rel" "$p"; done; done < $S/files.txt
-  echo "== files $1 $(while read -r rel; do cat /work/$rel; done < $S/files.txt | md5sum | cut -c1-8)"
+  while read -r rel; do [[ -e "$S/v/$2/$rel" ]] || continue; cp "$S/v/$2/$rel" "$W/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$2/$rel" "$p"; done; done < $S/files.txt
+  echo "== files $1 $(while read -r rel; do cat $W/$rel; done < $S/files.txt | md5sum | cut -c1-8)"
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
 elfsum() {
@@ -29,7 +29,7 @@ elfsum() {
   done | sort | md5sum | cut -c1-12
 }
 declare -A ES; r=0; fail=0
-for a in M H H2 H2 H M; do
+for a in ${RA_ARMS:-M H H2 H2 H M}; do
   r=$((r+1)); src=${a%2}; use $a $src
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
   timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/mm_ci.py > $o.log 2>&1; rc=$?
