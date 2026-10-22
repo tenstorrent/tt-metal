@@ -94,10 +94,15 @@ Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](test
 
 ### Compute precision
 
-The non-expert matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert) run HiFi3 with fp32 accumulation on
-bf16 activations, and every RMSNorm computes its statistics in fp32 ([`tt/compute_configs.py`](tt/compute_configs.py)).
-The routed experts keep their kernels' own configs (`unified_routed_expert_moe` is fixed at LoFi with bf16
-accumulation).
+Two switches ([`tt/compute_configs.py`](tt/compute_configs.py)), each on for MiniMax-M3.1 and off for MiniMax-M3 by
+default, and set either way with `=1` / `=0`:
+
+- `M3_PRECISE_MATMULS`: the non-expert matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert) run HiFi3 with
+  fp32 accumulation, and o_proj takes the bf16 attention output instead of a bf8 cast.
+- `M3_PRECISE_NORMS`: every RMSNorm computes its statistics in fp32.
+
+Off, they run ttnn's default configs. The residual adds are bf16 either way. The routed experts keep their kernels'
+own configs (`unified_routed_expert_moe` is fixed at LoFi with bf16 accumulation).
 
 ### MiniMax-M3.1 and quantized checkpoints (MXFP8 / NVFP4)
 

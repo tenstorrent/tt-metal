@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute kernel configs for the non-expert matmuls and the RMSNorms.
+"""Compute kernel configs for the non-expert matmuls and the RMSNorms, behind two switches.
 
 Matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert): a matmul's weight (in1) feeds SrcA and its activation
 (in0) SrcB. Below HiFi3 SrcB keeps 7 of a bf16 activation's 8 significant bits. HiFi3 skips only A_lo x B_lo, which
@@ -12,11 +12,44 @@ fp32 L1 partials remove that.
 
 RMSNorm: the default (bf16 DEST) sums x^2 in bf16, a 1-2% (up to 12%) per-token scale error at deep layers.
 fp32 DEST keeps the statistics fp32; exact rsqrt.
+
+Each switch defaults to the model variant (on for MiniMax-M3.1, off for MiniMax-M3) and is overridden by its env
+var (0 or 1). Off is ttnn's default config (None):
+  * M3_PRECISE_MATMULS: the matmul config above, plus a bf16 o_proj input instead of a bf8 cast;
+  * M3_PRECISE_NORMS: fp32 RMSNorm statistics.
 """
 
 import functools
+import os
 
 import ttnn
+from models.demos.minimax_m3.utils.model_variant import select_variant
+
+PRECISE_MATMULS_ENV = "M3_PRECISE_MATMULS"
+PRECISE_NORMS_ENV = "M3_PRECISE_NORMS"
+
+
+@functools.lru_cache(maxsize=None)
+def _variant_default(hf_model, variant):
+    # Keyed on the env select_variant reads, so the checkpoint config is read once, not on every forward.
+    return select_variant(hf_model).precise_prefill
+
+
+def _switch(var):
+    value = os.getenv(var)
+    if value is None or not value.strip():
+        return _variant_default(os.getenv("HF_MODEL"), os.getenv("M3_MODEL_VARIANT"))
+    if value.strip() not in ("0", "1"):
+        raise ValueError(f"{var} must be 0 or 1 (got {value!r})")
+    return value.strip() == "1"
+
+
+def precise_matmuls():
+    return _switch(PRECISE_MATMULS_ENV)
+
+
+def precise_norms():
+    return _switch(PRECISE_NORMS_ENV)
 
 
 @functools.lru_cache(maxsize=None)
@@ -42,10 +75,10 @@ def _rms_norm_config(arch):
 
 
 def matmul_compute_config(device):
-    """HiFi3, fp32 accumulation: bf16 activation x MXFP8-origin weight, exact products."""
-    return _matmul_config(device.arch())
+    """HiFi3, fp32 accumulation (bf16 activation x MXFP8-origin weight, exact products); None when off."""
+    return _matmul_config(device.arch()) if precise_matmuls() else None
 
 
 def rms_norm_compute_config(device):
-    """fp32 statistics, exact rsqrt."""
-    return _rms_norm_config(device.arch())
+    """fp32 statistics, exact rsqrt; None when off."""
+    return _rms_norm_config(device.arch()) if precise_norms() else None

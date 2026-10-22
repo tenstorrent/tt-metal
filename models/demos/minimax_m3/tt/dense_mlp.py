@@ -114,7 +114,7 @@ class DenseMLP:
         assert keep_alive is not None, "a sub-device partial must hand its intermediates to keep_alive"
         sd_id, cores = sub_device
         gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(cores, x, self.gate_proj, self.down_proj)
-        # Explicit: a program_config alone drops the matmul default to LoFi.
+        # A program_config alone drops the matmul default to LoFi, so precise matmuls pass their config explicitly.
         kw = dict(
             dtype=ttnn.bfloat16, compute_kernel_config=matmul_compute_config(self.mesh_device), sub_device_id=sd_id
         )

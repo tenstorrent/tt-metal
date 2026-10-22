@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-only checks (no device) that the non-expert matmuls and the RMSNorms run with the compute configs of
-tt/compute_configs.py: every ttnn call is replaced by a recorder. The device-side numerics are covered by
-test_norm_vs_ref.py (test_rms_norm_fp32_statistics) and the *_vs_ref layer tests.
+tt/compute_configs.py: every ttnn call is replaced by a recorder. Both switches are on unless a test says
+otherwise. The device-side numerics are covered by test_norm_vs_ref.py (test_rms_norm_fp32_statistics) and the
+*_vs_ref layer tests.
 """
 
 from types import SimpleNamespace
@@ -14,8 +15,15 @@ import torch
 import ttnn
 from models.demos.minimax_m3.tt import dense_mlp, layer, rms_norm
 from models.demos.minimax_m3.tt.attention import msa, operations
-from models.demos.minimax_m3.tt.compute_configs import matmul_compute_config, rms_norm_compute_config
-from models.demos.minimax_m3.tt.moe.shared_overlap import DEST_TILES, cb_tiles
+from models.demos.minimax_m3.tt.compute_configs import (
+    PRECISE_MATMULS_ENV,
+    PRECISE_NORMS_ENV,
+    matmul_compute_config,
+    precise_matmuls,
+    precise_norms,
+    rms_norm_compute_config,
+)
+from models.demos.minimax_m3.tt.moe.shared_overlap import cb_tiles, dest_tiles
 
 BH = ttnn.device.Arch.BLACKHOLE
 WH = ttnn.device.Arch.WORMHOLE_B0
@@ -59,6 +67,30 @@ def _recorder(monkeypatch, *names):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _precise(monkeypatch):
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "1")
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "1")
+
+
+def test_switches_default_to_the_variant(monkeypatch, expect_error):
+    """Unset: on for MiniMax-M3.1, off for MiniMax-M3. Set: that value, for either variant."""
+    monkeypatch.delenv("HF_MODEL", raising=False)
+    for variant, default in (("MiniMax-M3", False), ("MiniMax-M3.1", True)):
+        monkeypatch.setenv("M3_MODEL_VARIANT", variant)
+        for value, expected in (("", default), ("0", False), ("1", True)):
+            monkeypatch.setenv(PRECISE_MATMULS_ENV, value)
+            monkeypatch.setenv(PRECISE_NORMS_ENV, value)
+            assert (precise_matmuls(), precise_norms()) == (expected, expected), (variant, value)
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "1")
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "0")
+    assert (precise_matmuls(), precise_norms()) == (True, False)
+    assert matmul_compute_config(_Dev()) is not None and rms_norm_compute_config(_Dev()) is None
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "on")
+    with expect_error(ValueError, "must be 0 or 1"):
+        precise_matmuls()
+
+
 @pytest.mark.parametrize("arch", [BH, WH], ids=["bh", "wh"])
 def test_configs(arch):
     mm, norm = matmul_compute_config(_Dev(arch)), rms_norm_compute_config(_Dev(arch))
@@ -95,7 +127,18 @@ def test_qkv_and_o_proj(monkeypatch):
     assert calls[1][1][0] is x and not x.freed
 
 
-def test_o_proj_fused_rs(monkeypatch):
+def test_o_proj_without_precise_matmuls(monkeypatch):
+    """Off: the attention output is cast to bf8 and the matmul runs ttnn's default config."""
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "0")
+    calls = _recorder(monkeypatch, "matmul", "typecast")
+    operations.apply_output_projection(_T("attn"), SimpleNamespace(o_proj=_T("o_proj")), ttnn.bfloat16)
+    assert [c[0] for c in calls] == ["typecast", "matmul"] and calls[0][1][1] == ttnn.bfloat8_b
+    assert "compute_kernel_config" not in calls[1][2]
+
+
+@pytest.mark.parametrize("precise", [True, False], ids=["precise", "off"])
+def test_o_proj_fused_rs(monkeypatch, precise):
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "1" if precise else "0")
     calls = _recorder(monkeypatch, "typecast")
     ccl = SimpleNamespace(
         mesh_device=_Dev(),
@@ -113,11 +156,16 @@ def test_o_proj_fused_rs(monkeypatch):
     out = operations.apply_output_projection_fused_rs(
         x, SimpleNamespace(o_proj=_T("o_proj", shape=(1, 1, 2048, 6144))), SimpleNamespace(tp_axis=1), ccl
     )
-    assert [c[0] for c in calls] == ["mm_rs"]
-    _, args, kw = calls[0]
-    assert args[0] is x and not x.freed
-    assert kw["compute_kernel_config"] is matmul_compute_config(_Dev()) and kw["dtype"] == ttnn.bfloat16
     assert out.name == "rs"
+    _, args, kw = calls[-1]
+    if precise:
+        assert [c[0] for c in calls] == ["mm_rs"]
+        assert args[0] is x and not x.freed
+        assert kw["compute_kernel_config"] is matmul_compute_config(_Dev()) and kw["dtype"] == ttnn.bfloat16
+    else:
+        # The bf8 cast, LoFi with fp32 accumulation, and the output in the input's dtype (bf8).
+        assert [c[0] for c in calls] == ["typecast", "mm_rs"] and args[0].name == "typecast" and args[0].freed
+        assert kw["compute_kernel_config"].math_fidelity == ttnn.MathFidelity.LoFi and kw["dtype"] is None
 
 
 def test_qk_norm(monkeypatch):
@@ -164,10 +212,12 @@ def test_dense_mlp_and_shared_expert(monkeypatch, sub_device):
         assert kw["compute_kernel_config"] is matmul_compute_config(_Dev()) and kw["dtype"] == ttnn.bfloat16
 
 
-def test_shared_expert_blocks_fit_fp32_dest():
-    """fp32 DEST holds 4 tiles at half-sync; the fp32 partials block is a separate buffer of 2 bf16 tiles per tile."""
-    assert DEST_TILES == 4
-    assert cb_tiles(4, 2, 3, 8) == 2 * (2 + 3) * 4 + 3 * 2 * 3
+def test_shared_expert_blocks_follow_dest():
+    """fp32 DEST holds 4 tiles at half-sync and its partials block is a separate buffer of 2 bf16 tiles per tile;
+    bf16 DEST holds 8 and its partials share the output block."""
+    assert (dest_tiles(True), dest_tiles(False)) == (4, 8)
+    assert cb_tiles(4, 2, 3, 8, fp32_dest=True) == 2 * (2 + 3) * 4 + 3 * 2 * 3
+    assert cb_tiles(4, 2, 3, 8, fp32_dest=False) == 2 * (2 + 3) * 4 + 2 * 3
 
 
 def _norm(distributed):
@@ -188,13 +238,16 @@ def test_rms_norm_single_pass(monkeypatch):
     assert calls[0][2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
 
 
-def test_rms_norm_distributed(monkeypatch):
+@pytest.mark.parametrize("precise", [True, False], ids=["precise", "off"])
+def test_rms_norm_distributed(monkeypatch, precise):
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "1" if precise else "0")
     calls = _recorder(monkeypatch, "rms_norm_pre_all_gather", "rms_norm_post_all_gather", "deallocate")
     n = _norm(True)
     n._gather_stats = lambda t, mc=None: t
     n.forward(_T("x", shape=(1, 1, 1024, 1536)))
     pre, post = (c for c in calls if c[0] != "deallocate")
-    assert pre[2]["dtype"] == ttnn.float32, "the per-column sum(x^2) is gathered fp32"
+    # With precise norms the per-column sum(x^2) is gathered fp32.
+    assert pre[2]["dtype"] == (ttnn.float32 if precise else ttnn.bfloat16)
     for c in (pre, post):
         assert c[2]["compute_kernel_config"] is rms_norm_compute_config(_Dev())
     assert post[2]["dtype"] == ttnn.bfloat16

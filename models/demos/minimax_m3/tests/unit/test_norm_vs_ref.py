@@ -23,6 +23,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
+from models.demos.minimax_m3.tt.compute_configs import PRECISE_NORMS_ENV
 from models.demos.minimax_m3.tt.rms_norm import RMSNorm
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
@@ -84,9 +85,11 @@ def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seed
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_rms_norm_fp32_statistics(mesh_device, device_params, reset_seeds):
-    """Residual-like rows at full emb (a few large channels, row scales over 4 decades): the per-token scale must
-    match fp32 statistics. The bf16-DEST default sums x^2 in bf16 (1-2% per-token error on real residuals)."""
+def test_rms_norm_fp32_statistics(mesh_device, device_params, reset_seeds, monkeypatch):
+    """Residual-like rows at full emb (a few large channels, row scales over 4 decades): with precise norms the
+    per-token scale must match fp32 statistics. The bf16-DEST default sums x^2 in bf16 (1-2% per-token error on
+    real residuals)."""
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "1")
     m, width, eps = 1024, 6144, 1e-6
     x = torch.randn(1, 1, m, width) * torch.logspace(-2, 2, m).reshape(1, 1, m, 1)
     x[..., torch.randperm(width)[:8]] *= 30.0

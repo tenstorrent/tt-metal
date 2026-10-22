@@ -54,6 +54,7 @@ class ModelVariant:
     name: str
     weights_dir: str  # default checkpoint dir on the exabox weka filesystem
     cache_root: str  # default tilized weight-cache root (holds tensor_cache_bfp8_MeshShape([sp, tp]) and golden/)
+    precise_prefill: bool = False  # default of the prefill precision switches (tt/compute_configs.py)
 
     @property
     def config_path(self) -> Path:
@@ -85,6 +86,7 @@ VARIANTS = {
             name="MiniMax-M3.1",
             weights_dir="/mnt/weka/model-weights/llm/minimax/m3",
             cache_root="/mnt/weka/model-cache/scratch/minimax/m3-cache/prefill",
+            precise_prefill=True,
         ),
     )
 }

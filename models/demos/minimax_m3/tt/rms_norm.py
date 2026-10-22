@@ -7,8 +7,8 @@ Which one runs is decided ONCE at construction from ``tt/residual.py::use_sharde
 per instance with ``is_distributed=``), because the two need differently-sharded gains:
 
   * single-pass: ``ttnn.rms_norm`` over the full emb, gain REPLICATED — every TP column normalizes the
-    same full vector, so the result is already replicated. The gain is TILE [1, 1, 1, emb]: with fp32
-    statistics a full row no longer fits L1 and the norm streams it, which reads the gain as tiles.
+    same full vector, so the result is already replicated. With fp32 statistics the gain is TILE
+    [1, 1, 1, emb]: a full row no longer fits L1 and the norm streams it, which reads the gain as tiles.
   * distributed: ``rms_norm_pre_all_gather`` -> all-gather the per-column sum(x^2) -> \
     ``rms_norm_post_all_gather``, gain sharded on dim -2 across TP. Three ops instead of one, but each
     touches only ``emb/tp``.
@@ -17,7 +17,8 @@ Supports both DRAM-interleaved and L1-sharded activations on the distributed pat
 do: ``program_config=None`` selects the interleaved kernels). M3's residual is DRAM-interleaved, so the
 interleaved path is the one that runs in the model; the sharded branch is kept for L1-sharded callers.
 
-Both forms compute the statistics in fp32 (tt/compute_configs.py); the distributed one also gathers them fp32.
+With precise norms (tt/compute_configs.py) both forms compute the statistics in fp32, and the distributed one
+also gathers them fp32.
 """
 
 from loguru import logger
@@ -81,33 +82,37 @@ class RMSNorm(nn.Module):
             mesh_mapper=None,
             cache_dump_mode=CACHE_DUMP_MODE,
         )
-        # Both forms re-lay the cached gain out. Derived here rather than cached: in the production
-        # cache-only path there is no torch source, so the gain is recovered from the replicated device
-        # tensor with one tiny init-time D2H (12 KiB per norm) — no new cache entry, hence no dependence
-        # on the (often other-user-owned, read-only) weight cache being writable.
-        gain = torch_weight if torch_weight is not None else ttnn.to_torch(ttnn.get_device_tensors(replicated)[0])
-        if self.is_distributed:
-            # rms_norm_post_all_gather requires the gain to match the input width (emb/tp), so re-shard
-            # it on dim -2 across the TP cols.
-            self.tt_weight = ttnn.from_torch(
-                gain,
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2)),
-            )
-        else:
-            self.tt_weight = ttnn.from_torch(
-                gain.reshape(1, 1, 1, -1),
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-        replicated.deallocate(True)
         self.compute_config = rms_norm_compute_config(mesh_device)
+        if not self.is_distributed and self.compute_config is None:
+            # Single pass with bf16 statistics reads the cached row-major gain as is.
+            self.tt_weight = replicated
+        else:
+            # Re-lay the cached gain out. Derived here rather than cached: in the production cache-only path
+            # there is no torch source, so the gain is recovered from the replicated device tensor with one tiny
+            # init-time D2H (12 KiB per norm) — no new cache entry, hence no dependence on the (often
+            # other-user-owned, read-only) weight cache being writable.
+            gain = torch_weight if torch_weight is not None else ttnn.to_torch(ttnn.get_device_tensors(replicated)[0])
+            replicated.deallocate(True)
+            if self.is_distributed:
+                # rms_norm_post_all_gather requires the gain to match the input width (emb/tp), so re-shard
+                # it on dim -2 across the TP cols.
+                self.tt_weight = ttnn.from_torch(
+                    gain,
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2)),
+                )
+            else:
+                self.tt_weight = ttnn.from_torch(
+                    gain.reshape(1, 1, 1, -1),
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
@@ -169,7 +174,10 @@ class RMSNorm(nn.Module):
             )
 
         tt_stats = ttnn.rms_norm_pre_all_gather(
-            x, program_config=program_config, dtype=ttnn.float32, compute_kernel_config=self.compute_config
+            x,
+            program_config=program_config,
+            dtype=ttnn.bfloat16 if self.compute_config is None else ttnn.float32,
+            compute_kernel_config=self.compute_config,
         )
         tt_gathered_stats = self._gather_stats(tt_stats, stats_memory_config)
         ttnn.deallocate(tt_stats)
