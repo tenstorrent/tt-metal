@@ -175,9 +175,6 @@ void run_single_core_copy_block_matmul_partials(
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     {

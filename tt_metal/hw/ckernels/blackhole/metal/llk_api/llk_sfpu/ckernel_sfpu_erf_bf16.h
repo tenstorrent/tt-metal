@@ -14,26 +14,39 @@ struct ErfBf16Config {
 };
 }  // namespace ckernel::sfpu
 
-#include "ckernel_sfpu_bf16_cascade_signed_abs.h"
+#include "ckernel_sfpu_erf_bf16_cascade_signed_abs.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_erf() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
+inline void calculate_erf_bf16_body() {
+    ckernel::sfpu::bf16::erf::calculate_signed_abs_nan<ckernel::sfpu::ErfBf16Config, ITERATIONS>();
+}
+// The constants stock's init also sets hold the kernel's own values for its call only.
+// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
+template <int ITERATIONS = 32>
 inline void calculate_erf_bf16() {
-    ckernel::sfpu::bf16::calculate_signed_abs_nan<ckernel::sfpu::ErfBf16Config, ITERATIONS>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0xbb39f45cu);
+    calculate_erf_bf16_body<ITERATIONS>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
 }
 inline void init_erf_bf16() {
-    if (bf16_dest_erf()) {
-        ckernel::sfpu::bf16::init_signed_abs_nan<ckernel::sfpu::ErfBf16Config>();
-    }
+    ckernel::sfpu::bf16::erf::init_signed_abs_nan<ckernel::sfpu::ErfBf16Config>();
+    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x40000000u);
 }
 
 }  // namespace ckernel::sfpu

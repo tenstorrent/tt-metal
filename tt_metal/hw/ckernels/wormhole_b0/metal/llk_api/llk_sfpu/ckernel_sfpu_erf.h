@@ -99,14 +99,11 @@ void init_erf_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erf_init() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        if (bf16_dest_erf()) {
-            init_erf_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_erf_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
