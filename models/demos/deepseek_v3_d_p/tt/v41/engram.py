@@ -309,6 +309,7 @@ class EngramChunkInputs:
 
     lookup: ttnn.Tensor
     mask: ttnn.Tensor | None
+    keep: torch.Tensor | None = None  # host memory ``lookup``'s shards borrow, when they do
 
     def to_device(self, mesh_device) -> "EngramChunkInputs":
         """Host inputs -> newly allocated device inputs."""
@@ -353,6 +354,7 @@ class TtV41Engram(LightweightModule):
         self.n_hash_cols = (config.ENGRAM_MAX_NGRAM_SIZE - 1) * config.ENGRAM_N_HEADS
         self.in_features = self.n_hash_cols * self.head_dim
         self.chips = self.sp * self.tp
+        self._zero_shards: dict[int, ttnn.Tensor] = {}  # rows per chip -> an all-zero host shard (``_packed_shards``)
         self.ccl = V41Collectives(mesh_device)
         shape = tuple(mesh_device.shape)
         tp_cols = ttnn.ShardTensor2dMesh(mesh_device, shape, dims=(None, 3))
@@ -402,12 +404,11 @@ class TtV41Engram(LightweightModule):
         assert (
             lookups % (32 * self.chips) == 0
         ), f"chunk {chunk}: its lookups must split over {self.chips} chips in tiles"
+        keep = None
         if isinstance(self.table, TtV41EngramTable):
             lookup = self._per_chip(self.table.shard_ids(hash_ids.flatten(), lookups)[:, None], ttnn.uint32)
         else:
-            packed = torch.zeros(lookups, PACKED_WIDTH, dtype=torch.uint16)
-            self.table.packed(hash_ids.flatten(), packed[: hash_ids.numel()])
-            lookup = self._per_chip(packed.view(self.chips, lookups // self.chips, PACKED_WIDTH), ttnn.uint16)
+            lookup, keep = self._packed_shards(hash_ids, lookups)
         mask = None
         if token_mask is not None:
             full = torch.ones(chunk, 1)
@@ -418,7 +419,30 @@ class TtV41Engram(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(2, None)),
             )
-        return EngramChunkInputs(lookup, mask)
+        return EngramChunkInputs(lookup, mask, keep)
+
+    def _packed_shards(self, hash_ids: torch.Tensor, lookups: int) -> tuple[ttnn.Tensor, torch.Tensor]:
+        """The chunk's packed rows as a host mesh tensor, token-major over the chips in (sp, tp) order: one borrowed
+        host shard per chip that holds a valid lookup, the cached all-zero shard for the rest. The sharding was
+        ``from_torch`` with ``ShardTensor2dMesh`` over the whole chunk, 31 to 42 ms a layer for 1,028 valid tokens
+        as for 5,120; this is 1.5 ms at 1,028 and 6 ms at 5,120. Returns the torch rows the
+        shards borrow (kept alive with the inputs)."""
+        per_chip = lookups // self.chips
+        n = hash_ids.numel()
+        full = -(-n // per_chip)  # chips with a valid lookup
+        packed = torch.zeros(full * per_chip, PACKED_WIDTH, dtype=torch.uint16)
+        self.table.packed(hash_ids.flatten(), packed[:n])
+        if per_chip not in self._zero_shards:
+            self._zero_shards[per_chip] = ttnn.from_torch(
+                torch.zeros(1, 1, per_chip, PACKED_WIDTH, dtype=torch.uint16),
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        parts = [
+            ttnn.Tensor(packed[c * per_chip : (c + 1) * per_chip].view(1, 1, per_chip, PACKED_WIDTH), ttnn.uint16)
+            for c in range(full)
+        ] + [self._zero_shards[per_chip]] * (self.chips - full)
+        return ttnn.from_host_shards(parts, ttnn.MeshShape(self.sp, self.tp)), packed
 
     # --- device side -----------------------------------------------------------------------------------
     def _copy(self, t: ttnn.Tensor, c: int, width: int) -> ttnn.Tensor:
