@@ -6,8 +6,9 @@
 
 #if __riscv_xtttensixbh || (__clang__ && defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC))
 #if __clang__
-// User is likely using static analysis tool.  Provide a declaration.
+// User is likely using static analysis tool. Provide declarations.
 extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+extern "C" void (__builtin_rvtt_ttreplay)(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
 #define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
 #define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
@@ -417,8 +418,17 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
 #define TT_REPLAY_VALID(start_idx, len, execute_while_loading, load_mode) \
     (ckernel::is_valid(start_idx, 10) && ckernel::is_valid(len, 10) && ckernel::is_valid(execute_while_loading, 3) && ckernel::is_valid(load_mode, 1))
-#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)  TT_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
-#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TTI_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
+#if __riscv_xtttensixbh || (__clang__ && defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_TRISC))
+#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    (__builtin_rvtt_ttreplay)(::ckernel::instrn_buffer, (len), 0, 0, (start_idx), (execute_while_loading), (load_mode))
+#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    (__builtin_rvtt_ttreplay)(nullptr, (len), 0, 0, (start_idx), (execute_while_loading), (load_mode))
+#else
+#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)     \
+    TT_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
+#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) \
+    TTI_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
+#endif
 
 #define TT_OP_RESOURCEDECL(linger_time, resources, op_class) TT_OP(0x05, (((linger_time) << 13) + ((resources) << 4) + ((op_class) << 0)))
 #define TT_RESOURCEDECL_VALID(linger_time, resources, op_class) \

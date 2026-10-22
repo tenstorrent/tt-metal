@@ -6,8 +6,10 @@
 
 #if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
 #if __clang__
-// User is likely using static analysis tool.  Provide a declaration.
+// User is likely using static analysis tool. Provide declarations.
 extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+extern "C" void (__builtin_rvtt_ttreplay)(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned)
+    __attribute__((nothrow));
 #endif
 #define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
 #define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
@@ -476,12 +478,21 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
 #define TT_OP_RDCFG(GprAddress, CfgReg) TT_OP(0xb1, (((GprAddress) << 16) + ((CfgReg) << 0)))
 #define TT_RDCFG(GprAddress, CfgReg)                                    TT_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
 #define TTI_RDCFG(GprAddress, CfgReg)                                   TTI_INSN(TT_OP_RDCFG(GprAddress, CfgReg))
+
 #define TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((last) << 3) + ((set_mutex) << 2) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
+#if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
+#define TT_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
+    (__builtin_rvtt_ttreplay)(::ckernel::instrn_buffer, (len), 0, 0, (start_idx), (execute_while_loading), (load_mode), (last), (set_mutex))
+#define TTI_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
+    (__builtin_rvtt_ttreplay)(nullptr, (len), 0, 0, (start_idx), (execute_while_loading), (load_mode), (last), (set_mutex))
+#else
 #define TT_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TT_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
 #define TTI_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TTI_INSN(TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode))
+#endif
+
 #define TT_OP_RESOURCEDECL(linger_time, resources, op_class) TT_OP(0x05, (((linger_time) << 15) + ((resources) << 5) + ((op_class) << 0)))
 #define TT_RESOURCEDECL(linger_time, resources, op_class)    TT_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))
 #define TTI_RESOURCEDECL(linger_time, resources, op_class)   TTI_INSN(TT_OP_RESOURCEDECL(linger_time, resources, op_class))
