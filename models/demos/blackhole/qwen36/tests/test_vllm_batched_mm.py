@@ -231,11 +231,19 @@ def test_batched_multimodal_serving(mesh_device, reset_seeds, ensure_gc):
     gen.warmup_model_decode(enable_trace=True, **dkw)
     cache = model._prefix_cache
     d = Driver(gen, kv, tok)
+
+    def slot_deltas(n=3):
+        # Host slot map (QWEN36_NS_SLOTMAP): runner slot i keeps its rope delta on device row phys[i]; identity otherwise.
+        phys = (
+            gen._ns_phys if os.environ.get("QWEN36_NS_SLOTMAP", "1") != "0" and hasattr(gen, "_ns_phys") else range(n)
+        )
+        return [model._slot_rope_delta[phys[i]].item() for i in range(n)]
+
     failures = []
 
     # ---- (a) one prefill call: text, image, video in slots 0, 1, 2; then STEPS resident decode steps
     logits_a, blocks_a = d.prefill(reqs, [0, 1, 2])
-    deltas = model._slot_rope_delta[:3].tolist()
+    deltas = slot_deltas()
     logger.info(f"per-slot rope deltas after prefill: {deltas}")
     assert deltas[0] == 0 and deltas[1] != 0 and deltas[2] != 0, deltas
     rows_a = mk_rows(reqs, logits_a, blocks_a)
@@ -270,7 +278,7 @@ def test_batched_multimodal_serving(mesh_device, reset_seeds, ensure_gc):
     survivors = rows_c[1:]
     remap = [1, 2, 0] + list(range(3, WIDTH))  # new slot i takes the state previously at slot remap[i]
     d.decode_step(survivors, remap=remap)
-    deltas_c = model._slot_rope_delta[:3].tolist()
+    deltas_c = slot_deltas()
     logger.info(f"(c) per-slot rope deltas after condense: {deltas_c}")
     assert deltas_c[0] == deltas[1] and deltas_c[1] == deltas[2], (deltas_c, deltas)
     for _ in range(STEPS - 6 - 1):

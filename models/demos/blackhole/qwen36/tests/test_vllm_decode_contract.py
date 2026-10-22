@@ -318,13 +318,22 @@ def _run(gen, kv_cache, mode, users, n_steps, delay=0.0):
         drv.step(users, s)
     drv.finalize()
     ttnn.synchronize_device(gen.mesh_device)
+    # Host slot map (QWEN36_NS_SLOTMAP): runner row i (front-packed layout) lives on device row phys[i]; identity otherwise.
+    phys = (
+        list(gen._ns_phys)
+        if os.environ.get("QWEN36_NS_SLOTMAP", "1") != "0" and hasattr(gen, "_ns_phys")
+        else list(range(WIDTH))
+    )
+    live_rows = [phys[i] for i in range(len(drv.last_layout))]
+    bucket = min(WIDTH, 1 << max(live_rows, default=0).bit_length())
     result = dict(
+        live_rows=live_rows,
         tokens={u.uid: list(u.out) for u in users},
         state=_gdn_state(gen.model[0]),
         step_times=drv.step_times,
         last_layout=[u.uid for u in drv.last_layout],
         users=users,
-        positions=_device_positions(gen, drv_bucket(drv)) if mode != "host_reload" else None,
+        positions=_device_positions(gen, bucket) if mode != "host_reload" else None,
     )
     return result
 
@@ -387,18 +396,20 @@ def test_serving_decode_modes_agree(mesh_device, reset_seeds, ensure_gc, name):
             ref["last_layout"] == got["last_layout"]
         ), f"{name}/{mode}: layout {got['last_layout']} != ref {ref['last_layout']}"
         n_live = len(got["last_layout"])
+        # Compare the live requests on the device rows each mode's map gave them (runner order); idle = every other row.
+        rl, gl = torch.tensor(ref["live_rows"], dtype=torch.long), torch.tensor(got["live_rows"], dtype=torch.long)
+        r_idle = torch.tensor([r for r in range(WIDTH) if r not in ref["live_rows"]], dtype=torch.long)
+        g_idle = torch.tensor([r for r in range(WIDTH) if r not in got["live_rows"]], dtype=torch.long)
         n_idle_diff, idle_max = 0, 0.0
         for i, ((nm, ax, ta), (_, _, tb)) in enumerate(zip(got["state"], ref["state"])):
             idle_differs = False
             for d, (a_d, b_d) in enumerate(zip(ta, tb)):
-                a_l, b_l = a_d.narrow(ax, 0, n_live), b_d.narrow(ax, 0, n_live)
+                a_l, b_l = a_d.index_select(ax, gl), b_d.index_select(ax, rl)
                 assert torch.equal(
                     a_l, b_l
                 ), f"{name}/{mode}: GDN state tensor {i} ({nm}) device {d} live rows differ (max abs {(a_l - b_l).abs().max()})"
                 if n_live < WIDTH:
-                    m = float(
-                        (a_d.narrow(ax, n_live, WIDTH - n_live) - b_d.narrow(ax, n_live, WIDTH - n_live)).abs().max()
-                    )
+                    m = float((a_d.index_select(ax, g_idle) - b_d.index_select(ax, r_idle)).abs().max())
                     if m > 0:
                         idle_differs = True
                         idle_max = max(idle_max, m)
@@ -410,10 +421,12 @@ def test_serving_decode_modes_agree(mesh_device, reset_seeds, ensure_gc, name):
         users = got["users"]
         live = [u for u in users if u.uid in got["last_layout"]]
         pos = got["positions"]
-        for row, uid in enumerate(got["last_layout"]):
+        for row, uid in zip(got["live_rows"], got["last_layout"]):
             u = next(x for x in live if x.uid == uid)
             assert pos[row] == PROMPT_LEN + u.submitted, f"{name}/{mode}: row {row} position {pos[row]}"
-        assert all(p == -1 for p in pos[len(got["last_layout"]) :]), f"{name}/{mode}: idle rows advanced: {pos}"
+        assert all(
+            p == -1 for r, p in enumerate(pos) if r not in got["live_rows"]
+        ), f"{name}/{mode}: idle rows advanced: {pos}"
 
 
 @torch.no_grad()

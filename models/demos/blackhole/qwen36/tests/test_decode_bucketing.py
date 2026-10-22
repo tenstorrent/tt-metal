@@ -100,6 +100,7 @@ def test_bucket_selection():
 
 
 def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch):
+    monkeypatch.setenv("QWEN36_NS_SLOTMAP", "0")  # these test the device GDN remap path
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 
@@ -154,6 +155,7 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
     the decode reads it, whether the step samples on host or device. Decode contract v1
     (vllm-tt-plugin#78) delivers slot_remap in both modes as a keyword; positional is the
     tt_transformers Generator signature (index 9)."""
+    monkeypatch.setenv("QWEN36_NS_SLOTMAP", "0")  # these test the device GDN remap path
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 

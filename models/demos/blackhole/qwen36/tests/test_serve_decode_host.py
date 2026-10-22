@@ -34,6 +34,9 @@ class _Recorder:
 def harness(monkeypatch):
     monkeypatch.delenv("QWEN36_SERVE_DEVICE_DECODE", raising=False)
     monkeypatch.delenv("TT_DECODE_BUCKETING", raising=False)
+    monkeypatch.setenv(
+        "QWEN36_NS_SLOTMAP", "0"
+    )  # this harness tests the device GDN remap path (host map: test_ns_slotmap_host.py)
     rec = _Recorder()
 
     def fake_decode_forward(self, *args, **kwargs):
@@ -189,7 +192,8 @@ def test_maybe_partial_chunk(budget, step_tokens, chunk_len, end, expected):
 def test_readback_is_the_generators():
     """Async readback / host processing already serve this model through the Generator (token buffer in place)."""
     assert Qwen36ForCausalLM.read_decode_output is Generator.read_decode_output
-    assert Qwen36ForCausalLM.process_decode_output_host is Generator.process_decode_output_host
+    # The host slot map (QWEN36_NS_SLOTMAP) wraps it and only re-orders rows under a non-identity map.
+    assert Qwen36ForCausalLM.process_decode_output_host is not Generator.process_decode_output_host
 
 
 # ---------------------------------------------------------------------------------------------------------------------

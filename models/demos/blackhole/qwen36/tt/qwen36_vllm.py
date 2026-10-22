@@ -8,6 +8,7 @@ trace for long, via prefill_dispatch) while Generator drives decode only. GDN + 
 model-bound, so the kv_cache contract param is accepted but unused.
 """
 
+import dataclasses
 import math
 import os
 from collections import defaultdict
@@ -27,6 +28,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
+from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_map_after_remap, slot_map_inverse
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
     spec_chain_enabled,
@@ -66,6 +68,50 @@ _RELOAD_COMMAND_DEFAULTS = {
 def _spec_prefix_cache_enabled():
     """QWEN36_SPEC_PREFIX_CACHE (default 1): prefix caching on the MTP spec class; 0 = refuse it as before."""
     return os.environ.get("QWEN36_SPEC_PREFIX_CACHE", "1") == "1"
+
+
+def _ns_slotmap_enabled():
+    """QWEN36_NS_SLOTMAP (default 1): the non-spec resident decode keeps a runner-slot -> device-row map on the host
+    instead of moving GDN state on the device for every plugin slot_remap; 0 = the device remap of old."""
+    return os.environ.get("QWEN36_NS_SLOTMAP", "1") != "0"
+
+
+_NS_WIDEN_DTYPES = tuple(getattr(torch, n) for n in ("uint16", "uint32", "uint64") if hasattr(torch, n))
+
+
+def _ns_widen(x):
+    """(x as int64 if torch cannot index / index_put / cat its unsigned dtype, else x unchanged), original dtype."""
+    return (x.to(torch.int64) if x.dtype in _NS_WIDEN_DTYPES else x), x.dtype
+
+
+def _ns_scatter_rows(x, inv, n, fill):
+    """Runner-ordered per-row field -> device row order (full width ``n`` = len(inv)). Tensors keep dtype and trailing
+    dims, lists stay lists; a field shorter than ``n`` is padded with ``fill`` (tensors) / its last item (lists)."""
+    if isinstance(x, torch.Tensor):
+        if x.dim() == 0 or x.shape[0] not in range(1, n + 1):
+            return x
+        x, dt = _ns_widen(x)
+        if x.shape[0] < n:
+            pad = torch.full((n - x.shape[0],) + tuple(x.shape[1:]), fill, dtype=x.dtype)
+            x = torch.cat([x, pad], dim=0)
+        return rows_to_engine(x, inv).to(dt)
+    if isinstance(x, (list, tuple)) and 0 < len(x) <= n:
+        x = list(x) + [x[-1]] * (n - len(x))
+        return [x[s] for s in inv]
+    return x
+
+
+def _ns_gather_rows(x, phys):
+    """Device-ordered per-row output -> runner order: out[i] = x[phys[i]] (neutral zeros where phys[i] is beyond the
+    rows the step produced). Always len(phys) rows; dtype and trailing dims kept."""
+    if not isinstance(x, torch.Tensor) or x.dim() == 0:
+        return x
+    idx = torch.as_tensor(phys, dtype=torch.int64)
+    keep = idx < x.shape[0]
+    x, dt = _ns_widen(x)
+    out = torch.zeros((len(phys),) + tuple(x.shape[1:]), dtype=x.dtype)
+    out[keep] = x[idx[keep]]
+    return out.to(dt)
 
 
 def _live_rows(start_pos, n):
@@ -505,6 +551,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if empty_slots is None:
             empty_slots = list(range(N))
         empty_slots = [int(s) for s in empty_slots]
+        ns_commit = None
+        if _ns_slotmap_enabled() and self._serve_device_decode_active():  # the map lives in the resident decode only
+            empty_slots, ns_commit = self._ns_prefill_rows(model, empty_slots)
         token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
@@ -522,9 +571,72 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         host_logits = model.prefill_paged_slots(
             token_ids_list, pt, empty_slots, valid_lens=plens, start_positions=start_pos, vision_tokens_list=vision_list
         )
+        if ns_commit is not None:
+            self._ns_phys, self._ns_owned = ns_commit
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
         logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
         return logits, torch.zeros(N, dtype=torch.long)
+
+    # Host slot map (QWEN36_NS_SLOTMAP). ``_ns_phys[runner slot] = device row`` is a permutation of range(W); a request's
+    # GDN / rope-delta state is written to its device row at prefill and never moves. ``_ns_owned`` = device rows held by
+    # live requests (prefill adds, release_request / a reload decode step rewrite it). Created lazily: the class is also
+    # built without __init__ side effects (tests, MTP subclass) and reset at the end of warmup_model_decode.
+    def _ns_reset(self):
+        W = int(self.model[0].args.max_batch_size)
+        self._ns_phys = list(range(W))
+        self._ns_owned = set()
+
+    def _ns_ensure(self):
+        W = int(self.model[0].args.max_batch_size)
+        if getattr(self, "_ns_phys", None) is None or len(self._ns_phys) != W:
+            self._ns_reset()
+        return W
+
+    def _ns_prefill_rows(self, model, slots):
+        """Runner slots -> device rows for a prefill: each takes the lowest free device row, swapping the two free
+        runner slots' map entries (both are free, so no live request moves). Returns (rows, (new_phys, new_owned)); the
+        state is committed by the caller after the prefill succeeded."""
+        self._ns_ensure()
+        phys, owned = list(self._ns_phys), set(self._ns_owned)
+        rows = []
+        # The plugin only gives free runner slots to a prefill, so phys[s] is never a live device row and is always a safe
+        # choice. _ns_owned can hold stale rows (a request that ended without release_request): that may only cost
+        # compactness (a higher row, a bigger bucket), never an error.
+        given = set()
+        for s in slots:
+            candidates = {d for d in range(len(phys)) if d not in owned and d not in given}
+            d = min(candidates | {phys[s]})
+            if d != phys[s]:
+                k = phys.index(d)
+                phys[s], phys[k] = phys[k], phys[s]
+            given.add(d)
+            owned.add(d)
+            rows.append(d)
+        return rows, (phys, owned)
+
+    def release_request(self, slot):
+        """Plugin hook (optional, called with the request's current runner slot when it ends): its device row is free."""
+        if _ns_slotmap_enabled():
+            self._ns_ensure()
+            self._ns_owned.discard(self._ns_phys[int(slot)])
+
+    def process_decode_output_host(self, tt_out, is_tokens=False, sample_rows=None):
+        out = super().process_decode_output_host(tt_out, is_tokens=is_tokens, sample_rows=sample_rows)
+        phys = getattr(self, "_ns_phys", None)
+        if not _ns_slotmap_enabled() or phys is None or phys == list(range(len(phys))):
+            return out
+        # Safe under a changing map: the plugin drains every in-flight decode output before any step that changes the
+        # map (layout change or prefill), so each output is processed under the map it was produced with.
+        if sample_rows is not None:
+            raise ValueError("compact host rows are not supported with a non-identity host slot map")
+        if isinstance(out, tuple):
+            first, second = out
+            if isinstance(second, tuple):
+                second = tuple(_ns_gather_rows(t, phys) for t in second)
+            else:
+                second = _ns_gather_rows(second, phys)
+            return _ns_gather_rows(first, phys), second
+        return _ns_gather_rows(out, phys)
 
     def _serve_device_decode_active(self):
         """Device-resident serving decode: env flag on AND the model built the resident inputs (TP mesh)."""
@@ -617,10 +729,44 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if tokens is None:
             raise TypeError("decode_forward requires tokens")
         start_pos = kwargs.get("start_pos")
+        ns_phys = None
+        if _ns_slotmap_enabled():
+            # Host slot map: no device remap. Scatter every per-row input to device-row order (the plugin's runner
+            # order is only a view), bucket by the highest live device row, forward slot_remap=None. State is
+            # set just before the Generator call (restored if it raises).
+            W = self._ns_ensure()
+            if slot_remap is not None:
+                remap = [int(j) for j in slot_remap]
+                if len(remap) != W or sorted(remap) != list(range(W)):
+                    raise ValueError(f"slot_remap must be a permutation of range({W}), got {remap}")
+                ns_phys = slot_map_after_remap(self._ns_phys, remap)
+            else:
+                ns_phys = list(self._ns_phys)
+            if ns_phys != list(range(W)):
+                inv = slot_map_inverse(ns_phys)
+                tokens = kwargs["tokens"] = _ns_scatter_rows(tokens, inv, W, 0)
+                if start_pos is not None:
+                    start_pos = kwargs["start_pos"] = _ns_scatter_rows(start_pos, inv, W, -1)
+                if kwargs.get("page_table") is not None:
+                    kwargs["page_table"] = _ns_scatter_rows(kwargs["page_table"], inv, W, 0)
+                for name, fill in (("prompt_tokens", 0), ("output_tokens", 0), ("grammar_bitmask", -1)):
+                    if kwargs.get(name) is not None:
+                        kwargs[name] = _ns_scatter_rows(kwargs[name], inv, W, fill)
+                sp = kwargs.get("sampling_params")
+                if sp is not None and dataclasses.is_dataclass(sp):
+                    kwargs["sampling_params"] = dataclasses.replace(
+                        sp, **{f.name: _ns_scatter_rows(getattr(sp, f.name), inv, W, 0) for f in dataclasses.fields(sp)}
+                    )
+            kwargs["slot_remap"] = None
+            slot_remap = None
         width = int(tokens.shape[0])
         # Bucket by the active prefix with ONE rule on every step (a remap step no longer forces full width: the
         # remap is applied to the full slot space below and rows are front-packed, so slicing afterwards is exact).
-        bucket = self._pick_decode_bucket(tokens, start_pos)
+        if ns_phys is not None and os.environ.get("TT_DECODE_BUCKETING", "1") == "1":
+            live = [] if start_pos is None else (start_pos.flatten() != -1).nonzero().flatten().tolist()
+            bucket = min(width, 1 << max(0, max(live, default=0).bit_length()))  # next pow2 >= max live row + 1
+        else:
+            bucket = self._pick_decode_bucket(tokens, start_pos)
         previous = getattr(self, "_decode_bucket_last", None)
         if not reload_inputs and bucket != previous:
             raise ValueError(
@@ -653,7 +799,22 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen, device-resident serving decode)")
         self._bind_bucket_store(bucket)
-        result = super().decode_forward(**kwargs)
+        # The plugin commits its own map only after decode_forward returns, but Generator.decode_forward with
+        # read_from_device=True gathers the output (process_decode_output_host -> _ns_gather_rows) INSIDE the call, so the
+        # NEW map must be live before it. A raise must leave our map unchanged: restore it and re-raise.
+        old_ns = (getattr(self, "_ns_phys", None), getattr(self, "_ns_owned", None))
+        if ns_phys is not None:
+            self._ns_phys = ns_phys
+            if reload_inputs:  # start_pos is authoritative on a reload step
+                self._ns_owned = (
+                    set() if start_pos is None else set((start_pos.flatten() != -1).nonzero().flatten().tolist())
+                )
+        try:
+            result = super().decode_forward(**kwargs)
+        except BaseException:
+            if ns_phys is not None:
+                self._ns_phys, self._ns_owned = old_ns
+            raise
         self._decode_bucket_last = bucket
         return result
 
@@ -874,6 +1035,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         self._decode_bucket_last = None  # warmup replays leave the resident decode inputs at warmup values
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         result = warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+        self._ns_reset()  # warmup rows are not requests: identity map, no owned rows
         if kwargs.get("enable_trace"):
             self._capture_gdn_slot_write_traces()
         self._maybe_forbid_post_capture_compile(kwargs.get("enable_trace"))
