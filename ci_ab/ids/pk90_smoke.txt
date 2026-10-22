@@ -1,0 +1,1 @@
+perf_pack.py::test_perf_pack_block[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-relu_type:NoRelu-dest_sync:Half-dest_index:0-run_types:[<PerfRunType.L1_TO_L1: 1>, <PerfRunType.UNPACK_ISOLATE: 2>, <PerfRunType.MATH_ISOLATE: 3>, <PerfRunType.PACK_ISOLATE: 4>, <PerfRunType.L1_CONGESTION: 5>]-loop_factor:32-is_perf:True]
