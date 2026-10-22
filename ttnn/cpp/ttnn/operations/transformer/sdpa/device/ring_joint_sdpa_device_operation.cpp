@@ -420,7 +420,7 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         "indexed KV caches, kv_valid_end and logical_l");
     TT_FATAL(
         !args.program_config.has_value() ||
-            (args.program_config->max_k_splits <= 1 && !args.program_config->segmented_accumulation),
+            (args.program_config->k_splits <= 1 && !args.program_config->segmented_accumulation),
         "dynamic_local_n does not support K splits or segmented accumulation");
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const auto& k_shape = tensor_args.input_k.logical_shape();
