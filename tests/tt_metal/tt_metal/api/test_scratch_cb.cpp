@@ -51,7 +51,8 @@ constexpr std::uint32_t kScratchTileWords = kTileBytes / 4;
 constexpr std::uint32_t kSlots = 2;  // largest pattern A ring; smaller rings guard their actual capacity
 constexpr std::uint32_t kGuardBytes = 64;
 constexpr std::uint32_t kGuardValue = 0xA5C39E71u;
-// Fixed L1 regions, well above the kernel-config region (as in compute_semaphore.cpp).
+// Fixed L1 regions, well above the kernel-config region (as in
+// metal2_host_api/integration_tests/compute_semaphore.cpp).
 constexpr std::uint32_t kInAddr = 100 * 1024 + 0x40000;
 constexpr std::uint32_t kRingAAddr = kInAddr + kNumTiles * kTileBytes + kGuardBytes;
 constexpr std::uint32_t kRingBAddr = kRingAAddr + kSlots * kTileBytes + kGuardBytes;
