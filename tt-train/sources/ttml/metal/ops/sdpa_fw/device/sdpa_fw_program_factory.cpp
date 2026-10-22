@@ -78,6 +78,22 @@ uint32_t pick_default_sk_chunk_t(uint32_t St) {
     return 1U;
 }
 
+// Chunk knob in elements -> tiles. 0 = fallback; otherwise it must be a tile multiple that divides S.
+// Checked here (not in validate) so the ring SDPA path, which builds the program directly, is covered too.
+uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t S, uint32_t fallback, const char* name) {
+    if (chunk_size == 0U) {
+        return fallback;
+    }
+    TT_FATAL(
+        chunk_size % tt::constants::TILE_HEIGHT == 0U && S % chunk_size == 0U,
+        "{} ({}) must be a multiple of {} that divides the sequence length ({})",
+        name,
+        chunk_size,
+        tt::constants::TILE_HEIGHT,
+        S);
+    return chunk_size / tt::constants::TILE_HEIGHT;
+}
+
 // One matmul_block call produces a rectangle of output tiles (block_rows x block_cols) that must fit
 // in DST (dst_size tiles). The full output is rows x cols tiles, so the rectangle sides must divide
 // those. Take the biggest rectangle; between equal sizes take the wider one, because the tiles of
@@ -245,11 +261,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // The two knobs in tiles (_t): Sq_chunk_t query tile-rows are processed together against one
     // pass over K/V, Sk_chunk_t K/V tiles are consumed per step. 0 = default (1 Q row, up to 4 K tiles).
-    const uint32_t Sq_chunk_t = args.q_chunk_size == 0U ? 1U : args.q_chunk_size / tt::constants::TILE_HEIGHT;
-    const uint32_t Sk_chunk_t =
-        args.k_chunk_size == 0U ? pick_default_sk_chunk_t(St) : args.k_chunk_size / tt::constants::TILE_HEIGHT;
-    TT_FATAL(Sq_chunk_t > 0U && (St % Sq_chunk_t == 0U), "Sq_chunk_t={} must be > 0 and divide St={}", Sq_chunk_t, St);
-    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
+    const uint32_t Sq_chunk_t = chunk_size_to_tiles(args.q_chunk_size, qS, /* fallback */ 1U, "q_chunk_size");
+    const uint32_t Sk_chunk_t = chunk_size_to_tiles(args.k_chunk_size, qS, pick_default_sk_chunk_t(St), "k_chunk_size");
 
     const uint32_t q_num_chunks = St / Sq_chunk_t;
     const uint32_t total_q_chunks = NC * q_num_chunks;
