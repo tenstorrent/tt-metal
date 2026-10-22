@@ -1719,7 +1719,12 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        if num_faces_r_dim is None or num_faces_c_dim is None:
+        if (num_faces_r_dim is None) != (num_faces_c_dim is None):
+            raise ValueError(
+                "Pass both num_faces_r_dim and num_faces_c_dim, or neither "
+                f"(got num_faces_r_dim={num_faces_r_dim}, num_faces_c_dim={num_faces_c_dim})"
+            )
+        if num_faces_r_dim is None:
             if num_faces not in (1, 2, 4):
                 raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
             num_faces_r_dim = 2 if num_faces == 4 else 1

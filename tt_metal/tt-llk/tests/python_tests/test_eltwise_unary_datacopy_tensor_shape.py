@@ -123,14 +123,17 @@ def test_eltwise_unary_datacopy_tensor_shape(
             "(_llk_math_eltwise_unary_datacopy_init_)"
         )
 
-    # Same known Wormhole issue as test_bcast.py::test_unpack_bcast.
+    # Same known Wormhole issue as test_bcast.py::test_unpack_bcast: https://github.com/tenstorrent/tt-llk/issues/1680
     if (
         get_chip_architecture() == ChipArchitecture.WORMHOLE
         and broadcast_type == BroadcastType.Row
         and dest_acc == DestAccumulation.Yes
         and formats.input_format == DataFormat.Float16_b
     ):
-        pytest.skip("Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b")
+        pytest.skip(
+            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b "
+            "(https://github.com/tenstorrent/tt-llk/issues/1680)"
+        )
 
     # 8x16 (one 8-row face) is not in SUPPORTED_TILE_SIZES, so it goes through the
     # face_r_dim / num_faces path, as in test_unpack_A_targeted_tensor_shape_coverage.

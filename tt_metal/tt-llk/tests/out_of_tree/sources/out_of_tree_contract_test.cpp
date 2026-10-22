@@ -149,12 +149,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // real, just unenforced in this suite.
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // copy srca to dest
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, tilize_en>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+        llk_test_pack_mode_v<false, tilize_en>>(tensor_shape, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     for (int block_num = 0; block_num < params.NUM_BLOCKS; ++block_num)
@@ -166,7 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 (params.DST_INDEX + tile_num < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "tile_num exceeds max dest tiles");
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                params.DST_INDEX + tile_num, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
+                params.DST_INDEX + tile_num, formats.math, formats.math, tensor_shape);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
