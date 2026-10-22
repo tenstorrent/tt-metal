@@ -3063,9 +3063,6 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
-                # 8960 and 11008 share 8 cores with dim 1536 / 2048 -> 8-core decode MLP; pad to 48 / 32.
-                "Qwen2.5-3B": 32,
-                "Qwen2.5-1.5B": 48,
                 "QwQ-32B": 16,
                 # 27392/8 = 3424 = 107 tiles (prime) -> find_grid_k_n degenerates to a
                 # single core (1x1 norm grid overflows L1; 1-core MLP matmuls). Pad to
@@ -3076,6 +3073,16 @@ class ModelArgs:
             # A hidden dim that is not a whole number of tiles cannot be sharded; zero padding is exact.
             if default_padded_cores == 0 and self.hidden_dim % (ttnn.TILE_SIZE * max(self.num_devices, 1)):
                 default_padded_cores = 8
+            self.table_padded_hidden_dim = (
+                nearest_multiple(self.hidden_dim, default_padded_cores * ttnn.TILE_SIZE * self.num_devices)
+                if default_padded_cores > 0
+                else self.hidden_dim
+            )
+            # 8960 and 11008 share 8 cores with dim 1536 / 2048 -> 8-core decode MLP on one device; pad to 48 / 32.
+            if self.num_devices == 1:
+                default_padded_cores = {"Qwen2.5-3B": 32, "Qwen2.5-1.5B": 48}.get(
+                    self.base_model_name, default_padded_cores
+                )
 
             # Override MLP padding cores from env var
             mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
@@ -3444,9 +3451,12 @@ class ModelArgs:
             # certifying the other. (#45400 review, finding R2)
             "hf_rope": bool(getattr(self, "use_hf_rope", False)),
         }
-        # mlp.py names the MLP weights .hidden_dim_{hidden_dim} once hidden_dim is padded.
-        if getattr(self, "hidden_dim", None) != getattr(self, "unpadded_hidden_dim", None):
-            variant["hidden_dim"] = int(self.hidden_dim)
+        # mlp.py names the MLP weights .hidden_dim_{hidden_dim} once hidden_dim is padded. Padding from the shared
+        # table is implied by the model, so only padding that departs from it (PAD_MLP_CORES, single-device entries)
+        # needs its own marker.
+        hidden_dim = getattr(self, "hidden_dim", None)
+        if hidden_dim != getattr(self, "table_padded_hidden_dim", hidden_dim):
+            variant["hidden_dim"] = int(hidden_dim)
         return variant
 
     def _weight_cache_identity(self, components=None):
