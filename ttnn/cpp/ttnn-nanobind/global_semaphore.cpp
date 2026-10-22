@@ -38,8 +38,7 @@ void py_module(nb::module_& mod) {
         nb::arg("address"),
         nb::keep_alive<0, 1>(),
         "Initialize a non-owning semaphore at one address on all supplied mesh devices and cores. "
-        "Metal validates alignment and SRAM bounds; the caller retains backing and validates its padded write "
-        "footprint.");
+        "Metal validates alignment and the padded write range against allocatable SRAM; the caller retains backing.");
     mod.def(
         "create_global_semaphore",
         &ttnn::global_semaphore::create_global_semaphore,

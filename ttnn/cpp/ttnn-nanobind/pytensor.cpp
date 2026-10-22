@@ -16,7 +16,6 @@
 #include <variant>
 #include <vector>
 #include <unordered_set>
-#include <tt-metalium/allocator.hpp>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>

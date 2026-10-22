@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -47,6 +48,7 @@
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
@@ -74,6 +76,14 @@ using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
 using MeshBufferViewTest = MeshDevice1x1Fixture;
+
+class MeshBufferViewBoundsTest : public MeshDeviceFixtureBase {
+protected:
+    // Reserve small SRAM and reduce worker capacity to exercise both allocator boundaries.
+    MeshBufferViewBoundsTest() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{1, 1}, .l1_small_size = 32 * 1024, .worker_l1_size = 512 * 1024}) {}
+};
 
 class MeshBufferTest1x2MultiCQ : public MeshDeviceFixtureBase {
 protected:
@@ -215,12 +225,94 @@ TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
     }
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("exceeds device SRAM")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
     invalid = valid;
     invalid.front().second = 0;
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("below allocatable SRAM")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+}
+
+// Ordinary views and semaphores must not cross into reserved small SRAM, even when physically in bounds.
+TEST_F(MeshBufferViewBoundsTest, RespectsAllocatorRegions) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    const MeshCoordinate coord(0, 0);
+    auto* device = mesh_device_->get_device(coord);
+    const auto& allocator = device->allocator();
+    const DeviceAddr base = allocator->get_base_allocator_addr(HalMemType::L1);
+    const DeviceAddr end = base + allocator->get_bank_size(BufferType::L1);
+    const DeviceAddr alignment = allocator->get_alignment(BufferType::L1);
+    ASSERT_EQ(device->l1_size_per_core() - end, 32 * 1024);
+    ASSERT_GE(base, device->l1_size_per_core() - 512 * 1024);
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 1}, .num_cores = {1, 1}, .page_shape = {1, 256}};
+    const TensorSpec spec(
+        Shape{1, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
+    const auto footprint = spec.compute_consumed_memory_bytes_per_bank(alignment, 1);
+    // Boundary views carry metadata only; no writes occur without an owning allocation.
+    for (const DeviceAddr address : {base, end - footprint}) {
+        EXPECT_EQ(
+            create_sram_buffer_view(*mesh_device_, spec, {{MeshCoreCoord{coord, CoreCoord(0, 0)}, address}}).address(),
+            address);
+    }
+    for (const DeviceAddr address : {base - alignment, end - alignment, end, end + 16 * 1024}) {
+        EXPECT_THAT(
+            [&] { create_sram_buffer_view(*mesh_device_, spec, {{MeshCoreCoord{coord, CoreCoord(0, 0)}, address}}); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    }
+    const DeviceLocalBufferConfig small_config{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1_SMALL,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto small_owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, small_config, mesh_device_.get());
+    std::vector<uint32_t> expected(64, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), small_owner, expected, coord, true);
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::CreateGlobalSemaphore(
+                *mesh_device_, config.shard_grid(), 37, BufferType::L1, small_owner->address());
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    for (const DeviceAddr address : {end - alignment, DeviceAddr{device->l1_size_per_core()}}) {
+        EXPECT_THAT(
+            [&] {
+                tt::tt_metal::experimental::CreateGlobalSemaphore(
+                    *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, address);
+            },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    }
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    EXPECT_EQ(readback, expected);
+    {
+        auto semaphore = tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, small_owner->address());
+        EXPECT_EQ(semaphore.address(), small_owner->address());
+    }
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    ASSERT_EQ(readback.size(), expected.size());
+    EXPECT_EQ(readback.front(), 37);
+    // Padding within the written word's alignment block is unspecified; neighboring blocks stay intact.
+    EXPECT_TRUE(std::equal(
+        readback.begin() + alignment / sizeof(uint32_t),
+        readback.end(),
+        expected.begin() + alignment / sizeof(uint32_t)));
+    // A null initializer checks the final valid word without writing unowned memory.
+    EXPECT_EQ(
+        tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), std::nullopt, BufferType::L1, end - alignment)
+            .address(),
+        end - alignment);
 }
 
 // Different per-core addresses must survive transfers and view destruction without touching neighbors.

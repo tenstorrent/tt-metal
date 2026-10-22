@@ -241,16 +241,16 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
 
 
 def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device, expect_error):
-    """Reject reserved, unaligned and overflowing semaphore writes without touching backing bytes."""
+    """Reject reserved, unaligned and out-of-range semaphore writes without touching backing bytes."""
     mesh, coord, core = per_core_mesh_device, ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     address = _address(owner, coord, core)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     for invalid, message in (
-        (0, "below allocatable SRAM"),
+        (0, "outside allocatable L1"),
         (address + 1, "must be aligned"),
-        (2**32, "exceeds device SRAM"),
-        (2**64 - ttnn.get_l1_alignment(), "overflows"),
+        (2**32, "outside allocatable L1"),
+        (2**64 - ttnn.get_l1_alignment(), "outside allocatable L1"),
     ):
         with expect_error(RuntimeError, message):
             ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, invalid)

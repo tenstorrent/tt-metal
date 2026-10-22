@@ -82,6 +82,9 @@ public:
     std::uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;
 
+    // Check an addressed buffer against its ordinary or small SRAM allocation region.
+    void validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type = BufferType::L1) const;
+
     std::uint32_t get_dram_channel_from_bank_id(std::uint32_t bank_id) const;
     CoreCoord get_logical_core_from_bank_id(std::uint32_t bank_id) const;
 
