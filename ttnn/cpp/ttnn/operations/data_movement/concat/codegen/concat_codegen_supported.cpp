@@ -205,8 +205,6 @@ namespace {
 using Shape = std::vector<uint32_t>;
 using Placement = std::vector<BufferType>;
 
-enum class Axis { kFirst, kLast };
-
 bool shape_matches(const Tensor& tensor, const Shape& expected) {
     const auto& logical = tensor.logical_shape();
     if (logical.rank() != expected.size()) {
@@ -238,17 +236,16 @@ bool dtype_in(DataType dtype, std::initializer_list<DataType> dtypes) {
     return std::find(dtypes.begin(), dtypes.end(), dtype) != dtypes.end();
 }
 
-// Exact match on the normalized attributes of one measured case: dtype, concat axis, per-input shape and buffer
+// Exact match on the normalized attributes of one measured last-axis case: dtype, per-input shape and buffer
 // placement, and an interleaved DRAM output.
 bool is_exact_case(
     const std::vector<Tensor>& input_tensors,
     const ttnn::prim::ConcatCodegenParams& attrs,
     std::initializer_list<DataType> dtypes,
-    Axis axis,
     const std::vector<Shape>& shapes,
     const Placement& placement) {
-    const uint32_t dim = axis == Axis::kFirst ? 0 : static_cast<uint32_t>(shapes.front().size() - 1);
-    return attrs.dim == dim && attrs.output_mem_config.buffer_type() == BufferType::DRAM &&
+    const auto last_dim = static_cast<uint32_t>(shapes.front().size() - 1);
+    return attrs.dim == last_dim && attrs.output_mem_config.buffer_type() == BufferType::DRAM &&
            inputs_match(input_tensors, shapes, placement) && dtype_in(input_tensors.front().dtype(), dtypes);
 }
 
@@ -270,7 +267,7 @@ bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::Conc
     const std::vector<Shape> three_input_rank3 = {{1, kUnit, kUnit}, {1, kUnit, kDouble}, {1, kUnit, kUnit}};
     const std::vector<Placement> placements = {{kDram, kL1, kDram}, {kL1, kDram, kL1}, {kDram, kDram, kDram}};
     for (const Placement& placement : placements) {
-        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, Axis::kLast, three_input_rank3, placement)) {
+        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, three_input_rank3, placement)) {
             return true;
         }
     }
@@ -278,17 +275,11 @@ bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::Conc
     // Unsettled: same as above, width concat of three rank-2 inputs.
     const std::vector<Shape> three_input_width = {{kUnit, kUnit}, {kUnit, kDouble}, {kUnit, kTriple}};
     for (const Placement& placement : placements) {
-        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, Axis::kLast, three_input_width, placement)) {
+        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, three_input_width, placement)) {
             return true;
         }
     }
-
-    // Unsettled: only these four of the outermost-axis three-input cases were measured slower.
-    const std::vector<Shape> three_input_outer = {{kUnit, kDouble}, {kUnit, kDouble}, {kUnit, kDouble}};
-    return is_exact_case(input_tensors, attrs, {kInt32}, Axis::kFirst, three_input_outer, {kDram, kL1, kDram}) ||
-           is_exact_case(input_tensors, attrs, {kBf16}, Axis::kFirst, three_input_outer, {kL1, kDram, kL1}) ||
-           is_exact_case(input_tensors, attrs, {kBf16}, Axis::kFirst, three_input_outer, {kDram, kDram, kDram}) ||
-           is_exact_case(input_tensors, attrs, {kUint32}, Axis::kFirst, three_input_outer, {kDram, kDram, kDram});
+    return false;
 }
 
 bool supported_execution_controls(
