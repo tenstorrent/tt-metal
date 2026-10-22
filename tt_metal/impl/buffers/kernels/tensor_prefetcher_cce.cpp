@@ -142,6 +142,10 @@ void deliver_chunk(
     uint32_t stage_slot_addr,
     uint32_t fifo_byte_offset,
     uint32_t bytes) {
+    // No invalidate before the loads. On the Mimir emulator a CCE re-reading GDDR after each host rewrite saw no stale
+    // word in four rounds (MM-7 spike S4, 2026-10-19); the AI-generated DV reference puts these SPAs on the hart's MMIO
+    // port, which a Rocket core does not cache, but that is not confirmed against RTL. The host makes the tensor's
+    // DRAM writes land before it releases a WAIT_CQ (SDMeshCommandQueue::enqueue_write_dram_core_counter).
     const volatile uint32_t* source = reinterpret_cast<const volatile uint32_t*>(
         experimental::cce_gddr_address(context.mimir, context.mimir, context.view_offset + view_byte_offset));
     volatile uint32_t* stage = remote_cb::own_tl1_word(stage_slot_addr);
@@ -159,8 +163,11 @@ void deliver_chunk(
 // One receiver-contiguous tensor, batched: receiver r reads slab recv_index_base + r, whose block_count blocks of
 // page_bytes_per_recv are contiguous. Each round takes the most blocks every receiver has room for (up to
 // target_per_visit_pages, and never across the FIFO's page-aligned limit), copies that many from each slab in
-// stage-third chunks, then credits the round. The Blackhole round's DMA pipeline and NoC write state have no CCE
-// counterpart, so each chunk is a load loop and a store loop.
+// stage-third chunks, then credits the round. Each chunk is a load loop and a store loop, not an iDMA copy. The CCE
+// has no NoC, so the Blackhole round's NoC reads and writes have no counterpart. Its iDMA moves the same data (MM-8
+// probes in tests/tt_metal/tt_metal/dram/README.md), but its done fires when the request is accepted (MIM-628), so
+// the sender could not order a credit behind the data without loading the receiver's TL1 back, and a CCE kernel load
+// of remote TL1 hung the emulator in those probes.
 RequestOutcome deliver_tensor(
     remote_cb::Sender& sender,
     const TensorPrefetcherEntry& entry,

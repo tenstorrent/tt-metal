@@ -413,9 +413,21 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
 
     // Slow-dispatch analog of the fast-dispatch leading dispatch wait: ensure any
-    // prior program touching this address space (and prior synchronous buffer
-    // writes) is complete before the counter is bumped.
+    // prior program touching this address space is complete before the counter is bumped.
     wait_for_cores_idle();
+    // A kernel that sees the counter reads DRAM next, so the buffer writes before this call must have
+    // landed first; the barrier is what orders them ahead of the counter write.
+    auto& cluster = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
+    std::unordered_set<ChipId> barriered_devices;
+    for (const auto& target : targets) {
+        if (!mesh_device_->impl().is_local(target.device_coord)) {
+            continue;
+        }
+        const ChipId device_id = mesh_device_->impl().get_device(target.device_coord)->id();
+        if (barriered_devices.insert(device_id).second) {
+            cluster.dram_barrier(device_id);
+        }
+    }
 
     for (const auto& target : targets) {
         if (!mesh_device_->impl().is_local(target.device_coord)) {
@@ -424,9 +436,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         IDevice* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (caller pre-applies the
         // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+        cluster.write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
     }
 }
 

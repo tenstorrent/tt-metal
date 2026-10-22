@@ -4,7 +4,8 @@
 
 // Experimental Start / Queue / Stop lifecycle API for the queueable Tensor
 // prefetcher (DRISC). A long-running DRISC kernel on every DRAM sender core
-// reads requests off a per-core H2D socket; each request identifies a
+// reads requests off a per-core H2D socket (on Quasar, one CCE sender kernel per
+// DRAM view reads them from a request ring in its TL1); each request identifies a
 // DRAM-sender GlobalCircularBuffer and a per-tensor work list. The host can
 // keep queueing new requests after Start returns; per-GCB ring-buffer state
 // (fifo_wr_ptr, pages_sent) is preserved in DRISC L1 so successive requests
@@ -135,7 +136,8 @@ struct TensorPrefetcherInput {
 // Build per-device Programs (two DRISC kernels per DRAM bank), allocate
 // the per-(device, sender) H2D sockets, and spawn the host worker thread that
 // drains the request queue. Returns immediately. No prefetch work is scheduled
-// yet — kernels park on socket_wait_for_pages.
+// yet — kernels park on socket_wait_for_pages. On Quasar there is one CCE sender
+// kernel per DRAM bank, fed through a TL1 request ring instead of a socket.
 //
 // Each queued GCB selects which of the provisioned senders receive its PREFETCH
 // requests. Single-sender GCBs leave the second sender for each bank idle; dual-sender
@@ -238,6 +240,11 @@ void WaitForCqOnTensorPrefetcher(
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
 // prefetcher is active.
+//
+// Throws, after releasing the resources, if a sender kernel did not finish cleanly. On Quasar that
+// includes a CCE sender that ended Failed (a credit, drain or CQ wait timed out, or a request it
+// cannot deliver): the message names each such sender, its status, and how many request pages the
+// host dropped because that sender had already exited.
 void StopTensorPrefetcher(distributed::MeshDevice& mesh_device);
 
 }  // namespace experimental

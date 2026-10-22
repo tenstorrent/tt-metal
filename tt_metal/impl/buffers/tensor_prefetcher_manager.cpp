@@ -6,7 +6,6 @@
 
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
-#include "impl/buffers/dram_receiver_config_page.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/global_circular_buffer_impl.hpp"
@@ -50,6 +49,7 @@
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -97,9 +97,9 @@ struct PrefetcherArchTraits {
     bool stage_ring_capped;
     // What the stage ring's size is aligned down to; unset is 6 x the L1 alignment.
     std::optional<uint32_t> stage_ring_alignment_bytes;
-    // Distance between consecutive receivers' credit counters in a sender's state.
-    uint32_t credit_stride_bytes;
-    // Receiver-contiguous batched delivery only: K-row-major tensors and streaming are rejected.
+    // Receiver-contiguous batched delivery only: K-row-major tensors and streaming are rejected. The CCE sender
+    // implements only the batched receiver-contiguous round; the Blackhole K-row-major and streaming paths are not
+    // ported to it.
     bool receiver_contiguous_batched_only;
     bool supports_prefetcher_pipes;
 };
@@ -111,7 +111,6 @@ constexpr PrefetcherArchTraits kBlackholeTraits{
     .gddr_subchannels_per_bank = 3,
     .stage_ring_capped = false,
     .stage_ring_alignment_bytes = std::nullopt,
-    .credit_stride_bytes = 2 * sizeof(uint32_t),
     .receiver_contiguous_batched_only = false,
     .supports_prefetcher_pipes = true,
 };
@@ -123,7 +122,6 @@ constexpr PrefetcherArchTraits kQuasarTraits{
     .gddr_subchannels_per_bank = std::nullopt,
     .stage_ring_capped = true,
     .stage_ring_alignment_bytes = kCceStageRingAlignBytes,
-    .credit_stride_bytes = kDramReceiverCreditStrideBytes,
     .receiver_contiguous_batched_only = true,
     .supports_prefetcher_pipes = false,
 };
@@ -1243,6 +1241,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
                                     .get_soc_desc(devices_.front()->id())
                                     .get_metal_dram_cores(tt::CoordSystem::TRANSLATED)
                                     .size();
+        // A warning, not a failure: a session with no receivers, such as one that only fences, is still valid.
         if (num_senders_ >= num_cces) {
             log_warning(
                 tt::LogMetal,
@@ -1292,6 +1291,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
 
     stop_requested_.store(false);
     worker_gave_up_on_sender_.store(false);
+    dropped_request_pages_.store(0);
     host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop, this);
     active_ = true;
     if (benchmark_enabled) {
@@ -2115,6 +2115,7 @@ void TensorPrefetcherManager::worker_loop() {
                         "Tensor prefetcher: dropping a command {} request page for {}; that sender has exited",
                         req.sender_pages[target.page_index].front(),
                         sender_name(target));
+                    dropped_request_pages_.fetch_add(1);
                     return true;
                 });
                 // A ring that drains slowly takes pages and so never reaches the limit. Without an operation timeout,
@@ -2240,9 +2241,11 @@ void TensorPrefetcherManager::stop() {
             std::make_move_iterator(drain_holds_.begin()),
             std::make_move_iterator(drain_holds_.end()));
     }
+    std::vector<std::string> failed_senders;
     if (!worker_gave_up_on_sender && !wait_failure) {
-        log_cce_sender_statuses_if_any_failed();
+        failed_senders = failed_cce_senders();
     }
+    const uint32_t dropped_request_pages = dropped_request_pages_.load();
     active_lifetime_timer_.reset();
 
     transport_.reset();
@@ -2264,6 +2267,15 @@ void TensorPrefetcherManager::stop() {
             "Tensor prefetcher: a sender's request ring took no page for {:.0f} s, so the host worker dropped that "
             "sender's later requests; the log names the sender and its status",
             std::chrono::duration<float>(request_ring_no_progress_limit_).count());
+    }
+    if (!failed_senders.empty()) {
+        const std::string failed_sender_list = fmt::format("{}", fmt::join(failed_senders, "; "));
+        TT_THROW(
+            "Tensor prefetcher: {} sender(s) ended Failed, so their requests were not all delivered ({} request pages "
+            "dropped after they exited): {}",
+            failed_senders.size(),
+            dropped_request_pages,
+            failed_sender_list);
     }
 }
 
@@ -2293,24 +2305,33 @@ void TensorPrefetcherManager::join_worker() {
     host_worker_.join();
 }
 
-void TensorPrefetcherManager::log_cce_sender_statuses_if_any_failed() const {
+std::vector<std::string> TensorPrefetcherManager::failed_cce_senders() const {
+    std::vector<std::string> failed_senders;
     if (prefetcher_traits_for(mesh_device_->arch()).transport != RequestTransportKind::Tl1Ring) {
-        return;
+        return failed_senders;
     }
     for (IDevice* device : devices_) {
         for (const CoreCoord& sender_logical : sender_logical_cores_) {
-            bool failed = true;
             try {
-                failed = read_cce_sender_status(*mesh_device_, device, sender_logical, cce_control_base_).state ==
-                         static_cast<uint32_t>(CceSenderState::Failed);
-            } catch (const std::exception&) {
-            }
-            if (failed) {
-                log_cce_sender_statuses();
-                return;
+                const CceSenderStatus status =
+                    read_cce_sender_status(*mesh_device_, device, sender_logical, cce_control_base_);
+                if (status.state == static_cast<uint32_t>(CceSenderState::Failed)) {
+                    failed_senders.push_back(fmt::format(
+                        "sender {} on device {}: {}",
+                        sender_logical.str(),
+                        device->id(),
+                        format_cce_sender_status(status)));
+                }
+            } catch (const std::exception& error) {
+                failed_senders.push_back(fmt::format(
+                    "sender {} on device {}: status unreadable: {}", sender_logical.str(), device->id(), error.what()));
             }
         }
     }
+    if (!failed_senders.empty()) {
+        log_cce_sender_statuses();
+    }
+    return failed_senders;
 }
 
 void TensorPrefetcherManager::log_cce_sender_statuses() const {

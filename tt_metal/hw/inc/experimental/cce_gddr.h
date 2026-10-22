@@ -47,7 +47,11 @@ inline __attribute__((always_inline)) void cce_gddr_write(
     }
 }
 
-// Package CCE SRAM is 4 MiB per CCE, grouped as 8 MiB per Mimir.
+// Package CCE SRAM is 4 MiB per CCE, grouped as 8 MiB per Mimir. One formula serves a CCE on this Mimir and one on
+// another: the DMRISC remap UMD programs on each CCE (TTDevice::program_cce_dmrisc_remap) rebases this Mimir's 8 MiB
+// window onto the chiplet-local SRAM base 0x4000_0000, so a store to the sibling CCE stays on the die. A hart cannot
+// use that local address itself: on the Mimir emulator, hart stores to 0x4040_0000 never reached the sibling CCE
+// (2026-10-14).
 inline constexpr uint64_t CCE_SRAM_SPA_BASE = 0x1280000000ULL;
 inline constexpr uint64_t CCE_SRAM_TILE_STRIDE = 0x400000ULL;
 
