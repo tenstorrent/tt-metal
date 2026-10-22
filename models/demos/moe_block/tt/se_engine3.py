@@ -570,6 +570,9 @@ void kernel_main() {
         for (uint32_t o = 0; o < nops; ++o) {
             const uint32_t op = get_arg_val<uint32_t>(r0 + 1 + o), kind = op & 0xFF, idx = op >> 8;
             if (kind == 0) {
+#ifdef SE_PROBE_RSSTAT
+                DeviceZoneScopedN("SE-DPASS");
+#endif
                 const uint32_t pd = idx, pw = get_arg_val<uint32_t>(pt0 + pd * (1 + MT));
                 reconfig_data_format(WIN, HALL);
                 matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);

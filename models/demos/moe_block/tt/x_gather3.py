@@ -19,6 +19,7 @@ from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 import ttnn
 from models.demos.moe_block.tt.router_stream import LSTREAM
 from models.demos.moe_block.tt.routing_stream import RA_SEND
+from models.demos.moe_block.tt.se_engine3 import _probes
 
 INC_EVERY = 8
 CB = 0
@@ -82,6 +83,11 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
     uint32_t seen[128];
     for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
     uint32_t c = 0, need = 0, wptr = 0;  // (pos: chunks pushed since the phases began - the CB's batch alignment)
+#ifdef SE_PROBE_RSSTAT
+    DeviceZoneScopedN("SE-RSG");
+    auto clk = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
+    uint32_t wprod = 0, wcb = 0, nw = 0;  // (cycles blocked on a producer's hand-off; on the CB's room)
+#endif
     auto flush = [&]() {
         noc_async_read_barrier();
         cb_push_back(0, c * RP);
@@ -100,11 +106,24 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
             if (*mb < target && c > 0) flush();  // (never hold reads while blocked on a producer)
+#ifdef SE_PROBE_RSSTAT
+            if (*mb < target) {
+                const uint32_t t = clk();
+                noc_semaphore_wait_min(mb, target);
+                wprod += clk() - t;
+                ++nw;
+            }
+#endif
             noc_semaphore_wait_min(mb, target);
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finb + fo * 2048);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                 if (c == 0) {
                     need = GROUP - pos % GROUP;
+#ifdef SE_PROBE_RSSTAT
+                    const uint32_t t = clk();
+                    cb_reserve_back(0, need * RP);
+                    wcb += clk() - t;
+#endif
                     cb_reserve_back(0, need * RP);
                     wptr = get_write_ptr(0);
                 }
@@ -115,6 +134,11 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
         }
         if (c > 0) flush();
     }
+#ifdef SE_PROBE_RSSTAT
+    DeviceTimestampedData("SE-RSG-WPROD", wprod);
+    DeviceTimestampedData("SE-RSG-WCB", wcb);
+    DeviceTimestampedData("SE-RSG-NW", nw);
+#endif
     for (uint32_t i = 0; i < nc; ++i)  // (re-arm: every hand-off of the call was waited for)
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
 }
@@ -231,6 +255,11 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
     const uint32_t zb = get_arg_val<uint32_t>(en0 + G + 2), actr = get_arg_val<uint32_t>(en0 + G + 3);
     const uint32_t P = get_arg_val<uint32_t>(en0 + G + 4);
     uint32_t u = 0, lim = GROUP - rpos % GROUP, h = 0;
+#ifdef SE_PROBE_RSSTAT
+    DeviceZoneScopedN("SE-RSS");
+    auto clk = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
+    uint32_t win = 0, wslot = 0, npk = 0;  // (cycles waiting for the reader's data; for a free fabric slot)
+#endif
     auto pop_batch = [&]() {
         noc_async_writes_flushed();
         cb_pop_front(0, u * RP);
@@ -249,7 +278,14 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
-                lpoll();  // (the logits / routing go between my packets)
+                if ((h & 3) == 0) lpoll();  // (the logits / routing go between my packets: every 4th)
+#ifdef SE_PROBE_RSSTAT
+                {
+                    const uint32_t t = clk();
+                    while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();
+                    win += clk() - t;
+                }
+#endif
                 while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();
                 cb_wait_front(0, RP * (u + 1));
                 const uint32_t src = get_read_ptr(0) + u * RP * 2048;
@@ -262,6 +298,14 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                 } else {
                     hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
                 }
+#ifdef SE_PROBE_RSSTAT
+                {
+                    const uint32_t t = clk();
+                    conn.wait_for_empty_write_slot();
+                    wslot += clk() - t;
+                    ++npk;
+                }
+#endif
                 conn.wait_for_empty_write_slot();
                 conn.send_current_slot_non_blocking(src, n * 2048, reinterpret_cast<uint32_t>(hdr));
                 if (++u == lim) pop_batch();
@@ -269,6 +313,11 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
         }
         if (u > 0) pop_batch();
     }
+#ifdef SE_PROBE_RSSTAT
+    DeviceTimestampedData("SE-RSS-WIN", win);
+    DeviceTimestampedData("SE-RSS-WSLOT", wslot);
+    DeviceTimestampedData("SE-RSS-NPK", npk);
+#endif
 }
 """
 
@@ -835,7 +884,7 @@ class XGather3:
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=_READER,
+                kernel_source=_probes() + _READER,
                 source_type=st,
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct + x_ct,
@@ -845,6 +894,7 @@ class XGather3:
             ttnn.KernelDescriptor(
                 kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
                 + (routing.defines(coord) if routing is not None else "")
+                + _probes()
                 + _SENDER,
                 source_type=st,
                 core_ranges=cs(list(ports.values())),
