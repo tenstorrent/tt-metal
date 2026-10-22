@@ -1,0 +1,18 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "rows": 1024,
+  "seq_len": 66,
+  "layer_counts": {
+    "time": 18,
+    "time_variate": 5,
+    "last": 1
+  },
+  "sections": [
+    "embed",
+    "layer_time",
+    "layer_time_variate",
+    "layer_last",
+    "head"
+  ]
+}

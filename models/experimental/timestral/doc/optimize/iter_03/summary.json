@@ -1,0 +1,305 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "reduced_window": {
+    "device_us": 61607.31500000002,
+    "op_to_op_gap_us": 2822.0260000000003,
+    "ops": 66
+  },
+  "sections": {
+    "embed": {
+      "device_us": 9080.922,
+      "op_to_op_gap_us": 2.819,
+      "ops": 6
+    },
+    "layer_time": {
+      "device_us": 18335.857999999997,
+      "op_to_op_gap_us": 6.900999999999999,
+      "ops": 13
+    },
+    "layer_time_variate": {
+      "device_us": 23777.431,
+      "op_to_op_gap_us": 9.684,
+      "ops": 18
+    },
+    "layer_last": {
+      "device_us": 10158.285999999998,
+      "op_to_op_gap_us": 12.809000000000001,
+      "ops": 24
+    },
+    "head": {
+      "device_us": 254.818,
+      "op_to_op_gap_us": 762.718,
+      "ops": 5
+    }
+  },
+  "layer_counts": {
+    "time": 18,
+    "time_variate": 5,
+    "last": 1
+  },
+  "full_model_estimate": {
+    "device_ms": 468.42662499999994,
+    "ops": 359
+  },
+  "measured": {
+    "steady_s": 0.5406507360748947,
+    "device_s": 0.470176137983799,
+    "cold_s": 0.6977853099815547,
+    "pcc_normalized": 0.9999366026330231,
+    "pcc_raw": 0.9999458305973433
+  },
+  "category_percent": {
+    "Other": 58.129999999999995,
+    "Compute": 35.69,
+    "TM": 6.17
+  },
+  "matmul_weighted_flops_percent": 24.14,
+  "stacked": [
+    {
+      "op": "MinimalMatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 44.97,
+      "device_us": 27706.66,
+      "count": 18,
+      "category": "Other"
+    },
+    {
+      "op": "FusedRMSNormPostAllGatherDeviceOperation (in0:dram_interleaved)",
+      "percent": 13.16,
+      "device_us": 8106.7,
+      "count": 9,
+      "category": "Other"
+    },
+    {
+      "op": "MatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 12.02,
+      "device_us": 7407.22,
+      "count": 9,
+      "category": "Compute"
+    },
+    {
+      "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+      "percent": 9.92,
+      "device_us": 6110.1,
+      "count": 9,
+      "category": "Compute"
+    },
+    {
+      "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
+      "percent": 7.13,
+      "device_us": 4394.14,
+      "count": 9,
+      "category": "Compute"
+    },
+    {
+      "op": "SDPAOperation (in0:dram_interleaved)",
+      "percent": 6.62,
+      "device_us": 4080.46,
+      "count": 3,
+      "category": "Compute"
+    },
+    {
+      "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 3.85,
+      "device_us": 2373.18,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "SliceDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.33,
+      "device_us": 819.15,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "ReshapeViewDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.99,
+      "device_us": 609.69,
+      "count": 3,
+      "category": "TM"
+    }
+  ],
+  "slowest_ops": [
+    {
+      "id": "112",
+      "op": "MinimalMatmulDeviceOperation 98304 x 768 x 4096",
+      "device_us": 3752.485,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 29.1442071054248,
+      "flops_percent": 54.19347284250142,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "92",
+      "op": "MinimalMatmulDeviceOperation 98304 x 768 x 4096",
+      "device_us": 3743.468,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 29.21440760278971,
+      "flops_percent": 54.32401023312979,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "73",
+      "op": "MatmulDeviceOperation 98304 x 64 x 3072",
+      "device_us": 3010.343,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 40.02839543533743,
+      "flops_percent": 4.222114264458276,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "117",
+      "op": "MinimalMatmulDeviceOperation 98304 x 768 x 2304",
+      "device_us": 2623.036,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 22.749821199556543,
+      "flops_percent": 43.60981286223639,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "82",
+      "op": "MinimalMatmulDeviceOperation 98304 x 768 x 2304",
+      "device_us": 2616.379,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 22.807704847042416,
+      "flops_percent": 43.72077175780309,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "97",
+      "op": "MinimalMatmulDeviceOperation 98304 x 768 x 2304",
+      "device_us": 2605.325,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 22.90447448974696,
+      "flops_percent": 43.906272380954036,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "74",
+      "op": "MinimalMatmulDeviceOperation 98304 x 3072 x 768",
+      "device_us": 2413.059,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 61.48942068967232,
+      "flops_percent": 63.206140195720636,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "93",
+      "op": "MinimalMatmulDeviceOperation 98304 x 2048 x 768",
+      "device_us": 2004.081,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 54.26367497122122,
+      "flops_percent": 50.73652061453453,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "113",
+      "op": "MinimalMatmulDeviceOperation 98304 x 2048 x 768",
+      "device_us": 1999.368,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 54.39158774172639,
+      "flops_percent": 50.856119018458315,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "108",
+      "op": "MatmulDeviceOperation 98304 x 768 x 768",
+      "device_us": 1367.708,
+      "bound": "SLOW",
+      "cores": "80",
+      "dram_percent": 43.29345152620296,
+      "flops_percent": 38.33332845899856,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x3"
+    },
+    {
+      "id": "103",
+      "op": "MatmulDeviceOperation 98304 x 768 x 768",
+      "device_us": 1367.599,
+      "bound": "SLOW",
+      "cores": "80",
+      "dram_percent": 43.29690208898953,
+      "flops_percent": 38.33638369141831,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x3"
+    },
+    {
+      "id": "101",
+      "op": "SDPAOperation",
+      "device_us": 1363.122,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "86",
+      "op": "SDPAOperation",
+      "device_us": 1362.304,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "88",
+      "op": "MatmulDeviceOperation 98304 x 768 x 768",
+      "device_us": 1359.724,
+      "bound": "SLOW",
+      "cores": "80",
+      "dram_percent": 43.54766114299666,
+      "flops_percent": 38.558413325057145,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "12",
+      "subblock": "1x3"
+    },
+    {
+      "id": "121",
+      "op": "SDPAOperation",
+      "device_us": 1355.033,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    }
+  ]
+}
