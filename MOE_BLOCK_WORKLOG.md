@@ -252,3 +252,27 @@ Design (being built, tt/se_engine.py):
 - down: N passes (W[:, n block] once each), h re-multicast along rows from L1 a pass, y a pass at a time (the
   reduce-scatter can then pipeline by column blocks);
 - DRAM a call: W GLM-Flash 6.7 MB (was ~53), K3 35 MB (was ~280); x own shard once; y.
+
+### Step 4: the shared expert engine, x in L1, weights read once (tt/se_engine.py SeEngine)
+Built as designed above (one engine on 11 x 10 cores, gate / up then down on the same cores, all buffers in one L1
+arena tensor - CBs via cb_descriptor_from_sharded_tensor at offsets, the two partials CBs aliased; fp32 partials by
+packer L1 accumulation, reloaded into DEST (UnpackToDestFp32) on the last step, GLU there, h packed in place).
+| test_se_engine (x from DRAM into L1, 2560 rows) | GLM-Flash | K3 (E 448) |
+|---|---|---|
+| time, PCC | **340 us**, 0.99975 | **1086 us**, 0.99964 |
+| gate / up alone, down alone | 203, 145 | 715, 382 |
+| shared expert weights read from DRAM a call | **6.7 MB** (lin2c chain 53.5) | **35.1 MB** (lin2c chain 281) |
+| vs lin2c chain (12 cols) / block mm2d | 294 / 292 | 1040 / 947 |
+Down is pack-bound (K steps of 1-5 tiles, each an fp32 L1-accumulating pack of the whole output block): 74 / 147 TFLOP/s.
+
+**Hang hunt (closed)**. Symptom: on a random chip, all engine cores' PACK threads in _llk_pack_dest_section_done_
+(waiting on its own pack), MATH in the matmul, UNPACK in cb_wait_front, BRISCs in cb_reserve_back(W) - or wrong results
+on one chip (PCC 0.94-0.98, one core row, error growing with the row sub-block). Narrowing (each one variable): L1 acc
+off, reload off, GLU off, full-sync DEST, gate / up only, down only, KB 4 - all still hung; small shapes passed (MT 2),
+MT 4 intermittently wrong, MT 8 hung; W column multicast -> unicasts and the x row multicasts split so each starts at
+its source (east half NOC0 / west half NOC1) - still hung. Cause (codex on the evidence): the W credits were ONE
+aggregate count on the reader - a fast core credits two successive slots while a slow one credits none, the reader
+overwrites the slow core's occupied slot, its BRISC blocks in cb_reserve_back (and stops serving x), everything stalls
+behind it (the packer included). Fix: credits per slot (WFREE[s] >= GY x round; XFREE likewise per slot on the owner),
+plus a flush between each data write and its valid-semaphore write (codex's other point: separate command FIFOs).
+Also kept: the W reader on the last row (the start of its column's path); x multicast halves from the owner.
