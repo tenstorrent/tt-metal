@@ -922,3 +922,8 @@ bf16 head flips 2/128 top-1s (98.4 %). The device's misses are HF top-2 swaps at
 HF's top-5); the prefill is run-to-run deterministic (max |dlogits| 0). The fast mHC costs 0.0003 of logits PCC and
 one near-tie position: kept. The residual-stream PCC (0.943 composite vs 0.901 fast at 128 tokens) was the
 depth-chaos amplification of that. Test bars set to the measured floor (logits PCC >= 0.98, top-1 >= 0.85).
+
+**Envelope point 2: 16 users per row x 256 K (01:33, `long_8x4_N262144_B16_envelope.log`):** 4 slots per chip, 128-slot
+model; per-prompt TTFT 123.1 then 109-111 s (2126-2400 tok/s), 1.63 GiB free after the 16 prefills per row, decode
+188.1 ms = 5.3 tok/s per user (128 slots, 680 aggregate); **needles 128/128, users agree** (rows differ at a
+near-tie as usual). README row added.
