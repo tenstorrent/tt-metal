@@ -586,8 +586,16 @@ std::vector<Tensor> topk(
     const uint32_t adjusted_k =
         operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k, tile_width);
 
+    // Padding fills can write through rank-only views, so isolate the input before transforming it.
+    auto working_input = input_tensor;
+    if (input_tensor.layout() == TILE_LAYOUT &&
+        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+        working_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
+    }
+
     // Dimension reordering - move target dimension to last position
-    Tensor transposed_tensor = ::reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = ::reduction_common::perform_transpose(working_input, is_dim_last_idx, dim, -1);
 
     // Rank normalization - convert to 4D tensor format
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
