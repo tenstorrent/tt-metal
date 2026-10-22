@@ -126,25 +126,7 @@ jobs:
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
                 echo "is-direct-ping=false" >> $GITHUB_OUTPUT
                 echo "is-bypass-command=true" >> $GITHUB_OUTPUT
-                echo "Command: bypass (retired)"
-
-                RETIRED_MSG='❌ The `/codeowners bypass` command has been retired. To bypass code-owner review, merge as a member of the `@tenstorrent/codeowner-bypass` team via the normal "Merge when ready" button — the `main-codeowner-bypass` ruleset now grants that directly, no bot approval needed.'
-                TEMP_JSON_FILE=$(mktemp)
-                jq -n --arg body "$RETIRED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
-
-                RETIRED_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                  -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  -H "Content-Type: application/json" \
-                  --data-binary @"$TEMP_JSON_FILE" \
-                  "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments")
-
-                rm -f "$TEMP_JSON_FILE"
-
-                if [ "$RETIRED_HTTP_CODE" != "201" ]; then
-                  echo "❌ Failed to post retirement notice (HTTP $RETIRED_HTTP_CODE)"
-                  exit 1
-                fi
+                echo "Command: bypass (handled by codeowner-bypass.yaml)"
               elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
                 echo "create-new-comment=true" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
