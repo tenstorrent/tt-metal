@@ -65,7 +65,7 @@ void test_h2d_socket(
     };
     auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
     // Create Recv MeshWorkload
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*mesh_device);
     CreateKernel(
         recv_program,
         h2d_mode == H2DMode::DEVICE_PULL ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_receiver.cpp"
@@ -140,7 +140,7 @@ void test_d2h_socket(
     };
     auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
@@ -218,7 +218,7 @@ void test_hd_socket_loopback(
     };
     auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
@@ -285,7 +285,7 @@ void test_hd_socket_multithreaded_loopback(
     };
     auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
