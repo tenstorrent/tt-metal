@@ -288,6 +288,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # 31 leave only 2 x 1), so the gate beside the relay gets 37 tiles on 8 columns.
         input_projection_k_block=8,
         output_projection_k_block=8,
+        output_gate_k_block=16,
         input_projection_extra_gate_tiles=5,
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
