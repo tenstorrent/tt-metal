@@ -1691,3 +1691,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   unknown X stops at once. Was F143's note: it excluded only X's downstream tasks, so every independent task still ran
   (DeepSeek-V4.1: FIX.5's 70 min gate ran after `resume --until FIX.7`). STOPPED tasks and stopped fix jobs outside
   that set no longer hold the run. Selftest: test_overseer.py::test_until_runs_the_task_and_what_it_needs_then_stops.
+- F153 (owner, 2026-10-22): two owner rules in the bringup skill, section 4. At its top: the overseer watches the
+  orchestrator itself for waste and wrong behaviour first (stop it, do the cheap correct thing by hand, fix the
+  orchestrator with a selftest; "the orchestrator does X" is never a reason given to the owner for waiting). After
+  "Stop doomed work at once": time is the owner's most important constraint (reuse before any re-run over ~10 min:
+  commit-only, the stamped gate result, the A/B sides, the kept profiles; never re-run for an administrative reason;
+  say what re-runs, why and how long before starting it). Agents' rule 8: run the full gate once, after the last edit.
+  Owner: "THE SYSTEM SHOULD NOT ACT AS TIME IS NOT IMPORTANT".
