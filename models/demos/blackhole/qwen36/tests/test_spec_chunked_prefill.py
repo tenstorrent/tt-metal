@@ -83,6 +83,11 @@ def test_spec_chunked_prefill_state(chunk, mesh_device, reset_seeds, ensure_gc, 
 
     monkeypatch.setenv("QWEN36_SPEC_CHUNKED_PREFILL", "1")
     monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "1")
+    # Harness.prefill (the one-shot reference) builds its page table with test_spec_prefix_cache's BPU (8k tokens):
+    # widen it to this test's MAX_SEQ so the 10k reference fits.
+    import models.demos.blackhole.qwen36.tests.test_spec_prefix_cache as spc
+
+    monkeypatch.setattr(spc, "BPU", BPU)
     mesh_device.enable_program_cache()
     cls = Qwen36MTPContractForCausalLM.initialize_vllm_model(
         SimpleNamespace(_name_or_path=os.environ.get("HF_MODEL")),
