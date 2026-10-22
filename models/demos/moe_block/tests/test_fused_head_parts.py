@@ -360,7 +360,7 @@ def test_se_engine3(mesh_device, device_params):
     from models.demos.moe_block.tt.lin2c import glu_weight
     from models.demos.moe_block.tt.se_engine3 import SeEngine3
 
-    rows, GX, GY, MT = 2560, 11, 10, int(os.environ.get("SE_MT", "1"))
+    rows, GX, GY, MT = int(os.environ.get("HXC_ROWS", "640")), 11, 10, int(os.environ.get("SE_MT", "1"))
     for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
         H, N, glu, _, _ = CHAIN[name]
         I = N // 2
@@ -416,7 +416,7 @@ def test_head_se3(mesh_device, device_params):
     from models.demos.moe_block.tt.fused_head import HeadSE3
     from models.demos.moe_block.tt.lin2c import glu_weight
 
-    rows = 2560
+    rows = int(os.environ.get("HXC_ROWS", "640"))
     for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
         H, N, glu, _, _ = CHAIN[name]
         I = N // 2

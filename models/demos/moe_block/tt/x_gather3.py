@@ -8,7 +8,7 @@ Every chip p of a mesh row holds x [rows, kl] (TILE, DRAM). Chunk by chunk (CR r
 fabric unicasts (tp_gather's ports, line / ring schedule and call fence): a port per (direction, link) sends the
 chunk's rows of its own shard (read from DRAM x), then each of the chunk's shards the upstream port landed here (read
 from the owners' L1). A packet: up to RP tiles of one row tile within one K step, written at the step's owner core
-(the engine's x families' owner tables) and slot. Row tile R goes over link (R / 2) % links. After each chunk a port
+(the engine's x families' owner tables) and slot. Row tile R (chunk-local lr) goes over link (lr / 2) % links. After each chunk a port
 increments the downstream chip's watcher ((direction, link) counter); the watcher raises XREADY on every engine core
 once all of a chunk's streams arrived (XREADY = m + 1: chunk m is in; the engine loads its own shard itself). x-own is
 never reused within a call, so no credits: the call fence only."""
@@ -36,8 +36,9 @@ template <typename F>
 FORCE_INLINE void walk(uint32_t m, uint32_t q, uint32_t part, uint32_t v, F&& f) {
     uint32_t cnt = 0;
     for (uint32_t R = m * CR; R < (m + 1) * CR; ++R) {
-        if ((R / 2) % NV != v) continue;
-        if (part == 0 || (R & 1) == part - 1)
+        const uint32_t lr = R - m * CR;  // (link and ring half by the chunk-local row: the host counts packets so)
+        if ((lr / 2) % NV != v) continue;
+        if (part == 0 || (lr & 1) == part - 1)
             for (uint32_t st = 0; st < SPS; ++st)
                 for (uint32_t kk0 = 0, i = 0; kk0 < KB; kk0 += RP, ++i)
                     f(R, q * SPS + st, st * KB + kk0, kk0, KB - kk0 < RP ? KB - kk0 : RP, cnt * RPR + st * PPS + i);
