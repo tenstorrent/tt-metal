@@ -36,10 +36,11 @@ constexpr uint32_t XS = get_compile_time_arg_val(13), Q1S = get_compile_time_arg
 constexpr uint32_t NSTW = get_compile_time_arg_val(15), GLU = get_compile_time_arg_val(16);
 constexpr uint32_t WBMAX = get_compile_time_arg_val(17), XRN = get_compile_time_arg_val(18);  // (XRN: XREADY a chunk)
 constexpr uint32_t NOTE = get_compile_time_arg_val(19);  // (the consumers' semaphore id; 0xFF: none)
+constexpr uint32_t MT = get_compile_time_arg_val(20);  // (row tiles a core a chunk: rows (m GY + cy) MT + t)
 constexpr uint32_t PO = GLU ? PNP / 2 : PNP;
-constexpr auto x_args = TensorAccessorArgs<20>();
+constexpr auto x_args = TensorAccessorArgs<21>();
 constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-constexpr uint32_t XB = KB * 2048, WB = KB * PNPX * WTB, NS = NP * NBLK, WPT = KB * PNPX;
+constexpr uint32_t XB = MT * KB * 2048, WB = KB * PNPX * WTB, NS = NP * NBLK, WPT = KB * PNPX;
 constexpr uint32_t XV = 0, WV = 2, XDQ = 8, WCB = 10, LANDED = 4, SENT = 6, XREADY = 14, XFREE = 15;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
@@ -117,8 +118,10 @@ void kernel_main() {
                     noc_async_read(get_noc_addr_from_bank_id<true>(T.bank, T.w_addr + piece * T.piece), dst, T.piece);
                 } else {
                     const uint32_t m = k / T.nc, j = own_at(T.q, k % T.nc);
-                    for (uint32_t t = 0; t < KB; ++t)
-                        noc_async_read(xg.get_noc_addr((m * GY + cy) * KT + j * KB + t), dst + t * 2048, 2048);
+                    for (uint32_t t = 0; t < MT; ++t)
+                        for (uint32_t kk = 0; kk < KB; ++kk)
+                            noc_async_read(xg.get_noc_addr(((m * GY + cy) * MT + t) * KT + j * KB + kk),
+                                           dst + (t * KB + kk) * 2048, 2048);
                 }
                 ++T.issued;
             }
@@ -156,15 +159,15 @@ void kernel_main() {
         // receive: x blocks (resident a chunk, pass 0) and W steps in order
         invalidate_l1_cache();
         if (xr < MC * NBLK && (xr % NBLK != 0 || fr * NBLK >= xr) && *sem(XV + q_of(1, xr % NBLK)) >= (xr / NBLK) * n_own(q_of(1, xr % NBLK)) + k_of(xr % NBLK) + 1) {
-            cb_reserve_back(0, KB);
-            cb_push_back(0, KB);
+            cb_reserve_back(0, MT * KB);
+            cb_push_back(0, MT * KB);
             if (++xr % NBLK == 0) {  // (a chunk's x complete here: the column barrier)
                 noc_semaphore_inc(get_noc_addr(s0x, s0y, get_semaphore(XDQ)), 1);
                 noc_semaphore_inc(get_noc_addr(s1x, s1y, get_semaphore(XDQ + 1)), 1);
             }
         }
         // x free: the compute popped chunk fr's x (the whole CB reservable again): tell the row's x senders
-        if (fr < MC && fr * NBLK < xr && xr % NBLK == 0 && xr / NBLK == fr + 1 && cb_pages_reservable_at_back(0, KT)) {
+        if (fr < MC && fr * NBLK < xr && xr % NBLK == 0 && xr / NBLK == fr + 1 && cb_pages_reservable_at_back(0, MT * KT)) {
             if (XS == 2) noc_semaphore_inc(get_noc_addr(lxy, ry, get_semaphore(XFREE)), 1);
             noc_semaphore_inc(get_noc_addr(rxy, ry, get_semaphore(XFREE)), 1);
             ++fr;
@@ -205,14 +208,16 @@ void kernel_main() {
     uint32_t xs = 0, ws = 0;
     uint32_t m = 0;  // (the chunk whose y is next)
     auto y_step = [&]() {  // write chunk m's y when the compute has packed it
-        if (m >= MC || !cb_pages_available_at_front(4, NP * PO)) return;
-        cb_wait_front(4, NP * PO);
+        if (m >= MC || !cb_pages_available_at_front(4, NP * MT * PO)) return;
+        cb_wait_front(4, NP * MT * PO);
         const uint32_t l1 = get_read_ptr(4);
         for (uint32_t p = 0; p < NP; ++p)
-            for (uint32_t t = 0; t < PO; ++t)
-                noc_async_write(l1 + (p * PO + t) * 2048, yg.get_noc_addr((m * GY + cy) * NT + n0 / (GLU + 1) + p * PO + t), 2048);
+            for (uint32_t r = 0; r < MT; ++r)
+                for (uint32_t t = 0; t < PO; ++t)
+                    noc_async_write(l1 + ((p * MT + r) * PO + t) * 2048,
+                                    yg.get_noc_addr(((m * GY + cy) * MT + r) * NT + n0 / (GLU + 1) + p * PO + t), 2048);
         noc_async_write_barrier();
-        cb_pop_front(4, NP * PO);
+        cb_pop_front(4, NP * MT * PO);
         if (NOTE != 0xFF)
             for (uint32_t i = 0; i < n_note; ++i)
                 noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(16 + 2 * i), get_arg_val<uint32_t>(17 + 2 * i), get_semaphore(NOTE)), 1);
@@ -267,9 +272,10 @@ _COMPUTE = r"""
 #endif
 constexpr uint32_t KB = get_compile_time_arg_val(0), PNP = get_compile_time_arg_val(1), PNPX = get_compile_time_arg_val(2);
 constexpr uint32_t NBLK = get_compile_time_arg_val(3), NP = get_compile_time_arg_val(4), MC = get_compile_time_arg_val(5);
+constexpr uint32_t MT = get_compile_time_arg_val(6);  // (x: [block][row t][k]; dest / y: [row t][column])
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(0, 1, 4);
-    matmul_block_init(0, 1, 0, PNP, 1, KB);
+    matmul_block_init(0, 1, 0, PNP, MT, KB);
 #ifdef L2C_GLU
 #if L2C_GLU == 2
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
@@ -282,13 +288,13 @@ void kernel_main() {
     constexpr uint32_t PO = PNP;
 #endif
     for (uint32_t m = 0; m < MC; ++m) {
-        cb_reserve_back(4, NP * PO);
+        cb_reserve_back(4, NP * MT * PO);
         for (uint32_t p = 0; p < NP; ++p) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < NBLK; ++j) {
-                if (p == 0) cb_wait_front(0, (j + 1) * KB);
+                if (p == 0) cb_wait_front(0, (j + 1) * MT * KB);
                 cb_wait_front(1, KB * PNPX);
-                for (uint32_t k = 0; k < KB; ++k) matmul_block(0, 1, j * KB + k, k * PNPX, 0, false, PNP, 1, KB);
+                for (uint32_t k = 0; k < KB; ++k) matmul_block(0, 1, j * MT * KB + k, k * PNPX, 0, false, PNP, MT, KB);
                 cb_pop_front(1, KB * PNPX);
             }
             tile_regs_commit();
@@ -296,22 +302,22 @@ void kernel_main() {
 #ifdef L2C_GLU
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if L2C_GLU == 2
-            for (uint32_t t = 0; t < PNP; t += 2)
+            for (uint32_t t = 0; t < MT * PNP; t += 2)
                 PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
 #else
-            for (uint32_t t = 0; t < PNP; t += 2) silu_tile_pack(t);
-            for (uint32_t t = 0; t < PNP; t += 2)
+            for (uint32_t t = 0; t < MT * PNP; t += 2) silu_tile_pack(t);
+            for (uint32_t t = 0; t < MT * PNP; t += 2)
                 PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_binary_mul, (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE), t, t + 1, t, VectorMode::RC)));
 #endif
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-            for (uint32_t t = 0; t < PNP; t += 2) pack_tile<true>(t, 4, p * PO + t / 2);
+            for (uint32_t t = 0; t < MT * PNP; t += 2) pack_tile<true>(t, 4, p * MT * PO + t / 2);
 #else
-            for (uint32_t t = 0; t < PNP; ++t) pack_tile<true>(t, 4, p * PO + t);
+            for (uint32_t t = 0; t < MT * PNP; ++t) pack_tile<true>(t, 4, p * MT * PO + t);
 #endif
             tile_regs_release();
         }
         cb_push_back(4, NP * PO);
-        cb_pop_front(0, KB * NBLK);
+        cb_pop_front(0, MT * KB * NBLK);
     }
 }
 """
@@ -341,10 +347,16 @@ class Lin2c:
         nstw=4,
         w_dtype=ttnn.bfloat8_b,
         xr_need=0,
+        MT=1,
     ):
         self.mesh = mesh_device
+        # MT row tiles a core a chunk: wired through, but MT > 1 hangs (2026-10-22, triage: the pack's per-chunk y
+        # reserve and the y writer both wait on CB 4 from the first chunk; cause not found - superseded by the
+        # W-once engine, so parked)
+        assert MT == 1, "lin2c MT > 1 hangs (see comment)"
+        self.MT = MT
         self.cx0, self.GX, self.GY, self.MC, self.K, self.N = cx0, GX, GY, MC, K, N
-        self.M = 32 * GY
+        self.M = 32 * GY * MT
         assert nb <= 4 and nb % 2 == 0, "W ring slots: semaphores 10 .. 9 + nb must stay below XREADY"
         self.glu, self.fid, self.kb, self.nb, self.nst, self.nstw, self.w_dtype = (
             glu,
@@ -361,7 +373,7 @@ class Lin2c:
         G = 2 if glu else 1
         self.G = G
         NP = 1
-        while (Nt % (NP * G)) or max(column_split(Nt, GX, NP * G)) // NP > 8:
+        while (Nt % (NP * G)) or max(column_split(Nt, GX, NP * G)) // NP * MT > 8:
             NP += 1
         self.NP = NP
         self.pns = column_split(Nt, GX, NP * G)
@@ -453,10 +465,10 @@ class Lin2c:
         vv_any = lambda c: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + c[0], c[1]))  # noqa: E731
         fmt = lambda i, dt, page: [ttnn.CBFormatDescriptor(i, dt, page)]  # noqa: E731
         allc = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
-        xb = kb * 2048
+        xb = self.MT * kb * 2048
         cbs = [
             ttnn.CBDescriptor(
-                total_size=self.Kt * 2048, core_ranges=allc, format_descriptors=fmt(0, ttnn.bfloat16, 2048)
+                total_size=self.MT * self.Kt * 2048, core_ranges=allc, format_descriptors=fmt(0, ttnn.bfloat16, 2048)
             ),
             ttnn.CBDescriptor(
                 total_size=self.nst * xb, core_ranges=allc, format_descriptors=fmt(8, ttnn.bfloat16, 2048)
@@ -478,7 +490,7 @@ class Lin2c:
                     total_size=nb * wbg, core_ranges=crs, format_descriptors=fmt(1, self.w_dtype, self.wtb)
                 ),
                 ttnn.CBDescriptor(
-                    total_size=NP * (pn // NP // self.G) * 2048,
+                    total_size=NP * self.MT * (pn // NP // self.G) * 2048,
                     core_ranges=crs,
                     format_descriptors=fmt(4, ttnn.bfloat16, 2048),
                 ),
@@ -520,6 +532,7 @@ class Lin2c:
                     self.wbmax,
                     self.xr_need,
                     note_sem,
+                    self.MT,
                 ]
                 + x_ct
                 + y_ct
@@ -598,7 +611,7 @@ class Lin2c:
                     kernel_source=(f"#define L2C_GLU {glu_code}\n" if self.glu else "") + _COMPUTE,
                     source_type=st,
                     core_ranges=crs,
-                    compile_time_args=[kb, pnp, pnp, self.nblk, NP, self.MC],
+                    compile_time_args=[kb, pnp, pnp, self.nblk, NP, self.MC, self.MT],
                     runtime_args=c_rt,
                     config=comp,
                 ),

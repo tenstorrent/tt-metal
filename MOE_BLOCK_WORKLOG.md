@@ -183,11 +183,13 @@ packet; a fence per call (no writes into a neighbour before it started the call)
 | ttnn.all_gather | 355 | 602 |
 | tp_gather, store-and-forward | **336** | **585** |
 | (probe, not kept: line multicast, 2 links / 1 link) | 341 / 670 | 599 / - |
-**The TP links bound it**: one link halves the rate (670 vs 341 us): ~15.6 GB/s a link a direction at 200G with 8 KB
-packets, so the 2-link 4-chip line's busiest hop (2 shards) puts the x all-gather's floor at ~335 / ~590 us. The x
-all-gather cannot get faster on this box - only hidden under compute. Same for the shared expert's reduce-scatter
-(~335 / ~590 us floor). So the fused head's TP links carry ~730 us (GLM-Flash) / ~1350 us (K3) of unavoidable traffic,
-and the head is bounded below by that, against today's 1352 / 3309 us serial heads.
+**The TP links bound it**: one link halves the rate (670 vs 341 us). The links run at their ceiling, ~23.6-24 GB/s a
+link a direction at 200G (link-rate probe, 24abecc2913): on the 4-chip line the END link carries G - 1 = 3 shards
+(the end chip has one neighbour), 3 x 5.24 MB / (2 x 23.6 GB/s) = 333 us for GLM-Flash vs 336 measured (K3: ~585).
+(An earlier note here said "15.6 GB/s, 2 shards" - wrong bookkeeping, same floor.) The x all-gather is at the line's
+floor - only hidden under compute; same for the shared expert's reduce-scatter. On a Galaxy TP ring of 4 the busiest
+link carries 1.5 shards (half the line's). So the fused head's TP links carry ~730 us (GLM-Flash) / ~1350 us (K3) on
+the LoudBox line, against today's 1352 / 3309 us serial heads.
 
 ### Building block 2: the chunked matmul engine (models/demos/moe_block/tt/lin2c.py)
 lin2d (x resident per core row, W streamed down the columns, 2D multicasts) chunked over M: chunk m = 32 GY rows, x
@@ -210,3 +212,43 @@ now start on chunk 0's x and stream h -> down while later chunks are still arriv
 
 tp_gather made ring-capable (plan topology from the fabric config, balanced ring schedule: the distance-TP/2 shard split
 into even / odd row tiles over the two directions, relay waits per part); line regression exact, 336 / 585 us.
+
+### Step 3: the x chain in one program (tt/fused_head.py HeadXChain, v1: x_full in DRAM, W per chunk)
+tp_gather became TpGather: chunk-major streams (per chunk: own shard, then the relays; increments counted per chunk),
+each stream's chunk end sends one fabric atomic increment to the downstream chip's watcher (behind the chunk's packets
+on that link), the copy cores count their chunk ends too, and a watcher kernel (first copy core's NCRISC) raises
+XREADY on the gate / up engine's x senders once a chunk of x_full is complete. Chunked gather alone: exact, 338 / 586 us
+(no cost for chunking). Movers in the last column (simple placement: one column cannot host the Ethernet probe).
+| x chain, us (PCC vs fp32 host) | GLM-Flash | K3 |
+|---|---|---|
+| serial: tp_gather + chain on 8 + 3 columns | 337 + 309 = 646 | 586 + 1138 = 1724 |
+| **fused, one program** (gather -> gate / up + GLU -> h DRAM -> down) | **595-603**, 0.99972 | **1543-1567**, 0.99963 |
+| probe: movers alone in one column | 414 (337 with Ethernet placement) | 724 (586) |
+| probe: engines alone | 307 | 1140 |
+| probe: both, engines not waiting for the gather | 580 | 1426 |
+| movers at the west edge instead | same | same |
+| movers 8 packets in flight (was 4), copy core pipelined | 551 | 1380 |
+| + W prefetch depth 2 / 1 (engines alone 304 / 333, K3 1193 / 1324) | 525 / 466 | 1358 / 1480 |
+**Interference, not gating**: per-core spans (K3, ungated) - gate / up ends ~1040 us, down ~1220, the movers 1160-1412
+(724 alone), even the copy cores (local DRAM -> DRAM) ~1285. The W stream readers re-read W every chunk at full DRAM
+rate (8 x: ~53 MB GLM-Flash / ~280 MB K3 a call) and starve the movers' DRAM traffic; throttling W confirms it (GLM
+466 us at depth 1). Matches the fabric_backpressure finding (store-and-forward relays reading DRAM slow 4-9x on a
+DRAM-loaded chip).
+Also: group 16 hung - the sender takes group + 1 packet headers and Blackhole's pool has 12 a RISC (the pool spins
+when exhausted); asserted. Two port cores on one link (workers_per_link 2) hung: FABRIC_2D gives one worker a link
+direction; removed. lin2c MT = 2 (two row tiles a core a chunk) hangs (pack / y-writer CB 4 wait from chunk 0, cause
+not found); parked behind an assert - superseded below.
+
+### Next (user): x lands in L1, the shared expert's weights read once a call
+Design (being built, tt/se_engine.py):
+- one engine on all compute columns, two phases on the same cores: gate / up, then down (down needs all of h anyway);
+- x lands in L1 as K-blocks per source chip: core (cx, cy) owns rows R_cy (2560 / 32 / GY row tiles) x the K steps
+  assigned to column cx; the copy cores write the chip's own shard there, fabric packets write the others' (runs of
+  tiles contiguous in the owner's L1), relays read from that L1 - no x_full in DRAM;
+- gate / up streams each W block ONCE, in the chip's arrival order (own K block first, then by distance), every core
+  multiplies its rows x the block (x step multicast along the row from its owner, L1 -> L1), partials accumulated in
+  fp32 L1 (packer L1 accumulation); GLU after the last block -> h, which stays in L1 exactly where down wants it
+  (core (cx, cy) owns h[R_cy, column cx's slice] = down's K step);
+- down: N passes (W[:, n block] once each), h re-multicast along rows from L1 a pass, y a pass at a time (the
+  reduce-scatter can then pipeline by column blocks);
+- DRAM a call: W GLM-Flash 6.7 MB (was ~53), K3 35 MB (was ~280); x own shard once; y.

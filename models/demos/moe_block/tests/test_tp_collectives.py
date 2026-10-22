@@ -274,7 +274,10 @@ def test_tp_gather(mesh_device, device_params):
     for name in os.environ.get("TPG_CASES", "glm_x_ag,k3_x_ag").split(","):
         shape, _, _ = CASES[name]
         _, x = _dev(mesh_device, shape, 1)
-        run = tp_gather_prepare(mesh_device, *shape, num_links=int(os.environ.get("TPG_LINKS", "2")))
+        opts = dict(
+            num_links=int(os.environ.get("TPG_LINKS", "2")), chunk_rows=int(os.environ.get("TPG_CHUNK", "0")) or None
+        )
+        run = tp_gather_prepare(mesh_device, *shape, **opts)
         res = {}
         ref = _host(mesh_device, ttnn.all_gather(x, dim=3, cluster_axis=1), (2, 3))
         for cname, f in {
@@ -286,7 +289,7 @@ def test_tp_gather(mesh_device, device_params):
             ttnn.deallocate(out)
             res[cname] = (us, (y - ref).abs().max().item())
         logger.info(
-            f"TPG {name} shard {shape}: "
+            f"TPG {name} shard {shape} {opts}: "
             + "; ".join(f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err {v[1]})" for k, v in res.items())
         )
         ttnn.deallocate(x)

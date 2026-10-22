@@ -43,11 +43,12 @@ def pcc(a, b):
 def test_lin2c(mesh_device, device_params):
     from models.demos.moe_block.tt.lin2c import Lin2c, glu_weight
 
-    GY, MC = 10, int(os.environ.get("L2C_MC", "8"))
-    rows = 32 * GY * MC
+    GY, MT = 10, int(os.environ.get("L2C_MT", "1"))
+    MC = int(os.environ.get("L2C_MC", str(8 // MT)))
+    rows = 32 * GY * MT * MC
     for name in os.environ.get("L2C_CASES", ",".join(LIN)).split(","):
         K, N, glu, GX = LIN[name]
-        eng = Lin2c(mesh_device, cx0=0, GX=GX, GY=GY, MC=MC, K=K, N=N, glu=glu)
+        eng = Lin2c(mesh_device, cx0=0, GX=GX, GY=GY, MC=MC, K=K, N=N, glu=glu, MT=MT)
         g = torch.Generator().manual_seed(3)
         x = torch.randn(rows, K, generator=g)
         ws = [torch.randn(K, N, generator=g) * 0.02 for _ in range(R * C)]
@@ -88,7 +89,7 @@ def test_lin2c(mesh_device, device_params):
                     logger.info(f"L2C diag chunk {m}: per output tile column {row}")
         flops = 2 * rows * K * N
         logger.info(
-            f"L2C {name} M {rows} K {K} N {N} glu {glu} GX {GX}: {us if us is None else round(us, 1)} us"
+            f"L2C {name} MT {MT} M {rows} K {K} N {N} glu {glu} GX {GX}: {us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
             + f", PCC min {min(ps):.5f}"
         )
@@ -113,16 +114,17 @@ def test_lin2c_chain(mesh_device, device_params):
     down on the next columns, chunk by chunk (the down engine's x senders wait for the gate / up row's notifies)."""
     from models.demos.moe_block.tt.lin2c import Lin2c, glu_weight
 
-    GY, MC = 10, int(os.environ.get("L2C_MC", "8"))
-    rows = 32 * GY * MC
+    GY, MT = 10, int(os.environ.get("L2C_MT", "1"))
+    MC = int(os.environ.get("L2C_MC", str(8 // MT)))
+    rows = 32 * GY * MT * MC
     logger.info(f"L2C grid {mesh_device.compute_with_storage_grid_size()}")
     for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
         H, N, glu, g1, g2 = CHAIN[name]
         if os.environ.get("L2C_SPLIT"):
             g1, g2 = map(int, os.environ["L2C_SPLIT"].split(":"))
         I = N // 2
-        gu = Lin2c(mesh_device, cx0=0, GX=g1, GY=GY, MC=MC, K=H, N=N, glu=glu)
-        dn = Lin2c(mesh_device, cx0=g1, GX=g2, GY=GY, MC=MC, K=I, N=H, xr_need=g1)
+        gu = Lin2c(mesh_device, cx0=0, GX=g1, GY=GY, MC=MC, K=H, N=N, glu=glu, MT=MT)
+        dn = Lin2c(mesh_device, cx0=g1, GX=g2, GY=GY, MC=MC, K=I, N=H, xr_need=g1, MT=MT)
         g = torch.Generator().manual_seed(5)
         x = torch.randn(rows, H, generator=g)
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
@@ -146,7 +148,7 @@ def test_lin2c_chain(mesh_device, device_params):
             ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
         flops = 2 * rows * H * N + 2 * rows * I * H
         logger.info(
-            f"L2C chain {name} M {rows} H {H} I {I} cols {g1} + {g2}: {us if us is None else round(us, 1)} us"
+            f"L2C chain {name} MT {MT} M {rows} H {H} I {I} cols {g1} + {g2}: {us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
             + f", PCC min {min(ps):.5f}"
         )
@@ -179,3 +181,56 @@ def test_lin2d_ref(mesh_device, device_params):
     y = run(xt, wl)
     yt = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).float()
     logger.info(f"L2C lin2d_ref K {K} N {N} pns {lay['pns']} NP {lay['NP']}: PCC {pcc(yt, x @ w):.5f}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_head_xchain(mesh_device, device_params):
+    """The fused head's x chain in one program a chip (tt/fused_head.py): the x all-gather over TP by the head's movers,
+    chunk by chunk into the shared expert's gate / up + GLU, h, down -> y (the shared expert's partial a chip)."""
+    from models.demos.moe_block.tt.fused_head import HeadLayout, HeadXChain
+    from models.demos.moe_block.tt.lin2c import glu_weight
+
+    rows = 2560
+    for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
+        H, N, glu, _, _ = CHAIN[name]
+        I = N // 2
+        probe = os.environ.get("HXC_PROBE", "")
+        layout = HeadLayout(
+            movers=os.environ.get("HXC_MOVERS", "last"),
+            group=int(os.environ.get("HXC_GROUP", "8")),
+            w_depth=int(os.environ.get("HXC_WD", "4")),
+        )
+        head = HeadXChain(mesh_device, rows=rows, H=H, I=I, glu=glu, probe=probe, layout=layout)
+        g = torch.Generator().manual_seed(7)
+        xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
+        wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
+        wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+        wts = head.upload([glu_weight(w[:, :I], w[:, I:]) for w in wg], wd)
+        xt = ttnn.from_torch(
+            torch.stack(xs).view(R, C, rows, H // C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        us, y = _time(mesh_device, lambda: head.run(xt, wts))
+        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
+        ps = []
+        for d in range(R * C):
+            r = d // C
+            xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
+            hh = xf @ wg[d]
+            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        logger.info(
+            f"HXC {name} {probe or 'fused'} rows {rows} H {H} I {I} layout {head.layout}: {us if us is None else round(us, 1)} us,"
+            f" PCC min {min(ps):.5f}"
+        )
+        assert probe or min(ps) > 0.999, ps
+        ttnn.deallocate(y)
+        ttnn.deallocate(xt)
