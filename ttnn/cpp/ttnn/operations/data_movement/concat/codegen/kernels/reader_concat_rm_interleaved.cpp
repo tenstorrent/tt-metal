@@ -15,14 +15,13 @@ void kernel_main() {
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t BATCH = get_compile_time_arg_val(1);
-    constexpr uint32_t N_TENSORS = get_compile_time_arg_val(2);
-    constexpr uint32_t ppb_0 = get_compile_time_arg_val(3);
-    constexpr uint32_t ppb_1 = get_compile_time_arg_val(4);
-    constexpr uint32_t CB_PAGE_SIZE = get_compile_time_arg_val(5);
-    constexpr uint32_t IN0_PAGE_SIZE = get_compile_time_arg_val(6);
-    constexpr uint32_t IN1_PAGE_SIZE = get_compile_time_arg_val(7);
+    constexpr uint32_t ppb_0 = get_compile_time_arg_val(2);
+    constexpr uint32_t ppb_1 = get_compile_time_arg_val(3);
+    constexpr uint32_t CB_PAGE_SIZE = get_compile_time_arg_val(4);
+    constexpr uint32_t IN0_PAGE_SIZE = get_compile_time_arg_val(5);
+    constexpr uint32_t IN1_PAGE_SIZE = get_compile_time_arg_val(6);
 
-    constexpr uint32_t ta_base = 8;
+    constexpr uint32_t ta_base = 7;
     constexpr auto ta0_args = TensorAccessorArgs<ta_base>();
     constexpr auto ta1_args = TensorAccessorArgs<ta0_args.next_compile_time_args_offset()>();
 

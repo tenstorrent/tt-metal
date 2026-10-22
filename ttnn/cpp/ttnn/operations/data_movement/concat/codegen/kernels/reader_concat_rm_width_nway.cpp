@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Assembles each output stick straight from all input sticks, with no pairwise intermediate.
-// Sticks that fill their page and land on a legal NOC offset are read directly into the output CB.
+// Width concat of three or more row-major inputs: assembles each output stick from all of its input sticks.
+// A stick that fills its page and lands on a NOC-aligned output offset is read directly into the output CB; any
+// other is staged in scratch and copied in by RISC stores.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -44,9 +45,6 @@ void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
     uint32_t src_page = get_arg_val<uint32_t>(1);
 
-    constexpr bool WORD_COPY = get_named_compile_time_arg_val("word_copy") != 0;
-    constexpr bool DIRECT_READ = get_named_compile_time_arg_val("direct_read") != 0;
-
     Noc noc;
     CircularBuffer out_cb(cb_out);
     CircularBuffer scratch_cb(cb_scratch);
@@ -71,21 +69,17 @@ void kernel_main() {
                 const uint32_t stick_size = get_common_arg_val<uint32_t>(stick_rt + input);
                 const uint32_t page_size = get_common_arg_val<uint32_t>(page_rt + input);
 
-                if constexpr (DIRECT_READ) {
-                    const uint32_t out_cb_offset = page * OUT_PAGE_SIZE + dst_offset;
-                    if (stick_size == page_size && (out_cb_offset % SRC_NOC_ALIGNMENT) == 0) {
-                        read_source_page<0>(noc, out_cb, input, src_page + page, out_cb_offset);
-                        dst_offset += stick_size;
-                        continue;
-                    }
+                const uint32_t out_cb_offset = page * OUT_PAGE_SIZE + dst_offset;
+                if (stick_size == page_size && (out_cb_offset % SRC_NOC_ALIGNMENT) == 0) {
+                    read_source_page<0>(noc, out_cb, input, src_page + page, out_cb_offset);
+                    dst_offset += stick_size;
+                    continue;
                 }
 
                 read_source_page<0>(noc, scratch_cb, input, src_page + page, 0);
                 noc.async_read_barrier();
-                bool word_store = false;
-                if constexpr (WORD_COPY) {
-                    word_store = (dst_offset & 3U) == 0;
-                }
+                // A word store needs a word-aligned destination; sticks are a multiple of 2 bytes, not of 4.
+                const bool word_store = (dst_offset & 3U) == 0;
                 if (word_store) {
                     CoreLocalMem<volatile uint32_t> src(scratch_addr);
                     CoreLocalMem<volatile uint32_t> target(dst + dst_offset);
@@ -112,10 +106,9 @@ void kernel_main() {
             }
         }
 
-        if constexpr (DIRECT_READ) {
-            noc.async_read_barrier();
-        }
-        // RISC stores can retire after push_back; reading the last stored address back proves they reached L1.
+        noc.async_read_barrier();
+        // Staged-copy drain: RISC stores can retire after push_back, so the consumer could read the page before
+        // they land. Reading the last stored address back blocks until they have reached L1.
         if (drain_addr != 0) {
             if (drain_wide) {
                 (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(drain_addr));

@@ -204,7 +204,6 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
         reader_ct_args = {
             kCbOut,
             batches->read_batch,
-            num_inputs,
             pages_per_block[0],
             pages_per_block[1],
             pages.out_page,
@@ -248,9 +247,6 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     KernelDescriptor reader_desc =
         make_kernel(kConcatKernelDir, reader_source, split.all_cores, std::move(reader_ct_args));
     reader_desc.config = ReaderConfigDescriptor{};
-    if (width && !two_input) {
-        reader_desc.named_compile_time_args = {{"word_copy", 1}, {"direct_read", 1}};
-    }
 
     // A whole aligned page per write: a sub-burst DRAM write for an unaligned stick costs more than the padding it
     // saves.

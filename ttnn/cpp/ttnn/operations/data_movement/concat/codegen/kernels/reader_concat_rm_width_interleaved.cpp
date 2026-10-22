@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Width concat of two row-major inputs: each output stick is in0's stick followed by in1's. Sticks that fill their
+// page and land on a NOC-aligned offset are read straight into the output CB, batched; otherwise the stick is
+// staged in scratch and copied in by RISC stores, one output stick at a time.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -98,8 +101,8 @@ void kernel_main() {
             }
         }
 
-        // RISC stores can retire after push_back; a blocking read-back of the last store (matched by its start
-        // address on Wormhole) proves they reached L1.
+        // Staged-copy drain: RISC stores can retire after push_back, so the consumer could read the page before
+        // they land. A blocking read-back of the last store (matched by its start address on Wormhole) waits for them.
         constexpr uint32_t staged_end = in1_direct ? IN0_STICK_SIZE : IN0_STICK_SIZE + IN1_STICK_SIZE;
         (void)ckernel::load_blocking(
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr + ((staged_end - 1) & ~1U)));
