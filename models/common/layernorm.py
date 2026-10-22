@@ -69,9 +69,9 @@ class LayerNorm(LightweightModule):
             try:
                 norm_type = LayerNormTypes(norm_type)
             except ValueError:
-                raise ValueError(f"Invalid mode: {norm_type}")
-        elif not isinstance(norm_type, Mode):
-            raise ValueError(f"Invalid mode: {norm_type}")
+                raise ValueError(f"Invalid layernorm type: {norm_type}")
+        elif not isinstance(norm_type, LayerNormTypes):
+            raise ValueError(f"Invalid layernorm norm type: {norm_type}")
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -102,19 +102,19 @@ class LayerNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
-        torch_weight_tiled = state_dict[weight_name].reshape(1, 1, 1, dim)
-        if add_unit_offset:
-            torch_weight_tiled = torch_weight_tiled + 1.0
         if norm_type == LayerNormTypes.LAYERNORM:
-            self.weight_tiled = ttnn.as_tensor(
-                torch_weight_tiled,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=weight_memory_config,
-                cache_file_name=None if weight_cache_path is None else weight_cache_path / (weight_name + "_tiled"),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-            )
+            torch_weight_tiled = state_dict[weight_name].reshape(1, 1, 1, dim)
+            if add_unit_offset:
+                torch_weight_tiled = torch_weight_tiled + 1.0
+                self.weight_tiled = ttnn.as_tensor(
+                    torch_weight_tiled,
+                    device=device,
+                    dtype=weight_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=weight_memory_config,
+                    cache_file_name=None if weight_cache_path is None else weight_cache_path / (weight_name + "_tiled"),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                )
 
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
@@ -144,7 +144,7 @@ class LayerNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def update(self, *, weight: ttnn.Tensor, norm_type) -> None:
+    def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the LayerNorm gamma via ``ttnn.copy``.
 
         HF-format input: ``weight`` is HF ``...norm.weight``, shape
@@ -164,7 +164,7 @@ class LayerNorm(LightweightModule):
         """
         assert not self.add_unit_offset, "LayerNorm.update does not support add_unit_offset=True"
         copy_to_buffer(weight, self.weight, self.weight.dtype)
-        if norm_type == LayerNormTypes.LAYERNORM:
+        if self.norm_type == LayerNormTypes.LAYERNORM:
             if getattr(self, "weight_tiled", None) is not None:
                 copy_to_buffer(weight, self.weight_tiled, self.weight_tiled.dtype)
 
@@ -196,19 +196,22 @@ class LayerNorm(LightweightModule):
         sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+        # Optional L1 placement for the distributed 3-op outputs (pre/gather/post); None -> DRAM default.
         distributed_out_mc = norm_config.get("distributed_output_mem_config") if norm_config else None
 
         # If input is sharded do sharded LayerNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        if distributed:
-            weight = self.weight_distributed
-        elif in_sharded:
-            # Decode sharded path keeps the ROW_MAJOR weight (matches program config).
-            weight = self.weight
-        else:
-            weight = getattr(self, "weight_tiled", self.weight)
+
+        if self.norm_type == LayerNormTypes.LAYERNORM:
+            if distributed:
+                weight = self.weight_distributed
+            elif in_sharded:
+                # Decode sharded path keeps the ROW_MAJOR weight (matches program config).
+                weight = self.weight
+            else:
+                weight = getattr(self, "weight_tiled", self.weight)
 
         if in_sharded:
             assert not distributed, "Distributed LayerNorm does not support sharded inputs"
