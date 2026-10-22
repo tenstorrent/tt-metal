@@ -6,15 +6,13 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/allocator.hpp>
+#include "impl/allocator/allocator.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
-#include <algorithm>
-#include <limits>
 #include <map>
 #include <unordered_set>
 
@@ -26,9 +24,6 @@ distributed::MeshBuffer create_sram_buffer_view(
     TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "SRAM view requires L1 memory");
     const auto packed_size = spec.compute_packed_buffer_size_bytes();
     const auto page_size = spec.compute_page_size_bytes();
-    TT_FATAL(
-        packed_size <= std::numeric_limits<DeviceAddr>::max() && page_size <= std::numeric_limits<DeviceAddr>::max(),
-        "SRAM view size overflows");
     const distributed::ReplicatedBufferConfig mesh_config{.size = packed_size};
     const distributed::DeviceLocalBufferConfig local_config{
         .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = spec.compute_buffer_sharding_args()};
@@ -49,13 +44,13 @@ distributed::MeshBuffer create_sram_buffer_view(
     const std::unordered_set<CoreCoord> core_set(expected_cores.begin(), expected_cores.end());
     for (const auto& [coord, entries] : by_device) {
         auto* device = mesh.impl().get_device(coord);
-        const uint64_t alignment = device->allocator()->get_alignment(BufferType::L1);
+        const uint64_t alignment = device->allocator_impl()->get_alignment(BufferType::L1);
         const auto bytes_per_core = spec.compute_consumed_memory_bytes_per_bank(alignment, expected_cores.size());
         std::unordered_set<CoreCoord> seen;
         for (const auto& [core, address] : entries) {
             TT_FATAL(seen.insert(core).second, "Duplicate SRAM view placement");
             TT_FATAL(core_set.contains(core), "SRAM view placement core is not in the buffer configuration");
-            tt::tt_metal::detail::validate_sram_address(*device, address, bytes_per_core);
+            device->allocator_impl()->validate_l1_range(address, bytes_per_core);
             TT_FATAL(per_core || address == lockstep_address, "Lockstep tensor view requires one address on every core");
         }
         TT_FATAL(seen.size() == core_set.size(), "SRAM view placements must cover every configured data core");

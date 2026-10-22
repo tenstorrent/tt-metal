@@ -9,7 +9,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 
 #include <atomic>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -18,11 +17,6 @@ namespace tt::tt_metal {
 
 class AllocatorImpl;
 class IDevice;
-
-namespace detail {
-// Check the complete padded range before creating a view or initializing an addressed semaphore.
-void validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes);
-}  // namespace detail
 
 class BufferImpl {
 public:
