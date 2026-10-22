@@ -4,7 +4,7 @@
 """Re-verify passed tasks under the current framework, without touching the run (F82).
 
     python -m models.demos.common.bringup.core.verify --spec S --tasks M.1 'L.*' K.1 'C.*' [--batch] [--status PASS]
-        [--out DIR]
+        [--out DIR] [--force]
 
 Runs each matching task's gate command as its gate would (same env, the safe runner), but with the metrics going to
 ``runs/<run>/verify/<stamp>/results`` and the logs next to them: state.json, results/ and the commits are untouched,
@@ -19,6 +19,10 @@ per task; ``--no-precompile``); testing/batch_tasks.py points each test's metric
 task's outcome. Every task is then judged exactly as unbatched (its outcome and its gate metrics). A task whose test
 never reported (the batch died: a hang, a crash) fails with the batch's exit code: rerun it unbatched. Anything else
 (a compound gate, the ladder, the contract) runs as before.
+
+F150: a task whose every gate unit has a PASS kept on the same stamp (same command, code, goldens: core/stamps.py) is
+not run again ("reused: same code"); its kept metrics are judged as a run's. ``--force`` runs it anyway (the overseer's
+deliberate re-check). An unbatched run is kept like a gate's.
 """
 
 from __future__ import annotations
@@ -32,7 +36,16 @@ import time
 from pathlib import Path
 
 from models.demos.common.bringup.core import metrics as M
-from models.demos.common.bringup.core.gate import check_metrics, gate_command, gate_env, run_name
+from models.demos.common.bringup.core import stamps
+from models.demos.common.bringup.core.gate import (
+    _merge_metrics,
+    check_metrics,
+    gate_env,
+    reusable,
+    run_name,
+    run_units,
+    unit_stamps,
+)
 from models.demos.common.bringup.core.ledger import Ledger
 
 BATCH_PLUGIN = "models.demos.common.bringup.testing.batch_tasks"
@@ -102,15 +115,43 @@ def run_batch(spec, led, tids: list[str], out: Path, n: int) -> list[dict]:
     return rows
 
 
+def reuse_kept(spec, led, tid: str, out: Path, store, tasks: dict, keys: tuple) -> dict | None:
+    """F150: the row of a task whose every unit has a kept PASS on the same stamp, judged as a run; else None."""
+    task = tasks[tid]
+    env = dict(gate_env(spec, led, tid), **{M.RESULTS_ENV: str(out / "results")})
+    plan = unit_stamps(spec, task, env, tasks, keys)
+    recs = [store.get(u, sid) for u, _, _, sid in plan]
+    if not all(reusable(r, task["gate"].get("metrics") or {}, len(plan) == 1) for r in recs):
+        return None
+    for (u, _, _, sid), rec in zip(plan, recs):
+        _merge_metrics(out / "results", tid, rec["metrics"])
+        store.restore(u, sid, rec, out / "results", tid)
+    verdict, lines = judge(task, 0, M.load(tid, out / "results"))
+    when = ", ".join(f"{u} {r.get('t')}" for (u, *_), r in zip(plan, recs))
+    return {"task": tid, "verdict": verdict, "rc": 0, "s": 0, "lines": lines, "reused": when}
+
+
 def verify(
-    spec, patterns: list[str], status: str | None = "PASS", out: Path | None = None, batch: bool = False
+    spec,
+    patterns: list[str],
+    status: str | None = "PASS",
+    out: Path | None = None,
+    batch: bool = False,
+    force: bool = False,
 ) -> dict:
     led = Ledger(spec.bringup_dir)
     tids = selected(led, patterns, status)
     out = Path(out or spec.run_dir(run_name(led)) / "verify" / time.strftime("%Y%m%dT%H%M%S"))
     (out / "results").mkdir(parents=True, exist_ok=True)
+    tasks, store = led.tasks(), stamps.Store(spec.run_dir(run_name(led)))
+    keys = (stamps.code_key(spec.repo), stamps.goldens_key(spec))
+    kept = {}
+    for tid in tids if not force else []:
+        row = reuse_kept(spec, led, tid, out, store, tasks, keys)
+        if row is not None:
+            kept[tid] = row
     groups: dict[tuple, list[str]] = {}
-    for tid in tids if batch else []:
+    for tid in [t for t in tids if t not in kept] if batch else []:
         key = batch_key(led.task(tid))
         if key is not None:
             groups.setdefault(key, []).append(tid)
@@ -118,6 +159,13 @@ def verify(
     batched = {t for g in groups.values() for t in g}
     rows = []
     for tid in tids:
+        if tid in kept:
+            r = kept[tid]
+            print(f"{r['verdict']} {tid} (reused: same code, kept PASS {r['reused']}; --force runs it)", flush=True)
+            for line in r["lines"] if r["verdict"] == "FAIL" else []:
+                print(line, flush=True)
+            rows.append(r)
+            continue
         if tid in first:
             new = run_batch(spec, led, first[tid], out, len({r.get("batch") for r in rows if "batch" in r}))
             for r in new:
@@ -133,11 +181,7 @@ def verify(
         env[M.RESULTS_ENV] = str(out / "results")
         log = out / f"{tid}.log"
         t0 = time.time()
-        with open(log, "w") as f:
-            cmd = gate_command(task)
-            f.write(f"$ {cmd}\n")
-            f.flush()
-            rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+        rc, _, _ = run_units(spec, task, env, log, out / "results", store, force, tasks)
         verdict, lines = judge(task, rc, M.load(tid, out / "results"))
         rows.append({"task": tid, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "lines": lines})
         print(f"{verdict} {tid} (rc {rc}, {time.time() - t0:.0f}s, log {log})", flush=True)
@@ -162,8 +206,9 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--batch", action="store_true", help="F142: C.* / S.* frozen tests grouped by block type, one process"
     )
+    ap.add_argument("--force", action="store_true", help="F150: run a task even when a PASS on the same code is kept")
     a = ap.parse_args(argv)
-    res = verify(Spec.load(a.spec), a.tasks, a.status or None, Path(a.out) if a.out else None, a.batch)
+    res = verify(Spec.load(a.spec), a.tasks, a.status or None, Path(a.out) if a.out else None, a.batch, a.force)
     return 1 if res["failed"] else 0
 
 

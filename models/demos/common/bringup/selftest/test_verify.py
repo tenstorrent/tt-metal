@@ -73,7 +73,7 @@ def test_a_batched_verify_judges_every_task_as_its_own_gate(gspec, monkeypatch, 
     (s.bringup_dir / "state.json").write_text(json.dumps({t["id"]: {"status": "PASS"} for t in tasks}))
     pats = ["X.1", "C.*", "S.*"]
     one = V.verify(s, pats, out=tmp_path / "one")
-    many = V.verify(s, pats, out=tmp_path / "many", batch=True)
+    many = V.verify(s, pats, out=tmp_path / "many", batch=True, force=True)  # F150: not the kept runs of `one`
     assert [r["task"] for r in one["tasks"]] == ["X.1", "C.blk.attn_norm", "C.blk.mlp", "S.blk.02"]
     assert [(r["task"], r["verdict"]) for r in many["tasks"]] == [(r["task"], r["verdict"]) for r in one["tasks"]]
     assert one["failed"] == many["failed"] == ["C.blk.mlp"] and {r.get("batch") for r in many["tasks"]} == {None, 0}

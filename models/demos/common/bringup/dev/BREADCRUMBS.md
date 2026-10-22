@@ -1659,3 +1659,21 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   profile) were recorded FAIL and re-run in full only to commit. Selftests: test_core.py
   (test_a_refused_commit_is_pending_and_commits_without_a_rerun, replacing F110's; too large; changed files),
   test_orchestrator.py::test_a_refused_commit_stops_the_run_and_resume_commits_without_a_rerun.
+- F150 (owner, 2026-10-22): no re-run of unchanged work. core/stamps.py stamps every gate run: per unit (a fix job's
+  segments of one source task each, F79's BRINGUP_TASK prefix now set as the unit's env; else the whole command) the
+  hash of its command as run, its source task's frozen block, the gate env's BRINGUP_* / TT_* variables (not where it
+  files results), the code key and the goldens key. Code key: F105 / F116's file set (the tree minus the run's records
+  and NO_MEASURE, now in core/stamps.py; plus overseer.yaml, the model's dashboard, verify / stamps / CLI / timing),
+  but by content (ls-tree blobs, changed and untracked files hashed), so the gate's own commit keeps it; the whole
+  tree, never a task's paths alone (a C.* test reads the reference, a ladder all of tt/). Goldens key: every golden
+  dir's own records (manifest with content_hash, drift / floor files). Every run unit is kept in
+  runs/<run>/stamps/<unit>.json (verdict, rc, metrics, side outputs copied aside; 8 stamps a unit). A unit whose stamp
+  has a PASS (rc 0, its metrics within today's limits: all of them for a one-unit gate) is restored instead of run
+  ("reused: same code" in the log, res.reused, state stamp.reused, the orchestrator's echo); a FAIL or HANG is never
+  reused; a changed stamp, a missing declared artifact or `gate --fresh` runs it. This covers F87's resumed task, a fix
+  job's units of passed tasks on unchanged code (and the units a stopped fix job already passed), `rerun` / `sweep`,
+  and core.verify (a task whose every unit is kept PASS is reused; `--force` runs it; unbatched runs are kept). Not
+  done: the A/B's ab_code_key keeps its own key (commit-dependent) so the live run's in-flight A/B sides stay valid;
+  untracked files are in the gate key only. DeepSeek-V4.1: resumed fix jobs re-ran 45-70 min gates on code unchanged
+  since their last run. Selftests: test_stamps.py (reuse on resume, a one-byte change runs, FAIL never reused, the key
+  follows content, fix-job units, verify --force, the orchestrator's resumed task without an agent), test_verify.py.
