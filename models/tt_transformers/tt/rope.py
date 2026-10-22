@@ -285,27 +285,35 @@ class Phi3RotaryEmbedding(ScaledRotaryEmbedding):
             scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.orig_context_len))
         super().__init__(dim, max_position_embeddings, base, scaling_factor, device)
 
-    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
-        if self.max_seq_len_cached > self.orig_context_len:
-            ext_factors = torch.tensor(self.long_factor, dtype=torch.float32)
-        else:
-            ext_factors = torch.tensor(self.short_factor, dtype=torch.float32)
+    def apply_scaling(self, freqs: torch.Tensor, long: bool = False) -> torch.Tensor:
+        ext_factors = torch.tensor(self.long_factor if long else self.short_factor, dtype=torch.float32)
         assert freqs.shape[-1] == ext_factors.shape[-1]
         return freqs / ext_factors
+
+    def _cos_sin(self, t: torch.Tensor, inv_freq: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        freqs = torch.outer(t, inv_freq.to(t.device))
+        emb = torch.cat((freqs, freqs), dim=-1)
+        return self.permute_to_meta_format(emb.cos() * self.scaling_factor, emb.sin() * self.scaling_factor)
 
     def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
 
         inv_freq_shape = torch.arange(0, self.dim, 2).float().to(device) / self.dim
-        self.inv_freq = 1.0 / (self.base**inv_freq_shape)
-        self.inv_freq = self.apply_scaling(self.inv_freq)
-        freqs = torch.outer(t, self.inv_freq.to(t.device))
+        base_inv_freq = 1.0 / (self.base**inv_freq_shape)
+        self.inv_freq = self.apply_scaling(base_inv_freq)
+        cos, sin = self._cos_sin(t, self.inv_freq)
 
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos() * self.scaling_factor
-        sin = emb.sin() * self.scaling_factor
-        cos, sin = self.permute_to_meta_format(cos, sin)
+        self.cos_cached_long = self.sin_cached_long = None
+        if seq_len > self.orig_context_len:
+            # HF picks the factors per forward pass from the sequence length so far: short up to
+            # orig_context_len, long beyond. A decode step at position p sees length p + 1, so rows
+            # from orig_context_len on take the long factors. A prompt longer than orig_context_len
+            # is prefilled with long factors on every row: that is the separate *_long table.
+            cos_long, sin_long = self._cos_sin(t, self.apply_scaling(base_inv_freq, long=True))
+            cos[..., self.orig_context_len :, :] = cos_long[..., self.orig_context_len :, :]
+            sin[..., self.orig_context_len :, :] = sin_long[..., self.orig_context_len :, :]
+            self.cos_cached_long, self.sin_cached_long = cos_long.to(dtype), sin_long.to(dtype)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
         self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
 
@@ -348,11 +356,13 @@ def compute_freqs_cis(
 
 
 def compute_gather_cos_sin(
-    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
+    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling], long: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     rotary_embedding = rotary_embedding_factory(
         dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
     )
+    if long:
+        return rotary_embedding.cos_cached_long, rotary_embedding.sin_cached_long
     return rotary_embedding.cos_cached, rotary_embedding.sin_cached
 
 
@@ -365,12 +375,14 @@ def get_rot_mats(
     datatype: Any = ttnn.bfloat16,
     rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     nope: bool = False,
+    long: bool = False,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
         end=2 * seq_len,
         theta=theta,
         rope_scaling=rope_scaling,
+        long=long,
     )
     if nope:
         # NoPE layers (e.g. EXAONE-4.x full-attention layers): rotary must be the
@@ -817,6 +829,27 @@ class RotarySetup(LightweightModule):
             rot_mats_layout=ttnn.TILE_LAYOUT,
             nope=nope,
         )
+
+        # Longrope: a prompt longer than the original context is prefilled with the long factors on every
+        # row, so it slices this table instead (see Phi3RotaryEmbedding._set_cos_sin_cache).
+        self.prefill_long_rope_threshold = None
+        if (
+            rope_scaling is not None
+            and rope_scaling.rope_type.value == "longrope"
+            and max_seq_len > rope_scaling.original_max_position_embeddings
+        ):
+            self.prefill_long_rope_threshold = rope_scaling.original_max_position_embeddings
+            self.cos_matrix_prefill_long, self.sin_matrix_prefill_long = get_rot_mats(
+                head_dim=head_dim,
+                device=device,
+                seq_len=max_seq_len,
+                theta=rope_theta,
+                rope_scaling=rope_scaling,
+                datatype=datatype,
+                rot_mats_layout=ttnn.TILE_LAYOUT,
+                nope=nope,
+                long=True,
+            )
 
         def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):
             if ttnn.get_arch_name() == "blackhole":

@@ -2031,6 +2031,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
+        # Longrope picks its factors from the whole prompt (HF: longest sequence in the batch), which a
+        # chunk or a padded prefill cannot see
+        rope_setup = getattr(self.model[model_id], "rope_setup", None)
+        if getattr(rope_setup, "prefill_long_rope_threshold", None) is not None and last_token_idx is not None:
+            kwargs = {**kwargs, "prompt_len": int(torch.as_tensor(last_token_idx).max()) + 1}
         # kwargs are for prepare_inputs_prefill (global_user_id, multimodal inputs, serving plugin keywords);
         # ttnn_prefill_forward takes only the per-layer page tables from them, on every path.
         forward_kwargs = (

@@ -3319,10 +3319,21 @@ class ModelArgs:
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
+        # The traced prefill reads the short-factor longrope table, so a prompt past the original context
+        # (which needs the long factors) runs untraced
+        rope_scaling = self.rope_scaling
+        needs_long_rope = (
+            rope_scaling is not None
+            and rope_scaling.rope_type.value == "longrope"
+            and self.max_seq_len > rope_scaling.original_max_position_embeddings
+            and prefill_seq_len + num_cached_tokens > rope_scaling.original_max_position_embeddings
+        )
+
         return (
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
+            and not needs_long_rope
         )
 
     def is_llama_vision(self):

@@ -612,8 +612,15 @@ class Transformer(LightweightModule):
         prefill_start_pos = 0 if trace_enabled else start_pos
         slice_end = trace_mat_len if trace_enabled else min(mat_len, required_end)
 
-        cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
+        # prompt_len is the full prompt incl. cached tokens (generator passes it for longrope); a chunk alone
+        # cannot tell whether its prompt goes past the original context
+        long_rope_threshold = getattr(self.rope_setup, "prefill_long_rope_threshold", None)
+        use_long_rope = long_rope_threshold is not None and kwargs.get("prompt_len", required_end) > long_rope_threshold
+        assert not (use_long_rope and trace_enabled), "Traced prefill only has the short-factor longrope table"
+        cos_prefill = self.rope_setup.cos_matrix_prefill_long if use_long_rope else self.rope_setup.cos_matrix_prefill
+        sin_prefill = self.rope_setup.sin_matrix_prefill_long if use_long_rope else self.rope_setup.sin_matrix_prefill
+        cos_slice = cos_prefill[:, :, prefill_start_pos:slice_end, :]
+        sin_slice = sin_prefill[:, :, prefill_start_pos:slice_end, :]
 
         if pad_len > 0:
             # Padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
