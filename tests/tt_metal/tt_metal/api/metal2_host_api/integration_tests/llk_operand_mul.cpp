@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// End-to-end LLK operands on Blackhole silicon: mul_tiles with operands from a DFB, a
+// End-to-end LLK operands on Blackhole silicon: mul_tile with operands from a DFB, a
 // LocalTensorAccessor and a Scratchpad.
 
 #include <gtest/gtest.h>
@@ -38,11 +38,11 @@ using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramSpecHWTest;
 
 // ============================================================================
-// LLKOperand integration: mul_tiles through each memory object (SPEC Parts II–III)
+// LLKOperand integration: mul_tile through each memory object (SPEC Parts II–III)
 // ============================================================================
 //
 // One Blackhole test per source of LLKOperand (DFB / LocalTensorAccessor / Scratchpad). Each pipes a
-// single Float16_b tile through experimental::mul_tiles and checks the product. Address math is
+// single Float16_b tile through experimental::mul_tile and checks the product. Address math is
 // covered implicitly by a correct product; the DFB test also keeps the MATH-thread front/back == 0 check.
 
 namespace {
@@ -73,7 +73,7 @@ std::vector<bfloat16> ReadBf16(distributed::MeshDevice& mesh_device, const MeshT
 }  // namespace
 
 // Elementwise mul of one Float16_b tile (C = A * B) through DFB operands: DRAM A/B are streamed into
-// in0/in1, compute does mul_tiles(in0.front, in1.front) and packs to out.back, and a DM writer drains
+// in0/in1, compute does mul_tile(in0.front, in1.front) and packs to out.back, and a DM writer drains
 // out to DRAM C. Proves LLKOperandFrom<dfb::…> + DataflowBuffer::front/back address the FIFO correctly.
 TEST_F(ProgramSpecHWTest, LLKOperandDfbMul) {
     auto mesh_device = devices_.at(0);
@@ -166,7 +166,7 @@ void kernel_main() {
     out.reserve_back(1);
 
     tile_regs_acquire();
-    ckernel::experimental::mul_tiles(in0.front<AOp>(), in1.front<BOp>(), 0, 0, 0);
+    ckernel::experimental::mul_tile(in0.front<AOp>(), in1.front<BOp>(), 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
     ckernel::experimental::pack_tile(out.back<OutOp>(), 0, 0);
@@ -245,7 +245,7 @@ void kernel_main() {
 }
 
 // Elementwise mul of one Float16_b tile already resident in L1: compute-only, no DFB/DM. Host writes
-// sharded tensors A and B; compute does mul_tiles(a.operand, b.operand) and packs into C via
+// sharded tensors A and B; compute does mul_tile(a.operand, b.operand) and packs into C via
 // LocalTensorAccessor::operand. Proves LLKOperandFrom<tensor::…> derives format/shape from TensorSpec.
 TEST_F(ProgramSpecHWTest, LLKOperandLocalTensorMul) {
     auto mesh_device = devices_.at(0);
@@ -285,7 +285,7 @@ void kernel_main() {
     ckernel::experimental::mul_init(AOp{0}, /*acc_to_dest=*/false);
 
     tile_regs_acquire();
-    ckernel::experimental::mul_tiles(a.operand<AOp>(), b.operand<BOp>(), 0, 0, 0);
+    ckernel::experimental::mul_tile(a.operand<AOp>(), b.operand<BOp>(), 0, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
     ckernel::experimental::pack_tile(c.operand<COp>(), 0, 0);
@@ -327,7 +327,7 @@ void kernel_main() {
 
 // Elementwise mul whose operands live in a Scratchpad. The UNPACK thread fills pad_in with constant
 // tiles A@0 and B@1 (it is the only thread that reads pad_in), then compute does
-// mul_tiles(pad_in, pad_in, 0, 1) and packs the result to both pad_out and the out DFB; a DM writer
+// mul_tile(pad_in, pad_in, 0, 1) and packs the result to both pad_out and the out DFB; a DM writer
 // drains out to DRAM C. Proves Scratchpad::operand as an LLK source and pack target without a
 // read-after-pack hazard.
 TEST_F(ProgramSpecHWTest, LLKOperandScratchpadMul) {
@@ -401,7 +401,7 @@ void kernel_main() {
     out.reserve_back(1);
 
     tile_regs_acquire();
-    ckernel::experimental::mul_tiles(pad_in.operand<InOp>(), pad_in.operand<InOp>(), 0, 1, 0);
+    ckernel::experimental::mul_tile(pad_in.operand<InOp>(), pad_in.operand<InOp>(), 0, 1, 0);
     tile_regs_commit();
     tile_regs_wait();
     ckernel::experimental::pack_tile(pad_out.operand<OutOp>(), 0, 0);
