@@ -233,7 +233,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 120
-    bh_galaxy: 195
+    bh_galaxy: 205
     bh_sc1: 20
     bh_sc4: 185
     bh_sc16: 150
