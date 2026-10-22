@@ -370,3 +370,33 @@ native 0.000143 / 0.000160; device official vs CPU official 0.000101 / 0.000105.
 -6.7e-7 / +5.9e-7 of the rms. So the swap failure is exactly the official fp8 rounding the device skips (rule 17), no
 device error: the per-step limits are 2 x the official arithmetic's noise floor and the reference hook stays official
 (owner, P.8 brief). The compressor's fp4 q-dq (rel ~0.1) is the same kind.
+
+## The swap tests' indexer checks fail on order and on bf16 score ties, not on logic
+
+DS41-102 (FIX.10 attempt 3, 2026-10-22).
+
+The swap tests of indexer blocks (enc_source_14, enc_source_engram_17; dec_candidate_14 and dec_reindex_13 by the same
+path) were last run 2026-10-16/17, when the indexer's match limit was 0.0. Under the current framework (F101 flips,
+F138 limits from the noise floor) they fail:
+
+| test | swap_indexer_vs_cpu match (limit) | flips | unexplained | recall | recall_tie |
+|---|---|---|---|---|---|
+| enc_source_14 (L2) | 0.0015 (0.922) | 1967 | 1471 | 0.9942 | 0.9975 |
+| enc_source_engram_17 (L14) | 0.0016 (0.860) | 1579 | 218 | 0.9979 | 0.9983 |
+
+CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's NF.flips, 3 nudge seeds):
+
+| selection vs native fp32 | flips | unexplained | recall | recall_tie |
+|---|---|---|---|---|
+| nudged inputs (the floor) | 339 | 0 | 0.99967 | 1.0 |
+| native scores rounded to bf16 (topk_large_indices is bf16-only) | 1879 | 1277 | 0.99458 | 0.99777 |
+| official arithmetic (numerics official, dtype bf16: DeepSeek's GPU code) | 2048 | 2048 | 0.96375 | 0.96809 |
+
+- Order: the reference returns ids ascending (lowest_index_topk); the device, descending by score. The native set
+  sorted by score matches the reference elementwise at 0.0014, the device's value. Order carries no meaning (sparse
+  attention reads a set; model.py topk(sorted=False)). K-42: index outputs need topk_overlap, not match.
+- Ties: the device's flips are what bf16 scores give; DeepSeek's own code is 6x further from native. The flip rule uses
+  the nudge and tie_rtol (0.002 x |cutoff|, less than one bf16 step) and not the official arithmetic's margin (F128).
+- Not from P.21 or FIX.10: P.21 did not touch tt/indexer.py (last changed P.19 066340ecb1c); the device's flips match
+  what bf16 scores alone give, so no indexer change since 2026-10-17 is needed to explain them.
+- enc_source_engram_17 also hits pytest-timeout (300 s) in the same run.

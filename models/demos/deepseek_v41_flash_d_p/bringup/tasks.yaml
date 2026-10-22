@@ -10190,6 +10190,57 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+- id: FIX.10
+  title: Remove the second copy of the compressed history that P.21 (STATIC_TABLES, f66d16327b6) added
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.21
+  - K.1
+  - L.last
+  gate:
+    cmd: BRINGUP_TASK=P.21 for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py
+      || exit 1; done && BRINGUP_TASK=P.21 for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14
+      dec_reindex_13 dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_TASK=P.21 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.21 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'Remove the second copy of the compressed history that P.21 (STATIC_TABLES, f66d16327b6) added. Today each KV
+      source keeps the served cache (server order, read back by the serving contract) AND the AttnTable (natural order + window
+      area): +1.25 GiB per chip per slot at 524,288 tokens for the full model (4 sources), +2.5 GiB at 1M, which breaks galaxy_4x4''s
+      planned 26.5 of 27.2 GiB at 524k. Make ONE storage serve both: keep the served cache itself in the table''s natural
+      order (or make the table a view into the served cache with the window area as a small separate buffer), so the compressor
+      writes each chunk''s rows once. The serving contract''s KV read-back (K.1 contract tests) must still pass, and the decode
+      side''s expected layout must still be met; if the contract fixes the server order, convert at read-back, not per chunk.
+      Report memory per chip per slot before/after (this box and the plan''s full-model numbers on galaxy_4x4 / 8x4 at 524k
+      and 1M), chunk wall and device time (must not lose P.21''s gain: quick wall ~103.5 ms), and the err_* metrics vs limits.
+      Delete the duplicate path; no new switch unless the old layout must stay selectable.'
+    gate_tasks:
+    - P.21
+    - K.1
+    - L.last
 - id: P.20
   title: 'Activations in bf16 wherever DeepSeek''s GPU code keeps bf16 (J5): owner comparison'
   step: perf
