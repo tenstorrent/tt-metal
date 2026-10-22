@@ -57,7 +57,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-const int iterations = 32;
+// 32 vectors of 32 lanes cover the tile; a test may narrow it (SFPU_UNARY_ITERATIONS template).
+#ifndef SFPU_UNARY_ITERATIONS
+#define SFPU_UNARY_ITERATIONS 32
+#endif
+const int iterations = SFPU_UNARY_ITERATIONS;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
