@@ -168,7 +168,9 @@ class WanPipelineConfig:
         preset = preset_dict.get(tuple(mesh_shape), {})
 
         if cache_config is _UNSET:
-            cache_config = WanDBCacheConfig.default()
+            # DBCache's residual-diff readback is single-host only (`ExpertCacheRunner.read_sums`), so a
+            # multi-host mesh stays uncached unless the caller passes a cache_config explicitly.
+            cache_config = None if ttnn.using_distributed_env() else WanDBCacheConfig.default()
 
         if dit_parallel_config is None or vae_parallel_config is None or encoder_parallel_config is None:
             sp_axis = preset["sp_axis"]
@@ -633,6 +635,13 @@ class WanPipeline(PipelineAPIMixin):
         if cache_config is None:
             return None
         cache_config = WanDBCacheConfig.coerce(cache_config)
+        if ttnn.using_distributed_env() and (cache_config.high_noise.enabled or cache_config.low_noise.enabled):
+            # Fail before the first denoising step rather than at the first residual-diff readback.
+            msg = (
+                "DBCache is not supported on multi-host meshes (the residual-diff readback needs a host-side "
+                "all-reduce); build or call the pipeline with cache_config=None"
+            )
+            raise NotImplementedError(msg)
 
         runners = []
         for idx, ts in enumerate(self.transformer_states):
