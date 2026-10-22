@@ -964,3 +964,11 @@ gap before the generic ops" is therefore not the one-range-per-core program desc
 amortises it); the change is kept (unit tests pass, simpler descriptors) but the 1.3 ms claim is withdrawn. To
 locate the gap: a layer-4 tracy profile of the traced step with the change, comparing the op start times around
 `kda_decode` and `paged_pool_gather` with `report_prof_ep32_ep_b4`.
+
+**MTP block, first device run (03:58, chip 0, `mtp_test_chip0.log`, `tests/test_mtp.py`):** built in 58 s; prefill 16
+rows vs the CPU reference: glue PCC 0.999914, block output 0.998332, logits 0.998476, top-1 16/16, device argmax ==
+host argmax 16/16; decode step at position 16: block 0.999837, logits 0.999653, greedy == reference on both slots,
+slots bit-equal. Steps 1-2 of `_agents/mtp_head/PLAN.md` are done; next: the level-1 draft inside the traced decode
+graph of the mesh model (step 3), then the batched verify step (4) and the KDA state commit (5). Code pushed
+(upstream 380b1b7da30) together with the rs combine default, the core-range helper, the auto prefill mode and the
+logits-level accuracy tooling.
