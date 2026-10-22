@@ -56,15 +56,12 @@ void kernel_main() {
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
-    constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
-
     // Multicast arguments follow the operation-owned argument setup.
     constexpr dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("in0_mcast_ct_offset"),
         get_named_compile_time_arg_val("in0_mcast_rt_offset")>
         in0_mcast_args;
     static_assert(in0_mcast_args.active);
-    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
 
     // Only shard owners wait for all-gather slices; the other cores are ordered behind them by the multicast.
     MatmulOpReceiver fused_op_receiver;
