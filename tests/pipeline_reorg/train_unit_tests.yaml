@@ -57,7 +57,7 @@
 - name: tt-train cpp galaxy unit tests
   cmd: |
     mkdir -p generated/test_reports
-    TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_torus_x.textproto build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report_galaxy.xml --gtest_filter="Galaxy*"
+    TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_torus_x.textproto build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report_galaxy.xml --gtest_filter="Galaxy*-*NIGHTLY*"
   skus:
     bh_galaxy:
       timeout: 10
