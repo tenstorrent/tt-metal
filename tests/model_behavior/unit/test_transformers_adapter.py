@@ -155,8 +155,7 @@ def test_qwen_opens_mesh_with_gdn_scratch_and_linear_fabric(monkeypatch, backend
 @pytest.mark.parametrize(
     "backend, sku, arch, device_count, shape, fabric, l1_small_size",
     [
-        # The Galaxy throughput-experts path builds a fabric mux in selective_reduce_combine,
-        # which TT_FATALs when the mesh is opened with l1_small_size=0 (#56784, #56769).
+        # GPT-OSS reserves the L1_SMALL size of models/demos/gpt_oss/tests/test_factory.py.
         ("gpt-oss-120b", "wh_galaxy_perf", "wormhole_b0", 32, (4, 8), "ring", 16384),
         ("gpt-oss-120b", "bh_quietbox_2", "blackhole", 4, (1, 4), "ring", 16384),
         # Families outside the table keep the ttnn default.

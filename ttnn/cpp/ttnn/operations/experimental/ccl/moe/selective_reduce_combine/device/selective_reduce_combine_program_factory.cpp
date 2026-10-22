@@ -338,8 +338,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    // Carried counters: keep them above the mux's ceiling where an L1_SMALL region exists. This op
-    // also TT_FATALs below if there is none, so the general-L1 fallback never reaches a mux.
+    // Carried counters: prefer L1_SMALL over general L1.
     const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);

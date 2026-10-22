@@ -134,9 +134,7 @@ The other Llama runners continue using their mounted model caches.
 
 Gemma and Qwen use their production factories' linear `FABRIC_1D` configuration.
 Qwen reserves 24 KiB of `L1_SMALL` for GDN prefill convolution. GPT-OSS
-reserves 16 KiB, like its production factory, so the throughput experts'
-fabric mux in `selective_reduce_combine` keeps its semaphores above the mux
-instead of failing device setup on Wormhole Galaxy. For a
+reserves 16 KiB, like its production factory. For a
 local eight-chip Gemma run on Wormhole Galaxy, the adapter opens the 32-chip
 parent mesh so fabric neighbors are initialized, then gives the model a `1x8`
 submesh. Reserve the whole Galaxy for that run; model weights and requests still

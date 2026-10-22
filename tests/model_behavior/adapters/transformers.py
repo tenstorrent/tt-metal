@@ -15,9 +15,7 @@ from tests.model_behavior.driver import Sample
 
 # L1_SMALL bytes reserved per core when the adapter opens the mesh, by model family.
 # Qwen's GDN conv1d needs the same 24 KiB reservation as
-# models/demos/blackhole/qwen36/tests/test_factory.py. GPT-OSS throughput experts
-# build a fabric mux in selective_reduce_combine, which TT_FATALs when the device
-# has no L1_SMALL bank (#56784, #56769); match
+# models/demos/blackhole/qwen36/tests/test_factory.py. GPT-OSS matches
 # models/demos/gpt_oss/tests/test_factory.py::L1_SMALL_SIZE. Every other family
 # keeps the ttnn default of 0.
 L1_SMALL_SIZE_BY_FAMILY = {"qwen": 24_576, "gpt_oss": 16_384}
