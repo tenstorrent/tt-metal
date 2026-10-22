@@ -38,7 +38,7 @@ DEVICE_PARAMS_FABRIC_1D = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "trace_region_size": 750000,
-    # The combine keeps its semaphores in L1_SMALL, above the fabric mux region; it refuses l1_small_size = 0.
+    # The combine keeps its carried semaphores in L1_SMALL when the device has the region.
     "l1_small_size": 16384,
 }
 

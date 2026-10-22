@@ -1164,7 +1164,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
         std::move(drain_mapping.logical_core_candidates),
         std::move(drain_mapping.virtual_cores)};
 
-    // Carried counters: prefer L1_SMALL, which sits above the fabric mux's ceiling (#56769).
+    // Carried counters: prefer L1_SMALL over general L1.
     const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
