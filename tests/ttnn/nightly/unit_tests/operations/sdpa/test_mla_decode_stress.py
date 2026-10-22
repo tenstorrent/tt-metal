@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     run_flash_mla_decode_impl,

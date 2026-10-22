@@ -67,6 +67,11 @@ public:
         // 0 = auto: start the tuned default worker count, clamped by num_sockets. 1 forces serial.
         // N > 1 starts up to N grouped workers, each reading a contiguous socket range.
         uint32_t host_read_thread_count = 0;
+        // Queue metadata records in a service-core ring (layout in persistent_d2h_writer.cpp) so the
+        // ack op (outbound_socket_service_sync) can run ahead of a host that drains late. Only the ack op
+        // writes the ring; a producer writing to get_metadata_addr() needs the default single record.
+        // Metadata-only services (global_spec=None) only.
+        bool metadata_ring = false;
     };
 
     D2HStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -82,7 +87,9 @@ public:
     void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
     void read_from_tensor(ttnn::Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
     void notify_backing_ready();
+    // Wait until the host has acked everything the device sent; with a timeout, throw once it expires.
     void barrier();
+    void barrier(std::optional<uint32_t> timeout_ms);
 
     const ttnn::Tensor& get_backing_tensor() const;
     const TensorSpec& get_per_shard_spec() const;
@@ -91,6 +98,10 @@ public:
 
     // Data-CB depth (full socket-page slots) the service derived from service-core L1.
     uint32_t get_slot_count() const;
+    // Service-core metadata ring geometry (owner only); layout in persistent_d2h_writer.cpp.
+    uint32_t get_metadata_ring_slots() const;
+    uint32_t get_metadata_slot_stride() const;
+    uint32_t get_metadata_data_offset() const;
 
     std::vector<distributed::D2HSocket*> get_sockets() const;
 
@@ -103,6 +114,8 @@ public:
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_metadata_input_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
+    // Service-core control words: [0] terminate, [1] abandon data the host never read (owner only).
+    DeviceAddr get_termination_addr(const distributed::MeshCoordinate& coord) const;
 
     std::string export_descriptor(const std::string& service_id);
     static std::unique_ptr<D2HStreamService> connect(
@@ -119,6 +132,8 @@ private:
         uint32_t num_socket_pages);
 
     void signal_termination();
+    void signal_abandon();
+    void write_termination_word(uint32_t word);
     bool tensor_enabled() const;
     void read_metadata_from_sockets(ttsl::Span<std::byte> metadata);
 
@@ -175,6 +190,9 @@ private:
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
     uint32_t slot_count_ = 0;  // data-CB depth derived from service-core L1 (owner only)
+    uint32_t metadata_ring_slots_ = 0;
+    uint32_t metadata_slot_stride_ = 0;
+    uint32_t metadata_data_offset_ = 0;
 
     std::vector<std::unique_ptr<HostReadWorkerState>> host_read_worker_states_;
     std::vector<std::thread> host_read_workers_;

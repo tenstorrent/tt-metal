@@ -29,9 +29,10 @@ import ttnn
 from ..reference.model import load_layer_weights
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
-from .attention import TtMiMoAttention
+from .attention import TtMiMoAttention, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
+from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import zero_output
@@ -216,6 +217,7 @@ class TtMiMoModel:
         self.verify_trace = None  # speculative verify step (capture_verify_trace)
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.greedy_head = None
+        self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
         self.decode_users = None
@@ -258,7 +260,7 @@ class TtMiMoModel:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
         self.kv_caches, tables = [], {}
-        max_blocks = self.max_seq_len // self.block_size
+        max_blocks = page_table_width(self.max_seq_len // self.block_size)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
         self.swa_table = None
         if swa_layers:
@@ -319,8 +321,10 @@ class TtMiMoModel:
         self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
         # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
         self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
-        # Decode's device-sampled greedy token (decode_forward_device); persistent buffers, made before any capture.
+        # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
+        # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -862,12 +866,14 @@ class TtMiMoModel:
                 )
         self.rope_tables = tables
 
-    def _decode_inputs(self, inputs, greedy_only=False, serial=0):
+    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0):
         """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input after the nine
         when the decode RoPE tables are set up, then ``serial`` per-slot position inputs)."""
         base, slots = inputs[: len(inputs) - serial], list(inputs[len(inputs) - serial :])
         rope = {"rope_pos_tt": base[9]} if len(base) > 9 else {}
-        return self.decode_forward_device(*base[:9], greedy_only=greedy_only, serial_pos=slots or None, **rope)
+        return self.decode_forward_device(
+            *base[:9], greedy_only=greedy_only, sample=sample, serial_pos=slots or None, **rope
+        )
 
     def decode_forward_device(
         self,
@@ -882,14 +888,17 @@ class TtMiMoModel:
         owner_mask_tt,
         rope_pos_tt=None,
         greedy_only=False,
+        sample=False,
         serial_pos=None,
     ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
 
         ``greedy_only``: skip the per-chip top-k candidates; GreedyHead computes the greedy tokens and also writes
         them into ``tokens_tt`` (the next step's input). ``rope_pos_tt`` (with ``rope_tables``): the cos / sin come
-        from the device tables at these positions, not from the cos / sin inputs. ``serial_pos``: per-slot position
-        tensors; every layer writes K / V one slot at a time (a speculative verify, reference/spec_decode.py)."""
+        from the device tables at these positions, not from the cos / sin inputs. ``sample`` (vLLM mode): the
+        DeviceSampler draws each row's token with its temperature / top-k / top-p (greedy rows take the argmax, as
+        GreedyHead). ``serial_pos``: per-slot position tensors; every layer writes K / V one slot at a time (a
+        speculative verify, reference/spec_decode.py)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         made = []
@@ -908,29 +917,52 @@ class TtMiMoModel:
             positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
         if serial_pos:
             positions["serial"] = serial_pos
+        # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer
+        # users than table rows the kernel would spread its cores over 32 rows of mostly idle slots.
+        compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
+        sdpa_tables = {}
+        if compact_sdpa:
+            positions["pos_sdpa"] = ttnn.slice(pos_owned_tt, (0,), (self.decode_users,))
         h = None
         for i, layer in enumerate(self.layers):
+            layer_positions = positions
+            if compact_sdpa and not layer.is_swa:
+                key = self._table_key(i)
+                if key not in sdpa_tables:
+                    table = self.page_table_tt[key]
+                    sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
+                layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
             y, h = layer.forward_decode(
-                x, rot_mats, positions, self._layer_page_table(i), self.kv_caches[i], mask_tt, h=h, return_norm=True
+                x,
+                rot_mats,
+                layer_positions,
+                self._layer_page_table(i),
+                self.kv_caches[i],
+                mask_tt,
+                h=h,
+                return_norm=True,
             )
             x.deallocate(True)
             x = y
         logits = self._logits(x, h)
         x.deallocate(True)
-        for t in (*rot_mats[True][:2], *rot_mats[False], *made):
+        for t in (*rot_mats[True][:2], *rot_mats[False], *made, *sdpa_tables.values()):
             t.deallocate(True)
+        if compact_sdpa:
+            positions["pos_sdpa"].deallocate(True)
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
             return {"logits": logits, "next_tokens": next_tokens}
         rows = None
         if self.layer_groups is not None:
             # vLLM: host sampling reads the users' rows (row-major) instead of 32 rows of tiles; device sampling is
-            # GreedyHead's greedy token (the lowest id on ties, like the host's argmax), written into the next step's
-            # token input. Nothing reads per-chip top-k candidates.
+            # GreedyHead's greedy token (the lowest id on ties, like the host's argmax), or with ``sample`` the
+            # DeviceSampler's draw, written into the next step's token input.
             rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
             rows = ttnn.slice(rm, (0, 0, 0, 0), (1, 1, self.decode_users, self.vocab_local))
             rm.deallocate(True)
-            next_tokens = self.greedy_head(logits, token_input=tokens_tt)
+            head = self.sampler if sample else self.greedy_head
+            next_tokens = head(logits, token_input=tokens_tt)
             out = {"logits": logits, "next_tokens": next_tokens, "logits_rows": rows}
             if h is not None:
                 out["hidden"] = h  # the final norm's persistent buffer: the MTP drafter's input (mtp.py)
@@ -973,7 +1005,11 @@ class TtMiMoModel:
 
         Warm-up and capture run with every slot empty (position -1), so they write no KV-cache entries
         and are safe to run after users have been prefilled. ``greedy_only`` captures the device-greedy step
-        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not."""
+        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not.
+
+        With a DeviceSampler (vLLM mode) a second trace on the same inputs, ``sampled``, also draws the sampled rows'
+        tokens; a step replays it only when a row samples, so greedy batches skip the sampler. Both steps compile
+        before either capture: a program compiled after a capture may keep buffers the replays overwrite."""
         assert self.decode_trace is None
         if greedy_only and self.greedy_head is None:
             # Persistent buffers, allocated before any capture.
@@ -994,34 +1030,51 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        warm = self._decode_inputs(inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
-        # Keeps the persistent buffers: GreedyHead's tokens and the final norm's "hidden" (the MTP drafter's input).
-        self._release(warm)
+        variants = [False] + ([True] if self.sampler is not None and not greedy_only else [])
+        for sample in variants:
+            warm = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+            self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
+            # Keeps the persistent buffers: GreedyHead's and the sampler's tokens and the final norm's "hidden" (the
+            # MTP drafter's input).
+            self._release(warm)
         ttnn.synchronize_device(self.mesh_device)
-        fabric = getattr(self.plan, "fabric_gather", None)
-        phase = fabric.phase if fabric is not None else None
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        output = self._decode_inputs(inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, output, tokens_written=written)
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
-        # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
-        fabric = getattr(self.plan, "fabric_gather", None)
-        assert fabric is None or fabric.phase == (phase if phase is not None else 0), "odd fabric reductions per step"
+        captured = []
+        for sample in variants:
+            fabric = getattr(self.plan, "fabric_gather", None)
+            phase = fabric.phase if fabric is not None else None
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            output = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+            self._feed_back(inputs, output, tokens_written=written)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
+            # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
+            fabric = getattr(self.plan, "fabric_gather", None)
+            assert fabric is None or fabric.phase == (
+                phase if phase is not None else 0
+            ), "odd fabric reductions per step"
+            captured.append({"id": trace_id, "output": output})
         ttnn.synchronize_device(self.mesh_device)
         self.decode_trace = {
-            "id": trace_id,
+            **captured[0],
             "inputs": inputs,
-            "output": output,
             "history": history,
             "greedy_only": greedy_only,
+            "sampled": captured[1] if len(captured) > 1 else None,
         }
 
     def release_decode_trace(self):
         if self.decode_trace is not None:
             ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
+            if self.decode_trace["sampled"] is not None:
+                ttnn.release_trace(self.mesh_device, self.decode_trace["sampled"]["id"])
             self.decode_trace = None
+
+    def _decode_replay(self, sample):
+        """Replays the decode trace (``sample``: the sampled one); returns its output."""
+        trace = self.decode_trace["sampled"] if sample else self.decode_trace
+        assert trace is not None, "a sampled decode step needs the DeviceSampler's trace (vLLM mode)"
+        ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
+        return trace["output"]
 
     # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
     def setup_mtp(self, ckpt, cache_dir, layer=0):
@@ -1039,9 +1092,15 @@ class TtMiMoModel:
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
         self._release(self._decode_inputs(inputs, serial=SPEC_SLOTS))
         ttnn.synchronize_device(self.mesh_device)
+        fabric = getattr(self.plan, "fabric_gather", None)
+        phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
+        # replays interleave on the gather phases they were captured with.
+        fabric = getattr(self.plan, "fabric_gather", None)
+        assert fabric is None or fabric.phase == (phase if phase is not None else 0), "odd fabric reductions per step"
         ttnn.synchronize_device(self.mesh_device)
         # The MTP draft program reads the step's final hidden from the norm buffer it was captured on.
         assert output.get("hidden") is self.norm_buffers[0], "the final norm is not the persistent fused-norm buffer"
@@ -1079,27 +1138,27 @@ class TtMiMoModel:
                 ttnn.release_trace(self.mesh_device, trace["id"])
                 trace["id"] = None
 
-    def decode_enqueue(self, tokens, positions):
+    def decode_enqueue(self, tokens, positions, sample=False):
         """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.
-        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates)."""
+        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates).
+        ``sample`` (vLLM mode): the DeviceSampler draws the tokens (its parameters and uniforms set beforehand)."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         host = self.prepare_decode_inputs_host(tokens, positions)
         self._advance_swa(positions)
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
                 ttnn.copy_host_to_device_tensor(h, d)
-            ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
-            return self.decode_trace["output"]
+            return self._decode_replay(sample)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        out = self._decode_inputs(inputs)
+        out = self._decode_inputs(inputs, sample=sample)
         for t in inputs:
             t.deallocate(True)
         return out
 
-    def decode_enqueue_resident(self, positions):
+    def decode_enqueue_resident(self, positions, sample=False):
         """A decode step on the tokens and positions the last replay fed back (``_feed_back``): copies only the
         RoPE inputs of ``positions`` (torch [max_batch], what the trace's own positions now hold), then replays the
-        trace. Non-blocking; returns the trace's output."""
+        trace (``sample``: the sampled one). Non-blocking; returns the trace's output."""
         assert self.decode_trace is not None, "a resident decode step replays the decode trace"
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         self._advance_swa(positions)
@@ -1110,13 +1169,13 @@ class TtMiMoModel:
             )
             for h, d in zip(host, self.decode_trace["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
-        ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
-        return self.decode_trace["output"]
+        return self._decode_replay(sample)
 
     def _release(self, handle):
-        traced = [t["output"] for t in (self.decode_trace, self.verify_trace) if t is not None]
-        if not any(handle is out for out in traced):
-            persistent = [self.greedy_head.next_tokens] if self.greedy_head is not None else []
+        trace = self.decode_trace
+        traced = (trace, trace["sampled"] if trace is not None else None, self.verify_trace)
+        if not any(t is not None and handle is t["output"] for t in traced):
+            persistent = [h.next_tokens for h in (self.greedy_head, self.sampler) if h is not None]
             persistent += list(self.norm_buffers or ())
             for t in handle.values():
                 if not any(t is p for p in persistent):

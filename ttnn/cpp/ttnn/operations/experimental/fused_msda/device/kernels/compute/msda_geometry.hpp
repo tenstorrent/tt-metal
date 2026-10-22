@@ -8,8 +8,8 @@
 // ~140 cycles per operation in soft-float emulation. The SFPU evaluates it
 // across the tile.
 //
-// align_corners, locations_in_grid_space and from_offsets are folded into the
-// three per-level constants on the host, so this kernel does not branch on
+// align_corners, locations_in_grid_space and from_offsets are folded into
+// three constants per axis per level on the host, so this kernel does not branch on
 // them. See fused_msda_program_factory.cpp::axis_constants.
 //
 // x0/y0 leave as bf16. The reader decodes them with integer shifts and does the
@@ -80,7 +80,9 @@ struct GeometryPipes {
     uint32_t scalar;     // compute -> compute, consumed by the reduction
 };
 
-// Makes SrcA carry `new_cb` for a datacopy. `srca_cb` tracks what SrcA was last
+// Points the unpacker and datacopy at `new_cb`. For float32 geom_x/geom_y the
+// program factory sets UnpackToDestFp32, so that copy bypasses SrcA and lands in
+// DST with all 23 mantissa bits. `srca_cb` tracks what SrcA was last
 // configured for so the reconfiguration is skipped when nothing changed; it must
 // be seeded with whatever `compute_kernel_hw_startup` left SrcA on.
 inline void copy_from(uint32_t new_cb, uint32_t& srca_cb) {

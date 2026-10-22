@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 import os
+import threading
+import time
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference.checkpoint import MiMoCheckpoint, default_model_path
@@ -51,6 +55,29 @@ def golden_path():
     if not os.path.exists(path):
         pytest.skip(f"golden file {path} not found; run reference/make_golden.py")
     return path
+
+
+@contextlib.contextmanager
+def heartbeat(what, every_sec=60):
+    """Log a line every ``every_sec`` seconds while the block runs.
+
+    The tt-device-mcp broker reaps a job that prints nothing for 300 s as hung
+    (TT_DEVICE_MCP_HUNG_SILENCE_SEC). A long prefill waits on the device in silence, so long
+    tests wrap those waits in this."""
+    stop = threading.Event()
+    t0 = time.time()
+
+    def beat():
+        while not stop.wait(every_sec):
+            logger.info(f"{what}: still running after {time.time() - t0:.0f} s")
+
+    thread = threading.Thread(target=beat, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def pcc(a, b):

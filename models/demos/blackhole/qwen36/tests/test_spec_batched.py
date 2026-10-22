@@ -249,7 +249,7 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
 
     Phase 1, on the B-user model: a base run, then per-B variants that must reproduce it from fresh KV.
       B=2, 8: two repeat runs (a difference is a KV read-modify-write race between users sharing the tile)
-              and an eager run with the traced draft chain / reseed off.
+              and an eager run with the recorded drafter off.
       B=2: null-block-padded page tables, verify_traced re-staging the page tables on every replay, and a
            stop-token run where the frozen user must not move its neighbour.
       B=4: top_k=1 sampling (checks the [B*T, vocab] row-to-user mapping; tokens only) and one prompt
@@ -259,8 +259,6 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
     """
     B = batch
     model, tokenizer, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-    monkeypatch.setenv("QWEN36_TRACED_DRAFT", "1")
-    monkeypatch.setenv("QWEN36_TRACED_RESEED", "1")
 
     def run(tag, prompts=prompts, tables=page_tables, **dec_kwargs):
         return _spec_run(model, kv_shape, B, K, prompts, tables, f"B={B} {tag}", **dec_kwargs)
@@ -285,12 +283,16 @@ def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
                 _assert_same_runs(
                     base, run(f"repeat {r}"), B, f"B={B} repeat {r} vs base (batched spec decode is nondeterministic)"
                 )
-        with _variant(failures, "traced vs eager"):
-            with monkeypatch.context() as m:
-                m.setenv("QWEN36_TRACED_DRAFT", "0")
-                m.setenv("QWEN36_TRACED_RESEED", "0")
+        with _variant(failures, "recorded vs eager drafter"):
+            # The engine is cached on the model and reads QWEN36_SPEC_EAGER_DRAFTER only at construction,
+            # so flip its per-call flag instead.
+            eng = model._spec_engine
+            eng.recorded_drafter = False
+            try:
                 eager = run("eager")
-            _assert_same_runs(base, eager, B, f"B={B} eager draft/reseed vs traced")
+            finally:
+                eng.recorded_drafter = True
+            _assert_same_runs(base, eager, B, f"B={B} eager drafter vs recorded drafter")
     if B == 2:
         with _variant(failures, "null-block padding"):
             padded = _null_padded_tables(page_tables, prompts, K)
