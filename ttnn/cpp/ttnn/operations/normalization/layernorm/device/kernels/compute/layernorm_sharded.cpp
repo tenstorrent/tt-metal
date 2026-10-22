@@ -331,7 +331,7 @@ void kernel_main() {
             pack_tile(dst0, dfb_ex_id);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
         dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
     }
@@ -500,7 +500,7 @@ void kernel_main() {
             pack_tile(dst0, dfb_ex2_id);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
         dfb_ex2.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 

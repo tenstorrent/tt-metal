@@ -142,8 +142,12 @@ ALWI void reduce_init(
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A (same as reduce_init)   | uint32_t  | 0 to 31                                        | False    |
+ *
+ * On Blackhole pass the reduce's type and dim when known: only a ROW MAX leaves state to restore, and the default
+ * (MAX, ROW) restores it.
  */
 // clang-format on
+template <PoolType reduce_type = PoolType::MAX, ReduceDim reduce_dim = ReduceDim::REDUCE_ROW>
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifdef ARCH_QUASAR
     // (Quasar) A column reduce over an MxFp4 operand overrides that operand's unpacker OUT_DATA_FORMAT
@@ -154,7 +158,7 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
     UNPACK((llk_unpack_AB_reduce_uninit(icb)));
     MATH((llk_math_reduce_uninit(icb)));
 #elif defined(ARCH_BLACKHOLE)
-    MATH((llk_math_reduce_uninit()));
+    MATH((llk_math_reduce_uninit<reduce_type, reduce_dim>()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32

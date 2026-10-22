@@ -283,7 +283,8 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
 template <bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_uninit()));
+    // The custom block max leaves the zero flag alone, so there is nothing to restore
+    MATH((llk_math_reduce_uninit<PoolType::SUM, ReduceDim::REDUCE_ROW>()));
 #elif defined(ARCH_QUASAR)
     // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
     (void)icb;
@@ -382,7 +383,8 @@ ALWI void reduce_block_max_row_runtime(
 ALWI void reduce_block_max_row_uninit_runtime(
     std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
 #ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reduce_uninit()));
+    // The custom block max leaves the zero flag alone, so there is nothing to restore
+    MATH((llk_math_reduce_uninit<PoolType::SUM, ReduceDim::REDUCE_ROW>()));
 #elif defined(ARCH_QUASAR)
     // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
     (void)icb;

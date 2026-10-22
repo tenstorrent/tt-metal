@@ -123,7 +123,8 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     llk_math_reduce_init_impl<type, dim, is_fp32_dest_acc_en, math_fidelity, col_pair>(tensor_shape);
 }
 
+template <PoolType type = PoolType::MAX, ReduceDim dim = ReduceDim::REDUCE_ROW>
 inline void llk_math_reduce_uninit() {
     SAN_HOOK(uninit<OperationFpuReduce>());
-    _llk_math_reduce_uninit_();
+    _llk_math_reduce_uninit_<type, dim>();
 }

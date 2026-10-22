@@ -765,7 +765,7 @@ ALWI void reduce(
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
     } else {
-        reduce_uninit();
+        reduce_uninit<reduce_type, reduce_dim>();
     }
 }
 

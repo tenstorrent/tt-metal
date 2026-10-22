@@ -1131,7 +1131,12 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
  *
  * @note Reverses @ref _llk_math_reduce_init_
  */
+template <PoolType type = PoolType::MAX, ReduceDim dim = ReduceDim::REDUCE_ROW>
 inline void _llk_math_reduce_uninit_()
 {
-    math::_configure_default_zero_flag_state_();
+    // Only the ROW MAX pools leave the zero flag changed
+    if constexpr (type == PoolType::MAX && dim == ReduceDim::REDUCE_ROW)
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }

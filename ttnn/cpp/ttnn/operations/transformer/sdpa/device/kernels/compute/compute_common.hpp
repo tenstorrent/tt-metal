@@ -320,7 +320,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
             reduce_tile<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
                 in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
-        reduce_uninit();
+        reduce_uninit<pool_type, reduce_dim>();
         if (do_eltwise_max) {
             reconfig_data_format_srca(prev_cb);
             copy_init(prev_cb);
