@@ -12,16 +12,10 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
-inline void calculate_cumsum(const bool first) {
-    if (first) {
-        // Clear context for F0
-        TTI_SFPMOV(0, 9, 4, 0);
-        TTI_SFPMOV(0, 9, 5, 0);
-        TTI_SFPMOV(0, 9, 6, 0);
-        TTI_SFPMOV(0, 9, 7, 0);
-    }
-
+// Scans each column of the tile top to bottom: loads 4+4 rows into LREG0-7, transposes them,
+// replays slots 0-15 (the step cumsum_init or cumprod_init recorded) and stores them back.
+// LREG4-7 carry the running column values between calls; cumsum and cumprod set them on `first`.
+inline void scan_tile_columns() {
     // F0,1 R0
     TTI_SFPLOAD(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
     TTI_SFPLOAD(1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
@@ -141,6 +135,18 @@ inline void calculate_cumsum(const bool first) {
     TTI_SFPSTORE(5, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 14 + 32);
     TTI_SFPSTORE(6, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 12 + 16 + 32);
     TTI_SFPSTORE(7, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 14 + 16 + 32);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
+inline void calculate_cumsum(const bool first) {
+    if (first) {
+        // Clear context for F0
+        TTI_SFPMOV(0, 9, 4, 0);
+        TTI_SFPMOV(0, 9, 5, 0);
+        TTI_SFPMOV(0, 9, 6, 0);
+        TTI_SFPMOV(0, 9, 7, 0);
+    }
+    scan_tile_columns();
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>
