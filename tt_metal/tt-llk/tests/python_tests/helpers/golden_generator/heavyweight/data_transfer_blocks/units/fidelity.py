@@ -58,21 +58,12 @@ PHASE_OPERAND_HALVES = (
 def fidelity_phases(math_fidelity: MathFidelity) -> range:
     """The phase numbers to loop over for a multiply at `math_fidelity`.
 
-    One table lookup, so the reason it is a function at all is the warning
-    below -- written here once instead of at every call site.
-
     **Every phase multiplies the original srcA and srcB.** The tempting mistake
     is to hand each phase what the one before it produced, as though the halves
     were a remainder being whittled down. They are not: every phase cuts its
     halves out of the full operand again. Chain them and each phase after the
-    first comes out zero -- and that does not read as a bug, because the answer
-    still looks reasonable. It is just more accurate than the device, and
-    fidelity has quietly stopped meaning anything.
-
-    Only the phase numbers are shared, not the loop around them. An
-    element-wise multiply writes Dest once per phase; a matmul writes once per
-    phase *per K face*. Those are genuinely different loops, so neither op
-    borrows the other's.
+    first comes out zero, and that does not read as a bug, because the answer
+    still looks reasonable.
     """
     return range(FIDELITY_PHASES[math_fidelity])
 
