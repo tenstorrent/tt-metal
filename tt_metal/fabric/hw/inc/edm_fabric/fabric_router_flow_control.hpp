@@ -232,7 +232,8 @@ FORCE_INLINE void receiver_send_completion_ack(
     uint8_t src_id,
     uint32_t num_completions = 1) {
     if constexpr (CHECK_BUSY) {
-        ReceiverLinkTransport::wait_until_idle();
+        while (ReceiverLinkTransport::is_busy()) {
+        };
     }
     receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
 }
@@ -241,7 +242,8 @@ template <bool CHECK_BUSY, typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE void receiver_send_received_ack(
     ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (CHECK_BUSY) {
-        ReceiverLinkTransport::wait_until_idle();
+        while (ReceiverLinkTransport::is_busy()) {
+        };
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id);
 }

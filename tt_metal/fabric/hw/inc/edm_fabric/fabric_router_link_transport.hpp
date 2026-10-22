@@ -13,7 +13,6 @@
 //
 // A policy provides:
 //   is_busy()                         the transport cannot accept another operation right now
-//   wait_until_idle()                 spin until it can
 //   send_packet(src, dest, bytes)     move bytes from local L1 to the peer's address; requires !is_busy()
 //   remote_update_ptr_val<id>(val)    add val to the peer's stream register `id`; requires !is_busy()
 //   remote_update_ptr_val(id, val)    the same with a runtime stream id
@@ -36,13 +35,8 @@ struct EthTxqLinkTransport {
 
     static FORCE_INLINE bool is_busy() { return internal_::eth_txq_is_busy(TXQ_ID); }
 
-    static FORCE_INLINE void wait_until_idle() {
-        while (is_busy()) {
-        }
-    }
-
-    // Assumes !is_busy() -- the caller checks (or wait_until_idle()s) first, so that a site which
-    // already sampled the busy bit for other reasons does not pay for it twice.
+    // Assumes !is_busy() -- the caller spins on is_busy() first, so that a site which already
+    // sampled the busy bit for other reasons does not pay for it twice.
     static FORCE_INLINE void send_packet(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
         internal_::eth_send_packet_bytes_unsafe(TXQ_ID, src_addr, dest_addr, num_bytes);
     }

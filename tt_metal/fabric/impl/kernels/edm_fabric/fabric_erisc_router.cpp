@@ -519,7 +519,8 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        SenderLinkTransport::wait_until_idle();
+        while (SenderLinkTransport::is_busy()) {
+        };
     }
     SenderLinkTransport::send_packet(src_addr, dest_addr, payload_size_bytes);
 
@@ -535,7 +536,8 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    SenderLinkTransport::wait_until_idle();
+    while (SenderLinkTransport::is_busy()) {
+    };
     SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
 }
 
