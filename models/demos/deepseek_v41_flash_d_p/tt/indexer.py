@@ -25,7 +25,9 @@ positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
         (tt/ccl.sum_rows) gives the chip's Sq rows of the sum directly
     q   the chip's Sq rows of q_resid -> bf16 @ wq_b^T (replicated, all 32 heads; DENSE_WEIGHTS; every head's rope
         rows de-interleaved at load, tt/rope.deinterleave_perm) at ATTN_FIDELITY + fp32 acc -> [1, 32, Sq, 128] fp32
-        -> tt/rope.rope_heads (fp32 SFPU, the reference's interleaved order back) -> bf16
+        -> tt/rope.rope_heads (fp32 SFPU, the reference's interleaved order back) -> bf16; ROPE_IMPL=on (P.17, the
+        default): wq_b in checkpoint order writing bf16 -> nlp_create_q_heads_split -> ONE stock rotary op with the
+        nope prepended (tt/rope.rope_stock)
     k   the layer's served index-key cache (tt/compressor.TtServedRows, 2_index_k_r2: SP-sharded, TP-replicated,
         bf16 ROW_MAJOR in token units, [rows, 64] per chip; the compressor wrote this chunk's keys) viewed as
         compressed rows [rows / 2, 128] and tiled: block-cyclic over SP with W / 2 compressed rows per SP rank per
@@ -51,7 +53,7 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
-from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads
+from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
 from .settings import settings
 
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
@@ -94,7 +96,9 @@ class TtIndexer:
         assert rope.half * 2 == self.rd, (rope.half, self.rd)
         self.ckc = attn_compute_config(mesh)  # weights_proj, wq_b: ATTN_FIDELITY (P.7)
         # wq_b [nh * hd, q_lora] -> W^T [q_lora, nh * hd], every head's rope rows de-interleaved; replicated
-        perm = deinterleave_perm(self.hd, self.rd)
+        # ROPE_IMPL=on (P.17): checkpoint order (the stock rope reads interleaved pairs)
+        self.stock = rope.stock
+        perm = torch.arange(self.hd) if self.stock else deinterleave_perm(self.hd, self.rd)
         wq = w["wq_b"].float()
         q_lora = wq.shape[1]
         wq = wq.view(self.nh, self.hd, q_lora)[:, perm, :].reshape(self.nh * self.hd, q_lora)
@@ -197,8 +201,11 @@ class TtIndexer:
         qq = cast(sub, ttnn.bfloat16)
         if qq is not sub:
             ttnn.deallocate(sub)
-        q = ttnn.linear(qq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        qdt = ttnn.bfloat16 if self.stock else ttnn.float32  # ROPE_IMPL=on: the bf16 heads the stock rope reads
+        q = ttnn.linear(qq, self.wq_b, dtype=qdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(qq)
+        if self.stock:
+            return self._query_stock(q, start)
         if self.rope.pairs is not None:
             return self._query_glue(q, start)
         q4 = ttnn.reshape(q, [1, self.sq, self.nh, self.hd])
@@ -211,6 +218,21 @@ class TtIndexer:
         out = cast(qr_, ttnn.bfloat16)
         if out is not qr_:
             ttnn.deallocate(qr_)
+        return out
+
+    def _query_stock(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:
+        """ROPE_IMPL=on (P.17): wq_b's bf16 output [1, 1, Sq, nh hd] (consumed) -> the index queries [1, nh, Sq, hd]
+        bf16: the heads split by nlp_create_q_heads_split, then ONE stock rotary op on the [.., 64] tails with the
+        nope prepended (tt/rope.rope_stock, concat_prefix)."""
+        qn, qt = ttnn.experimental.nlp_create_q_heads_split(
+            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
+        )
+        ttnn.deallocate(q)
+        cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
+        out = rope_stock(qt, cos, sin, self.rope.trans, prefix=qn)
+        self.rope.free(cos, sin)
+        ttnn.deallocate(qt)
+        ttnn.deallocate(qn)
         return out
 
     def _query_glue(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:

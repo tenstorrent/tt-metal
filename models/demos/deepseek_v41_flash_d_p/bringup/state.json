@@ -6744,6 +6744,458 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.17": {
+  "ab": {
+   "at": "2026-10-22T09:02:37",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.17.perf.1.json",
+    "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+   ],
+   "decided": "2026-10-22T09:09:57",
+   "decision": "accept",
+   "env": {
+    "DS41_ROPE_IMPL": "off"
+   },
+   "gate_on": {
+    "failing": [],
+    "ok": true,
+    "partial": true
+   },
+   "key": "bb57d3de5317d762",
+   "ladder": {},
+   "note": "owner rule: device 104.33 -> 96.91 ms per chunk, calls 1950 -> 1535; quick wall 195.3 (spread 137.6) -> 153.6 (spread 22.4); every err_* unchanged within limits (worst L24 0.67 of its margin both sides)",
+   "on": {
+    "DS41_ROPE_IMPL": "on"
+   },
+   "profile": {},
+   "quick": {
+    "new": {
+     "chunk_wall_gap_ms": 296.6,
+     "chunk_wall_ms": 153.6,
+     "chunk_wall_ms_spread": 22.4,
+     "host_transfers_per_layer": 0,
+     "limits": {
+      "err_layer_L00": [
+       0.026134141871918287,
+       0.057040304657989094
+      ],
+      "err_layer_L01": [
+       0.03469038098562814,
+       0.07198198537842104
+      ],
+      "err_layer_L02": [
+       0.052027417912095156,
+       0.10765007060443406
+      ],
+      "err_layer_L03": [
+       0.08125822155475118,
+       0.15874685018338183
+      ],
+      "err_layer_L14": [
+       0.06046751837953152,
+       0.13803127960006578
+      ],
+      "err_layer_L20": [
+       0.030012811877930392,
+       0.0507189886421758
+      ],
+      "err_layer_L21": [
+       0.050690190814773814,
+       0.13115337487015624
+      ],
+      "err_layer_L24": [
+       0.028097202825799333,
+       0.04181175884968598
+      ],
+      "err_state_candidates_L20": [
+       0.004469156265258789,
+       0.12970542907714844
+      ],
+      "err_state_compress_kv_L02": [
+       0.04074909888312587,
+       0.20946498203278574
+      ],
+      "err_state_compress_kv_L14": [
+       0.003917140075031523,
+       0.19156450105768943
+      ],
+      "err_state_compress_kv_L20": [
+       0.0038273630687631253,
+       0.19104702291578074
+      ],
+      "err_state_compress_partial_L02": [
+       0.0,
+       1.828984673004184e+256
+      ],
+      "err_state_compress_partial_L14": [
+       0.0,
+       1.828984673004184e+256
+      ],
+      "err_state_engram_tail_L01": [
+       0.0,
+       0.6666666666666665
+      ],
+      "err_state_engram_tail_L14": [
+       0.0,
+       0.6666666666666665
+      ],
+      "err_state_index_k_L02": [
+       0.02189311502182511,
+       0.2404183945595354
+      ],
+      "err_state_index_k_L14": [
+       0.004179108318922405,
+       0.23974809313331105
+      ],
+      "err_state_index_k_L20": [
+       0.004109969661615138,
+       0.23472722669010793
+      ],
+      "err_state_topk_idx_L02": [
+       0.021654129028320312,
+       0.2099456787109375
+      ],
+      "err_state_topk_idx_L14": [
+       0.0064239501953125,
+       0.16502761840820312
+      ],
+      "err_state_topk_idx_L20": [
+       0.007317543029785156,
+       0.23809242248535156
+      ],
+      "err_state_topk_idx_L24": [
+       0.024880409240722656,
+       0.39916229248046875
+      ],
+      "err_state_window_kv_L00": [
+       0.0041888080931497965,
+       0.05848548497358636
+      ],
+      "err_state_window_kv_L01": [
+       0.024853806837010738,
+       0.08392080123365658
+      ],
+      "err_state_window_kv_L02": [
+       0.033012884864698507,
+       0.09536937867958058
+      ],
+      "err_state_window_kv_L03": [
+       0.05410782771100285,
+       0.13138609577569618
+      ],
+      "err_state_window_kv_L14": [
+       0.004982166771687381,
+       0.06525365549926526
+      ],
+      "err_state_window_kv_L20": [
+       0.004918109848563884,
+       0.06461323383111396
+      ],
+      "err_state_window_kv_L21": [
+       0.045878058514204824,
+       0.11176215617472073
+      ],
+      "err_state_window_kv_L24": [
+       0.006140933853696854,
+       0.0768790614800899
+      ]
+     },
+     "min layer": "L03",
+     "min layer PCC": 0.9967013385046734,
+     "pcc_chunk_out": 0.999606211661055,
+     "rc": 0
+    },
+    "old": {
+     "chunk_wall_gap_ms": 286.1,
+     "chunk_wall_ms": 195.3,
+     "chunk_wall_ms_spread": 137.6,
+     "host_transfers_per_layer": 0,
+     "limits": {
+      "err_layer_L00": [
+       0.02647562809954643,
+       0.057040304657989094
+      ],
+      "err_layer_L01": [
+       0.034640443307405115,
+       0.07198198537842104
+      ],
+      "err_layer_L02": [
+       0.05229100414218302,
+       0.10765007060443406
+      ],
+      "err_layer_L03": [
+       0.08181924965610106,
+       0.15874685018338183
+      ],
+      "err_layer_L14": [
+       0.061826353108444615,
+       0.13803127960006578
+      ],
+      "err_layer_L20": [
+       0.0306340420438633,
+       0.0507189886421758
+      ],
+      "err_layer_L21": [
+       0.052119111346583355,
+       0.13115337487015624
+      ],
+      "err_layer_L24": [
+       0.028077371265861656,
+       0.04181175884968598
+      ],
+      "err_state_candidates_L20": [
+       0.004418849945068359,
+       0.12970542907714844
+      ],
+      "err_state_compress_kv_L02": [
+       0.040197709878565656,
+       0.20946498203278574
+      ],
+      "err_state_compress_kv_L14": [
+       0.003591497778716743,
+       0.19156450105768943
+      ],
+      "err_state_compress_kv_L20": [
+       0.0035391880686949082,
+       0.19104702291578074
+      ],
+      "err_state_compress_partial_L02": [
+       0.0,
+       1.828984673004184e+256
+      ],
+      "err_state_compress_partial_L14": [
+       0.0,
+       1.828984673004184e+256
+      ],
+      "err_state_engram_tail_L01": [
+       0.0,
+       0.6666666666666665
+      ],
+      "err_state_engram_tail_L14": [
+       0.0,
+       0.6666666666666665
+      ],
+      "err_state_index_k_L02": [
+       0.021530503040715042,
+       0.2404183945595354
+      ],
+      "err_state_index_k_L14": [
+       0.003624686587844036,
+       0.23974809313331105
+      ],
+      "err_state_index_k_L20": [
+       0.0035711426222596403,
+       0.23472722669010793
+      ],
+      "err_state_topk_idx_L02": [
+       0.02147197723388672,
+       0.2099456787109375
+      ],
+      "err_state_topk_idx_L14": [
+       0.006163597106933594,
+       0.16502761840820312
+      ],
+      "err_state_topk_idx_L20": [
+       0.0068721771240234375,
+       0.23809242248535156
+      ],
+      "err_state_topk_idx_L24": [
+       0.024659156799316406,
+       0.39916229248046875
+      ],
+      "err_state_window_kv_L00": [
+       0.0033796796190607953,
+       0.05848548497358636
+      ],
+      "err_state_window_kv_L01": [
+       0.025462564474534394,
+       0.08392080123365658
+      ],
+      "err_state_window_kv_L02": [
+       0.036766176769119294,
+       0.09536937867958058
+      ],
+      "err_state_window_kv_L03": [
+       0.054151284562157335,
+       0.13138609577569618
+      ],
+      "err_state_window_kv_L14": [
+       0.004404958448905283,
+       0.06525365549926526
+      ],
+      "err_state_window_kv_L20": [
+       0.004410224824324624,
+       0.06461323383111396
+      ],
+      "err_state_window_kv_L21": [
+       0.046964306385439296,
+       0.11176215617472073
+      ],
+      "err_state_window_kv_L24": [
+       0.005883309594646362,
+       0.0768790614800899
+      ]
+     },
+     "min layer": "L03",
+     "min layer PCC": 0.9966519786472094,
+     "pcc_chunk_out": 0.9996066460320359,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.17/table.md",
+   "tests": {},
+   "why": "apply P.17 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.17/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.17 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "89b184661fa85720fee477db0a51f0e4472fcc0f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "7c7e5930-c24e-4d94-9731-6926fb0a6546"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.17.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "89b184661fa85720fee477db0a51f0e4472fcc0f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [
+     "DS41-15",
+     "DS41-16"
+    ],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.17.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 3034.3,
+    "session_id": "7c7e5930-c24e-4d94-9731-6926fb0a6546",
+    "t": "2026-10-22T09:02:36"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-22T09:10:30"
+   }
+  ],
+  "last_run": "2026-10-22T09:10:30",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.17.log",
+  "metrics": {
+   "err_layer_L00": 0.026134141871918287,
+   "err_layer_L00_limit": 0.057040304657989094,
+   "err_layer_L01": 0.03469038098562814,
+   "err_layer_L01_limit": 0.07198198537842104,
+   "err_layer_L02": 0.052027417912095156,
+   "err_layer_L02_limit": 0.10765007060443406,
+   "err_layer_L03": 0.08125822155475118,
+   "err_layer_L03_limit": 0.15874685018338183,
+   "err_layer_L14": 0.06046751837953152,
+   "err_layer_L14_limit": 0.13803127960006578,
+   "err_layer_L20": 0.030012811877930392,
+   "err_layer_L20_limit": 0.0507189886421758,
+   "err_layer_L21": 0.050690190814773814,
+   "err_layer_L21_limit": 0.13115337487015624,
+   "err_layer_L24": 0.028097202825799333,
+   "err_layer_L24_limit": 0.04181175884968598,
+   "err_state_candidates_L20": 0.004469156265258789,
+   "err_state_candidates_L20_limit": 0.12970542907714844,
+   "err_state_compress_kv_L02": 0.04074909888312587,
+   "err_state_compress_kv_L02_limit": 0.20946498203278574,
+   "err_state_compress_kv_L14": 0.003917140075031523,
+   "err_state_compress_kv_L14_limit": 0.19156450105768943,
+   "err_state_compress_kv_L20": 0.0038273630687631253,
+   "err_state_compress_kv_L20_limit": 0.19104702291578074,
+   "err_state_compress_partial_L02": 0.0,
+   "err_state_compress_partial_L02_limit": 1.828984673004184e+256,
+   "err_state_compress_partial_L14": 0.0,
+   "err_state_compress_partial_L14_limit": 1.828984673004184e+256,
+   "err_state_engram_tail_L01": 0.0,
+   "err_state_engram_tail_L01_limit": 0.6666666666666665,
+   "err_state_engram_tail_L14": 0.0,
+   "err_state_engram_tail_L14_limit": 0.6666666666666665,
+   "err_state_index_k_L02": 0.02189311502182511,
+   "err_state_index_k_L02_limit": 0.2404183945595354,
+   "err_state_index_k_L14": 0.004179108318922405,
+   "err_state_index_k_L14_limit": 0.23974809313331105,
+   "err_state_index_k_L20": 0.004109969661615138,
+   "err_state_index_k_L20_limit": 0.23472722669010793,
+   "err_state_topk_idx_L02": 0.021654129028320312,
+   "err_state_topk_idx_L02_limit": 0.2099456787109375,
+   "err_state_topk_idx_L14": 0.0064239501953125,
+   "err_state_topk_idx_L14_limit": 0.16502761840820312,
+   "err_state_topk_idx_L20": 0.007317543029785156,
+   "err_state_topk_idx_L20_limit": 0.23809242248535156,
+   "err_state_topk_idx_L24": 0.024880409240722656,
+   "err_state_topk_idx_L24_limit": 0.39916229248046875,
+   "err_state_window_kv_L00": 0.0041888080931497965,
+   "err_state_window_kv_L00_limit": 0.05848548497358636,
+   "err_state_window_kv_L01": 0.024853806837010738,
+   "err_state_window_kv_L01_limit": 0.08392080123365658,
+   "err_state_window_kv_L02": 0.033012884864698507,
+   "err_state_window_kv_L02_limit": 0.09536937867958058,
+   "err_state_window_kv_L03": 0.05410782771100285,
+   "err_state_window_kv_L03_limit": 0.13138609577569618,
+   "err_state_window_kv_L14": 0.004982166771687381,
+   "err_state_window_kv_L14_limit": 0.06525365549926526,
+   "err_state_window_kv_L20": 0.004918109848563884,
+   "err_state_window_kv_L20_limit": 0.06461323383111396,
+   "err_state_window_kv_L21": 0.045878058514204824,
+   "err_state_window_kv_L21_limit": 0.11176215617472073,
+   "err_state_window_kv_L24": 0.006140933853696854,
+   "err_state_window_kv_L24_limit": 0.0768790614800899,
+   "host_transfers_per_layer": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-22T09:10:30",
+  "status": "PASS",
+  "waiting": null
+ },
  "P.2": {
   "ab": {
    "at": "2026-10-18T02:03:00",

@@ -17,6 +17,12 @@ the cast that follows every site; exact at HiFi4), and the rope's last add / sub
 RNE as ttnn.typecast): ``rope_deinterleaved_bf16`` (kv, compressor), ``rope_heads(..., dtype=bf16)`` (q, indexer q,
 the attention output).
 
+ROPE_IMPL=on (P.17, the default): none of the above. Every site is ONE stock
+``ttnn.experimental.deepseek_prefill.rotary_embedding_indexed`` (``rope_stock``) on bf16 heads in the checkpoint's
+interleaved order (no weight row permutation): the Meta pair order with the rotation trans-mat (``rot_mats``; its
+transpose rotates back), cos / sin [rows, 64] bf16 with each angle twice (``pair_table``), the tail roped in place
+(rotary_offset) or the q nope prepended (concat_prefix). bf16 tables: the op refuses fp32 cos / sin.
+
 cos / sin: ``RopeTable`` holds the reference's own fp32 table (torch.polar of the fp32 angles) for positions
 [0, max_seq), [1, 1, max_seq, 32] fp32 TILE, replicated, built once at load. Per chunk it is sliced on the device at
 [start, start + S) and split over the SP axis with ``ttnn.mesh_partition``, so mesh row r gets the positions of its
@@ -37,6 +43,66 @@ def glue() -> bool:
     """ATTN_GLUE=on (P.15): the attention / RoPE glue folded into ops (``PairPerm``, nlp_create_q_heads_split,
     the bf16 output path; tt/settings.py)."""
     return settings.get("ATTN_GLUE") == "on"
+
+
+def stock() -> bool:
+    """ROPE_IMPL=on (P.17): every RoPE site through one stock rotary_embedding_indexed call (``rope_stock``) on bf16
+    heads in the checkpoint's (interleaved) order; off = the fp32 SFPU chains below on de-interleaved rows."""
+    on = settings.get("ROPE_IMPL") == "on"
+    assert not on or glue(), "ROPE_IMPL=on builds on ATTN_GLUE=on (tt/settings.py)"
+    return on
+
+
+def rot_mats(mesh) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """ROPE_IMPL=on: the rotation trans-mat of the Meta pair order (x @ T = (-x_odd, x_even) per pair) and its
+    transpose (the inverse rotation, rope(..., inverse=True)): [1, 1, 32, 32] bf16 TILE, replicated, load time."""
+    t = torch.zeros(1, 1, 32, 32)
+    t[..., torch.arange(0, 32, 2), torch.arange(1, 32, 2)] = 1.0
+    t[..., torch.arange(1, 32, 2), torch.arange(0, 32, 2)] = -1.0
+
+    def dev(m):
+        return ttnn.from_torch(
+            m.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=DRAM,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    return dev(t), dev(t.transpose(-1, -2))
+
+
+def pair_table(rot: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """ROPE_IMPL=on: the reference's complex rotations [N, R/2] -> cos / sin [N, R] in the Meta pair order (entries
+    2k and 2k + 1 hold the k-th angle's cos / sin), fp32 on the host (uploaded bf16: the op takes no fp32 table)."""
+    return rot.real.float().repeat_interleave(2, dim=-1), rot.imag.float().repeat_interleave(2, dim=-1)
+
+
+def rope_stock(
+    x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, trans: ttnn.Tensor, prefix: ttnn.Tensor | None = None
+) -> ttnn.Tensor:
+    """ROPE_IMPL=on (P.17): RoPE of the last R = cos.shape[-1] columns of x [B, H, rows, W] bf16 TILE (adjacent pairs,
+    the reference's order) by cos / sin [1, 1, rows, R] bf16 (``pair_table`` rows of this chip's positions, broadcast
+    over the heads), in ONE stock ttnn.experimental.deepseek_prefill.rotary_embedding_indexed: the other columns are
+    copied unconverted (rotary_offset); ``prefix`` [B, H, rows, P] (the q heads' nope) is written before the rotated
+    columns (concat_prefix) -> [B, H, rows, P + W]. ``trans``: ``rot_mats``' forward or inverse matrix. The rows are
+    pre-sliced per chip, so kv_actual_global is 0 (every chip reads its cos / sin from row 0; any start). The op's
+    default compute config (HiFi4, fp32 DEST: the trans-mat's 0 / +-1 product is exact on bf16, DS41-83). Output dtype
+    = x's. Does not consume its inputs."""
+    rd = cos.shape[-1]
+    return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+        x,
+        cos,
+        sin,
+        trans,
+        0,
+        SP_AXIS,
+        memory_config=DRAM,
+        rotary_dim=rd,
+        rotary_offset=x.shape[-1] - rd,
+        concat_prefix=prefix,
+    )
 
 
 def indexer_glue() -> bool:
@@ -127,7 +193,9 @@ def deinterleave_perm(width: int, rope_dim: int) -> torch.Tensor:
 
 
 class RopeTable:
-    """cos / sin of one rope type for positions [0, max_seq): [1, 1, max_seq, R/2] fp32 TILE, replicated."""
+    """cos / sin of one rope type for positions [0, max_seq): [1, 1, max_seq, R/2] fp32 TILE, replicated (ROPE_IMPL=on:
+    [1, 1, max_seq, R] bf16 TILE in the Meta pair order, ``pair_table``, and the trans-mats ``trans`` / ``trans_inv``).
+    """
 
     def __init__(self, mesh, freqs: torch.Tensor, max_seq: int):
         from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import rope_table
@@ -137,18 +205,27 @@ class RopeTable:
         self.mesh, self.max_seq, self.half = mesh, max_seq, freqs.numel()
         assert self.half % 32 == 0, f"rope half width {self.half} is not a tile multiple"
 
-        def dev(t):
+        def dev(t, dtype):
             return ttnn.from_torch(
-                t.float().reshape(1, 1, max_seq, self.half).contiguous(),
-                dtype=ttnn.float32,
+                t.float().reshape(1, 1, max_seq, t.shape[-1]).contiguous(),
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh,
                 memory_config=DRAM,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
 
-        self.cos, self.sin = dev(rot.real), dev(rot.imag)
-        self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
+        self.stock = stock()  # ROPE_IMPL=on (P.17): [max_seq, R] bf16 pair tables for rope_stock
+        if self.stock:
+            c2, s2 = pair_table(rot)
+            self.width, self.dtype = 2 * self.half, ttnn.bfloat16
+            self.cos, self.sin = dev(c2, ttnn.bfloat16), dev(s2, ttnn.bfloat16)
+            self.trans, self.trans_inv = rot_mats(mesh)
+            self.pairs = None
+        else:
+            self.width, self.dtype = self.half, ttnn.float32
+            self.cos, self.sin = dev(rot.real, ttnn.float32), dev(rot.imag, ttnn.float32)
+            self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
         self.memo = RowsMemo(indexer_glue())  # INDEXER_GLUE=on (P.16): the rows once per (start, length)
 
     def free(self, *ts) -> None:
@@ -156,7 +233,8 @@ class RopeTable:
         self.memo.free(*ts)
 
     def rows(self, start: int, length: int, tp_split: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """cos, sin of the chip row's natural block of [start, start + length): [1, 1, length / SP, R/2] fp32.
+        """cos, sin of the chip row's natural block of [start, start + length): [1, 1, length / SP, R/2] fp32
+        (ROPE_IMPL=on: [1, 1, length / SP, R] bf16).
         ``tp_split``: this chip's Sq = length / (SP TP) rows of that block (mesh column c: rows [c Sq, (c+1) Sq);
         the indexer's queries). Release them with ``free``."""
         if tp_split:
@@ -183,7 +261,7 @@ class RopeTable:
         assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(t, [0, 0, start, 0], [1, 1, start + length, self.half], memory_config=DRAM)
+            sl = ttnn.slice(t, [0, 0, start, 0], [1, 1, start + length, self.width], memory_config=DRAM)
             if sp > 1:
                 part = ttnn.mesh_partition(sl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
                 ttnn.deallocate(sl)

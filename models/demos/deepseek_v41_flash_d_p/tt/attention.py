@@ -42,6 +42,10 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    (INTERLEAVED); output: bf16 nope kept, the tail de-interleaved by PairPerm (fp32 out), inverse RoPE
                    writing bf16 [re | ro] (wo_a's input rows permuted at load), nlp_concat_heads after wo_a,
                    the bf16 reduce-scatter result returned as is (tt/residual.py casts where it needs fp32)
+    ROPE_IMPL=on   (P.17, default) q: x 512^-0.5 folded into the input's bf16 cast -> wq_b (checkpoint order) writing
+                   bf16 -> nlp_create_q_heads_split -> ONE stock rotary_embedding_indexed with the nope prepended;
+                   output: ONE stock rotary op with the transposed trans-mat on the bf16 tail in place; wo_a in
+                   checkpoint order (tt/rope.rope_stock)
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
 (g / S) (W / TP) + g mod (W / TP) (W = S / SP; update_padded_kv_cache's sp x tp linearized block-cyclic order),
@@ -57,7 +61,7 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, sum_cols
-from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads
+from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
 
@@ -336,11 +340,14 @@ class TtWindowAttention:
         # de-interleaved by PairPerm on the bf16 sdpa output, kept bf16 (the inverse rope writes bf16, wo_a's input
         # rows permuted at load to [nope | re | ro]: no re-interleave), nlp_concat_heads after wo_a
         self.glue = glue()
+        # ROPE_IMPL=on (P.17): q / output through one stock rotary op each (tt/rope.rope_stock), every weight in
+        # checkpoint order, the table read as stored (interleaved)
+        self.stock = rope.stock
         if self.glue:
-            assert rope.pairs is not None, "ATTN_GLUE=on: the RopeTable was built without its PairPerm"
+            assert self.stock or rope.pairs is not None, "ATTN_GLUE=on: the RopeTable was built without its PairPerm"
             self.pairs = rope.pairs
             self.INTERLEAVED = True  # the table as stored (no per-chunk transform of the window rows)
-        perm = deinterleave_perm(self.d, self.rd)
+        perm = torch.arange(self.d) if self.stock else deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
         wq_b = w["wq_b"].float().view(self.heads, self.d, -1)[:, perm].reshape(self.heads * self.d, -1)
@@ -351,7 +358,9 @@ class TtWindowAttention:
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
         assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
-        if self.glue:  # each head's input columns in the order the bf16 output path writes: [nope | re | ro]
+        if (
+            self.glue and not self.stock
+        ):  # each head's input columns in the order the bf16 output writes: [nope | re | ro]
             wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
         wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
         self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, (None, 1))
@@ -449,10 +458,27 @@ class TtWindowAttention:
         ttnn.deallocate(ti)
         return q
 
+    def _q_stock(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """ROPE_IMPL=on (P.17): q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] bf16, checkpoint
+        (interleaved) order: the softmax scale 512^-0.5 folded into the bf16 cast of the input (one rounding, as the
+        cast was), wq_b writing bf16, the heads split by nlp_create_q_heads_split, ONE stock rotary op on the [.., 64]
+        tails with the nope prepended (tt/rope.rope_stock)."""
+        xq = ttnn.multiply(q_resid, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
+        qb = ttnn.linear(xq, self.wq_b, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM)
+        ttnn.deallocate(xq)
+        qn, qr = ttnn.experimental.nlp_create_q_heads_split(
+            qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
+        )
+        ttnn.deallocate(qb)
+        q = rope_stock(qr, cos, sin, self.rope.trans, prefix=qn)
+        ttnn.deallocate(qr)
+        ttnn.deallocate(qn)
+        return q
+
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
         if self.glue:
-            qb = self._q_glue(q_resid, cos, sin)
+            qb = self._q_stock(q_resid, cos, sin) if self.stock else self._q_glue(q_resid, cos, sin)
             qa = self._reshard(qb, in_dim=1, out_dim=2)
             if qa is not qb:
                 ttnn.deallocate(qb)
@@ -489,6 +515,10 @@ class TtWindowAttention:
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:
             ttnn.deallocate(ot)
+        if self.stock:  # ROPE_IMPL=on (P.17): the inverse rope on the bf16 tail in place, one stock op
+            oq = rope_stock(oh, cos, sin, self.rope.trans_inv)
+            ttnn.deallocate(oh)
+            return self._out_proj(oq, oq.shape[2])
         if self.glue:
             return self._out_glue(oh, cos, sin)
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)

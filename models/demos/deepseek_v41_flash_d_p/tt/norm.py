@@ -45,10 +45,10 @@ SS_COL = PACK_N * (PACK_N + 2)
 
 class TtDistributedRmsNorm:
     """One column-split RMSNorm. Call with the per-chip [1, 1, S/SP, H/TP] fp32 TILE; returns [1, 1, S/SP, H/TP]
-    fp32 TILE (same split). Does not consume its input. ``split=False``: the rows are whole on every chip ([.., H],
+    fp32 TILE (same split; ``dtype``: what the last multiply writes, e.g. bf16). Does not consume its input. ``split=False``: the rows are whole on every chip ([.., H],
     replicated over TP, e.g. q_norm / kv_norm): the same chain with a replicated weight and no exchange."""
 
-    def __init__(self, mesh, weight: torch.Tensor, eps: float, split: bool = True, gather: bool = False):
+    def __init__(self, mesh, weight: torch.Tensor, eps: float, split: bool = True, gather: bool = False, dtype=None):
         assert split or not gather, "gather needs a column-split norm"
         hidden = weight.numel()
         self.gather = gather and mesh.shape[TP_AXIS] > 1
@@ -59,6 +59,9 @@ class TtDistributedRmsNorm:
         # all-gather moves half the bytes, the router and the experts read it as is
         bf16 = gather and settings.get("FFN_NORM_DTYPE") == "bf16"
         self.out_dtype = ttnn.bfloat16 if bf16 else ttnn.float32
+        if dtype is not None:  # ROPE_IMPL=on (P.17): kv_norm / k_norm write the bf16 the stock rope reads
+            assert not gather, "gather norms take FFN_NORM_DTYPE"
+            self.out_dtype = dtype
         self.inv_h = 1.0 / float(hidden)
         # w as [1, 1, 1, H] fp32 TILE, the last dim split over the TP axis (chip column c holds w[c H/TP, (c+1) H/TP)),
         # replicated over the SP axis; split=False: replicated everywhere.
