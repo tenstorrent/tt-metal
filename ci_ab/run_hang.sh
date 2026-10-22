@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scratch, not for merge. Hang stress of topk_large_indices on one CI runner. usage: run_hang.sh <sections...>
 # sections: suiteW[:passes] suiteN[:passes] glmW[:iters] glmN[:iters] mixW[:iters] mixN[:iters] followW[:iters] followN[:iters]
-# W = device watcher + LLK asserts on, N = both off. DEADLINE (s, default 5100) stops starting new work.
+# W = LLK asserts only (full watcher overflows the kernel config buffer at this head), R = reduced watcher + LLK asserts, N = both off. DEADLINE (s, default 5100) stops starting new work.
 set +e +o pipefail
 cd /work; export TT_METAL_HOME=/work HWLOCK_HELD=ci
 S=/work/ci_ab; OUT=/work/generated/hang; mkdir -p $OUT
@@ -9,13 +9,15 @@ T0=$(date +%s); DEADLINE=${DEADLINE:-5100}
 echo "== $(date -u +%FT%TZ) host $(hostname) $(git log -1 --format='%h %s' 2>/dev/null)"
 (tt-smi -ls 2>&1 | head -8) ; for f in /sys/class/tenstorrent/*/tt_card_type /sys/class/tenstorrent/*/tt_serial; do [ -e "$f" ] && echo "$f $(cat $f)"; done
 export TT_METAL_CACHE=$OUT/cache
-envW() { export TT_METAL_WATCHER=10 TT_METAL_LLK_ASSERTS=1; }
-envN() { unset TT_METAL_WATCHER TT_METAL_LLK_ASSERTS; }
+envW() { unset TT_METAL_WATCHER; export TT_METAL_LLK_ASSERTS=1; }
+# R: reduced watcher (NoC sanitize, status polling; waypoints, stack usage, ring buffer, asserts off so the program fits) plus LLK asserts
+envR() { export TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_STACK_USAGE=1 TT_METAL_WATCHER_DISABLE_RING_BUFFER=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 TT_METAL_LLK_ASSERTS=1; }
+envN() { unset TT_METAL_WATCHER TT_METAL_LLK_ASSERTS TT_METAL_WATCHER_DISABLE_WAYPOINT TT_METAL_WATCHER_DISABLE_STACK_USAGE TT_METAL_WATCHER_DISABLE_RING_BUFFER TT_METAL_WATCHER_DISABLE_ASSERT; }
 left() { echo $(( DEADLINE - ($(date +%s) - T0) )); }
 scan() { grep -a -c -E "TENSIX TIMED OUT|Watcher|watcher.*(assert|error)|NoC|noc.*error|Assertion|TT_THROW|MISMATCH" "$1" 2>/dev/null; }
 for sec in "$@"; do
   name=${sec%%:*}; n=${sec#*:}; [ "$n" = "$sec" ] && n=""
-  case $name in *W) envW;; *) envN;; esac
+  envN; case $name in *W) envW;; *R) envR;; esac
   case $name in
     suite*)
       p=0; tot=${n:-1}
