@@ -179,17 +179,9 @@ void kernel_main() {
         // mean / var -> row 0 of mean_dst / var_dst (scale 1/W), then rotate into column 0 so the
         // pass-2 FPU ops can column-broadcast them.
         welford_finalize_to_row<0>(mean_dst, W - 1, no_lut);
-#ifdef LN_DEBUG_STATS_FROM_EPS
-        // TEMPORARY sim bring-up: mean = var = eps (column 0 of the eps tile), already column-oriented.
-        reconfig_data_format_srca(dfb_in, dfb_eps);
-        copy_init(dfb_eps);
-        copy_tile(dfb_eps, 0, mean_dst);
-        copy_tile(dfb_eps, 0, var_dst);
-#else
         transpose_dest_init<DST_ACCUM_MODE>(dfb_in);
         transpose_dest<DST_ACCUM_MODE>(mean_dst);
         transpose_dest<DST_ACCUM_MODE>(var_dst);
-#endif
         tile_regs_commit();
 
         ex.reserve_back(1);

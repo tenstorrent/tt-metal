@@ -141,9 +141,7 @@ Tensor layer_norm(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor,
     const std::optional<DataType>& dtype,
-    const ThreadPlan& threads,
-    const std::string& extra_include_path,
-    const std::string& extra_define) {
+    const ThreadPlan& threads) {
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(
         LayerNormParams{
             .eps = epsilon,
@@ -152,8 +150,6 @@ Tensor layer_norm(
             .compute_kernel_config = compute_kernel_config,
             .dtype = dtype,
             .threads = threads,
-            .extra_include_path = extra_include_path,
-            .extra_define = extra_define,
         },
         LayerNormInputs{
             .input = input_tensor,

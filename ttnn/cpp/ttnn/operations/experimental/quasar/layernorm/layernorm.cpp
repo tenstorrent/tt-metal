@@ -50,10 +50,8 @@ Tensor layer_norm(
     const ttnn::prim::LayerNormProgramConfig program_config_val =
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true});
 
-    // Experiment knobs (thread plan; TEMPORARY stub-LLK include path / debug define) travel as op attributes.
+    // The thread plan (an experiment knob) travels as an op attribute, so it is part of the program-cache key.
     const auto threads = ttnn::prim::qsr::thread_plan_from_env("TTNN_QSR_LAYERNORM_THREADS", "layer_norm");
-    const char* extra_inc = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_INC");
-    const char* extra_def = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_DEFINE");
 
     return ttnn::prim::qsr::layer_norm(
         input_tensor,
@@ -66,9 +64,7 @@ Tensor layer_norm(
         kernel_config_val,
         recip_tensor,
         std::nullopt,
-        threads,
-        extra_inc ? std::string(extra_inc) : std::string{},
-        extra_def ? std::string(extra_def) : std::string{});
+        threads);
 }
 
 }  // namespace ttnn::operations::experimental::quasar

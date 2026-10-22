@@ -232,20 +232,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
     if (beta.has_value() && beta->dtype() == DataType::FLOAT32) {
         compute_hw.unpack_modes.emplace(BETA_DFB, UnpackMode::UnpackToSrc);
     }
-    // TEMPORARY (sim bring-up, see LayerNormParams): stub-LLK include path and debug define.
-    m2::KernelSpec::CompilerOptions::IncludePaths compute_includes;
-    if (!operation_attributes.extra_include_path.empty()) {
-        compute_includes.emplace_back(operation_attributes.extra_include_path);
-    }
-    auto compute_defines = affine_defines;
-    if (!operation_attributes.extra_define.empty()) {
-        compute_defines.emplace(operation_attributes.extra_define, "1");
-    }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(KERNEL_DIR) + "compute/layernorm_welford.cpp",
         .num_threads = C,
-        .compiler_options = {.include_paths = compute_includes, .defines = compute_defines},
+        .compiler_options = {.defines = affine_defines},
         .dfb_bindings = compute_dfbs,
         .compile_time_args =
             {{"Wt", Wt}, {"W", W}, {"cb_length", cb_length}, {"block_size", block_size}, {"compute_threads", C}},

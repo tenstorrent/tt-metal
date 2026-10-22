@@ -23,12 +23,6 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::DataType> dtype;
     ThreadPlan threads;
-    // TEMPORARY (sim bring-up until Quasar has an llk_math_welfords_sfpu_entry.h): an extra compute include
-    // path (a stub Welford entry header) and an extra compute define (LN_DEBUG_STATS_FROM_EPS makes the kernel
-    // use mean = var = eps so the data-movement plan can be checked numerically). Attributes, not raw env
-    // reads, so they are part of the program-cache key.
-    std::string extra_include_path;
-    std::string extra_define;
 };
 
 struct LayerNormInputs {

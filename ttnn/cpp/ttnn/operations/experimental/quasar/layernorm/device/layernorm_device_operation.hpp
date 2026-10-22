@@ -45,8 +45,6 @@ Tensor layer_norm(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& dtype = std::nullopt,
-    const ThreadPlan& threads = {},
-    const std::string& extra_include_path = {},
-    const std::string& extra_define = {});
+    const ThreadPlan& threads = {});
 
 }  // namespace ttnn::prim::qsr
