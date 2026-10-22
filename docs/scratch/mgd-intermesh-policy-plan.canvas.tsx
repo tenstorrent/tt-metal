@@ -249,7 +249,8 @@ function OverviewTab() {
         constraints, and every target edge resolves to one EdgeDemand {"{ required, preferred }"}. A caller sets it per edge
         or for the whole solve with set_default_edge_policy. The default lives in the constraints, so solve_topology_mapping
         no longer takes a ConnectionValidationMode, and allow_unmatched_target_edges becomes one value of the default. The
-        intra-mesh solve sets its mesh's policy as the default; the inter-mesh seat solve sets per-pair demands.
+        intra-mesh solve sets its mesh's policy as the default; the inter-mesh seat solve sets per-pair demands. The same
+        structure carries the cable PortType: allowed types (hard) and preferred types (soft) per edge or per solve (part 7).
       </Callout>
       <H2>Worked example: one STRICT seam, one RELAXED seam</H2>
       <ThreeMeshExample />
@@ -529,6 +530,214 @@ bool is_inter_mesh_policy_specified() const;`}
   );
 }
 
+type CableSeat = { id: string; label: string; cable: string; links: number };
+
+const CABLE_SEATS: CableSeat[] = [
+  { id: "a", label: "Seating A", cable: "WARP400", links: 2 },
+  { id: "b", label: "Seating B", cable: "QSFP_DD", links: 2 },
+  { id: "c", label: "Seating C", cable: "WARP100", links: 2 },
+];
+
+function CableExample() {
+  const t = useHostTheme();
+  const [useAllowed, setUseAllowed] = useCanvasState<boolean>("cable-allowed", true);
+  const [usePreferred, setUsePreferred] = useCanvasState<boolean>("cable-preferred", true);
+  const allowed = (cable: string) => !useAllowed || cable === "WARP400" || cable === "QSFP_DD";
+  const tier = (cable: string) => (usePreferred ? (cable === "WARP400" ? 0 : 1) : 0);
+  const valid = CABLE_SEATS.filter((s) => allowed(s.cable));
+  const bestTier = Math.min(...valid.map((s) => tier(s.cable)));
+  const chosen = valid.filter((s) => tier(s.cable) === bestTier).map((s) => s.id);
+  const verdict = (s: CableSeat) => {
+    if (!allowed(s.cable)) return "rejected: WARP100 not in allowed_port_types (STRICT)";
+    if (chosen.includes(s.id)) return chosen.length > 1 ? "valid, tied: solver may pick it" : "valid, chosen: best cable tier";
+    return "valid, not chosen: worse cable tier";
+  };
+  const proto = [
+    "channels {",
+    "  count: 2",
+    "  policy: STRICT",
+    ...(useAllowed ? ["  allowed_port_types: [ WARP400, QSFP_DD ]"] : []),
+    ...(usePreferred ? ["  preferred_port_types: [ WARP400 ]"] : []),
+    "}",
+  ].join("\n");
+  const color = (cable: string) =>
+    cable === "WARP400" ? t.accent.primary : cable === "QSFP_DD" ? t.category.purple : t.category.orange;
+  return (
+    <Grid columns={fit(360)} gap={20} align="start">
+      <Stack gap={10}>
+        <svg width="100%" viewBox="0 0 360 200" style={{ maxWidth: 360 }}>
+          {CABLE_SEATS.map((s, i) => {
+            const y = 14 + i * 62;
+            const dim = !allowed(s.cable);
+            return (
+              <g key={s.id} opacity={dim ? 0.45 : 1}>
+                <rect x={10} y={y} width={70} height={40} rx={5} fill={t.fill.secondary} stroke={t.stroke.primary} />
+                <text x={45} y={y + 25} textAnchor="middle" fontSize={12} fontWeight={600} fill={t.text.primary}>M0</text>
+                <rect x={200} y={y} width={70} height={40} rx={5} fill={t.fill.secondary} stroke={t.stroke.primary} />
+                <text x={235} y={y + 25} textAnchor="middle" fontSize={12} fontWeight={600} fill={t.text.primary}>M1</text>
+                {[0, 1].map((k) => (
+                  <line key={k} x1={80} y1={y + 14 + k * 12} x2={200} y2={y + 14 + k * 12} stroke={color(s.cable)} strokeWidth={2} strokeDasharray={dim ? "4 3" : undefined} />
+                ))}
+                <text x={140} y={y + 10} textAnchor="middle" fontSize={10} fill={t.text.secondary}>{s.cable} x{s.links}</text>
+                <text x={282} y={y + 25} fontSize={11} fontWeight={600} fill={chosen.includes(s.id) ? t.accent.primary : t.text.tertiary}>
+                  {s.label}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        <Row gap={6} wrap>
+          <span>
+            <Pill active={useAllowed} onClick={() => setUseAllowed(!useAllowed)}>allowed_port_types</Pill>
+          </span>
+          <span>
+            <Pill active={usePreferred} onClick={() => setUsePreferred(!usePreferred)}>preferred_port_types</Pill>
+          </span>
+        </Row>
+      </Stack>
+      <Stack gap={10}>
+        <Table
+          headers={["Seating", "Verdict"]}
+          rows={CABLE_SEATS.map((s) => [`${s.label} (${s.cable})`, verdict(s)])}
+          rowTone={CABLE_SEATS.map((s) => (!allowed(s.cable) ? "danger" : chosen.includes(s.id) ? "success" : undefined))}
+        />
+        <CodeCard path="M0-M1 connection (hypothetical)" language="protobuf" src={proto} />
+      </Stack>
+    </Grid>
+  );
+}
+
+function CableTab() {
+  return (
+    <Stack gap={16}>
+      <Text tone="secondary">
+        Every Ethernet channel in the PSD has a PortType (EthConnection::port_type): TRACE, QSFP_DD, WARP100, WARP400,
+        LINKING_BOARD_1..3 or UNKNOWN. The solver never sees it: build_adjacency_graph_physical (topology_solver.cpp:164) and
+        the seat graph (physical_grouping_descriptor_matching.cpp:2667) turn each channel into one parallel edge. The per-edge
+        structure is where it fits: each global edge gets a count per cable type, and each target edge, or the whole solve,
+        says which types may count (hard) and which it prefers (soft).
+      </Text>
+      <H3>Example: prefer WARP400 over QSFP-DD, accept only those two</H3>
+      <CableExample />
+      <Text size="small" tone="tertiary">
+        Under RELAXED instead of STRICT, seating C would be accepted as zero-link with a warning. The cable orderings here are
+        illustrations, not recommendations.
+      </Text>
+      <Grid columns={fit(420)} gap={16} align="start">
+        <CodeCard
+          added
+          path="topology_solver.hpp  (MappingConstraints)"
+          src={`
+using ChannelClass = std::uint32_t;   // the mapper uses static_cast<ChannelClass>(port_type)
+
+// Global side: channels per class on a global edge; must add up to its multiplicity.
+// Unannotated edges have all channels in class 0.
+bool set_global_edge_channel_classes(
+    GlobalNode a, GlobalNode b, const std::map<ChannelClass, std::size_t>& channels_per_class);
+
+// Hard: only these classes count toward an edge's demand. Empty = all.
+void set_default_allowed_channel_classes(std::set<ChannelClass> classes);
+bool set_edge_allowed_channel_classes(TargetNode a, TargetNode b, std::set<ChannelClass> classes);
+
+// Soft: preference tiers, best first. Unlisted classes are in the last tier.
+void set_default_channel_class_preference(std::vector<ChannelClass> best_first);
+bool set_edge_channel_class_preference(TargetNode a, TargetNode b, std::vector<ChannelClass> best_first);
+
+struct EdgeDemand {
+    std::size_t required = 0;
+    std::size_t preferred = 0;
+    std::set<ChannelClass> allowed_classes;      // empty = all
+    std::vector<ChannelClass> class_preference;  // best first
+};`}
+        />
+        <CodeCard
+          added
+          path="mesh_graph_descriptor.proto"
+          language="protobuf"
+          src={`
+message Channels {
+    int32 count = 1;
+    optional Policy policy = 2;
+    // Hard: only these cable types count toward \`count\`. Empty = any. UNKNOWN always counts.
+    repeated PortType allowed_port_types = 3;
+    // Soft: preferred cable types, best first. Unlisted types rank last.
+    repeated PortType preferred_port_types = 4;
+}
+// PortType imported from physical_system_descriptor.proto (open question 8).`}
+        />
+      </Grid>
+      <H3>Semantics</H3>
+      <Table
+        headers={["Piece", "Meaning"]}
+        rows={[
+          ["Allowed classes (hard)", "usable channels of target edge e on global edge g = g's channels in e's allowed classes; every STRICT / RELAXED / BEST_EFFORT rule uses that count instead of the multiplicity"],
+          ["Preference (soft)", "e's tier on g = worst tier among the best c_e allowed channels; minimize edges in the worst tier, then the next (lexicographic); no weight tuning"],
+          ["Objective order", "host cap and host objective, realized preferred edges, channel thresholds, cable tiers, preferred node hits; capacity before cable type (open question 7)"],
+          ["UNKNOWN", "always allowed, last tier, one warning per solve; all-UNKNOWN systems map exactly as today"],
+        ]}
+      />
+      <H3>SAT encoding</H3>
+      <Table
+        headers={["Piece", "Encoding"]}
+        rows={[
+          ["Allowed classes", "usable count per (target edge, global pair) computed up front; support clauses and AC-3 filter neighbours per target edge; same clause shape"],
+          ["Channel thresholds", "count usable channels, not the multiplicity"],
+          ["Preference", "z[e,T] for tiers worse than the best; x[t1,g1] ∧ x[t2,g2] → z[e,T] for pairs in tier T; best-tier pairs add nothing; minimize with the existing binary search (:2033)"],
+          ["Cost", "O(|E_target| × |E_global|) ternary clauses outside the best tier; nothing when no preference is set"],
+          ["DFS", "allowed classes are a per-edge channel check DFS can do; preferences need SAT (DFS only orders candidates)"],
+        ]}
+      />
+      <H3>Where the classes come from</H3>
+      <Table
+        headers={["Solve", "Global edge", "Counts per class built in"]}
+        rows={[
+          ["Intra-mesh", "ASIC pair", "build_adjacency_graph_physical already loops get_eth_connections; also emit counts per port_type"],
+          ["Seat solve", "footprint pair", "AdjacencyMatrixCache / saturated_link_count (:2395) counts per port type; build_sat_placement_seat_graph annotates seat pairs"],
+          ["Exit nodes", "chip", "prefer exit chips whose inter-mesh links are in a better tier (preferred node constraints)"],
+          ["Control plane binding", "channel", "the solver picks chip pairs, not channels: pair_logical_intermesh_ports binds allowed channels in tier order; shortfall counts allowed channels"],
+        ]}
+      />
+      <Grid columns={fit(420)} gap={16} align="start">
+        <CodeCard
+          path="intra-mesh: prefer on-board traces and linking boards (hypothetical)"
+          language="protobuf"
+          src={`
+mesh_descriptors {
+  name: "M"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: STRICT
+    preferred_port_types: [ TRACE, LINKING_BOARD_1, LINKING_BOARD_2, LINKING_BOARD_3 ]
+  }
+}`}
+        />
+        <CodeCard
+          added
+          path="C++ against the solver"
+          src={`
+MappingConstraints<FabricNodeId, PhysicalNodeId> c;
+c.set_default_edge_policy(EdgePolicy::STRICT);
+for (const auto& [pair, per_type] : channels_per_port_type(psd, physical_graph)) {
+    c.set_global_edge_channel_classes(pair.first, pair.second, per_type);
+}
+c.set_default_channel_class_preference({cls(PortType::TRACE), cls(PortType::LINKING_BOARD_1)});
+// One edge must not use QSFP-DD at all:
+c.set_edge_allowed_channel_classes(n0, n1, {cls(PortType::TRACE), cls(PortType::WARP400)});
+auto result = solve_topology_mapping(logical_graph, physical_graph, c);`}
+        />
+      </Grid>
+      <Text size="small" tone="tertiary">
+        Intra-mesh fabric uses every channel between two adjacent chips, so an intra-mesh preference changes which chip pairs a
+        smaller mesh uses, not which channels. TopologyMappingConfig gets optional port_type_preference and allowed_port_types
+        overrides for tools and tests.
+      </Text>
+    </Stack>
+  );
+}
+
 function ImplicationsTab() {
   return (
     <Table
@@ -539,12 +748,13 @@ function ImplicationsTab() {
         ["Hierarchical MGDs", "the compatibility check is per graph, so two graphs may differ today and the first connection silently wins; after, each is honoured. List affected MGDs before landing"],
         ["Solver API", "the mode argument and allow_unmatched_target_edges become one constraint, set_default_edge_policy; old signatures keep working, deprecated"],
         ["Intra-mesh", "same behaviour, expressed as the default edge policy; ready for per-edge intra-mesh policy"],
+        ["Cable type", "opt-in; nothing changes without allowed / preferred port types or on UNKNOWN-only systems; an allowed list can make a STRICT connection UNSAT, and the error names the connection and the types found"],
         ["Solve time", "mixed MGDs faster than all-RELAXED; uniform unchanged"],
         ["Symmetry", "swapping two same-shape meshes can move a STRICT seam onto a pair with fewer links, so unique_shapes must be off when policies mix"],
         ["Warnings", "zero-link and shortfall warnings name the connection and its policy"],
         ["Pipeline design", "a STRICT pipeline edge over a RELAXED connection may end zero-link: Tier B keeps declared channels as an upper bound, Tier C decides; merging parts with different policies stops failing"],
       ]}
-      rowTone={["success", "success", "warning", undefined, "success", "success", "warning", undefined, undefined]}
+      rowTone={["success", "success", "warning", undefined, "success", "warning", "success", "warning", undefined, undefined]}
     />
   );
 }
@@ -555,7 +765,7 @@ function PlanTab() {
       <Text tone="secondary">
         Land the MGD side and the solver side as one PR stack. The parse-time "Cannot mix" check stays until the last PR, so no
         MGD is accepted before every consumer can handle it. A1, A2, A3 go in order; the A series and B are independent; C
-        needs A1 and B; D and E need C.
+        needs A1 and B; D and E need C. The cable-type series F1-F3 needs A1; F3 needs D for the binding.
       </Text>
       <Table
         headers={["PR", "Contents", "Behaviour change"]}
@@ -566,9 +776,12 @@ function PlanTab() {
           ["B. MGD demand tables", "InterMeshChannelDemand, get_inter_mesh_channel_demand; requested maps carry policy; sum instead of overwrite", "none for valid MGDs, except the overwrite fix"],
           ["C. Mapper", "seat solve and exit nodes read demands; ladder scoped; config override; unique_shapes gate; drop merge-agreement fatals", "merged parts with different policies accepted"],
           ["D. Control plane", "per-boundary quota, validation, downed links, health (#49960)", "device- and mesh-level connections may coexist"],
+          ["F1. Solver channel classes", "ChannelClass, set_global_edge_channel_classes, allowed classes and preferences at both scopes; SAT pieces; DFS allowed-class filter", "none: no caller annotates classes"],
+          ["F2. Port types in the mapper", "counts per PortType in build_adjacency_graph_physical and the seat graph; exit-node preference; config override", "none until an MGD or config asks"],
+          ["F3. MGD and control plane", "allowed_port_types / preferred_port_types in Channels; binding in tier order; shortfall counts allowed channels", "MGDs may constrain and prefer cable types"],
           ["E. Allow mixing", "drop the MGD 1.0 'Cannot mix' check; proto and README comments; deprecate is_inter_mesh_policy_relaxed", "MGDs may mix policies"],
         ]}
-        rowTone={[undefined, undefined, undefined, undefined, "warning", "warning", "warning"]}
+        rowTone={[undefined, undefined, undefined, undefined, "warning", "warning", undefined, undefined, "warning", "warning"]}
       />
       <H3>Tests</H3>
       <Table
@@ -579,6 +792,7 @@ function PlanTab() {
           ["B", "device-level STRICT 1 + mesh-level RELAXED 2 gives {1, 2}; two mesh-level connections on a pair sum; every existing textproto gives the same demands as its global policy"],
           ["C", "M0-M1 STRICT, M1-M2 RELAXED: no M1-M2 link accepted with a warning, no M0-M1 link rejected; STRICT part merged with RELAXED part succeeds; unique_shapes off when mixed"],
           ["D", "#49960 acceptance criteria; STRICT shortfall throws, RELAXED warns; downed link on a RELAXED boundary not rejected; single- and multi-host goldens"],
+          ["F", "equal link counts, one over the preferred type: preferred wins; STRICT edge on only disallowed links is UNSAT, BEST_EFFORT is zero-link with a warning; UNKNOWN always counts; no cabling data maps as today; capacity beats tier (4 QSFP-DD over 2 WARP400 for a RELAXED edge); binding takes preferred channels first"],
           ["all", "TopologyMapperUtilsTest, MeshGraphDescriptorTests, control-plane and CPU-only fabric suites unchanged for uniform MGDs"],
         ]}
       />
@@ -592,6 +806,9 @@ function PlanTab() {
           ["4", "How long does TopologyMappingConfig::inter_mesh_validation_mode stay as a forcing override?"],
           ["5", "Give express links (or topology dimensions) their own channels { count policy } for per-edge intra-mesh policy, or keep one policy per mesh?"],
           ["6", "An unset default edge policy means RELAXED, today's default argument. Flip it to STRICT, matching the MGD, once every caller sets it?"],
+          ["7", "Channel count ranks above cable tier. Should a preferred cable type win over more channels instead, or be configurable?"],
+          ["8", "Import PortType from physical_system_descriptor.proto (proposed), or define an MGD-owned enum?"],
+          ["9", "Lexicographic tiers (proposed), or integer costs per type, e.g. two QSFP-DD links as good as one WARP400?"],
         ]}
       />
     </Stack>
@@ -604,6 +821,7 @@ const SECTIONS = [
   { id: "semantics", label: "Semantics per connection", body: SemanticsTab },
   { id: "solver", label: "Solver: a constraint, not an argument", body: SolverTab },
   { id: "changes", label: "MGD, mapper and control plane", body: ChangesTab },
+  { id: "cable", label: "Cable type: constraints by port type", body: CableTab },
   { id: "implications", label: "Implications", body: ImplicationsTab },
   { id: "plan", label: "Implementation plan", body: PlanTab },
 ] as const;

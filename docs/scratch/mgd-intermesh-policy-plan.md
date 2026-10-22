@@ -35,9 +35,13 @@ The design carries the policy per connection, end to end:
    solver (section 3.4).
 4. **Mapper and control plane.** Exit-node constraints, intermesh binding and validation look
    up each mesh pair's demand instead of the global mode.
+5. **Cable type.** The same per-edge structure carries the cable `PortType`: each global edge
+   gets a channel count per type; each target edge, or the whole solve, says which types may
+   count (hard) and which it prefers (soft, tiers best first). The MGD says it with
+   `allowed_port_types` and `preferred_port_types` in `Channels` (section 7).
 
 So yes, STRICT / RELAXED can be a required constraint instead of a solver argument, for the
-whole solve or per edge. The MGD side and the solver side should land together (section 8):
+whole solve or per edge. The MGD side and the solver side should land together (section 9):
 the per-pair demand is useless until the solver can encode it, and the solver change has no
 caller until the MGD supplies it.
 
@@ -198,7 +202,7 @@ search and `MappingValidator`; they read the resolved `EdgeDemand` per edge.
 
 A uniform `STRICT` or `RELAXED` default produces exactly today's encoding for that mode, and a
 uniform `BEST_EFFORT` default produces today's soft encoding. That is the property test in
-section 8.
+section 9.
 
 The objective order is unchanged: host cap and host objective, then the number of realized
 preferred edges, then channel thresholds, then preferred node hits.
@@ -251,7 +255,7 @@ soft seams, each with and without the host cap. Under the per-edge design:
 
 1. **Parse.** Replace `populate_inter_mesh_policy` with a per-pair demand table, built from
    every FABRIC connection and from `graph_topology`. Drop the "Cannot mix STRICT and RELAXED
-   policies in the same graph" check (section 8 says when).
+   policies in the same graph" check (section 9 says when).
 2. **API** on `MeshGraphDescriptor` and `MeshGraph`:
 
    ```cpp
@@ -319,7 +323,175 @@ soft seams, each with and without the host cap. Under the per-edge design:
 5. **System health.** `validate_system_health_against_mesh_graph_policy` treats the MGD as
    RELAXED if any connection is RELAXED.
 
-## 7. Implications
+## 7. Cable type: hard and preferred constraints by port type
+
+Every Ethernet channel in the physical system descriptor has a `PortType`
+(`EthConnection::port_type`, `physical_system_descriptor.hpp:74`): `TRACE`, `QSFP_DD`,
+`WARP100`, `WARP400`, `LINKING_BOARD_1..3`, or `UNKNOWN`. The solver never sees it today:
+`build_adjacency_graph_physical` (`topology_solver.cpp:164`) and the seat graph
+(`build_sat_placement_seat_graph`, `physical_grouping_descriptor_matching.cpp:2667`) turn each
+channel into one parallel edge, so a global edge is just a channel count. The per-edge
+structure from section 3 is the natural place to add it: each global edge gets a count per
+cable type, and each target edge says which types may count (hard) and which it prefers
+(soft).
+
+### 7.1 Solver API: channel classes
+
+The solver stays generic and knows nothing about `PortType`. A **channel class** is an
+integer the caller assigns; the mapper uses `static_cast<ChannelClass>(port_type)`.
+
+```cpp
+using ChannelClass = std::uint32_t;
+
+// Global side: how many channels of each class a global edge has. The counts must add up to the
+// edge's multiplicity in the global graph. Edges left unannotated have all channels in class 0.
+bool set_global_edge_channel_classes(
+    GlobalNode a, GlobalNode b, const std::map<ChannelClass, std::size_t>& channels_per_class);
+
+// Hard: only channels of these classes count toward an edge's demand. Empty set = all classes.
+void set_default_allowed_channel_classes(std::set<ChannelClass> classes);
+bool set_edge_allowed_channel_classes(TargetNode a, TargetNode b, std::set<ChannelClass> classes);
+
+// Soft: preference tiers, best first. A class that is not listed is in the last tier.
+void set_default_channel_class_preference(std::vector<ChannelClass> best_first);
+bool set_edge_channel_class_preference(TargetNode a, TargetNode b, std::vector<ChannelClass> best_first);
+```
+
+These scope like the edge policy: per edge beats the whole-solve default. The resolved edge
+from section 3 grows two fields:
+
+```cpp
+struct EdgeDemand {
+    std::size_t required = 0;
+    std::size_t preferred = 0;
+    std::set<ChannelClass> allowed_classes;        // empty = all
+    std::vector<ChannelClass> class_preference;    // best first
+};
+```
+
+### 7.2 Semantics
+
+- **Hard (allowed classes).** For target edge `e` on global edge `g`, the usable channel count
+  is the sum of `g`'s channels in `e`'s allowed classes. Every channel rule in section 3 uses
+  that count instead of the multiplicity: a STRICT edge needs `required` allowed channels, a
+  RELAXED edge needs at least one, and a BEST_EFFORT edge is realized only on allowed
+  channels.
+- **Soft (preference).** The tier of `e` on `g` is the worst tier among the best `c_e` allowed
+  channels of `g` (`c_e` is `e`'s channel count): the edge is charged for the cables it would
+  actually use. The objective minimizes the number of target edges in the worst tier, then
+  the next worst, and so on (lexicographic). Tiers read directly as "prefer A over B" and need
+  no weight tuning; integer costs per class could be added later if tiers aren't enough.
+- **Objective order.** host cap and host objective, then realized preferred edges, then
+  channel thresholds, then **cable tiers**, then preferred node hits. Capacity comes before
+  cable type (open question 7).
+- **`UNKNOWN`.** Descriptors without cabling data report `UNKNOWN`. An `UNKNOWN` channel is
+  always allowed, so an allowed list can't silently drop every link on such a system, and it
+  sits in the last tier, with a single warning per solve. When every channel is `UNKNOWN`,
+  preferences have no effect and the mapping is the same as today.
+
+### 7.3 SAT encoding
+
+| Piece | Encoding |
+|---|---|
+| Allowed classes | Per (target edge, global pair) usable count, computed before encoding. Support clauses and AC-3 arcs use pairs with enough usable channels; that is the same clause shape as today, with the neighbour list filtered per target edge |
+| Channel thresholds | Count usable channels, not the multiplicity |
+| Preference | For each target edge `e` and tier `T` worse than the best: a literal `z[e,T]`, with clauses `x[t1,g1] ∧ x[t2,g2] → z[e,T]` for each global pair whose tier for `e` is `T`. Pairs in the best tier add no clause. Minimize `Σ z[e,worst]`, then the next tier, with the binary search the realized-edge objective already uses (`:2033`) |
+| Cost | `O(|E_target| × |E_global|)` ternary clauses for pairs outside the best tier, the same order as the support clauses. Nothing is added when no preference is set |
+
+DFS: the allowed-class filter is a per-edge channel check, which DFS can do. Preferences are an
+objective, so they need SAT; under DFS they only order candidates, as RELAXED channel
+preference does today.
+
+### 7.4 Where the classes come from
+
+| Solve | Global edge | Where the counts per class are built |
+|---|---|---|
+| Intra-mesh | ASIC pair | `build_adjacency_graph_physical` already loops `get_eth_connections` (`topology_solver.cpp:164`); it also emits counts per `port_type` |
+| Seat solve | footprint pair (`const Candidate*`) | `AdjacencyMatrixCache` / `saturated_link_count` (`physical_grouping_descriptor_matching.cpp:2395`) counts links between two footprints; it counts them per port type too, and `build_sat_placement_seat_graph` annotates each seat pair |
+| Exit nodes | chip | `add_exit_node_constraints` can prefer exit chips whose inter-mesh links are in a better tier, as preferred node constraints, so the intra-mesh solve and the seat solve agree |
+| Control plane binding | channel | the solver picks chip pairs, not channels. When a boundary has more channels than its quota, `pair_logical_intermesh_ports` binds the allowed channels in tier order. Shortfall checks count allowed channels only |
+
+Intra-mesh fabric uses every channel between two adjacent chips, so an intra-mesh preference
+changes which chip pairs a smaller mesh uses, not which channels.
+
+### 7.5 How you say it
+
+**In the MGD.** `Channels` gets two optional fields, so the same words work per inter-mesh
+connection and per mesh (intra-mesh):
+
+```proto
+message Channels {
+    int32 count = 1;
+    optional Policy policy = 2;
+    // Hard: only these cable types count toward `count`. Empty = any. UNKNOWN always counts.
+    repeated PortType allowed_port_types = 3;
+    // Soft: preferred cable types, best first. Unlisted types rank last.
+    repeated PortType preferred_port_types = 4;
+}
+```
+
+`PortType` is already defined in `physical_system_descriptor.proto`. The MGD proto imports it
+rather than adding a fourth copy (open question 8).
+
+Example: inter-mesh, prefer WARP400 over QSFP-DD, and only accept those two.
+
+```
+connections {
+  nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+  nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+  channels {
+    count: 2
+    policy: STRICT
+    allowed_port_types: [ WARP400, QSFP_DD ]
+    preferred_port_types: [ WARP400 ]
+  }
+}
+```
+
+Two seatings that both give two links between M0 and M1, one over WARP400 and one over
+QSFP-DD, are both valid; the solver picks the WARP400 one. A seating whose only links are
+WARP100 is rejected, because WARP100 isn't allowed and the connection is STRICT. Under
+RELAXED it would be accepted as zero-link with a warning.
+
+Example: intra-mesh, prefer on-board traces and linking boards over cables when a smaller
+mesh fits a larger system in several ways.
+
+```
+mesh_descriptors {
+  name: "M"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: STRICT
+    preferred_port_types: [ TRACE, LINKING_BOARD_1, LINKING_BOARD_2, LINKING_BOARD_3 ]
+  }
+}
+```
+
+**In C++, directly against the solver:**
+
+```cpp
+MappingConstraints<FabricNodeId, PhysicalNodeId> c;
+c.set_default_edge_policy(EdgePolicy::STRICT);
+for (const auto& [pair, per_type] : channels_per_port_type(psd, physical_graph)) {
+    c.set_global_edge_channel_classes(pair.first, pair.second, per_type);
+}
+c.set_default_channel_class_preference({cls(PortType::TRACE), cls(PortType::LINKING_BOARD_1)});
+// One edge must not use QSFP-DD at all:
+c.set_edge_allowed_channel_classes(n0, n1, {cls(PortType::TRACE), cls(PortType::WARP400)});
+auto result = solve_topology_mapping(logical_graph, physical_graph, c);
+```
+
+The orderings in these examples are illustrations, not recommendations: which cable to
+prefer is the MGD author's call.
+
+**Config override.** `TopologyMappingConfig` gets an optional
+`port_type_preference` and `allowed_port_types` for tools and tests, applied as the
+whole-solve default when the MGD says nothing.
+
+## 8. Implications
 
 | Area | Effect |
 |---|---|
@@ -328,12 +500,13 @@ soft seams, each with and without the host cap. Under the per-edge design:
 | Hierarchical MGDs | The compatibility check is per graph, so two graphs may already differ, and the first FABRIC connection silently wins. After this change each is honoured. That is a behaviour change: list the MGDs it affects before landing |
 | Solver API | The mode argument and `allow_unmatched_target_edges` become one constraint, `set_default_edge_policy`. Old signatures keep working, deprecated; about 190 uses in 13 files can move later |
 | Intra-mesh | Same behaviour, now expressed as the default edge policy; ready for per-edge intra-mesh policy if the MGD ever gets it |
+| Cable type | New and opt-in. Without `allowed_port_types` / `preferred_port_types`, or on a system whose descriptor reports `UNKNOWN`, nothing changes. With them, an allowed list can turn a STRICT connection UNSAT on hardware that only has other cables, and the error names the connection and the types found |
 | Solve time | Mixed MGDs solve faster than all-RELAXED ones, because STRICT edges keep their pruning. Uniform MGDs are unchanged |
 | Symmetry | `unique_shapes` must be off when policies mix (section 5) |
 | Warnings | Zero-link and shortfall warnings name the connection and its policy |
 | Pipeline design | A STRICT pipeline edge crossing a RELAXED connection may end with zero links. Tier B keeps the declared channels as an upper bound; Tier C decides on the bound links. Merging parts with different policies, which the pipeline design needs, stops failing |
 
-## 8. Implementation plan
+## 9. Implementation plan
 
 Land the MGD side and the solver side as one PR stack. The parse-time "Cannot mix" check stays
 until the last PR, so no MGD is accepted before every consumer can handle it.
@@ -346,11 +519,16 @@ until the last PR, so no MGD is accepted before every consumer can handle it.
 | B. MGD demand tables | `InterMeshChannelDemand`, `get_inter_mesh_channel_demand`, `has_relaxed_inter_mesh_connection`; requested maps carry policy; sum instead of overwrite | none for valid MGDs, except the overwrite fix |
 | C. Mapper | seat solve and exit nodes read demands (sections 3.5, 5); config override; `unique_shapes` gate; drop the merge-agreement fatals | merged parts with different policies are accepted |
 | D. Control plane | sections 6.1-6.5 (#49960) | device-level and mesh-level connections may coexist |
+| F1. Solver channel classes | `ChannelClass`, `set_global_edge_channel_classes`, allowed classes and preferences at both scopes; SAT pieces from 7.3; DFS allowed-class filter | none: no caller annotates classes |
+| F2. Port types in the mapper | counts per `PortType` in `build_adjacency_graph_physical` and the seat graph; exit-node preference; `TopologyMappingConfig` override | none until an MGD or config asks |
+| F3. MGD and control plane | `allowed_port_types` / `preferred_port_types` in `Channels`; binding in tier order; shortfall counts allowed channels | MGDs may constrain and prefer cable types |
 | E. Allow mixing | drop the MGD 1.0 "Cannot mix" check; proto and `MGD_README.md` comments; deprecate `is_inter_mesh_policy_relaxed` | MGDs may mix policies |
 
 A1, A2, A3 go in that order; the A series and B are independent and can be reviewed in
 parallel. C needs A1 and B; D and E need C. The test suites can move off the mode argument
-after A2, in any order.
+after A2, in any order. The cable-type series F1, F2, F3 needs A1 (it extends `EdgeDemand`)
+and is otherwise independent: F1 can be reviewed alongside A2, and F3 needs D for the
+binding.
 
 ### Tests
 
@@ -373,10 +551,16 @@ after A2, in any order.
 - **Control plane (D).** The #49960 acceptance criteria. A STRICT boundary shortfall throws;
   a RELAXED one warns; a downed link on a RELAXED boundary is not rejected. Single-host and
   multi-host golden paths.
+- **Cable type (F).** Two seatings with equal link counts, one over the preferred type: the
+  preferred one wins. A STRICT edge whose only links are a disallowed type is UNSAT; the same
+  edge under BEST_EFFORT is zero-link with a warning. `UNKNOWN` channels always count. A
+  system with no cabling data maps exactly as today. Capacity beats cable tier (a RELAXED edge
+  takes 4 QSFP-DD links over 2 WARP400 links), as section 7.2 orders them. The control plane
+  binds preferred channels first.
 - **Regression.** `TopologyMapperUtilsTest`, `MeshGraphDescriptorTests`, control-plane
   suites and the CPU-only fabric suites, unchanged for uniform MGDs.
 
-## 9. Open questions
+## 10. Open questions
 
 1. **Device-level RELAXED.** Should the named chips stay pinned as exit nodes (proposed), or
    should RELAXED also let the link move to other chips?
@@ -391,3 +575,9 @@ after A2, in any order.
    keep one policy per mesh?
 6. **Unset default.** An unset default edge policy means `RELAXED`, today's default argument.
    Flip it to `STRICT`, matching the MGD default, once every caller sets it explicitly?
+7. **Capacity versus cable type.** Section 7.2 ranks channel count above cable tier. Should a
+   preferred cable type win over more channels instead, or be configurable?
+8. **`PortType` in the MGD proto.** Import it from `physical_system_descriptor.proto`
+   (proposed), or define an MGD-owned enum so the MGD schema doesn't depend on the PSD's?
+9. **Tiers or weights.** Lexicographic tiers (proposed), or integer costs per type for cases
+   such as "two QSFP-DD links are as good as one WARP400"?
