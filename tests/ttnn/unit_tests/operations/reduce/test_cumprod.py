@@ -336,12 +336,31 @@ def test_cumprod_tile_axis_runs_in_place(size, dim, torch_dtype, device):
     assert torch.equal(ttnn.to_torch(output_tensor), expected)
 
 
+def _with_special_values(torch_input, dim):
+    # Puts 0, -0, +-inf, NaN, a huge and a tiny value each into scans of their own, at the first position and on
+    # both sides of each tile boundary (31/32 and 63/64), where the running product moves into the next tile.
+    moved = torch_input.movedim(dim, -1).contiguous()
+    scans = moved.view(-1, moved.shape[-1])
+    k = 0
+    for value in (0.0, -0.0, float("inf"), float("-inf"), float("nan"), 1e30, 1e-30):
+        for position in (0, 31, 32, 63, 64):
+            scans[k, position] = value
+            k += 1
+    return moved.movedim(-1, dim).contiguous()
+
+
+@pytest.mark.parametrize("values", ["near_one", "special"])
 @pytest.mark.parametrize("torch_dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("dim", [-1, -2])
-def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, device):
-    """Bit-identical to the permuted path's kernel on full-precision inputs (dim 0 of a 4D tensor needs no permute)."""
+def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, values, device):
+    """Same bits as the permuted path's kernel (dim 0 of a 4D tensor needs no permute), on full-precision inputs and
+    on special values. NaNs only have to be at the same places."""
     torch.manual_seed(29112024)
-    torch_input = (1.0 + 0.01 * torch.randn([33, 35, 70])).to(torch_dtype)
+    if values == "near_one":
+        torch_input = 1.0 + 0.01 * torch.randn([33, 70, 70])
+    else:
+        torch_input = _with_special_values(torch.empty([33, 70, 70]).uniform_(-3, 3), dim)
+    torch_input = torch_input.to(torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
     moved = torch_input.movedim(dim, 0)
     dim0_tensor = ttnn.from_torch(moved.reshape(moved.shape[0], 1, 1, -1), device=device, layout=ttnn.Layout.TILE)
@@ -349,7 +368,38 @@ def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, device):
     tile_axis = ttnn.to_torch(ttnn.cumprod(input_tensor, dim=dim))
     dim0 = ttnn.to_torch(ttnn.cumprod(dim0_tensor, dim=0)).reshape(moved.shape).movedim(0, dim)
 
-    assert torch.equal(tile_axis, dim0)
+    nan = torch.isnan(dim0)
+    assert torch.equal(torch.isnan(tile_axis), nan)
+    bits = torch.int16 if torch_dtype == torch.bfloat16 else torch.int32
+    assert torch.equal(tile_axis[~nan].view(bits), dim0[~nan].view(bits))
+
+
+def test_cumsum_cumprod_tile_axis_program_cache(device):
+    """Interleaved cumsum/cumprod over bf16/fp32 and H/W: one program per configuration, and cache hits on new input
+    buffers give exact results."""
+    configs = [
+        ("cumsum", torch.bfloat16, -1),
+        ("cumprod", torch.bfloat16, -1),
+        ("cumsum", torch.bfloat16, -2),
+        ("cumprod", torch.bfloat16, -2),
+        ("cumprod", torch.float32, -1),
+        ("cumprod", torch.float32, -2),
+    ]
+    size = [2, 64, 96]
+    torch.manual_seed(29112024)
+    device.clear_program_cache()
+    inputs = []  # kept alive, so that every call reads a new input buffer
+    for repeat in range(2):
+        for op, torch_dtype, dim in configs:
+            if op == "cumsum":
+                torch_input = torch.randint(-2, 3, size).to(torch_dtype)  # the partial sums stay exact in bf16
+            else:
+                torch_input = _exact_cumprod_input(size, dim, torch_dtype)
+            inputs.append(ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE))
+            output = ttnn.to_torch(getattr(ttnn, op)(inputs[-1], dim=dim))
+            expected = getattr(torch, op)(torch_input.double(), dim).to(torch_dtype)
+            assert torch.equal(output, expected), (repeat, op, torch_dtype, dim)
+        assert device.num_program_cache_entries() == len(configs)
 
 
 @pytest.mark.parametrize(
