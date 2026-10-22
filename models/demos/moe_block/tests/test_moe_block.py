@@ -214,3 +214,62 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     logger.info(
         f"MOE_WALL {model}: forward {statistics.median(ws):.0f} us wall (median of {ITERS}; {[round(v) for v in ws]})"
     )
+
+
+_SE_PARAMS = [
+    pytest.param(
+        (R, C),
+        fabric2d_device_params(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
+        name,
+        id=f"{name}-se",
+    )
+    for name, m in MODELS.items()
+]
+
+
+@pytest.mark.parametrize("mesh_device, device_params, model", _SE_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(3600)
+def test_shared_expert(mesh_device, device_params, model):
+    """The shared expert alone (TP-split, chunk 5120): device time and accuracy per math fidelity, vs fp32 on the host
+    with the same bf8-quantized-on-device weights' source (fp32 weights): PCC and relative L2 of the summed partials."""
+    import os
+
+    from models.demos.moe_block.moe_block import Geometry, MoEDtypes, SharedExpert
+
+    m = MODELS[model]
+    T, H = 5120, m.emb_dim
+    w = random_weights(m)
+    g = Geometry.of(mesh_device, m, T, 2, zigzag=False)
+    x = torch.randn(T, H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+    xt = ttnn.from_torch(
+        x.view(1, 1, T, H),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3)),
+    )
+    x_full = ttnn.all_gather(xt, dim=3, cluster_axis=1)
+    gs, us = split_gate_up(w.shared["gate_up"].float())
+    ref = act_host(m.shared_expert_activation, x.float() @ gs.T, x.float() @ us.T) @ w.shared["down"].float().T
+    for fid in (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3):
+        se = SharedExpert(mesh_device, g, m, w.shared, dataclasses.replace(MoEDtypes(), shared_fidelity=fid))
+        out = se(x_full)
+        ttnn.synchronize_device(mesh_device)
+        parts = [ttnn.to_torch(t).reshape(T // R, H).float() for t in ttnn.get_device_tensors(out)]
+        ttnn.deallocate(out)
+        y = torch.cat([sum(parts[r * C : (r + 1) * C]) for r in range(R)])  # (row r's chips hold its tokens' partials)
+        rel = ((y - ref).norm() / ref.norm()).item()
+        us_ = None
+        if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+            per_chip_programs(mesh_device)
+            ts = []
+            for _ in range(ITERS):
+                o = se(x_full)
+                ttnn.synchronize_device(mesh_device)
+                ts.append(max(sum(r_) for r_ in per_chip_programs(mesh_device) if r_))
+                ttnn.deallocate(o)
+            us_ = statistics.median(ts)
+        logger.info(
+            f"MOE_SE {model} {fid}: PCC {pcc(y, ref):.5f}, rel L2 {100 * rel:.2f}%, "
+            f"{'-' if us_ is None else round(us_, 1)} us"
+        )

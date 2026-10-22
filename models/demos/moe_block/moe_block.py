@@ -112,7 +112,9 @@ class MoEDtypes:
     routed_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     shared_weights: ttnn.DataType = ttnn.bfloat8_b
     shared_activations: ttnn.DataType = ttnn.bfloat16
-    shared_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi3
+    shared_fidelity: ttnn.MathFidelity = (
+        ttnn.MathFidelity.HiFi2
+    )  # (HiFi3: rel L2 1.6 -> 1.3% with bf8 weights, +11-25% time)
     projection_weights: ttnn.DataType = ttnn.bfloat8_b  # latent down / up
     router_weights: ttnn.DataType = ttnn.bfloat16  # top-k selection in fp32
     dispatch_rows: WireFormat = field(default_factory=WireFormat)
@@ -586,25 +588,51 @@ class Router:
 
 class SharedExpert:
     """TP-split: gate / up split by columns over I_s (whole gate / up pairs a chip), down split by rows; the output is
-    a partial [S/SP, H] the block reduce-scatters over TP."""
+    a partial [S/SP, H] the block reduce-scatters over TP. mm2d program configs (glm53_flash_d_p mm_configs); the
+    activation as one op where ttnn has it: SiLU -> one gate / up matmul ([up | gate] columns a chip) + ttnn.swiglu
+    (first half x silu(second half)); SiTU -> ttnn.situ_glu on the two matmuls' outputs; others elementwise."""
 
     def __init__(self, mesh, g: Geometry, model: MoEModel, w: dict, dtypes: MoEDtypes):
         gate, up = split_gate_up(w["gate_up"])  # [I_s, H] each
         dt = dtypes.shared_weights
-        self.wg = _weight(mesh, gate.T, dt, (None, 1))  # [H, I_s / TP]
-        self.wu = _weight(mesh, up.T, dt, (None, 1))
-        self.wd = _weight(mesh, w["down"].T, dt, (None, 0))  # [I_s / TP, H]
         self.act = model.shared_expert_activation
+        self.fused = self.act.kind == "silu"
+        if self.fused:  # chip column c: [H, 2 I_s / TP] = [up slice c | gate slice c]
+            Is, TP = gate.shape[0], g.tp
+            sl = Is // TP
+            cat = torch.cat(
+                [torch.cat([up[c * sl : (c + 1) * sl], gate[c * sl : (c + 1) * sl]], dim=0) for c in range(TP)], dim=0
+            )  # [TP 2 sl, H]
+            self.wgu = _weight(mesh, cat.T, dt, (None, 1))  # [H, 2 I_s / TP]
+        else:
+            self.wg = _weight(mesh, gate.T, dt, (None, 1))  # [H, I_s / TP]
+            self.wu = _weight(mesh, up.T, dt, (None, 1))
+        self.wd = _weight(mesh, w["down"].T, dt, (None, 0))  # [I_s / TP, H]
         self.cfg = _cfg(dtypes.shared_fidelity)
         self.adt = dtypes.shared_activations
 
+    def _lin(self, a, wt, dtype):
+        import models.demos.glm53_flash_d_p.tt.mm_configs as mmc
+
+        return ttnn.linear(
+            a, wt, compute_kernel_config=self.cfg, dtype=dtype, program_config=mmc.linear_config(a, wt, dtype)
+        )
+
     def __call__(self, x_full):
-        g_ = ttnn.linear(x_full, self.wg, compute_kernel_config=self.cfg, dtype=self.adt)
-        u_ = ttnn.linear(x_full, self.wu, compute_kernel_config=self.cfg, dtype=self.adt)
-        a = _act_dev(self.act, g_, u_)
-        ttnn.deallocate(g_)
-        ttnn.deallocate(u_)
-        out = ttnn.linear(a, self.wd, compute_kernel_config=self.cfg, dtype=ttnn.bfloat16)
+        if self.fused:
+            gu = self._lin(x_full, self.wgu, self.adt)
+            a = ttnn.swiglu(gu, dim=-1)
+            ttnn.deallocate(gu)
+        else:
+            g_ = self._lin(x_full, self.wg, self.adt)
+            u_ = self._lin(x_full, self.wu, self.adt)
+            if self.act.kind == "situ":
+                a = ttnn.situ_glu(g_, u_, self.act.beta, self.act.linear_beta)
+            else:
+                a = _act_dev(self.act, g_, u_)
+            ttnn.deallocate(g_)
+            ttnn.deallocate(u_)
+        out = self._lin(a, self.wd, ttnn.bfloat16)
         ttnn.deallocate(a)
         return out
 
