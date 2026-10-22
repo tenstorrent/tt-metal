@@ -663,6 +663,17 @@ def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
     return ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc
 
 
+def static_cb_bytes(N, S, row_width, *, group=8, manifest_batch=16, dtype_bytes=2):
+    """L1 the port cores' circular buffers take (sparse_all_gather_2d's descriptor, no extra op): N chips, S own rows,
+    rows row_width wide. Each CB rounded to 64 B; for sizing the L1 below a buffer that stays allocated over the call.
+    """
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    row_bytes = al(row_width * dtype_bytes)
+    plan_bytes = al(S * route_words(N) * 4)
+    cbs = (2 * group * row_bytes, 2 * group * META_PAGE, plan_bytes, 3 * 2 * manifest_batch * 16, 64)
+    return sum(al(v) for v in cbs)
+
+
 def sparse_all_gather_2d(
     output,
     plan_tensor,

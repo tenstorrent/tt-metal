@@ -74,3 +74,20 @@ Problems found, largest first:
    reserve (manifest + dispatch CBs) is an estimate (2 x 2 x group x row bytes + 8 KB).
 Also: GLM-Flash's PCC (0.987) is lower than K3's (0.996) - not localized yet; Zipf routing not run (the routing comes
 from the router; skew needs biased router weights).
+
+## 2026-10-22 (pm): wiring in the tuned pieces
+
+Same test and bar (models/demos/moe_block/tests/test_moe_block.py, chunk 5120, 640 owned tokens a chip, PCC > 0.98 vs the
+fp32 reference on the device's routing); per-stage device time, slowest chip, median of 5; runs `moe_block_runs/s*_*.log`.
+
+### Step 1: the exchange built once (arena address fixed), the arena reserve from the real footprint
+- `MoEBlock._warm_up()` runs the head and the tail once on zeros (the exchange skipped) in the constructor, then
+  `TokenExchange.build()`: every op's one-time L1 (collective semaphores and the like) lands before the arena is sized,
+  so the second call no longer moves it (exchange builds: 2 -> 1; the 10-17 s rebuild is gone). The arena check stays
+  (rebuild with a warning) for L1 allocated by anything else later.
+- The arena's reserve (TtK3TokenSplitMoE, combine_auto_cfg): was flat static CBs + manifest + an estimate of the
+  dispatch's CBs (2 x 2 x group x row bytes + 8 KB). Now the writers' words + max(the fused op's static CBs, the
+  dispatch's real CBs (`sparse_all_gather_2d.static_cb_bytes`, the descriptor's sizes) + its manifest) + 1 KB: the two
+  programs never run together. GLM-Flash and K3 frees ~37 / ~118 KB a core for the arena.
+- Device times unchanged (GLM-Flash 4739 -> 4738 us, K3 8496 -> 8493; experts + combine 2070 -> 2083 / 2856 -> 2855,
+  the extra arena not used by the combine's sizing at this load); PCC unchanged (0.98704 / 0.99637).

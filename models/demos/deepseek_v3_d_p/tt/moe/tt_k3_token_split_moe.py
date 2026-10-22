@@ -513,16 +513,19 @@ class TtK3TokenSplitMoE:
         if (
             combine_auto_cfg
         ):  # (the arena takes the L1 left, less the flat program's static CBs: the combine sizes from it)
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import static_cb_bytes
             from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
 
             mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
-            reserve = fused_arena_reserve(int(plan["static_l1_bytes"]), l1=True)
-            if self.sparse_dispatch:  # (the dispatch's manifest rings: allocated per call while the arena is)
+            # (below the arena, over the call: the writers' words (allocated after it) and whichever program's CBs are
+            # larger - the fused op's static CBs, or the dispatch's on its port cores plus its per-call manifest)
+            flat_cbs = int(plan["static_l1_bytes"])
+            disp = 0
+            if self.sparse_dispatch:
                 ms = manifest_spec(mesh_device, S, num_links=2, torus=self.torus)
-                reserve += (int(ms[0][-1]) * 4 + 63) // 64 * 64
-                # (and its static CBs on the port cores, below the manifest: 2 x group rows of row bytes + slack)
-                grp = 8 if 2 * d.latent <= 7168 else 2
-                reserve += 2 * 2 * grp * 2 * d.latent + 8192
+                grp = 8 if 2 * d.latent <= 7168 else 2  # (dispatch()'s row group)
+                disp = (int(ms[0][-1]) * 4 + 63) // 64 * 64 + static_cb_bytes(self.N, S, d.latent, group=grp)
+            reserve = fused_arena_reserve(max(flat_cbs, disp), l1=True) + 1024
             a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (

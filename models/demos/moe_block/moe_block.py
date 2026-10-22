@@ -318,6 +318,10 @@ class MoEBlock(LightweightModule):
         self.stage_hook = None  # (profiling: called with the stage name after every stage)
         self.keep_taps = False  # (debug: keep the last call's routing rows for taps())
         self._taps = {}
+        # The exchange's arena address is baked into its kernels: run the head and the tail once first (their ops'
+        # one-time L1 - collective semaphores, program state - lands now), then build the exchange on the L1 left.
+        self._warm_up()
+        self.exchange.build()
         from loguru import logger
 
         logger.info(
@@ -341,7 +345,36 @@ class MoEBlock(LightweightModule):
         assert x.layout == ttnn.TILE_LAYOUT
         if chunk is not None:
             raise NotImplementedError("MoEBlock: padded chunks (ChunkSpan) are not built yet")
-        mark = self._mark
+        rows, own, se = self._head(x)
+        # ---- exchange ----
+        if self.keep_taps:  # (host copies: the exchange consumes the routing rows)
+            self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(rows)])
+        y_own = self.exchange(own, rows, hook=self.stage_hook)  # owners' sums [S/N, Hr]
+        ttnn.deallocate(own)
+        if rows.is_allocated():
+            ttnn.deallocate(rows)
+        return self._tail(y_own, se)
+
+    def _warm_up(self):
+        """The head and the tail once on zeros (the exchange skipped): every op they run allocates its one-time L1."""
+        g, m = self.geometry, self.model
+        mesh = self.mesh_device
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        z = lambda shape: ttnn.from_torch(  # noqa: E731
+            torch.zeros(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        x0 = z((1, 1, g.tokens_per_row, m.emb_dim // g.tp))
+        rows, own, se = self._head(x0, mark=False)
+        ttnn.deallocate(x0)
+        ttnn.deallocate(own)
+        ttnn.deallocate(rows)
+        out = self._tail(z((g.tokens_per_chip, m.routed_width)), se, mark=False)
+        ttnn.deallocate(out)
+        ttnn.synchronize_device(mesh)
+
+    def _head(self, x, mark=True):
+        """-> (the joint routing rows, the owners' rows [1, 1, S/N, Hr], the shared expert's [S/SP, H/TP] or None)."""
+        mark = self._mark if mark else (lambda _: None)
         # ---- head ----
         partial = self.router.logits(x)  # [S/SP, E] fp32 partial over H
         mark("router")
@@ -373,14 +406,12 @@ class MoEBlock(LightweightModule):
             own = ttnn.mesh_partition(x_full, dim=2, cluster_axis=1)  # [S/N, H]
             mark("own_rows")
         ttnn.deallocate(x_full)
-        # ---- exchange ----
-        if self.keep_taps:  # (host copies: the exchange consumes the routing rows)
-            self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(rows)])
-        y_own = self.exchange(own, rows, hook=self.stage_hook)  # owners' sums [S/N, Hr]
-        ttnn.deallocate(own)
-        if rows.is_allocated():
-            ttnn.deallocate(rows)
-        # ---- tail ----
+        return rows, own, se
+
+    def _tail(self, y_own, se, mark=True):
+        """owners' sums [S/N, Hr] (+ the shared expert's output) -> [1, 1, S/SP, H/TP]."""
+        mark = self._mark if mark else (lambda _: None)
+        g = self.geometry
         y_own = ttnn.reshape(y_own, [1, 1, g.tokens_per_chip, self.model.routed_width])
         y_row = ttnn.all_gather(y_own, dim=2, cluster_axis=1)  # [S/SP, Hr]
         ttnn.deallocate(y_own)
@@ -616,15 +647,15 @@ class RoutedExperts:
 class TokenExchange:
     """Routing gather, planner, dispatch prep, 2D sparse dispatch and the fused flat experts + combine: the K3
     token-split block's routed-only path (models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py) on the
-    owners' rows. Built at the first call (after the head's ops ran once: the arena's address is baked into its
-    kernels) and rebuilt if L1 allocated since moved the arena."""
+    owners' rows. Built by the block after its head and tail ran once (the arena's address is baked into its kernels),
+    rebuilt (with a warning) only if L1 allocated since moved the arena."""
 
     def __init__(self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts):
         self.mesh, self.g, self.model, self.experts = mesh, g, model, experts
         self.block = None
         self.builds = 0
 
-    def _build(self):
+    def build(self):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
 
         g, m = self.g, self.model
@@ -652,7 +683,7 @@ class TokenExchange:
                 from loguru import logger
 
                 logger.warning("MoEBlock exchange: L1 moved the arena, rebuilding")
-            self._build()
+            self.build()
         x2 = ttnn.reshape(own, [self.g.tokens_per_chip, self.model.routed_width])
         return self.block.routed(x2, rows, None, self.experts.op, hook=hook)
 
