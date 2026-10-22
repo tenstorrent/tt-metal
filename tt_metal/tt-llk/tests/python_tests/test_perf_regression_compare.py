@@ -286,15 +286,63 @@ def test_report_table_names_the_test_and_keeps_the_whole_config():
         assert f"`{key}={value}`" in text
 
 
-def test_report_table_puts_the_distinguishing_parameter_first():
-    from regression_compare import _delta_table
+def test_report_table_leaves_out_what_never_changes_in_the_test():
+    from regression_compare import _delta_table, _fixed_params
 
     rows = [
         _record("perf_pack", "INIT", shared="x", tile_cnt=2),
         _record("perf_pack", "INIT", shared="x", tile_cnt=8),
     ]
-    body = [l for l in _delta_table(rows, caption="c") if l.startswith("1. ")][0]
-    assert body.startswith("1. `tile_cnt=2`")
+    lines = _delta_table(rows, caption="c", fixed=_fixed_params(rows))
+    row = [l for l in lines if l.startswith("| 1 |")][0]
+    assert "| `tile_cnt=2` |" in row and "shared" not in row
+
+
+def test_report_shortens_enum_and_whole_float_values_and_groups_formats():
+    from regression_compare import _params
+
+    config = {
+        "dest_acc": "DestAccumulation.Yes",
+        "loop_factor": 64.0,
+        "formats.input_A": "Float16",
+        "formats.input_B": "Float16",
+        "formats.output": "Float32",
+    }
+    assert _params(tuple(config.items())) == (
+        "`dest_acc=Yes`, `formats.input=Float16`, `formats.output=Float32`, "
+        "`loop_factor=64`"
+    )
+
+
+def test_report_names_the_arch_and_folds_the_improvements(tmp_path):
+    current, baseline = _sides(
+        tmp_path, (_INIT, _TILE_LOOP), (_INIT, _TILE_LOOP * 1.10)
+    )
+    text = render_report(
+        compare_runs(baseline, current),
+        threshold=DEFAULT_THRESHOLD,
+        test="LLK perf",
+        baseline_sha="a",
+        current_sha="b",
+        arch="wormhole",
+    )
+    assert text.startswith("# Perf compare — LLK perf — Wormhole")
+    assert "**Wormhole: ✅ no regressions**" in text
+    assert "<summary>All 1 improvement findings (faster on current)</summary>" in text
+
+
+def test_report_folds_the_regressions_too(tmp_path):
+    current, baseline = _sides(
+        tmp_path, (_INIT, _TILE_LOOP), (_INIT, _TILE_LOOP * 1.10)
+    )
+    text = render_report(
+        compare_runs(current, baseline),
+        threshold=DEFAULT_THRESHOLD,
+        test="LLK perf",
+        baseline_sha="a",
+        current_sha="b",
+    )
+    assert "<summary>All 1 regression findings (slower on current)</summary>" in text
 
 
 def test_defaults_are_the_measured_ones():

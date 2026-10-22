@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -157,7 +158,7 @@ void kernel_main() {
 
 #ifdef ARCH_QUASAR
         // Quasar (quirk #1): ckl::add uses the default InitReconfigOwner::Chain, so it re-inits the UNPACK
-        // side (add_tiles_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
+        // side (add_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
         // so it does NOT re-program the pack BFD. Retarget the packer to `out` before its PackTile.
         pack_init(dfb::out);
 #endif
@@ -167,6 +168,12 @@ void kernel_main() {
             cos_interm_dfb_obj,
             sin_interm_dfb_obj,
             out_dfb_obj);
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced. dummy_unpack orders the pop after
+        // the wait on Quasar (nothing unpacks this buffer).
+        out_dfb_obj.wait_front(Wt);
+        dummy_unpack(dfb::out);
+        out_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from DFB

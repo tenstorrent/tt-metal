@@ -206,6 +206,25 @@ def test_a_failed_measurement_is_a_skip_not_a_pass():
     assert "did not complete" in reason
 
 
+def test_a_failed_measurement_names_the_leg():
+    leg = "A blackhole measuring leg did not complete: 2/2: cancelled after 10 min."
+    status, reason = verdict(
+        exit_code=0,
+        have_baseline=True,
+        report_written=True,
+        measure_failed=True,
+        measure_reason=leg,
+    )
+    assert status == "skipped"
+    assert reason.startswith(leg)
+
+
+def test_a_skip_names_the_arch():
+    for ctx in (_CTX, {**_CTX, "arch": "wormhole"}):
+        text = build_text("skipped", [], ctx)
+        assert f"{ctx['arch']} · L1_TO_L1" in text.splitlines()[1]
+
+
 def test_a_cancelled_measurement_is_a_skip_not_a_pass():
     from gate_slack_notify import _measure_complete
 

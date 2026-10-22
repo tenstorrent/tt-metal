@@ -11,7 +11,7 @@
 #include "sfpu_stub.h"
 
 using namespace ckernel;
-#include "params.h" // FILL_INT_FORMAT, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
+#include "params.h" // FILL_INT_FORMAT, is_fp32_dest_acc_en
 
 // The kernel path (int_fill vs fill) is selected at runtime from formats.unpack_A_src.
 // FILL_INT_FORMAT (forwarded by the harness) drives the SFPMEM store mode used by
@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     DataFormat math_format = static_cast<DataFormat>(formats.math);
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
     _llk_math_eltwise_sfpu_init_();
 
