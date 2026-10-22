@@ -36,9 +36,11 @@ inline void _calculate_lrelu_(const int iterations, std::uint32_t slope) {
 }
 
 // relu_max(x) = max(min(x, threshold), 0): two SFPSWAP min/max folds in place of two predicated
-// blocks (SFPGT/SFPMOV/SFPENCC each), 9 -> 5 instructions per row when `threshold` is a literal or
-// a constant register, 6 when it lives in a general LReg (SFPSWAP writes both operands, so the
-// compiler copies the threshold first).
+// v_if blocks. On Wormhole each block was an SFPMAD subtract (+SFPNOP) and SFPSETCC, or a bare
+// SFPSETCC, then SFPMOV/SFPENCC; the replayed row goes from 11 to 5 instructions (load, two
+// SFPSWAPs, store, dst increment) when `threshold` is a literal or a constant register. A threshold
+// in a general LReg costs one more SFPMOV per row: SFPSWAP writes both operands, so the compiler
+// copies the threshold first.
 //
 // The order is the one the predicated chain had -- threshold first, then the relu clamp -- and
 // it is not interchangeable with min(max(x, 0), threshold): for threshold < 0 this form returns
@@ -47,7 +49,9 @@ inline void _calculate_lrelu_(const int iterations, std::uint32_t slope) {
 //   +NaN -> threshold (outranks every value, the min lands on the threshold)
 //   -NaN -> +0.0      (ranks below every value, survives the min, the clamp takes it)
 //   -0.0 -> +0.0      (ranks below +0.0)
-// which is what the SFPGT/SFPSETCC chain returned as well; measured on Blackhole silicon, see
+// which is what the predicated chain returned as well. On Wormhole silicon the output is
+// bit-identical to the previous v_if implementation for every bf16 input pattern (±0, ±Inf, NaNs,
+// subnormals) and for random fp32 inputs, at thresholds 6, 0.5 and -0.5; see also
 // test_eltwise_unary_sfpu_relu_max_threshold.
 sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshold) {
     return sfpi::max(sfpi::min(val, threshold), 0.0f);
@@ -56,7 +60,7 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
 // Float relu_max with a per-call scalar threshold. The threshold is parked in vConstFloatPrgm1
 // (LREG13) for the duration of the call: SFPSWAP writes both of its operands, so a threshold held
 // in a general LReg costs an SFPMOV copy per row, while a write to a constant register is dropped.
-// One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 9 before.
+// One SFPCONFIG (+2 SFPLOADI) per call buys one instruction per row: 5 instead of 6, 11 before.
 //
 // Prgm1 is call-scoped here. relu_max_init programs nothing, and every production caller runs its
 // init next to its call (ttnn unary chains emit `<op>_init(); <op>(idst);` per op per tile), so no
@@ -76,8 +80,8 @@ inline void _relu_max_float_impl_(const int iterations, const float threshold) {
     }
 }
 
-// Integer relu_max. No production caller on Blackhole (relu_max_tile_int32 uses the metal
-// relu_clamp_int); kept as it was.
+// Integer relu_max. No production caller (relu_max_tile_int32 uses the metal relu_clamp_int);
+// kept as it was.
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_impl_(const int iterations, VecType threshold) {
     for (int d = 0; d < iterations; d++) {

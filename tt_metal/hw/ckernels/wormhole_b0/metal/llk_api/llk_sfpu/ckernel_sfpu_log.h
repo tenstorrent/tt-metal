@@ -170,9 +170,10 @@ sfpi_inline void _calculate_log_with_base_body_(
 /**
  * @brief ln(base) without any program constant register.
  *
- * ln2 and D come from the caller: a loop with two spare LREGs (lgamma) keeps them resident, a
- * loop with none (digamma) passes the plain floats and they are materialised at use. A, B and
- * C are always materialised at use. The zero test is bitwise; no caller delivers -0.0.
+ * ln2 and D come from the caller as an LREG-resident vFloat or a plain float materialised at use.
+ * On Wormhole, lgamma keeps only ln2 resident and passes D as a float: its reciprocal leaves no
+ * LREG for a second constant, and holding D too fails register allocation. digamma passes both
+ * as floats. A, B and C are always materialised at use. The zero test is bitwise; no caller delivers -0.0.
  *
  * @tparam Ln2T: sfpi::vFloat (LREG-resident) or float (materialised at use).
  * @tparam DT: sfpi::vFloat (LREG-resident) or float (materialised at use).
