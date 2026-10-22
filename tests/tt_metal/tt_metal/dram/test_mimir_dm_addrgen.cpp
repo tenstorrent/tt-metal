@@ -46,10 +46,10 @@ struct AddrgenCase {
 
 std::string case_name(const ::testing::TestParamInfo<AddrgenCase>& info) { return info.param.name; }
 
-// The hardware loop (addrgen_api.hpp) with a one-bank banking loop: every pop advances the inner loop; on reaching its
-// end the inner index restarts at its start (0 here) and the outer loop advances; on the outer end the outer index
-// restarts and the base advances by the face size. The addrgen_api.hpp comment says the index becomes
-// (index + stride) mod end; on a CCE it restarts (Im2Col_Dilation1, whose ends are not a multiple of the stride).
+// The hardware loop (addrgen_api.hpp): every pop advances the inner loop; on reaching its end the inner index restarts
+// at its start (0 here) and the outer loop advances; on the outer end the outer index restarts and the base advances by
+// the face size. The addrgen_api.hpp comment says the index becomes (index + stride) mod end; on a CCE it restarts
+// (Im2Col_Dilation1, whose ends are not a multiple of the stride).
 struct SideModel {
     abi::SideSpec spec;
     uint64_t base = 0;
