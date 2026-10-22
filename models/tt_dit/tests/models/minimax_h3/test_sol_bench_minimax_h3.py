@@ -207,10 +207,14 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             prefix_times.clear()
             # density comes from the compile run; the host readback must not be inside the timed reps
             density = getattr(tt_model, "sol_last_density", None)
+            # 64x64-block density of the same mask (resident / chunk modes skip at the coarser K-chunk level, so
+            # the two differ there; identical in the block-form modes). This is the sparsity the model requires.
+            block_density = getattr(tt_model, "sol_last_block_density", None)
             # Keep the per-call density readback on during the timed reps (2026-10-21): the resident op's time
             # tracks the mask density call by call, and on a machine whose pre-pass gathers are corrupted the mask
             # changes between calls. The readback sits in the module time, never in the op time.
             densities = []
+            block_densities = []
             profile = os.environ.get("SOL_BENCH_PROFILE") == "1"
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
@@ -219,6 +223,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                 ms, out = _timed(module_call, mesh_device, 1)
                 module_ms.append(ms)
                 densities.append(getattr(tt_model, "sol_last_density", None))
+                block_densities.append(getattr(tt_model, "sol_last_block_density", None))
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
         finally:
@@ -238,6 +243,8 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             "prefix_mode": tt_model.sol_prefix_mode if mode == "sol" else None,
             "chunk_density": density,
             "chunk_density_per_rep": densities,
+            "block_density": block_density,
+            "block_density_per_rep": block_densities,
         }
         results.append(rec)
         prefix_note = (
@@ -251,6 +258,12 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             + (
                 f"; density per rep {' / '.join('-' if d is None else f'{d:.3f}' for d in densities)}"
                 if any(d is not None for d in densities)
+                else ""
+            )
+            + (f"; block density (64x64) {block_density:.4f}" if block_density is not None else "")
+            + (
+                f"; block density per rep {' / '.join('-' if d is None else f'{d:.3f}' for d in block_densities)}"
+                if any(d is not None for d in block_densities)
                 else ""
             )
         )

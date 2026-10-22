@@ -154,6 +154,9 @@ class SolPrepassFused:
         self._state: dict | None = None
         self._key = None
         self.last_density: float | None = None
+        # The fused route program writes the chunk-form mask directly in chunk mode, so the block-level density is
+        # only known in the block-form modes (where it equals last_density).
+        self.last_block_density: float | None = None
         self.host_times: dict = {}  # last call's host-side timing of allocation vs launch, per program (seconds)
 
     # ------------------------------------------------------------------ constants / descriptors
@@ -493,6 +496,7 @@ class SolPrepassFused:
             else:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
+            self.last_block_density = None if self.mode == "chunk" else self.last_density
         ttnn.deallocate(q_bar)
         out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias}
         if union is not None:

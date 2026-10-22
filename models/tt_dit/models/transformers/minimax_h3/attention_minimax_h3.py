@@ -164,6 +164,9 @@ class MiniMaxH3Attention(Module):
         self.sol_sink_tokens = 0
         self.sol_report_density = False
         self.sol_last_density: float | None = None
+        # Same mask before the K-chunk union: (q_chunk x 64-key) blocks, 64x64 in resident mode. Equal to
+        # `sol_last_density` in the block-form modes (gather / compact / pack).
+        self.sol_last_block_density: float | None = None
         self._sol_prepass: SolPrepass | None = None
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -548,6 +551,7 @@ class MiniMaxH3Attention(Module):
         out = self._sol_prepass(q_BHNE, k_BHNE, v_BHNE, scale=scale, report_density=self.sol_report_density)
         if self.sol_report_density:
             self.sol_last_density = self._sol_prepass.last_density
+            self.sol_last_block_density = getattr(self._sol_prepass, "last_block_density", None)
         kwargs = {
             "sol_block_mask": out["block_mask"],
             "sol_pooled_k": out["pooled_k"],

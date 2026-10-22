@@ -275,6 +275,9 @@ class SolPrepass:
         self._consts: dict | None = None
         self._key = None
         self.last_density: float | None = None
+        # Density of the (q_chunk x 64-key) block mask before any K-chunk union (64x64 blocks when q_chunk is 64,
+        # i.e. resident mode). In chunk mode `last_density` is the coarser (q_chunk x k_chunk) density the op skips at.
+        self.last_block_density: float | None = None
         self.hifi4 = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -341,24 +344,36 @@ class SolPrepass:
         self.geo = geo
         self._key = key
 
+    def _host_density(self, mask01: ttnn.Tensor, cols: torch.Tensor) -> float:
+        """Mean of a [1,H,nqc_pad,W] 0/1 mask over the real Q chunks and the given real columns (host readback)."""
+        host = ttnn.to_torch(
+            mask01,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=[0, 1] if self.sp_axis == 0 else [1, 0],
+                mesh_shape=tuple(self.mesh_device.shape),
+            ),
+        )
+        # host: [S, 4H (TP replicas), nqc_pad, W]; count real Q chunks and the real columns only
+        sub = host[:, : host.shape[1] // tuple(self.mesh_device.shape)[1 - self.sp_axis], : self.geo.nqc].float()
+        return float(sub[..., cols].mean())
+
+    def _block_cols(self) -> torch.Tensor:
+        geo = self.geo
+        return torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
+
     def _finish_chunk_mode(self, block01: ttnn.Tensor, report_density: bool) -> dict:
         c = self._consts
         geo = self.geo
+        if report_density:
+            # The block-level density (q_chunk x 64 keys) before the K-chunk union: the sparsity the model sees.
+            self.last_block_density = self._host_density(block01, self._block_cols())
         # Any kept block in a K chunk keeps the chunk: [1,H,nqc_pad,nbg] @ [nbg,nkc_pad] -> [1,H,nqc_pad,nkc_pad]
         chunk01 = ttnn.gtz(ttnn.subtract(ttnn.matmul(block01, c["kc_pool"], compute_kernel_config=self.hifi2), 0.5))
         ttnn.deallocate(block01)
         if report_density:
-            host = ttnn.to_torch(
-                chunk01,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=[0, 1] if self.sp_axis == 0 else [1, 0],
-                    mesh_shape=tuple(self.mesh_device.shape),
-                ),
-            )
-            sub = host[:, : host.shape[1] // tuple(self.mesh_device.shape)[1 - self.sp_axis], : geo.nqc].float()
             cols = torch.cat([torch.arange(s * geo.nkc, s * geo.nkc + geo.nkc) for s in range(geo.shards)])
-            self.last_density = float(sub[..., cols].mean())
+            self.last_density = self._host_density(chunk01, cols)
         bias = None
         if self.emit_bias:
             # Blocks of kept chunks are exact (every valid token of the chunk is computed): bias NEG there.
@@ -430,19 +445,8 @@ class SolPrepass:
             return self._finish_chunk_mode(block01, report_density)
         # gather / compact: block-form mask
         if report_density:
-            host = ttnn.to_torch(
-                block01,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=[0, 1] if self.sp_axis == 0 else [1, 0],
-                    mesh_shape=tuple(self.mesh_device.shape),
-                ),
-            )
-            # host: [S, 4H (TP replicas), nqc_pad, nbg]; count real Q chunks and blocks only
-            sub = host[:, : host.shape[1] // tuple(self.mesh_device.shape)[1 - self.sp_axis], : geo.nqc].float()
-            nb_all = geo.shards * geo.nb
-            cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
-            self.last_density = float(sub[..., cols].mean())
+            self.last_density = self._host_density(block01, self._block_cols())
+            self.last_block_density = self.last_density
         bias = None
         if self.emit_bias:
             bias_row = ttnn.add(ttnn.multiply(block01, NEG), c["len_bias_row"])
