@@ -208,8 +208,9 @@ std::shared_ptr<Buffer> create_device_buffer_at_lockstep_address(const MeshBuffe
     return buffer;
 }
 
-// Guards the lazily built entries of MeshBuffer::buffers_. A pool keyed by address keeps the lock out of the class.
-// It is only held to read or publish one entry, so MeshBuffers that share a mutex cannot deadlock.
+// Guards the lazily built entries of MeshBuffer::buffers_ and the change of MeshBuffer::state_ in deallocate(). A pool
+// keyed by address keeps the lock out of the class. Nothing done under it takes another of these locks, so MeshBuffers
+// that share a mutex cannot deadlock.
 std::mutex& lazy_device_buffer_mutex(const MeshBuffer* mesh_buffer) {
     constexpr int kNumMutexBits = 6;
     static std::array<std::mutex, 1 << kNumMutexBits> mutexes;
@@ -436,6 +437,20 @@ void MeshBuffer::deallocate() {
         Inspector::mesh_buffer_deallocated(this);
     }
 
+    // get_device_buffer() checks state_ under this lock, so it cannot build a device buffer at an address that is being
+    // freed. The old state frees the allocation when it is destroyed, after the lock is released. A MeshBuffer that is
+    // already deallocated, as in the destructor after deallocate(), has nothing to change.
+    auto set_deallocated_state = [this]() {
+        if (std::holds_alternative<DeallocatedState>(state_)) {
+            return;
+        }
+        decltype(state_) old_state = DeallocatedState{};
+        {
+            std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
+            state_.swap(old_state);
+        }
+    };
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
@@ -468,7 +483,7 @@ void MeshBuffer::deallocate() {
             }
         }
 
-        state_ = DeallocatedState{};
+        set_deallocated_state();
         return;
     }
 
@@ -477,7 +492,7 @@ void MeshBuffer::deallocate() {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
     }
-    state_ = DeallocatedState{};
+    set_deallocated_state();
 }
 
 MeshDevice* MeshBuffer::device() const {
@@ -490,9 +505,11 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
     // not in the MeshBuffer object, so filling one in from this const method is well defined.
     auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
+    auto mesh_device = mesh_device_.lock();
+    // deallocate() changes state_ under this lock, so a deallocation cannot overlap the check and the build below.
+    std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
 
     // After deallocate() the address may already belong to another buffer, so no entry is returned, built or not.
-    auto mesh_device = mesh_device_.lock();
     TT_FATAL(
         !std::holds_alternative<DeallocatedState>(state_) && mesh_device != nullptr,
         "MeshBuffer::get_device_buffer({}): the MeshBuffer is deallocated or its MeshDevice is gone",
@@ -501,24 +518,10 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     TT_FATAL(
         device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());
 
-    std::mutex& entry_mutex = lazy_device_buffer_mutex(this);
-    {
-        std::lock_guard<std::mutex> lock(entry_mutex);
-        if (device_buffer != nullptr) {
-            return device_buffer.get();
-        }
-    }
-
-    // Build outside the lock; if another thread publishes the entry first, this copy is dropped.
-    std::shared_ptr<Buffer> buffer;
-    {
+    if (device_buffer == nullptr) {
         // Keep lazily built buffers out of a light-metal capture that started after this allocation.
         LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-        buffer = create_device_buffer_at_lockstep_address(*this, device);
-    }
-    std::lock_guard<std::mutex> lock(entry_mutex);
-    if (device_buffer == nullptr) {
-        device_buffer = std::move(buffer);
+        device_buffer = create_device_buffer_at_lockstep_address(*this, device);
     }
     return device_buffer.get();
 }
