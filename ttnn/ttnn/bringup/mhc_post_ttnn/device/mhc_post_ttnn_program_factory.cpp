@@ -213,10 +213,14 @@ ProgramDescriptor create_program_descriptor(
     const Tensor& comb,
     const Tensor& output,
     const ComputeConfigDescriptor& compute_config,
-    bool comb_transposed) {
+    bool comb_transposed,
+    uint32_t post_col,
+    uint32_t comb_col) {
     auto* device = input.device();
 
-    const int64_t n = post.logical_shape()[-1];
+    // post_col / comb_col (P.19): post / comb may be wider (the packed mixes); n is then the residual's stream count
+    const bool offsets = post_col != 0 || comb_col != 0;
+    const int64_t n = offsets ? residual.logical_shape()[-1] / input.logical_shape()[-1] : post.logical_shape()[-1];
     const int64_t col_tiles_per_row = input.logical_shape()[-1] / TILE_HW;  // Ct
     const int64_t token_tiles = tensor_token_tiles(input.padded_shape());
     const int64_t total_units = token_tiles * col_tiles_per_row;
@@ -378,6 +382,13 @@ ProgramDescriptor create_program_descriptor(
             desc.kernels[k].defines.emplace_back("MHC_POST_COMB_DIRECT", "1");
         }
     }
+    if (offsets) {  // the raw post / comb column offsets (absent when 0 / 0: the DM kernels unchanged)
+        TT_FATAL(post_col + n <= TILE_HW && comb_col + n * n <= TILE_HW, "mhc_post: post / comb beyond one tile row");
+        for (uint32_t k : {READER_KERNEL, WRITER_KERNEL}) {
+            desc.kernels[k].defines.emplace_back("MHC_POST_POST_COL", std::to_string(post_col));
+            desc.kernels[k].defines.emplace_back("MHC_POST_COMB_COL", std::to_string(comb_col));
+        }
+    }
     for (uint32_t sem : {SEM_RD_GO, SEM_RD_DONE}) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
@@ -394,7 +405,9 @@ ProgramDescriptor MhcPostProgramFactory::create_descriptor(
         tensor_args.comb,
         output,
         operation_attributes.compute_config,
-        operation_attributes.comb_transposed);
+        operation_attributes.comb_transposed,
+        operation_attributes.post_col,
+        operation_attributes.comb_col);
 }
 
 void MhcPostProgramFactory::override_runtime_arguments(

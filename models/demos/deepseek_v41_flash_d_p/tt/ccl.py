@@ -42,6 +42,26 @@ _SEMS: dict = {}
 _RS_LINKS: dict = {}
 
 
+_DEALLOC = [ttnn.deallocate]
+
+
+def dealloc(t: ttnn.Tensor) -> None:
+    """dealloc(t); GLUE_FOLD=on (P.19, set by ``configure`` at model load): the binding itself, without
+    ttnn's FastOperation wrapper (its config reads, graph-capture check and try / except: ~1.3 us of ~6 us a call,
+    ~1000 calls a chunk). The bring-up profiler's op sequences then skip these calls on both of its runs alike."""
+    _DEALLOC[0](t)
+
+
+def configure() -> None:
+    """Model load: bind ``dealloc`` to the setting's value."""
+    _DEALLOC[0] = ttnn._ttnn.operations.core.deallocate if glue_fold() else ttnn.deallocate
+
+
+def glue_fold() -> bool:
+    """GLUE_FOLD=on (P.19): fabric_reduce_scatter with program_hash (and the other folds of tt/settings.py)."""
+    return settings.get("GLUE_FOLD") == "on"
+
+
 def fabric() -> bool:
     """The bring-up fabric forks (CCL_IMPL fabric or fabric_bf16)."""
     return settings.get("CCL_IMPL") in ("fabric", "fabric_bf16")
@@ -64,10 +84,10 @@ def _rs_bf16(mesh, t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
     (bf16 output, as GLM-5.3's scatter_rows). Does not consume ``t``."""
     tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=DRAM)
     out = ttnn.bringup.fabric_reduce_scatter(
-        tb, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=dim, cache_descriptors=True
+        tb, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=dim, cache_descriptors=True, program_hash=glue_fold()
     )
     if tb is not t:
-        ttnn.deallocate(tb)
+        dealloc(tb)
     return out
 
 
@@ -80,7 +100,7 @@ def _exact_input(t: ttnn.Tensor) -> ttnn.Tensor:
 def _to_fp32(t: ttnn.Tensor) -> ttnn.Tensor:
     """bf16 -> fp32 (exact), consuming ``t``: the consumers of the sums take fp32."""
     out = ttnn.typecast(t, ttnn.float32, memory_config=DRAM)
-    ttnn.deallocate(t)
+    dealloc(t)
     return out
 
 
@@ -176,10 +196,10 @@ def _gather_add(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
     for c in range(1, tp):
         part = ttnn.slice(g, [0, c, 0, 0], [1, c + 1, r, w])
         nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(acc)
-        ttnn.deallocate(part)
+        dealloc(acc)
+        dealloc(part)
         acc = nxt
-    ttnn.deallocate(g)
+    dealloc(g)
     return acc
 
 
@@ -211,18 +231,24 @@ def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
         tf = _exact_input(t)
         out = _gather_add(mesh, tf)
         if tf is not t:
-            ttnn.deallocate(tf)
+            dealloc(tf)
         return out
     if bf16_sums() and not exact:  # CCL_IMPL=fabric_bf16: RS and row gather in bf16, back to fp32 (P.6)
         part = _rs_bf16(mesh, t, 2)
         out = all_gather(part, 2, TP_AXIS)
-        ttnn.deallocate(part)
+        dealloc(part)
         return _to_fp32(out)
     part = ttnn.bringup.fabric_reduce_scatter(
-        t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=2, exact_fp32_add=True, cache_descriptors=True
+        t,
+        cluster_axis=TP_AXIS,
+        num_links=rs_links(mesh),
+        dim=2,
+        exact_fp32_add=True,
+        cache_descriptors=True,
+        program_hash=glue_fold(),
     )
     out = all_gather(part, 2, TP_AXIS)
-    ttnn.deallocate(part)
+    dealloc(part)
     return out
 
 
@@ -238,7 +264,13 @@ def sum_rows(mesh, t: ttnn.Tensor) -> ttnn.Tensor | None:
     if bf16_sums():
         return _rs_bf16(mesh, t, 2)
     return ttnn.bringup.fabric_reduce_scatter(
-        t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=2, exact_fp32_add=True, cache_descriptors=True
+        t,
+        cluster_axis=TP_AXIS,
+        num_links=rs_links(mesh),
+        dim=2,
+        exact_fp32_add=True,
+        cache_descriptors=True,
+        program_hash=glue_fold(),
     )
 
 
@@ -254,12 +286,18 @@ def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
         return _to_fp32(out) if fp32 else out
     if fabric() and _rs_ok(t, 3, tp):
         return ttnn.bringup.fabric_reduce_scatter(
-            t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=3, exact_fp32_add=True, cache_descriptors=True
+            t,
+            cluster_axis=TP_AXIS,
+            num_links=rs_links(mesh),
+            dim=3,
+            exact_fp32_add=True,
+            cache_descriptors=True,
+            program_hash=glue_fold(),
         )
     tf = _exact_input(t)
     full = _gather_add(mesh, tf)
     if tf is not t:
-        ttnn.deallocate(tf)
+        dealloc(tf)
     out = ttnn.mesh_partition(full, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-    ttnn.deallocate(full)
+    dealloc(full)
     return out

@@ -51,6 +51,7 @@ Realistic (use by default): every option below.
 - `compute_kernel_config=None`: `fp32_dest_acc_en` must be True.
 - `deepseek=False` (opt-in, CHANGELOG 7): DeepSeek-V4 `hc_split_sinkhorn` math: pre + hc_eps, no clamp (clamp_min / clamp_max ignored), softmax + eps, column norm, then iters - 1 pairs. Refused with `coefficients_given=True`. Realistic: the reference's own fp32 math, where the source `mhc_split_sinkhorn` is TF32-grade and biased (CHANGELOG 7).
 - `collapse_pre=None` (opt-in, CHANGELOG 8): (..., T, n..32) fp32 TILE; with streams and the coefficients, y collapses with its columns 0..n-1 instead of the pre just computed (hc still returned). Refused without streams, with `coefficients_given`, or wider than 32. Realistic (a pure data-flow change: y is bit-identical to `mhc_pre_xing(collapse_pre, streams, coefficients_given=True)`).
+- `partials=1` (opt-in, CHANGELOG 10; coefficient mode only): P > 1 = the input is (1, P, T, 32), a TP group's partial rows gathered on dim 1; summed in dim-1 order in fp32 on the SFPU (the exact all_gather + ttnn.add sum) before the coefficient math; hc / y (1, 1, T, ...). Realistic (exact fp32 sum: the reference's fp32 mixes).
 - Returns `(hc or None, y or None)`.
 
 `mhc_pre_xing_pack` (fork addition, CHANGELOG 4):
@@ -68,6 +69,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - `mhc_pre_xing(deepseek=True)`, 2x2, 1024 rows per chip: coefficients vs CPU fp32 Sinkhorn rel 6.5e-8..7.6e-8 (source `mhc_split_sinkhorn` 5.9e-4..1.2e-3); 0.031 ms vs 0.45 ms for rsqrt chain + source kernel + concat (CHANGELOG.md change 7).
 - `mhc_pre_xing_pack`, [1024, 10240] fp32 per chip: sum x^2 rel 4.7e-7 (bf16-valued) / 1.0e-7 (fp32 mantissas), 0.119 ms incl. the mix row (models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md, RMS statistic note).
 - Regression after change 7: model cases 103 passed; unit + golden 321 passed / 1 skipped (CHANGELOG.md change 7).
+- `mhc_pre_xing(partials=)`, deepseek_v41_flash_d_p P.19 (2x2, [1024, 32] fp32 rows, TP 2): bit-identical to the ttnn.add-summed row (tests/unit/test_xing_partials.py); one fabric all_gather instead of typecast + bf16 reduce-scatter + gather + typecast: attn_hc + ffn_hc host 10.8 -> 3.7 ms, device 4.02 -> 4.21 ms a chunk.
 - `mhc_pre_xing(collapse_pre=)`, 2x2 p150, [1024, 4 x 2560] fp32 a chip (wall, 30 synced calls): 0.164 ms vs coefficients 0.028 + the multiply / addcmul collapse 0.765 ms; y bit-identical to the coefficients_given collapse, 4e-8 vs float64; deepseek_v41_flash_d_p attn / ffn_collapse 5.0 + 5.0 -> 0 ms a chunk (CHANGELOG.md change 8).
 - `mhc_pre_xing_pack` engram mode, 2x2, h [1024, 4 x 2560], k [1024, 5 x 2560] fp32: 0.424 ms vs 2.51 ms for the multiply / slice / ttnn.sum chain; every column <= 1.4e-7 vs float64 sums; deepseek_v41_flash_d_p engram_add 7.0 -> 1.78 ms a chunk with mhc_post's identity-comb add (CHANGELOG.md change 9).
 - Regression after changes 8-9: unit + golden 332 passed / 1 skipped (= 321 / 1 + 11 new), model cases 103 passed.
@@ -98,7 +100,7 @@ Tests: `tests/test_mhc_pre_ttnn.py` + `tests/cases.py` (mhc_pre model cases), `t
 ## Used by
 - glm53_flash_d_p: `mhc_pre` in `tt/mhc_fused.py` (default; `GLM_MHC_IMPL=composite` keeps the op chains); O.1 cases.
 - xing40_a4b_d_p: `mhc_pre_xing_pack` -> `ttnn.all_reduce` axis 1 -> `mhc_pre_xing` in `tt/mhc.py`; collapse `mhc_pre_xing(coefficients_given=True)` in `tt/collapse.py` (`XING_HC_IMPL=composed` keeps the op chain); task P.2b, O.1 cases.
-- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). Model cases for these calls: none yet (task O.1).
+- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). P.19 (setting GLUE_FOLD=on): `mhc_pre_xing(..., partials=TP)` on the all_gathered rows (tt/mhc.py:TtHcMixes.fused). Model cases for these calls: none yet (task O.1).
 
 ## History
 CHANGELOG.md; codegen worklogs: changelog.md, op_design.md, op_requirements.md, verification_report.md, verifier_report.json, l1_ledger.md, self_reflection.md.

@@ -692,7 +692,10 @@ def create_mesh_program_descriptor(
     inc_every=8,
     dim=2,
     exact_fp32_add=False,
+    hash_key=None,
 ):
+    # hash_key (program_hash=True): each chip's program gets custom_program_hash = hash(salt, hash_key, chip); None
+    # (default) = no custom hash (generic_op hashes the descriptor)
     sem_a, sem_b, ready_addr = sems
     ring = chips_ring
     page_bytes = int(input_tensor.buffer_aligned_page_size())
@@ -899,6 +902,8 @@ def create_mesh_program_descriptor(
             ),
         ]
         r, c = coord
+        if hash_key is not None:
+            program.custom_program_hash = hash((_HASH_SALT, hash_key, (r, c))) & ((1 << 64) - 1)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
 
@@ -945,6 +950,7 @@ def fabric_reduce_scatter(
     dim=2,
     exact_fp32_add=False,
     cache_descriptors=False,
+    program_hash=False,
 ):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] TILE, DRAM interleaved, a partial per chip; block i = rows
     i Sb ..) over each group: every chip gets its block of the sum over the group, [1, 1, Sb, W] (the layout
@@ -970,7 +976,17 @@ def fabric_reduce_scatter(
         host time a call on a 2x2 for 160 cores' arguments); True = kept in an LRU keyed by everything it depends on
         (the group configuration, dim, exact_fp32_add, the input / scratch / output buffer addresses, padded shapes,
         dtype and page size, the counters' addresses), so a steady-state loop whose allocations repeat reuses it
-        (generic_op ~0.1 ms). The device program is the same either way."""
+        (generic_op ~0.1 ms). The device program is the same either way.
+    program_hash: False (default) = generic_op hashes every program descriptor on every call (each kernel's inline
+        source string, CBs, semaphores: ~0.04 ms a call on a 2x2); True (needs cache_descriptors) = each cached
+        descriptor's programs carry ``custom_program_hash``, a hash of everything the program depends on except the
+        buffer addresses (the group configuration, dim, exact_fp32_add, dtype, page size, padded shapes, the
+        counters' addresses, the chip), so generic_op skips that hashing; and the plan / counters lookup of
+        ``prepare`` is one dict hit. Programs, runtime arguments and results are the same as without it (addresses
+        are runtime arguments, which generic_op patches on a program-cache hit either way)."""
+    if program_hash:
+        assert cache_descriptors, "program_hash needs cache_descriptors=True"
+        return _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add)
     mesh_device = input_tensor.device()
     plan_entry = prepare(
         mesh_device,
@@ -1049,6 +1065,103 @@ def fabric_reduce_scatter(
 
 _DESC_CACHE = OrderedDict()  # cache_descriptors=True: dkey -> (mesh_device, MeshProgramDescriptor), LRU
 _DESC_CACHE_SIZE = 512
+_FAST_PREP = {}  # program_hash=True: (mesh id, group configuration) -> (mesh_device, prepare(...)'s result)
+_HASH_SALT = "ttnn.bringup.fabric_reduce_scatter.program_hash"
+
+
+def _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add):
+    """program_hash=True: fabric_reduce_scatter(cache_descriptors=True) with the plan lookup memoized and every
+    cached program descriptor carrying a custom_program_hash (no per-call hashing of the kernel sources in
+    generic_op). The same checks, scratch, descriptor (built by create_mesh_program_descriptor) and generic_op call."""
+    mesh_device = input_tensor.device()
+    pkey = (id(mesh_device), cluster_axis, topology, num_links, scheme, placement)
+    hit = _FAST_PREP.get(pkey)
+    if hit is None or hit[0] is not mesh_device:
+        hit = _FAST_PREP[pkey] = (
+            mesh_device,
+            prepare(
+                mesh_device,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=num_links,
+                scheme=scheme,
+                placement=placement,
+            ),
+        )
+    _, chips, ring, sem_handles = hit[1]
+    G = next(iter(chips.values()))["G"]
+    _check_dram_interleaved(input_tensor, "input")
+    shape = list(input_tensor.shape)
+    assert input_tensor.layout == ttnn.TILE_LAYOUT and shape[0] == shape[1] == 1, shape
+    assert dim in (2, 3, -1, -2), f"dim {dim}: blocks of rows (2) or of columns (3)"
+    dim = dim % 4
+    if exact_fp32_add:
+        assert input_tensor.dtype == ttnn.float32, f"exact_fp32_add needs FLOAT32 partials, got {input_tensor.dtype}"
+    if dim == 2:
+        assert shape[2] % (32 * G) == 0, f"rows {shape[2]} must split into {G} tile-aligned blocks"
+        Sb, W = shape[2] // G, shape[3]
+    else:
+        assert shape[2] % 32 == 0, f"rows {shape[2]} must be tile-aligned"
+        assert shape[3] % (32 * G) == 0, f"columns {shape[3]} must split into {G} tile-aligned blocks"
+        Sb, W = shape[2], shape[3] // G
+    want = [1, 1, Sb, W]
+    if output is None:
+        output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(want), input_tensor.dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+    assert list(output.shape) == want and output.dtype == input_tensor.dtype, (list(output.shape), want)
+    skey = (id(mesh_device), G, Sb, W, input_tensor.dtype) + (() if dim == 2 else ("cols",))
+    if skey not in _SCRATCH_CACHE:
+        scr = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, (G + 1) * Sb, W]),
+            input_tensor.dtype,
+            ttnn.TILE_LAYOUT,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        _SCRATCH_CACHE[skey] = (mesh_device, scr)
+    scratch = _SCRATCH_CACHE[skey][1]
+    sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in sem_handles)
+    # everything the programs depend on but the buffer addresses (runtime arguments)
+    prog = (
+        id(mesh_device),
+        cluster_axis,
+        topology,
+        num_links,
+        scheme,
+        placement,
+        dim,
+        bool(exact_fp32_add),
+        sems,
+        input_tensor.dtype,
+        int(input_tensor.buffer_aligned_page_size()),
+        tuple(input_tensor.padded_shape),
+        tuple(output.padded_shape),
+    )
+    # ("hashed",): never the default path's descriptor of the same buffers (that one has no custom hash)
+    dkey = prog + ("hashed",) + tuple(int(t.buffer_address()) for t in (input_tensor, scratch, output))
+    hit = _DESC_CACHE.get(dkey)
+    if hit is None or hit[0] is not mesh_device:
+        extra = {} if dim == 2 and not exact_fp32_add else {"dim": dim, "exact_fp32_add": exact_fp32_add}
+        desc = create_mesh_program_descriptor(
+            mesh_device,
+            input_tensor,
+            scratch,
+            output,
+            sems,
+            chips,
+            num_links=num_links,
+            chips_ring=ring,
+            hash_key=prog,
+            **extra,
+        )
+        hit = (mesh_device, desc)
+        _DESC_CACHE[dkey] = hit
+        while len(_DESC_CACHE) > _DESC_CACHE_SIZE:
+            _DESC_CACHE.popitem(last=False)
+    else:
+        _DESC_CACHE.move_to_end(dkey)
+    return ttnn.generic_op([input_tensor, scratch, output], hit[1])
 
 
 def prepare(

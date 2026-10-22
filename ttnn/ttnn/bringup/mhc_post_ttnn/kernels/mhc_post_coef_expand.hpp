@@ -111,9 +111,13 @@ struct CoefExpander {
         const uint32_t raw_addr = t == 0 ? raw_post_addr : raw_comb_addr;
 #ifdef MHC_POST_COMB_DIRECT
         // comb_transposed=False: X'_j = sum_i comb[j*n + i] X_i (comb applied as stored, xing40_a4b_d_p).
-        const uint32_t raw_col = t == 0 ? job_j : job_j * n + (t - 1);
+        uint32_t raw_col = t == 0 ? job_j : job_j * n + (t - 1);
 #else
-        const uint32_t raw_col = t == 0 ? job_j : (t - 1) * n + job_j;
+        uint32_t raw_col = t == 0 ? job_j : (t - 1) * n + job_j;
+#endif
+#ifdef MHC_POST_POST_COL
+        // post_col / comb_col (P.19): post / comb read from columns of a wider tile row (the packed mixes)
+        raw_col += t == 0 ? MHC_POST_POST_COL : MHC_POST_COMB_COL;
 #endif
         const uint32_t tile = job_j * coef_tiles_per_stream + coef_tile_in_stream(t);
         expand_half(raw_addr, raw_col, bcast_base + tile * coef_page_bytes, coef_half(t));

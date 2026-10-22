@@ -48,7 +48,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     bool coefficients_given = false,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     bool deepseek = false,
-    const std::optional<Tensor>& collapse_pre = std::nullopt);
+    const std::optional<Tensor>& collapse_pre = std::nullopt,
+    int64_t partials = 1);
 
 // ttnn.bringup.mhc_pre_xing_pack: the row mhc_pre_xing reduces, from the caller's partial projection. `mix` (..., T,
 // 32) fp32 (partial x @ fn^T in columns 0 .. n(n+2)-1, zero elsewhere) and the local streams (..., T, n*C) fp32 -> mix

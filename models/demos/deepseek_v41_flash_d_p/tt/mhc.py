@@ -34,7 +34,9 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
-from .common import DRAM, compute_config, fpu_weight, tp_sum
+from . import ccl
+from .ccl import dealloc
+from .common import DRAM, TP_AXIS, compute_config, fpu_weight, tp_sum
 from .layout import HC, streams_cols_to_chip_major
 from .settings import settings
 
@@ -77,6 +79,7 @@ class TtHcMixes:
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
         )
         self.sinkhorn = settings.get("HC_SINKHORN")
+        self.gather = ccl.glue_fold()  # GLUE_FOLD=on (P.19): the fused step's exchange as one all_gather
         # sfpu_fp32: the fork's scalars (runtime args of one program shared by every layer; fp32 values, exact)
         self.scale = [float(v) for v in scale.float().reshape(-1)]
         self.base = [float(v) for v in base.float().reshape(-1)]
@@ -99,7 +102,7 @@ class TtHcMixes:
         column 24 (what ttnn.bringup.mhc_post(stats_weight=fn_t) emits in the residual's pass, MHC_FUSED=on)."""
         mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
-        ttnn.deallocate(mix)
+        dealloc(mix)
         return packed
 
     def fused(self, x: ttnn.Tensor, pre: ttnn.Tensor, row: ttnn.Tensor | None = None):
@@ -111,8 +114,16 @@ class TtHcMixes:
         assert self.sinkhorn == "sfpu_fp32", "MHC_FUSED=on needs HC_SINKHORN=sfpu_fp32"
         if row is None:
             row = self.partial_row(x)
-        red = tp_sum(self.mesh, row)
-        ttnn.deallocate(row)
+        tp = self.mesh.shape[TP_AXIS]
+        partials = {}
+        if self.gather and tp > 1:
+            # GLUE_FOLD=on (P.19): ONE all_gather of the chips' fp32 rows over TP -> [1, TP, R, 32]; mhc_pre_xing adds
+            # them in mesh-column order on the SFPU (exact fp32: _gather_add's sum; no bf16 RS, no casts)
+            red = ccl.all_gather(row, 1, TP_AXIS)
+            partials = {"partials": tp}
+        else:
+            red = tp_sum(self.mesh, row)
+        dealloc(row)
         hc, y = ttnn.bringup.mhc_pre_xing(
             red,
             x,
@@ -125,17 +136,18 @@ class TtHcMixes:
             sinkhorn_iters=self.iters,
             deepseek=True,
             collapse_pre=pre,
+            **partials,
         )
-        ttnn.deallocate(red)
+        dealloc(red)
         return hc, y
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         rows = x.shape[-2]
         mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
-        ttnn.deallocate(mix)
+        dealloc(mix)
         red = tp_sum(self.mesh, packed)
-        ttnn.deallocate(packed)
+        dealloc(packed)
         if self.sinkhorn == "sfpu_fp32":
             hc, _ = ttnn.bringup.mhc_pre_xing(
                 red,
@@ -149,25 +161,25 @@ class TtHcMixes:
                 sinkhorn_iters=self.iters,
                 deepseek=True,
             )
-            ttnn.deallocate(red)
+            dealloc(red)
             return hc
         ss = ttnn.slice(red, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1])
         ms = ttnn.multiply(ss, self.inv_n, dtype=ttnn.float32)
-        ttnn.deallocate(ss)
+        dealloc(ss)
         t = ttnn.add(ms, self.norm_eps, dtype=ttnn.float32)
-        ttnn.deallocate(ms)
+        dealloc(ms)
         rs = ttnn.rsqrt(t)
-        ttnn.deallocate(t)
+        dealloc(t)
         mixes = ttnn.multiply(red, rs, dtype=ttnn.float32, memory_config=DRAM)  # column 24 is ignored below
-        ttnn.deallocate(red)
-        ttnn.deallocate(rs)
+        dealloc(red)
+        dealloc(rs)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.consts, HC, self.iters, self.hc_eps
         )
-        ttnn.deallocate(mixes)
+        dealloc(mixes)
         out = ttnn.concat([pre, post, comb], dim=-1, memory_config=DRAM)
         for t_ in (pre, post, comb):
-            ttnn.deallocate(t_)
+            dealloc(t_)
         return ttnn.reshape(out, [1, 1, rows, NG])
 
 

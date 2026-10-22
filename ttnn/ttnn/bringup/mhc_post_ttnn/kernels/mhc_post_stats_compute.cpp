@@ -54,6 +54,9 @@ constexpr uint32_t cb_soa = get_compile_time_arg_val(15);
 constexpr uint32_t cb_soa_out = get_compile_time_arg_val(16);
 constexpr uint32_t cb_part = get_compile_time_arg_val(17);
 constexpr uint32_t cb_fin = get_compile_time_arg_val(18);
+#ifdef MHC_POST_STATS_F16
+constexpr uint32_t cb_f = get_compile_time_arg_val(19);  // P.19: bf16 F tiles (UnpackToDestFp32: exact in DEST)
+#endif
 
 #ifdef TRISC_MATH
 namespace stats_sfpu {
@@ -160,6 +163,9 @@ void kernel_main() {
         }
         cb_wait_front(cb_cf, 2 * cf);
         cb_wait_front(cb_in, (n + 1) * bw);
+#ifdef MHC_POST_STATS_F16
+        cb_wait_front(cb_f, bw);
+#endif
         cb_reserve_back(cb_out, n * bw);
         cb_reserve_back(cb_xs, n * bw);
         cb_reserve_back(cb_ssc, bw);
@@ -169,10 +175,21 @@ void kernel_main() {
             for (uint32_t t = 0; t < cf; ++t) {
                 copy_from(cb_cf, t, t);
             }
+#ifdef MHC_POST_STATS_F16
+            reconfig_data_format_srca(cb_cf, cb_f);
+            copy_init(cb_f);
+            copy_from(cb_f, c, cf);  // F (bf16 -> fp32 DEST, exact)
+            reconfig_data_format_srca(cb_f, cb_in);
+            copy_init(cb_in);
+            for (uint32_t t = 1; t <= n; ++t) {
+                copy_from(cb_in, c * (n + 1) + t, cf + t);
+            }
+#else
             copy_init(cb_in);
             for (uint32_t t = 0; t <= n; ++t) {
                 copy_from(cb_in, c * (n + 1) + t, cf + t);
             }
+#endif
             STATS_SFPU(stats_sfpu::mix_half<0>);
             copy_init(cb_cf);
             for (uint32_t t = 0; t < cf; ++t) {
@@ -195,6 +212,9 @@ void kernel_main() {
         cb_push_back(cb_xs, n * bw);
         cb_push_back(cb_ssc, bw);
         cb_pop_front(cb_in, (n + 1) * bw);
+#ifdef MHC_POST_STATS_F16
+        cb_pop_front(cb_f, bw);
+#endif
         cb_pop_front(cb_cf, 2 * cf);
 
         // the unit's partial: DEST 0 = X'_unit @ W_block (FPU), DEST 1 = sum of the columns' squares (SFPU)

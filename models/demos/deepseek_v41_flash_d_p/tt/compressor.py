@@ -54,6 +54,7 @@ import torch
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, tp_sum
 from .norm import TtDistributedRmsNorm
 from .rope import (
@@ -131,10 +132,10 @@ class CompressRope:
         for t in (self.cos, self.sin):
             sl = ttnn.slice(t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM)
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
-            ttnn.deallocate(sl)
+            dealloc(sl)
             if sp > 1:
                 part = ttnn.mesh_partition(tl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
-                ttnn.deallocate(tl)
+                dealloc(tl)
                 tl = part
             out.append(tl)
         return out[0], out[1]
@@ -194,7 +195,7 @@ class TtServedRows:
             self.slab.tensor, slab, slot, kv, valid_global=valid, **args
         )
         for t in (slot, kv, valid):
-            ttnn.deallocate(t)
+            self._slot.release(t) if t is slot else self._pos.release(t)
 
     def write(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
         """rows_rm [1, 1, S / r, width] bf16 ROW_MAJOR, the chunk's compressed rows in natural order, replicated, rows
@@ -202,7 +203,7 @@ class TtServedRows:
         g = self.geo
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
-        idx = ttnn.slice(self.tables.srv, [0, 0, k, 0], [1, 1, k + 1, g.w], memory_config=DRAM)
+        idx = self.tables.srv_row(k)  # GLUE_FOLD=on (P.19): sliced once per start for the chunk's writes
         rows = ttnn.embedding(
             ttnn.reshape(idx, [1, g.w]),
             ttnn.reshape(rows_rm, [g.chunk, self.tok_width]),
@@ -210,13 +211,13 @@ class TtServedRows:
             dtype=ttnn.bfloat16,
             memory_config=DRAM,
         )
-        ttnn.deallocate(idx)
+        self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width])
         self._put(slab, start, end)
         view = slab.buffer_address() == rows.buffer_address()  # a reshape may return a view (K-1, DS41-52)
-        ttnn.deallocate(rows)
+        dealloc(rows)
         if not view:
-            ttnn.deallocate(slab)
+            dealloc(slab)
 
     # ------------------------------------------------------------------ harness / serving boundary (host)
     def _owner_shards(self) -> list[torch.Tensor]:
@@ -255,7 +256,7 @@ class TtServedRows:
                 (0, None),
             )
             self._put(slab, t0, t0 + m * r)
-            ttnn.deallocate(slab)
+            dealloc(slab)
 
     def free(self) -> None:
         """Frees the tensor only when it is the cache's own (never the engine's)."""
@@ -337,24 +338,24 @@ class TtCompressor:
         for g in (g0, g1):
             d = ttnn.subtract(g, m, dtype=ttnn.float32, memory_config=DRAM)
             e.append(ttnn.exp(d, memory_config=DRAM))
-            ttnn.deallocate(d)
-            ttnn.deallocate(g)
-        ttnn.deallocate(m)
+            dealloc(d)
+            dealloc(g)
+        dealloc(m)
         den = ttnn.add(e[0], e[1], dtype=ttnn.float32, memory_config=DRAM)
         acc = None
         for kv, ei in zip((kv0, kv1), e):
             wt = ttnn.divide(ei, den, memory_config=DRAM)
             t = ttnn.multiply(kv, wt, dtype=ttnn.float32, memory_config=DRAM)
             for u in (wt, ei, kv):
-                ttnn.deallocate(u)
+                dealloc(u)
             if acc is None:
                 acc = t
             else:
                 nxt = ttnn.add(acc, t, dtype=ttnn.float32, memory_config=DRAM)
-                ttnn.deallocate(acc)
-                ttnn.deallocate(t)
+                dealloc(acc)
+                dealloc(t)
                 acc = nxt
-        ttnn.deallocate(den)
+        dealloc(den)
         return acc
 
     def __call__(self, x: ttnn.Tensor, start: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -366,14 +367,14 @@ class TtCompressor:
         pdt = ccl.partial_dtype(self.mesh) if self.glue_partial else ttnn.float32
         part = self._mm(x, self.proj_w, dtype=pdt)
         p = tp_sum(self.mesh, part)
-        ttnn.deallocate(part)
+        dealloc(part)
         if r > 1:
             pooled = self._pool(p)
-            ttnn.deallocate(p)
+            dealloc(p)
         else:
             pooled = p
         latent = self.norm(pooled)
-        ttnn.deallocate(pooled)
+        dealloc(pooled)
         n = rows // r
         cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
         if self.stock:
@@ -386,22 +387,22 @@ class TtCompressor:
             lr = rope_deinterleaved(latent, cos, sin)
             ckv = cast(lr, ttnn.bfloat16)
             if ckv is not lr:
-                ttnn.deallocate(lr)
+                dealloc(lr)
         kp = self._mm(latent, self.wk)
-        ttnn.deallocate(latent)
+        dealloc(latent)
         kn = self.k_norm(kp)
-        ttnn.deallocate(kp)
+        dealloc(kp)
         if fold:
             k = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
-            ttnn.deallocate(kn)
+            dealloc(kn)
             self.rope.free(cos, sin)
             return ckv, k
         kr = rope_deinterleaved(kn, cos, sin)
-        ttnn.deallocate(kn)
+        dealloc(kn)
         self.rope.free(cos, sin)
         k = cast(kr, ttnn.bfloat16)
         if k is not kr:
-            ttnn.deallocate(kr)
+            dealloc(kr)
         return ckv, k
 
     def _rope_stock(self, latent: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -409,13 +410,13 @@ class TtCompressor:
         the latent cast to bf16; k = rope of k_norm(latent wk^T) written bf16 (wk reads the fp32 latent, as before)."""
         lb = ttnn.typecast(latent, ttnn.bfloat16, memory_config=DRAM)
         ckv = rope_stock(lb, cos, sin, self.rope.trans)
-        ttnn.deallocate(lb)
+        dealloc(lb)
         kp = self._mm(latent, self.wk)
-        ttnn.deallocate(latent)
+        dealloc(latent)
         kn = self.k_norm(kp)
-        ttnn.deallocate(kp)
+        dealloc(kp)
         k = rope_stock(kn, cos, sin, self.rope.trans)
-        ttnn.deallocate(kn)
+        dealloc(kn)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return ckv, k
 
@@ -437,15 +438,15 @@ class TtCompressor:
             )
             keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
             if not full:
-                ttnn.deallocate(iota)
+                dealloc(iota)
             masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM)
-            ttnn.deallocate(keep)
+            dealloc(keep)
             if g is not t:
-                ttnn.deallocate(g)
+                dealloc(g)
             g = masked
         rm = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         if g is not t and rm is not g:
-            ttnn.deallocate(g)
+            dealloc(g)
         return rm
 
     def write(self, ckv: ttnn.Tensor, k: ttnn.Tensor, start: int, end: int, caches: TtCompressCaches) -> None:
@@ -455,7 +456,7 @@ class TtCompressor:
         for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
             rm = self._gathered(t, valid)
             cache.write(rm, start, end)
-            ttnn.deallocate(rm)
+            dealloc(rm)
 
 
 def compressor_weights(ck, layer: int) -> dict[str, torch.Tensor]:

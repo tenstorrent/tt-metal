@@ -27,10 +27,12 @@ namespace ttnn::operations::bringup::mhc_post_ttnn {
 struct MhcPostStatsParams {
     tt::tt_metal::ComputeConfigDescriptor compute_config;
     bool comb_transposed = true;
+    uint32_t post_col = 0;  // P.19: post / comb column offsets (writer defines MHC_POST_POST_COL / _COMB_COL; 0 = off)
+    uint32_t comb_col = 0;
 };
 
 struct MhcPostStatsInputs {
-    Tensor input;     // F   (..., T, C)      fp32
+    Tensor input;     // F   (..., T, C)      fp32, or bf16 (P.19: its own CB, define MHC_POST_STATS_F16)
     Tensor residual;  // X   (..., T, n*C)    fp32
     Tensor post;      // (..., T, n)          fp32
     Tensor comb;      // (..., T, n*n)        fp32
@@ -83,5 +85,7 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const ttnn::Tensor& comb,
     const ttnn::Tensor& weight,
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
-    bool comb_transposed);
+    bool comb_transposed,
+    uint32_t post_col = 0,
+    uint32_t comb_col = 0);
 }  // namespace ttnn::prim::bringup
