@@ -147,6 +147,28 @@ def test_concat(device, height, width, dim, dtype):
     assert_equal(torch_output_tensor, output)
 
 
+# Issue #61543: an input that is empty along the concat dim must contribute nothing, as in torch.cat
+@pytest.mark.parametrize("empty_pos", [0, 1, 2, None])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("width", [64, 50])
+def test_concat_empty_input(device, empty_pos, dim, layout, width):
+    shape = [1, 2, 32, width]
+    empty_shape = list(shape)
+    empty_shape[dim] = 0
+    torch_inputs = []
+    for i in range(3):
+        s = empty_shape if empty_pos in (i, None) else shape
+        n = math.prod(s)
+        torch_inputs.append(((torch.arange(n) + i * 7) % 97 + 1).reshape(s).to(torch.bfloat16))
+    torch_output_tensor = torch.cat(torch_inputs, dim=dim)
+
+    inputs = [ttnn.from_torch(t, layout=layout, device=device) for t in torch_inputs]
+    output = ttnn.to_torch(ttnn.concat(inputs, dim=dim))
+
+    assert_equal(torch_output_tensor, output)
+
+
 def test_concat_size_switches(device):
     def to_tt(t, device):
         return ttnn.from_torch(

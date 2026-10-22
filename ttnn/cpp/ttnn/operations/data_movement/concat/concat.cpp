@@ -319,6 +319,20 @@ ttnn::Tensor concat(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
+    // Inputs that are empty along dim contribute nothing; drop them like torch.cat does (#61543).
+    std::vector<ttnn::Tensor> non_empty_tensors;
+    std::copy_if(
+        input_tensors.begin(),
+        input_tensors.end(),
+        std::back_inserter(non_empty_tensors),
+        [dim](const ttnn::Tensor& t) { return t.logical_shape()[dim] != 0; });
+    if (non_empty_tensors.empty()) {
+        return ttnn::to_memory_config(first_tensor, mem_config, std::nullopt);
+    }
+    if (non_empty_tensors.size() != input_tensors.size()) {
+        return ttnn::concat(non_empty_tensors, dim, memory_config, optional_output_tensor, groups, sub_core_grids);
+    }
+
     auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
         ttnn::Shape shape_out = tensors[0].logical_shape();
         shape_out[dim] = 0;
