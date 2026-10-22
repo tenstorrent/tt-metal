@@ -101,6 +101,7 @@ from models.demos.common.bringup.core.gate import (
 from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.runs import FreezeError, agent_hashes, freeze_task
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
+from models.demos.common.bringup.core.stamps import NO_MEASURE, RECORDS
 from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
@@ -375,25 +376,6 @@ def command_violations(commands: list[str], repo: Path) -> list[str]:
                 if touches:
                     out.append(f"python on device code without a safe runner: {cmd[:120]!r}")
     return sorted(set(out))
-
-
-# F120: files that cannot change what a run measures (the orchestration, its docs and selftests, any markdown): a commit
-# to them between an A/B report and its accept keeps the report's measurements valid
-NO_MEASURE = tuple(
-    f"models/demos/common/bringup/{p}"
-    for p in (
-        "orchestrator.py",
-        "watch.py",
-        "overseer.py",
-        "agents/*",
-        "briefs/*",
-        "skill/*",
-        "selftest/*",
-        "dev/*",
-        "dashboard/*",
-        "knowledge/*",
-    )
-) + ("*.md",)
 
 
 def ab_switch_text(task: dict) -> str:
@@ -932,6 +914,8 @@ class Orchestrator:
             sig = self.infra_failure(res)
             if sig:
                 raise InfraStop(tid, sig)
+        if res.reused:  # F150
+            self.echo(f"  [{tid}] reused: same code, not run: {', '.join(res.reused)}")
         self.echo(f"  [{tid}] gate {res.verdict}" + (f" -> {res.commit}" if res.commit else ""))
         self.refresh_dashboards()
         return res
@@ -1247,7 +1231,7 @@ class Orchestrator:
         def git(*a):
             return subprocess.run(["git", *a], cwd=self.spec.repo, capture_output=True, text=True).stdout
 
-        skip = ("*state.json", "*/results/*", "*BREADCRUMBS.md", "*supervision.md", "*/bringup/tasks.yaml") + NO_MEASURE
+        skip = RECORDS + NO_MEASURE
         files = [
             ln
             for ln in git("ls-tree", "-r", "HEAD").splitlines()
