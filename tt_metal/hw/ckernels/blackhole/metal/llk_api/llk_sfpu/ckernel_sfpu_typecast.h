@@ -41,8 +41,9 @@ constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 // rounds to nearest (ties away from zero), and max(0, x - 0.5) rounds to trunc(x) for every
 // finite x. The uint16 mode drops the sign, so the clamp is needed, and it must follow the
 // subtraction (max(0, x) - 0.5 rounds 0 to 1). Values from 65535 up saturate to 65535.
-// Blackhole SFPADDI emits the canonical NaN 0x7FC00000 for any NaN input (ISA, SFPMAD), so a negative
-// NaN gives 65535 like a positive one; Wormhole keeps the sign and gives 0.
+// NaN conversion results depend on the source format and Dest mode. On Blackhole,
+// negative NaNs can produce 65535, but Float16_b 0xFFC0 with FP32 Dest produces 0.
+// Wormhole preserves the sign and produces 0 for negative NaNs.
 // The plain loops need an SFPNOP after SFPADDI: SFPSWAP reads its operands before the SFPADDI
 // result is visible, and the hardware does not stall for it.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
