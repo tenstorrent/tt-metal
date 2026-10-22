@@ -6,9 +6,12 @@
 // and a two-thread handoff, on metal's device names only.
 //
 // Runtime args (flat tile-SRAM offsets): 0 source, 1 NOC destination,
-// 2 Ethernet destination (in the link peer's SRAM), 3 result words.
+// 2 Ethernet destination (in the link peer's SRAM), 3 result words,
+// 4 nonzero when the link peer is this tile (loopback), so the Ethernet
+// destination is in this tile's SRAM.
 // Common args: 0 pattern seed. Compile-time args: pattern_words.
-// Thread 0 moves the pattern; thread 1 verifies both destinations and writes
+// Thread 0 moves the pattern; thread 1 verifies the destinations in this
+// tile's SRAM (the NOC one, and the Ethernet one under loopback) and writes
 // result[0] = words still wrong through the uncached view after polling, and
 // result[1] = words wrong through the cached view after invalidating.
 
@@ -36,6 +39,7 @@ struct PocRun {
     uint32_t noc_dst;
     uint32_t eth_dst;
     uint32_t results;
+    bool eth_dst_local;
     uint32_t seed;
 };
 
@@ -82,19 +86,32 @@ void move_pattern(const PocRun& run) {
 }
 
 void verify_pattern(const PocRun& run) {
-    // Pull both destinations into the cache first, so a missing invalidate
+    const uint32_t dsts[] = {run.noc_dst, run.eth_dst};
+    const uint32_t num_dsts = run.eth_dst_local ? 2 : 1;
+
+    // Pull the destinations into the cache first, so a missing invalidate
     // leaves stale lines behind.
-    uint32_t stale = count_mismatches(run, cached(run.noc_dst)) + count_mismatches(run, cached(run.eth_dst));
+    uint32_t stale = 0;
+    for (uint32_t d = 0; d < num_dsts; d++) {
+        stale += count_mismatches(run, cached(dsts[d]));
+    }
     (void)stale;
 
     sync_threads();
 
-    uint32_t uncached_bad = poll_until_match(run, run.noc_dst) + poll_until_match(run, run.eth_dst);
+    uint32_t uncached_bad = 0;
+    for (uint32_t d = 0; d < num_dsts; d++) {
+        uncached_bad += poll_until_match(run, dsts[d]);
+    }
 
-    invalidate_l2_cache_range(run.noc_dst, kPatternBytes);
-    invalidate_l2_cache_range(run.eth_dst, kPatternBytes);
+    for (uint32_t d = 0; d < num_dsts; d++) {
+        invalidate_l2_cache_range(dsts[d], kPatternBytes);
+    }
     invalidate_l1_cache();
-    uint32_t cached_bad = count_mismatches(run, cached(run.noc_dst)) + count_mismatches(run, cached(run.eth_dst));
+    uint32_t cached_bad = 0;
+    for (uint32_t d = 0; d < num_dsts; d++) {
+        cached_bad += count_mismatches(run, cached(dsts[d]));
+    }
 
     uncached(run.results)[0] = uncached_bad;
     uncached(run.results)[1] = cached_bad;
@@ -108,6 +125,7 @@ void kernel_main() {
         .noc_dst = get_arg_val<uint32_t>(1),
         .eth_dst = get_arg_val<uint32_t>(2),
         .results = get_arg_val<uint32_t>(3),
+        .eth_dst_local = get_arg_val<uint32_t>(4) != 0,
         .seed = get_common_arg_val<uint32_t>(0),
     };
 

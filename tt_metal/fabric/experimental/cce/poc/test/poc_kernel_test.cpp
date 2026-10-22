@@ -41,6 +41,9 @@ thread_local uint32_t t_thread_id;
 std::barrier<> g_barrier(kNumThreads);
 std::vector<uint32_t> g_rt_args;
 std::vector<uint32_t> g_common_args;
+// Cross-tile: Ethernet sends land in the link peer's SRAM, not this window.
+bool g_eth_to_peer = false;
+std::vector<uint8_t> g_peer_sram;
 
 uint8_t* cached(uintptr_t addr) { return reinterpret_cast<uint8_t*>(addr); }
 uint8_t* sram(uintptr_t addr) { return reinterpret_cast<uint8_t*>(addr + MEM_L1_UNCACHED_BASE); }
@@ -95,7 +98,15 @@ void noc_async_write(uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t
 }
 
 void internal_::eth_send_packet_fake(uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
-    sram_copy(uintptr_t{dest_word_addr} << 4, uintptr_t{src_word_addr} << 4, size_t{num_words} << 4);
+    uintptr_t dst = uintptr_t{dest_word_addr} << 4, src = uintptr_t{src_word_addr} << 4;
+    size_t size = size_t{num_words} << 4;
+    if (!g_eth_to_peer) {
+        sram_copy(dst, src, size);
+        return;
+    }
+    check_range(src, size);
+    check_range(dst, size);
+    std::memcpy(g_peer_sram.data() + (dst - kWindowBase), sram(src), size);
 }
 
 // ---------------------------------------------------------------- test
@@ -161,20 +172,20 @@ int check_pattern(const char* what, uint32_t addr) {
     return bad;
 }
 
-}  // namespace
-
-int main() {
-    if (!map_window()) {
-        return 2;
-    }
+// One kernel run. Cross-tile, the Ethernet destination is checked in the
+// peer's SRAM and must stay poisoned in this tile's.
+int run_case(bool cross_tile) {
+    const char* name = cross_tile ? "cross-tile" : "loopback";
     poison(kSrc);
     poison(kNocDst);
     poison(kEthDst);
     const uint32_t results_poison = 0xFFFFFFFF;
     std::memcpy(sram(kResults), &results_poison, 4);
     std::memcpy(sram(kResults + 4), &results_poison, 4);
+    g_eth_to_peer = cross_tile;
+    g_peer_sram.assign(kWindowSize, 0);
 
-    g_rt_args = {kSrc, kNocDst, kEthDst, kResults};
+    g_rt_args = {kSrc, kNocDst, kEthDst, kResults, cross_tile ? 0u : 1u};
     g_common_args = {kSeed};
 
     std::vector<std::thread> threads;
@@ -188,14 +199,45 @@ int main() {
         t.join();
     }
 
-    int failures = check_pattern("source", kSrc) + check_pattern("NOC destination", kNocDst) +
-                   check_pattern("Ethernet destination", kEthDst);
+    int failures = check_pattern("source", kSrc) + check_pattern("NOC destination", kNocDst);
+    if (cross_tile) {
+        int peer_bad = 0;
+        for (uint32_t i = 0; i < kPatternWords; i++) {
+            uint32_t v;
+            std::memcpy(&v, g_peer_sram.data() + (kEthDst - kWindowBase) + 4 * i, 4);
+            peer_bad += v != pattern_word(i);
+            peer_bad += sram_word(kEthDst + 4 * i) != (0xDEAD0000u ^ i);
+        }
+        if (peer_bad) {
+            std::fprintf(
+                stderr,
+                "FAIL: %s: Ethernet destination: %d words wrong in the peer or changed locally (%u words)\n",
+                name,
+                peer_bad,
+                kPatternWords);
+        }
+        failures += peer_bad;
+    } else {
+        failures += check_pattern("Ethernet destination", kEthDst);
+    }
     uint32_t uncached_bad = sram_word(kResults);
     uint32_t cached_bad = sram_word(kResults + 4);
     if (uncached_bad != 0 || cached_bad != 0) {
-        std::fprintf(stderr, "FAIL: result words: uncached %u, cached %u (want 0, 0)\n", uncached_bad, cached_bad);
+        std::fprintf(stderr, "FAIL: %s: result words: uncached %u, cached %u (want 0, 0)\n", name, uncached_bad,
+                     cached_bad);
         failures++;
     }
+    std::printf("%s: %s\n", name, failures ? "FAIL" : "PASS");
+    return failures;
+}
+
+}  // namespace
+
+int main() {
+    if (!map_window()) {
+        return 2;
+    }
+    int failures = run_case(false) + run_case(true);
     std::printf("%s\n", failures ? "poc_kernel_test: FAIL" : "poc_kernel_test: PASS");
     return failures ? 1 : 0;
 }
