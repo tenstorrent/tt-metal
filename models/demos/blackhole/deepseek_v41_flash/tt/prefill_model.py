@@ -875,7 +875,7 @@ class DSV41PrefillModel:
         if getattr(self.dyn, "umask", None) is not None:
             act = getattr(self, "active_mask", None)
             m = torch.ones(self.rows * self.U) if act is None else torch.as_tensor(act).float()
-            ttnn.copy_host_to_device_tensor(
+            h2d(  # (recordable: see ``record_window``)
                 ttnn.from_torch(
                     m.reshape(-1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self.shard
                 ),
@@ -978,20 +978,40 @@ class DSV41PrefillModel:
         self._dyn_compiled = None
         self.timing["compile_and_capture"] = time.perf_counter() - t0
 
-    def replay_window(self, tokens, hashes, s0, C, active, vis=None):
+    def record_window(self, prepped, s0, C, active):
+        """All the host work of the uploads of the window [s0, s0 + C) (input tensors, RoPE tables, masks, hand-off index tables: ``upload_inputs`` + ``begin_chunk``) with the device copies only RECORDED -> ops for
+        ``replay_window(ops=...)``. Runs while the device replays the previous window (the demo's ``prep_rec``)."""
+        self.active_mask = torch.as_tensor(active).bool()
+        with recording() as ops:
+            self.upload_inputs(prepped, self._bufs[C])
+            self.begin_chunk(s0, C)
+        return ops
+
+    def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
         ``active`` bool [B]; ``vis`` (DSV41_VISION=1): (image mask [B, C] bool, embedding override [B, C, dim] bf16) or None. Returns (host seconds, device seconds).
         """
         t0 = time.perf_counter()
-        self.active_mask = torch.as_tensor(active).bool()
-        act = self.active_mask.nonzero().reshape(-1)
-        self.upload_inputs(self.prep_inputs(tokens, hashes, act, vis=vis), self._bufs[C])
-        self.begin_chunk(s0, C)
+        if ops is not None:  # recorded ahead (``record_window``): only the device copies are left
+            replay(ops)
+        else:
+            self.active_mask = torch.as_tensor(active).bool()
+            act = self.active_mask.nonzero().reshape(-1)
+            self.upload_inputs(
+                prepped if prepped is not None else self.prep_inputs(tokens, hashes, act, vis=vis), self._bufs[C]
+            )
+            self.begin_chunk(s0, C)
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
         check_trace_allocations(self.md, self.dyn_trace, "prefill chunk")
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+        if (
+            overlap is not None
+        ):  # host work of the NEXT window (Engram hash + rows gather / dequant) runs while the device replays this one
+            to0 = time.perf_counter()
+            overlap()
+            self.timing["host_overlapped"] = self.timing.get("host_overlapped", 0.0) + time.perf_counter() - to0
         ttnn.synchronize_device(self.md)
         t2 = time.perf_counter()
         for hk in self.post_replay_hooks:

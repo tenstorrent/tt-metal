@@ -23,6 +23,7 @@ where. NOT possible: ``ttnn.copy_host_to_device_tensor(host, ttnn.get_device_ten
 (tests/test_apc_m2_device_write.py, variant A).
 """
 
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -294,7 +295,39 @@ def read_pool_latents(model, b, src, n):
     return torch.cat(out) if len(out) > 1 else out[0]
 
 
+def _snapshot_nb():
+    """``DSV41_APC_SNAP_NB`` (default 1): the carried-state reads of a snapshot are issued without blocking and waited for in groups (``SNAP_GROUP_MIB`` of device slices alive at once). A snapshot costs ~0.4 s whatever
+    its size (measured 6.6 .. 55 MiB: 0.37 .. 0.47 s) because every carried tensor was a blocking slice + read round trip (~300 per snapshot); 6 snapshots of a 32k prompt = 2.8 s of the 28 s prefill call.
+    """
+    return os.environ.get("DSV41_APC_SNAP_NB", "1") == "1"
+
+
+SNAP_GROUP_MIB = (
+    32  # device bytes (per device) of slices kept alive between two synchronisations of the non-blocking snapshot reads
+)
+
+
 def snapshot_user(model, b, s, toks):
+    """-> PrefixSnapshot (see ``_snapshot_user``). ``DSV41_APC_SNAP_CHECK=1`` (debug): also takes the blocking snapshot and asserts both are bit-identical."""
+    nb = _snapshot_nb()
+    snap = _snapshot_user(model, b, s, toks, nb)
+    if nb and os.environ.get("DSV41_APC_SNAP_CHECK") == "1":
+        ref = _snapshot_user(model, b, s, toks, False)
+        assert snap.carried.keys() == ref.carried.keys()
+        for k in ref.carried:
+            assert len(snap.carried[k]) == len(ref.carried[k]) and all(
+                torch.equal(x, y) for x, y in zip(snap.carried[k], ref.carried[k])
+            ), f"non-blocking snapshot differs from the blocking one in {k} at {s}"
+        for k in ref.pool:
+            assert torch.equal(snap.pool[k], ref.pool[k]), f"pool latents of source {k} differ at {s}"
+        print(
+            f"prefix cache: snapshot check OK at {s} tokens ({len(ref.carried)} tensors; non-blocking {snap.seconds:.2f} s, blocking {ref.seconds:.2f} s)",
+            flush=True,
+        )
+    return snap
+
+
+def _snapshot_user(model, b, s, toks, nb):
     """State of user ``b`` right after a step that ended at position ``s`` (``model.pf_resume[b] == s``) -> PrefixSnapshot. ``toks``: the user's tokens [>= s]. The pool latents of the kv-source layers
     are NOT read from the pool (an fp8 pool, and reading it would mean the whole per-device pool): the kv table of a source layer holds the same bf16 latents (entry j = FIFO row LAT - n + j).
     """
@@ -308,11 +341,38 @@ def snapshot_user(model, b, s, toks):
     for src in _sources(model):
         if not paged and f"L{src}.kvt" not in specs:
             raise ApcUnsupported(f"no kv table for source layer {src} (dense prefill path)")
+    group_bytes = SNAP_GROUP_MIB << 20
+    live, live_bytes = (
+        [],
+        0,
+    )  # non-blocking mode: (device slice to free or None, [(list, index) slots of the pending host tensors])
+    pending = []  # (list, index) slots holding a host tensor handle until the next sync
+    staged = OrderedDict()
+
+    def flush():
+        nonlocal live, live_bytes, pending
+        if not live and not pending:
+            return
+        ttnn.synchronize_device(model.md)
+        for lst, k in pending:
+            lst[k] = ttnn.to_torch(lst[k]).clone()
+        for part in live:
+            if part is not None:
+                ttnn.deallocate(part)
+        live, live_bytes, pending = [], 0, []
+
+    def read(part, k, lst):
+        """device shard k of mesh tensor ``part`` -> appended to ``lst`` (a torch tensor; a host handle until the next flush in non-blocking mode)"""
+        if nb:
+            lst.append(ttnn.from_device(_dev(part, k), blocking=False))
+            pending.append((lst, len(lst) - 1))
+        else:
+            lst.append(read_shard(part, k).clone())
+
     for name, sp in specs.items():
         if sp.tensor.dtype != ttnn.bfloat16:
             raise ApcUnsupported(f"{name} is {sp.tensor.dtype}")
         n = sp.count(s)
-        vals = []
         N, D = sp.tensor.shape[2], sp.tensor.shape[3]
         end = sp.end_row(N) if sp.kind == "tail" else N
         # slice the slot (and, for a FIFO, its valid tail) ON DEVICE first: reading a whole padded table per tensor is what made a snapshot cost ~0.5 s regardless of its size
@@ -320,19 +380,32 @@ def snapshot_user(model, b, s, toks):
         whole = (
             sp.tensor.shape[0] == 1 and lo == 0 and end == N
         )  # (a full slice returns the persistent tensor itself: never free it)
+        pieces = [[] for _ in range(1 if sp.replicated else cols)]
         if whole:
-            for c in range(1 if sp.replicated else cols):
-                vals.append(read_shard(sp.tensor, r * cols + c).clone())
+            for c in range(len(pieces)):
+                read(sp.tensor, r * cols + c, pieces[c])
+            if nb:
+                live.append(
+                    None
+                )  # (persistent tensor: read in place, nothing is enqueued that could change it before the flush)
         else:
             # row pieces of <= SNAP_PIECE_MIB: one device copy of the whole slice is 512 MiB at 524,288 tokens (1M config), more than the largest free DRAM block (OOM in the server at the 2^19 snapshot)
             step = max(1, (SNAP_PIECE_MIB << 20) // (D * sp.tensor.element_size()))
-            pieces = [[] for _ in range(1 if sp.replicated else cols)]
             for p0 in range(lo, end, step):
                 part = ttnn.slice(sp.tensor, [i, 0, p0, 0], [i + 1, 1, min(p0 + step, end), D])
                 for c in range(len(pieces)):
-                    pieces[c].append(read_shard(part, r * cols + c).clone())
-                ttnn.deallocate(part)
-            vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
+                    read(part, r * cols + c, pieces[c])
+                if nb:
+                    live.append(part)
+                    live_bytes += (min(p0 + step, end) - p0) * D * sp.tensor.element_size()
+                    if live_bytes >= group_bytes:
+                        flush()
+                else:
+                    ttnn.deallocate(part)
+        staged[name] = (pieces, sp)
+    flush()
+    for name, (pieces, sp) in staged.items():
+        vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
         snap.carried[name] = vals * cols if sp.replicated else vals
     for src in _sources(model):
         if paged:  # no table: the latents are read from the user's pool pages

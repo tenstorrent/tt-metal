@@ -138,6 +138,9 @@ def _chunked_prefill_capabilities():
     up = int(os.environ.get("DSV41_PREFILL_UP", "1"))
     cap = int(os.environ.get("DSV41_VLLM_MAX_PARTIAL", str(VS.MESH_ROWS * up - 1)))
     caps = {"prefill_chunk_alignment": chunk, "max_partial_prefills": max(cap, 0)}
+    # admission window of an idle engine (plugin TTScheduler._admission_hold): requests arriving together join ONE prefill call (4 users cost one call, ~25 s at 32k, instead of 1 + 3 sequential calls);
+    # a lone request waits at most this long. ``TT_PREFILL_ADMIT_WINDOW_MS`` in the server's environment overrides it; 0 = start the first prefill step at once.
+    caps["prefill_admission_window_ms"] = float(os.environ.get("DSV41_PREFILL_ADMIT_MS", "100"))
     if _apc_on():
         # the scheduler rounds vLLM's prefix-cache hits down to the grid of the snapshot policy (a hit the model cannot resume from would make it recompute the whole prompt in one call)
         caps["prefix_cache_hit_policy"] = os.environ.get("DSV41_APC_POLICY", "pow2")

@@ -1478,10 +1478,14 @@ class Model:
                         wave, apc, vis
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
                 slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
-                for s0 in range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C):
+                s0_list = list(range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C))
+
+                def _build(s0, wave=wave):
+                    """host inputs of the window at s0 (tokens, Engram hashes, Engram rows gathered / dequantised): None when no user of the wave is active in it. Pure host work: DSV41_PF_OVERLAP=1 (default) runs it for the NEXT window while the device replays the current one."""
+                    th_h = 0.0
                     part = [it for it in wave if it[2] <= s0 < it[3]]
                     if not part:
-                        continue
+                        return None
                     active, lens = torch.zeros(rows * Up, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
                     tok = torch.zeros(rows * Up, C, dtype=torch.long)
                     slot_b = [None] * (rows * Up)
@@ -1514,14 +1518,45 @@ class Model:
                             rows=torch.tensor([slot_b[i] for i in idx.tolist()]),
                             token_mask=None if vw is None else ~vw[0][idx],
                         )
-                    t_hash += time.perf_counter() - th0
+                    th_h = time.perf_counter() - th0
+                    prepped = pm.prep_inputs(tok, hs, active.nonzero().reshape(-1), vis=vw)
+                    return part, active, lens, tok, slot_b, vw, hs, prepped, th_h
+
+                ahead = {}
+                for k_s0, s0 in enumerate(s0_list):
+                    bw = ahead.pop(s0) if s0 in ahead else _build(s0)
+                    if bw is None:
+                        continue
+                    part, active, lens, tok, slot_b, vw, hs, prepped, th_h = bw[:9]
+                    rec_ops = bw[9] if len(bw) > 9 else None
+                    t_hash += th_h
                     self.sink.set_lengths(lens)
                     self.sink.set_map(slot_b if general else None)
                     self._slot_b = slot_b if general else None
                     self._last_pos = (
                         torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if general else lens - 1
                     )
-                    th, td = pm.replay_window(tok, hs, s0, C, active, vis=vw)
+
+                    def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b):
+                        if os.environ.get("DSV41_PF_OVERLAP", "1") != "1":
+                            return
+                        for s0n in s0_list[k_s0 + 1 :]:
+                            nbw = _build(s0n)
+                            if nbw is None:
+                                ahead[s0n] = None
+                                continue
+                            # the whole host side of the next window's uploads (RoPE tables, masks, hand-off index tables, Engram rows) is built NOW, the device copies are recorded and replayed right before its trace
+                            self.sink.set_lengths(nbw[2])
+                            self.sink.set_map(nbw[4] if general else None)
+                            ops = pm.record_window(nbw[7], s0n, C, nbw[1])
+                            self.sink.set_lengths(lens)
+                            self.sink.set_map(slot_b if general else None)
+                            ahead[s0n] = nbw + (ops,)
+                            return
+
+                    th, td = pm.replay_window(
+                        tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops
+                    )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     done = [b for b, _, _, e in part if e <= s0 + C]
                     te0 = time.perf_counter()
