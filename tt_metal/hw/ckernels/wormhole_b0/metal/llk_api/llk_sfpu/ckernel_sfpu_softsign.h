@@ -15,9 +15,13 @@ inline void calculate_softsign() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat tmp = sfpi::abs(v) + 1.0f;
-        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
-        sfpi::dst_reg[0] = v * tmp;
+        sfpi::vFloat a = sfpi::abs(v);
+        sfpi::vFloat r = a * sfpu_reciprocal<APPROXIMATION_MODE>(a + 1.0f);
+        // 1/(1+|x|) underflows near FLT_MAX; for |x| >= 2^24 softsign rounds to 1 anyway
+        v_if(a >= 16777216.0f) { r = 1.0f; }
+        v_endif;
+        // copysgn restores the sign, including for -0
+        sfpi::dst_reg[0] = sfpi::copysgn(r, v);
         sfpi::dst_reg++;
     }
 }

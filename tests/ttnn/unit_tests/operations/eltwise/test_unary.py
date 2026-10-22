@@ -1686,6 +1686,31 @@ def test_unary_softsign_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device
 
 
 @pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)],
+    ids=["bfloat16", "float32"],
+)
+def test_unary_softsign_large_magnitude(torch_dtype, ttnn_dtype, device):
+    # Regression for #61531: 1/(1+|x|) underflows near the float max, which used to give 0 instead of ±1.
+    fmax = torch.finfo(torch_dtype).max
+    magnitudes = [fmax, 2.0**127, 1e38, 2.0**24, 1e30, 1000.0, 1.0]
+    values = [s * m for m in magnitudes for s in (1.0, -1.0)] + [0.0, -0.0]
+    in_data = torch.tensor(values, dtype=torch_dtype).repeat(1024 // len(values) + 1)[:1024].reshape(32, 32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn.softsign(input_tensor))
+    golden_tensor = torch.nn.functional.softsign(in_data)
+
+    large = in_data.abs() >= 2.0**24
+    assert torch.equal(output_tensor[large], torch.sign(in_data[large]))
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
+    if torch_dtype == torch.float32:
+        # BF16 pack may drop the sign of zero, so only check -0 for float32
+        zeros = in_data == 0
+        assert torch.equal(torch.signbit(output_tensor[zeros]), torch.signbit(in_data[zeros]))
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([3, 128, 32])),
