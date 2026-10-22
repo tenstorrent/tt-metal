@@ -21,6 +21,7 @@ ALWI void binary_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_de
     static_assert(llk_2_0::is_supported_format(FA) && llk_2_0::is_supported_format(FB), "binary init: Float16_b / Float16 only.");
     static_assert(is_legal_tile_shape(SA), "binary init: illegal tile shape for operand A.");
     static_assert(same_tile_shape(SA, SB), "binary init: operands A and B must have the same tile shape.");
+    detail::dest_leave<dest_dvalid_client::UNPACK>();
     detail::dest_join<dest_dvalid_client::FPU>();
     UNPACK((llk_2_0::unpack_AB_init<LLKOperand<FA, SA>::descriptor, LLKOperand<FB, SB>::descriptor>(
         a.l1_address, b.l1_address)));

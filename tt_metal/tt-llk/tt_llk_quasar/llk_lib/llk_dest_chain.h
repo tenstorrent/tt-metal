@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "ckernel_trisc_common.h"
+#include "llk_assert.h"
 #include "llk_dest_dvalid.h"
 
 namespace ckernel
@@ -19,19 +21,33 @@ using dest_dvalid::THIS_UNIT;
 
 // Each thread only acts for its own unit, so the copies agree on the holder and the use, and on the turns of the
 // units a thread tracks.
+// No member initializers: in metal the state is per-thread zero-init storage (.tbss), given initial_state() by
+// _llk_dest_chain_reset_.
 struct State
 {
-    dest_dvalid_client holder = NONE;
-    bool holder_has_bit       = false; // on the holder's thread, false while it was admitted on an empty bank
-    bool gated                = false; // this thread's unit has a wait word, false at boot and after a leave
-    std::uint8_t members      = 0;
-    std::uint8_t turned       = 0;          // tracked units with a turn in the current bank use
-    std::uint8_t ordered[2]   = {0xF, 0xF}; // per bank, tracked units with a turn in its last use (boot orders everyone)
-    std::uint8_t use          = 0;          // bank of the current use in SyncHalf
-    std::uint8_t bank         = 0;          // bank of this thread's unit
+    dest_dvalid_client holder;
+    bool holder_has_bit;     // on the holder's thread, false while it was admitted on an empty bank
+    bool gated;              // this thread's unit has a wait word, false at boot and after a leave
+    std::uint8_t members;
+    std::uint8_t turned;     // tracked units with a turn in the current bank use
+    std::uint8_t ordered[2]; // per bank, tracked units with a turn in its last use (boot orders everyone)
+    std::uint8_t use;        // bank of the current use in SyncHalf
+    std::uint8_t bank;       // bank of this thread's unit
 };
 
-inline State state;
+constexpr State initial_state()
+{
+    return State {NONE, false, false, 0, 0, {0xF, 0xF}, 0, 0};
+}
+
+// One instance per hardware TRISC thread, like trisc::bfd_state (llk_bfd_alloc.h): ENV_LLK_INFRA uses a plain
+// global; the metal build declares it extern thread_local, defined zero-init in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
+// (a non-zero .tdata image breaks Quasar device init), and _llk_dest_chain_reset_ gives it its initial value.
+#ifdef ENV_LLK_INFRA
+inline State state = initial_state();
+#else
+extern thread_local State state;
+#endif
 
 /**
  * @brief Select a bank on its owner's thread, preserving the bank's ownership bits.
@@ -130,6 +146,42 @@ inline bool end_use()
 }
 
 } // namespace dest_chain
+
+/**
+ * @brief Kernel-start reset of the dest chain. Call on every thread (UNPACK, MATH, PACK, ISOLATE_SFPU) before any join.
+ *
+ * Resets this thread's chain bookkeeping. The UNPACK thread then does what the tt-llk test boot does: zeroes Dest,
+ * clears every dvalid bit and bank id and the four dvalid control words a previous kernel left programmed, then raises
+ * DEST_CHAIN_INIT to 3. Each other thread spins until it is raised and takes one count, so no thread joins or hands
+ * dest to another unit before the reset has landed, and the semaphore is back at 0 once all three passed.
+ */
+inline void _llk_dest_chain_reset_()
+{
+    dest_chain::state = dest_chain::initial_state();
+    if constexpr (dest_chain::THIS_UNIT == dest_dvalid_client::UNPACK)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, 0 /*16-bit*/, 0, 1, 0);
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, 1 /*32-bit*/, 0, 1, 0);
+        _llk_dest_dvalid_boot_reset_();
+        _llk_dest_dvalid_write_wait_<dest_dvalid_client::UNPACK, 0, 0>(false /*stall*/);
+        _llk_dest_dvalid_write_wait_<dest_dvalid_client::FPU, 0, 0>(false /*stall*/);
+        _llk_dest_dvalid_write_wait_<dest_dvalid_client::SFPU, 0, 0>(false /*stall*/);
+        _llk_dest_dvalid_write_wait_<dest_dvalid_client::PACK, 0, 0>(false /*stall*/);
+        _llk_dest_dvalid_write_release_<dest_dvalid_client::UNPACK, 0, false /*HOLD_BANK*/>();
+        _llk_dest_dvalid_write_release_<dest_dvalid_client::FPU, 0, false /*HOLD_BANK*/>();
+        _llk_dest_dvalid_write_release_<dest_dvalid_client::SFPU, 0, false /*HOLD_BANK*/>();
+        _llk_dest_dvalid_write_release_<dest_dvalid_client::PACK, 0, false /*HOLD_BANK*/>();
+        TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::CFGEXU);
+        TTI_SEMINIT(3 /*max*/, 3 /*init*/, 0, trisc::semaphore::t6_sem(trisc::semaphore::DEST_CHAIN_INIT));
+    }
+    else if constexpr (dest_chain::THIS_UNIT != dest_chain::NONE)
+    {
+        while (semaphore_read(trisc::semaphore::DEST_CHAIN_INIT) == 0)
+        {
+        }
+        trisc::t6_semaphore_get(trisc::semaphore::DEST_CHAIN_INIT);
+    }
+}
 
 /**
  * @brief Add UNIT to the dest chain.

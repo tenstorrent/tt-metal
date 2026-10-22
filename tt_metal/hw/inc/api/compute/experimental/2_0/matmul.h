@@ -14,6 +14,21 @@
 
 namespace ckernel {
 namespace experimental {
+namespace detail {
+
+// Takes Dest for FPU; when this starts FPU's turn, MATH zeroes the bank first (matmul accumulates onto Dest and the
+// chain never clears it).
+__attribute__((noinline)) inline void matmul_dest_take() {
+    [[maybe_unused]] const bool new_turn = dest_chain::state.holder != dest_dvalid_client::FPU;
+    _llk_dest_chain_take_<dest_dvalid_client::FPU, DST_SYNC_MODE, DST_ACCUM_MODE>();
+#ifdef TRISC_MATH
+    if (new_turn) {
+        _llk_math_dest_clear_<DST_SYNC_MODE, DST_ACCUM_MODE>(dest_chain::state.bank);
+    }
+#endif
+}
+
+}  // namespace detail
 
 // clang-format off
 /**
@@ -37,6 +52,7 @@ ALWI void matmul_init(
     static_assert(llk_2_0::is_supported_format(F0) && llk_2_0::is_supported_format(F1), "matmul_init: Float16_b / Float16 only.");
     static_assert(is_legal_tile_shape(S0) && is_legal_tile_shape(S1), "matmul_init: illegal tile shape.");
     LLK_ASSERT(ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "matmul_init: block exceeds Dest");
+    detail::dest_leave<dest_dvalid_client::UNPACK>();
     detail::dest_join<dest_dvalid_client::FPU>();
     UNPACK((llk_2_0::unpack_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, ct_dim, rt_dim, kt_dim)));
@@ -89,7 +105,7 @@ ALWI void matmul_init(LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint3
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
 ALWI void matmul_tile(
     LLKOperand<F0, S0> in0, LLKOperand<F1, S1> in1, std::uint32_t in0_tile, std::uint32_t in1_tile, std::uint32_t idst) {
-    detail::dest_take<dest_dvalid_client::FPU>();
+    detail::matmul_dest_take();
     UNPACK((llk_2_0::unpack_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0.tile(in0_tile), in1.tile(in1_tile), 1, 1, 1)));
     MATH((llk_2_0::math_matmul_tile(idst)));
@@ -123,7 +139,7 @@ ALWI void matmul_block(
     LLK_ASSERT(
         (ct_dim == 1 && rt_dim == 1) || (in0.stride_tiles == 1 && in1.stride_tiles == 1),
         "matmul_block: a block step needs contiguous operand tiles");
-    detail::dest_take<dest_dvalid_client::FPU>();
+    detail::matmul_dest_take();
     UNPACK((llk_2_0::unpack_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0.tile(in0_tile), in1.tile(in1_tile), ct_dim, rt_dim, kt_dim)));
     MATH((llk_2_0::math_matmul_block(ct_dim, rt_dim)));

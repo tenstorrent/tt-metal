@@ -305,6 +305,7 @@ struct semaphore
     constexpr static std::uint32_t FPU_SFPU    = 5; // math -> sfpu thread, dest section ready
     constexpr static std::uint32_t SFPU_FPU    = 6; // sfpu thread -> math, dest section done
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t DEST_CHAIN_INIT = 2; // unpack -> math/pack/sfpu: dest-chain kernel-start reset done (llk_dest_chain.h)
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
