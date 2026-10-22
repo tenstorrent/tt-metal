@@ -202,9 +202,7 @@ class ModelArgs:
                     keep.add(shard)
             shards = sorted(keep)
 
-            # Dequantize only this window's layer tensors (+ non-layer ones): a shard holding these layers also holds
-            # others, and dequantizing all of them to bf16 put ~100 GB on every rank (4 ranks/host -> host OOM).
-            # Scale tensors share their weight's layer prefix, so the filtered map still resolves them.
+            # Shards also hold other layers' tensors: dequantize only this window's (and the non-layer ones).
             def _in_window(k):
                 kk = k[len("language_model.") :] if k.startswith("language_model.") else k
                 return not kk.startswith("model.layers.") or start <= int(kk.split(".")[2]) < start + kln
