@@ -471,12 +471,15 @@ class MTPSpecEngine:
         self.recorded_drafter = os.environ.get("QWEN36_SPEC_EAGER_DRAFTER", "0") != "1"
         self._dr_bufs = []  # persistent drafter-trace inputs (all of the _dr_* tensors below)
         self._dr_tok0 = None  # [B,1] uint32 pending tokens
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []  # per draft step k: [B] int32, [1,B,1,rd] bf16 x2
+        # step-major draft-step tables (row k*B+u = step k, user u), sliced per step inside the trace:
+        # [K*B] int32, [1,K*B,1,rd] bf16 x2
+        self._dr_pos = self._dr_cos = self._dr_sin = None
         self._dr_rs_tok = (
             self._dr_rs_pos
         ) = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None  # reseed rows (B*T)
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
-        self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
+        self._dr_outs = []  # ids outputs of that trace: [1,K,B,1] uint32 (one readback), or K [1,1,B,1] without concat
+        self._dr_concat_ids = False  # the K ids are concatenated on device (probed in _alloc_drafter_inputs)
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
@@ -748,7 +751,7 @@ class MTPSpecEngine:
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self._dr_pos = self._dr_cos = self._dr_sin = None
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -1349,9 +1352,11 @@ class MTPSpecEngine:
         al, z, bf, i32 = self._alloc_host_replicated, torch.zeros, ttnn.bfloat16, torch.int32
         rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
         self._dr_tok0 = al(z(B, 1, dtype=i32), ttnn.uint32, rm)
-        self._dr_pos = [al(z(B, dtype=i32), ttnn.int32, rm) for _ in range(K)]
-        self._dr_cos = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
-        self._dr_sin = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
+        # One step-major table per input instead of K small ones: 3 host->device copies per propose, not 3K
+        # (each replicated copy costs ~0.15 ms of host time on the propose critical path).
+        self._dr_pos = al(z(K * B, dtype=i32), ttnn.int32, rm)
+        self._dr_cos = al(z(1, K * B, 1, rd, dtype=torch.bfloat16), bf, tile)
+        self._dr_sin = al(z(1, K * B, 1, rd, dtype=torch.bfloat16), bf, tile)
         self._dr_rs_tok = al(z(R, 1, dtype=i32), ttnn.uint32, rm)
         self._dr_rs_pos = al(z(R, dtype=i32), ttnn.int32, rm)
         self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=i32), ttnn.int32, rm)
@@ -1359,15 +1364,16 @@ class MTPSpecEngine:
         self._dr_rs_sin = al(z(1, R, 1, rd, dtype=torch.bfloat16), bf, tile)
         self._dr_bufs = [
             self._dr_tok0,
-            *self._dr_pos,
-            *self._dr_cos,
-            *self._dr_sin,
+            self._dr_pos,
+            self._dr_cos,
+            self._dr_sin,
             self._dr_rs_tok,
             self._dr_rs_pos,
             self._dr_rs_pt,
             self._dr_rs_cos,
             self._dr_rs_sin,
         ]
+        self._dr_concat_ids = self._probe_id_concat()
 
     def _drafter_body(self, feed):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
@@ -1391,7 +1397,11 @@ class MTPSpecEngine:
         ttnn.deallocate(hn)
         h, tok, outs = self._hp_buf, self._dr_tok0, []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
+            pos_k, cos_k, sin_k, sliced = self._draft_step_inputs(k)
+            logits, hn = mtp.forward_decode(h, tok, pos_k, cos_k, sin_k, self._mtp_pt)
+            if sliced:
+                for t in (pos_k, cos_k, sin_k):
+                    ttnn.deallocate(t)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (B, 1))
@@ -1400,7 +1410,48 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
-        return outs
+        if not self._dr_concat_ids:
+            return outs
+        ids = ttnn.concat(outs, dim=1)  # [1,K,B,1] uint32: all K*B ids in one readback
+        for t in outs:
+            ttnn.deallocate(t)
+        return [ids]
+
+    def _draft_step_inputs(self, k):
+        """(pos, cos, sin, sliced) of draft step k: rows [k*B, (k+1)*B) of the step-major tables. Each k is its own
+        slice program (offsets are in the program hash); the eager warm pass of _drafter_body compiles all K before
+        capture. A full-span slice aliases its input, so at K == 1 the tables are passed as is (never freed)."""
+        if self.K == 1:
+            return self._dr_pos, self._dr_cos, self._dr_sin, False
+        B, rd = self.B, self.args.rope_head_dim
+        pos_k = ttnn.slice(self._dr_pos, (k * B,), ((k + 1) * B,))
+        # dims -2, -1 stay full-span: a whole-tile copy, never a sub-tile read
+        cos_k = ttnn.slice(self._dr_cos, (0, k * B, 0, 0), (1, (k + 1) * B, 1, rd))
+        sin_k = ttnn.slice(self._dr_sin, (0, k * B, 0, 0), (1, (k + 1) * B, 1, rd))
+        return pos_k, cos_k, sin_k, True
+
+    def _probe_id_concat(self):
+        """Can the K [1,1,B,1] uint32 ROW_MAJOR ids be concatenated on device (dim 1)? Probed eagerly before any
+        capture, where a validation refusal is recoverable; False keeps K separate readbacks."""
+        if self.K == 1:
+            return False
+        probe, ok = [], False
+        try:
+            for _ in range(self.K):
+                probe.append(
+                    self._alloc_host_replicated(
+                        torch.zeros(1, 1, self.B, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                    )
+                )
+            ttnn.deallocate(ttnn.concat(probe, dim=1))
+            ok = True
+        except Exception as e:  # noqa: BLE001 - any refusal means "read the K ids separately"
+            logger.info(f"[spec_engine] drafter id concat unavailable ({e}); reading {self.K} ids separately")
+        finally:
+            for t in probe:
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(self.mesh)
+        return ok
 
     def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
         """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
@@ -1417,16 +1468,20 @@ class MTPSpecEngine:
         stage(rcos, self._dr_rs_cos, bf, tile)
         stage(rsin, self._dr_rs_sin, bf, tile)
         tok0, poss = draft_step_plan(pending, p, K)
+        pos_all = torch.cat(poss)  # step-major [K*B]
+        c, s = model._rope_tp_cos_sin_decode_torch(pos_all)
         stage(tok0, self._dr_tok0, ttnn.uint32, rm)
-        for k, pv in enumerate(poss):
-            c, s = model._rope_tp_cos_sin_decode_torch(pv)
-            stage(pv, self._dr_pos[k], ttnn.int32, rm)
-            stage(c, self._dr_cos[k], bf, tile)
-            stage(s, self._dr_sin[k], bf, tile)
+        stage(pos_all, self._dr_pos, ttnn.int32, rm)
+        stage(c, self._dr_cos, bf, tile)
+        stage(s, self._dr_sin, bf, tile)
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
+        if len(self._dr_outs) == 1 and K > 1:  # [1,K,B,1] concat: one readback, step-major
+            t = ttnn.to_torch(ttnn.get_device_tensors(self._dr_outs[0])[0]).reshape(-1)[: K * B]
+            steps = t.reshape(K, B).tolist()
+        else:
+            steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
         return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
