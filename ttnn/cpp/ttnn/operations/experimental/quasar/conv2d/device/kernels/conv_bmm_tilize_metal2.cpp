@@ -40,11 +40,11 @@
 //
 // On WH/BH that is a save/restore of the partials CB's fifo_rd_ptr/fifo_wr_ptr. Quasar compute has no
 // cb_interface (it tracks DFB state in g_dfb_interface), so the equivalent position is the DFB ring
-// state: tc_slots[].wr_entry_idx/wr_offset + wr_entry_ptr for the packer, tc_slots[].rd_entry_idx/
-// rd_offset for the unpacker. Those advance only via dfb_advance_slot() on push_back/pop_front, so
+// state: tc_slots[].cursor_entry_idx (plus wr_entry_ptr for the packer); the byte offset is derived
+// from it. Those advance only via dfb_advance_slot() on push_back/pop_front, so
 // snapshotting and restoring them reproduces the rewind exactly. The PARTIALS_* macros below abstract
-// the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(), so the wr_*/rd_*
-// fields they touch only compile on the matching TRISC.
+// the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(); the _WR ones also
+// touch wr_entry_ptr, which only exists on the pack TRISC.
 #ifdef ARCH_QUASAR
 struct QsrDfbRingPos {
     uint16_t entry_idx[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -56,14 +56,14 @@ using PartialsRingPos = QsrDfbRingPos;
 // Quasar has no evil_set_*; snapshot/restore the DFB ring via get_local_dfb_interface.
 // Macros take a DataflowBuffer so call sites match the WH/BH evil_* path.
 // [#48552] f6b15a widened DFBTCSlot.ring_size to uint32 and REMOVED wr_offset/rd_offset -- the cursor
-// byte-offset is now DERIVED from *_entry_idx (dfb_slot_cursor_offset_units). The partials-rewind
-// snapshot/restore therefore only needs *_entry_idx; restoring it restores the derived offset.
+// byte-offset is now DERIVED from cursor_entry_idx (dfb_slot_cursor_offset_units). The partials-rewind
+// snapshot/restore therefore only needs cursor_entry_idx; restoring it restores the derived offset.
 // (PartialsRingPos.offset[] is now unused.)
 #define QSR_SNAPSHOT_WR(pos, dfb)                                         \
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].wr_entry_idx;        \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].cursor_entry_idx;        \
         }                                                                 \
         (pos).entry_ptr = _qd.wr_entry_ptr;                               \
         (pos).tc_idx = _qd.tc_idx;                                        \
@@ -72,7 +72,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            _qd.tc_slots[_qi].wr_entry_idx = (pos).entry_idx[_qi];        \
+            _qd.tc_slots[_qi].cursor_entry_idx = (pos).entry_idx[_qi];        \
         }                                                                 \
         _qd.wr_entry_ptr = (pos).entry_ptr;                               \
         _qd.tc_idx = (pos).tc_idx;                                        \
@@ -81,7 +81,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].rd_entry_idx;        \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].cursor_entry_idx;        \
         }                                                                 \
         (pos).tc_idx = _qd.tc_idx;                                        \
     } while (0)
@@ -89,7 +89,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            _qd.tc_slots[_qi].rd_entry_idx = (pos).entry_idx[_qi];        \
+            _qd.tc_slots[_qi].cursor_entry_idx = (pos).entry_idx[_qi];        \
         }                                                                 \
         _qd.tc_idx = (pos).tc_idx;                                        \
     } while (0)

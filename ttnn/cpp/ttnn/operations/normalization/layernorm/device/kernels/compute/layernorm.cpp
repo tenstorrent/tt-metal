@@ -335,7 +335,7 @@ void kernel_main() {
 #endif
 #endif
 #ifdef FUSE_GAMMA
-            constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            constexpr auto dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
             auto& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
