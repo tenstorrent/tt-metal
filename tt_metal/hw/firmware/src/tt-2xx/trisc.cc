@@ -25,6 +25,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "llk_dest_chain.h"  // ckernel::dest_chain::State (definition of state below)
 
 // clang-format on
 
@@ -118,6 +119,11 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
+namespace dest_chain {
+// Dest-chain bookkeeping (llk_dest_chain.h); thread_local per TRISC like bfd_state, zero-init (.tbss), given its
+// initial value by _llk_dest_chain_reset_ in the 2.0 compute_kernel_hw_startup.
+thread_local State state __attribute__((used));
+}  // namespace dest_chain
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
 // Declared extern thread_local in cpack_common.h.

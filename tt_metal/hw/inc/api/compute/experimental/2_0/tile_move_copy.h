@@ -42,6 +42,7 @@ ALWI void copy_init(LLKOperand<Format, Shape> src) {
         detail::dest_join<dest_dvalid_client::UNPACK>();
         UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));
     } else {
+        detail::dest_leave<dest_dvalid_client::UNPACK>();
         detail::dest_join<dest_dvalid_client::FPU>();
         UNPACK((llk_2_0::unpack_A_init<D, is_fp32_dest_acc_en>(src.l1_address)));
         MATH((llk_2_0::math_datacopy_init<D, is_fp32_dest_acc_en>()));
