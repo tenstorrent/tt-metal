@@ -654,7 +654,8 @@ class Qwen3TTSPipeline:
         else:
             temperature = settings.get("subtalker_temperature", 1.0)
             top_k = settings.get("subtalker_top_k", 0)
-            if settings.get("subtalker_top_p", 1.0) < 1.0 or not 0 < top_k <= DEVICE_TOP_K_LIMIT or temperature <= 0:
+            # A sampled top 1 draws among tied maxima; the device's top 1 is argmax.
+            if settings.get("subtalker_top_p", 1.0) < 1.0 or not 1 < top_k <= DEVICE_TOP_K_LIMIT or temperature <= 0:
                 return False
         self.predictor.sample_on_device(temperature, top_k)
         return True

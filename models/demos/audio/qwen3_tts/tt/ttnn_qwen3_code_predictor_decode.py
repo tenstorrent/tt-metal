@@ -513,11 +513,12 @@ class TtCodePredictorCachedDecoder:
 
         Returns the code as a float32 [1, 1, 1, 1], exact, as every codebook index is far
         below float32's 2^24. Of tied best scores, which only argmax meets, the lowest id
-        wins, as `torch.argmax` picks.
+        wins, as `torch.argmax` picks. The top k is stable so that id stays a candidate
+        however many logits tie.
         """
         settings = self._device_sampling
         k = settings["top_k"]
-        values, indices = ttnn.topk(ttnn.reshape(logits, (1, 1, 1, -1)), k=DEVICE_TOP_K_LIMIT, dim=-1)
+        values, indices = ttnn.topk(ttnn.reshape(logits, (1, 1, 1, -1)), k=DEVICE_TOP_K_LIMIT, dim=-1, stable=True)
         values = ttnn.typecast(values, ttnn.float32)
         floor = ttnn.slice(values, [0, 0, 0, k - 1], [1, 1, 1, k])
         noise = ttnn.slice(settings["noise"], [0, 0, step, 0], [1, 1, step + 1, DEVICE_TOP_K_LIMIT])
