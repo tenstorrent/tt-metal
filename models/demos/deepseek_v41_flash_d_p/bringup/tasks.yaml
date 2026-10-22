@@ -856,13 +856,6 @@ tasks:
     kind: moe
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-16T01:42:56'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py: 11d5ccb1ed7c412ddde4a2d274c700a4962b931fe14e93aaa170d00f1637170b
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa.12
   title: 'swa block with steps 1-12 on device (last: experts)'
   step: implement
@@ -1974,13 +1967,6 @@ tasks:
     - ffn_norm
     - router
     layer: 1
-  frozen:
-    at: '2026-10-16T04:03:00'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py: 84115dfa7f35a594ab72cfb808ce60a97574067bbe13e67a7f0415b97d60229a
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.swa_engram.experts
   title: swa_engram experts (moe) on device, layer 1
   step: implement
@@ -2002,13 +1988,6 @@ tasks:
     kind: moe
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-16T04:29:36'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py: b0c651ce42602129f18627c219e7acbf02ea05ee20990c5a2eb094a547de4dc0
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa_engram.15
   title: 'swa_engram block with steps 1-15 on device (last: experts)'
   step: implement
@@ -2043,13 +2022,6 @@ tasks:
     - router
     - experts
     layer: 1
-  frozen:
-    at: '2026-10-16T05:06:31'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py: 57bcab7f44da2ccdaa09be9fed1e646df7ff9526b1f11e9bceaea4fccc015c7e
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.swa_engram.shared_expert
   title: swa_engram shared_expert (mlp) on device, layer 1
   step: implement
@@ -2113,13 +2085,6 @@ tasks:
     - experts
     - shared_expert
     layer: 1
-  frozen:
-    at: '2026-10-16T05:39:20'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py: 9ca85fa4bf35e7fb8f6c9ba374f51f5c2923609770d2b1132390c57f56ed8376
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.swa_engram.moe_add
   title: swa_engram moe_add (residual) on device, layer 1
   step: implement
@@ -2185,13 +2150,6 @@ tasks:
     - shared_expert
     - moe_add
     layer: 1
-  frozen:
-    at: '2026-10-16T06:00:53'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py: 23568022bbb0cd7012b0b2b09d6ec50241f8ada61d5c14c7b9bced7ed1ba1635
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.swa_engram.ffn_residual
   title: swa_engram ffn_residual (residual) on device, layer 1
   step: implement
@@ -2258,13 +2216,6 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 1
-  frozen:
-    at: '2026-10-16T06:25:27'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py: 911b2a69d8bb8c7d1ba51e582fb5660f42c557748844df07d1214923c46b96f0
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.enc_source.attn_hc
   title: enc_source attn_hc (op) on device, layer 2
   step: implement
@@ -9962,6 +9913,68 @@ tasks:
     - M.1
     - L.last
     - K.1
+- id: FIX.9
+  title: 'One expert pipeline: the shipped flat + weighted combine path only (J2)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - C.swa.experts
+  - C.swa.shared_expert
+  - C.enc_source.experts
+  - C.enc_source.shared_expert
+  - C.dec_candidate.experts
+  - C.dec_candidate.shared_expert
+  - C.dec_reuse.experts
+  - C.dec_reuse.shared_expert
+  - L.last
+  gate:
+    cmd: BRINGUP_TASK=C.swa.experts scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py
+      && BRINGUP_TASK=C.swa.shared_expert scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py
+      && BRINGUP_TASK=C.enc_source.experts scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
+      && BRINGUP_TASK=C.enc_source.shared_expert scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
+      && BRINGUP_TASK=C.dec_candidate.experts scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
+      && BRINGUP_TASK=C.dec_candidate.shared_expert scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
+      && BRINGUP_TASK=C.dec_reuse.experts scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
+      && BRINGUP_TASK=C.dec_reuse.shared_expert scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_experts_L00: <= limit
+      err_shared_expert_L00: <= limit
+      err_experts_L02: <= limit
+      err_shared_expert_L02: <= limit
+      err_experts_L20: <= limit
+      err_shared_expert_L20: <= limit
+      err_experts_L21: <= limit
+      err_shared_expert_L21: <= limit
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'precision_debt_report.md section 6 J2 (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md).
+      Since F137 the per-step tests run the shipped settings, so the second expert pipeline that existed only for max-precision
+      per-step tests is dead code: delete the separate combine path (EXPERTS_COMBINE=separate), the routing-weight pieces,
+      the loop / unified / fp4_decode kernels and EXPERTS_DECODE, and the linear shared expert (SHARED_EXPERT_IMPL=linear);
+      the flat routed expert with the weighted combine and the shared expert inside the flat op are the only path. Remove
+      the DeepSeek-only fork options it alone used (routing_weights and fp8_act_quant on the flat / unified fork ops, their
+      two test_ds41_h_options.py files) only if no other model uses them (grep every model''s code and the forks'' tests/cases.py);
+      keep option-off behaviour of each touched fork unchanged and run each touched fork''s unit suite. Shipped numerics must
+      not change (device time and per-layer errors as before). Gate: the experts and shared-expert component tests of four
+      block types and L.last at the new limits. Report what was deleted and the gate numbers.'
+    gate_tasks:
+    - C.swa.experts
+    - C.swa.shared_expert
+    - C.enc_source.experts
+    - C.enc_source.shared_expert
+    - C.dec_candidate.experts
+    - C.dec_candidate.shared_expert
+    - C.dec_reuse.experts
+    - C.dec_reuse.shared_expert
+    - L.last
 - id: FIX.5
   title: P.16 ChunkMemo cleared at every chunk start
   step: overseer_fix
