@@ -15,6 +15,7 @@ Skip the slow shapes: they are already opt-in via SOL_COMPACT_FULL=1.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import time
@@ -151,13 +152,15 @@ def _run(
         for x in (q, k, v)
     )
 
-    # "resident" (M2) takes the block-form mask with the bias generated on device, exactly like "compact".
+    # "resident" (M2) takes the block-form mask with the bias generated on device, exactly like "compact", plus
+    # (M4) the static per-row logit bound.
     pre = SolPrepass(
         mesh_device=mesh_device,
         ccl_manager=ccl,
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
+        row_max=(mode == "resident"),
     )
     pre.prepare(geo, sink_tokens, scale)
     sol = pre(tq, tk, tv, scale=scale, report_density=True)
@@ -246,6 +249,8 @@ def _run(
         sol_pooled_v=sol["pooled_v"],
         sol_mode=mode,
     )
+    if mode == "resident":
+        sol_kw["sol_row_max"] = sol["row_max"]
     if upload_bias and sol.get("bias") is not None:
         # Use the pre-pass's Python-computed bias instead of the op's on-device generator (sol_bias_gen).
         sol_kw["sol_bias"] = sol["bias"]
@@ -608,6 +613,55 @@ def test_resident_matches_compact(
 
 
 @GALAXY_RING
+def test_sol_row_max_bound(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds):
+    """Resident mode's static row max (M4) must bound every raw logit of its query row.
+
+    The pre-pass's ||q_row|| * max ||k|| + ln(64)/scale (bf16, read back from the device) is checked on host
+    against the row's true max of q.k over ALL keys of the sequence plus the same ln(64)/scale margin, on the
+    bf16-rounded inputs the device saw. Also pins the tensor contract: bf16 tile [1, H, rows, 32], column 0 only.
+    """
+    rows = 512
+    S = tuple(mesh_device.shape)[sp_axis]
+    scale = D**-0.5
+    ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    q, k, v = _qkv(S, rows)
+    mesh_axes = [sp_axis, None, None, None]
+    tq, tk, tv = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=mesh_axes, layout=ttnn.TILE_LAYOUT)
+        for x in (q, k, v)
+    )
+    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=1.0, mode="compact", row_max=True)
+    pre.prepare(SolGeometry(shards=S, rows=rows, logical_n=S * rows, q_chunk=Q1_CHUNK, k_chunk=K_CHUNK), 300, scale)
+    rm = pre(tq, tk, tv, scale=scale)["row_max"]
+    assert tuple(rm.shape) == (1, H, rows, 32), rm.shape
+    assert rm.dtype == ttnn.bfloat16 and rm.layout == ttnn.TILE_LAYOUT
+    # Device d on dim 0, its TP replicas of the H heads on dim 1 (the composer _run uses for the gathered K).
+    host = ttnn.to_torch(
+        rm,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=[1, 0] if sp_axis == 1 else [0, 1], mesh_shape=tuple(mesh_device.shape)
+        ),
+    )[
+        :, :H
+    ].float()  # [S, H, rows, 32]
+    assert int(torch.count_nonzero(host[..., 1:])) == 0, "columns 1..31 of sol_row_max must be zero"
+    bound = host[..., 0]  # [S, H, rows]
+    qb, kb = q.bfloat16().float(), k.bfloat16().float()
+    margin = math.log(64) / scale
+    # Per head: every local query row against every key of the whole sequence (all S shards).
+    true_max = torch.stack(
+        [(qb[:, h] @ kb[:, h].reshape(S * rows, D).T).amax(dim=-1) for h in range(H)], dim=1
+    )  # [S, H, rows]
+    true_max = true_max + margin
+    slack = bound - true_max
+    logger.info(
+        f"[row_max] min slack {float(slack.min()):.3f} (bound mean {float(bound.mean()):.2f}, true max mean "
+        f"{float(true_max.mean()):.2f}, margin {margin:.2f})"
+    )
+    assert float(slack.min()) >= 0.0, f"sol_row_max is below the true max raw logit by {-float(slack.min()):.3f}"
+
+
+@GALAXY_RING
 @pytest.mark.parametrize("rows,logical_n", [(1024, 8192), (1184, 9472)], ids=["r1024", "r1184"])
 @pytest.mark.parametrize("q_chunk", [64, 128, 256], ids=["q64", "q128", "q256"])
 def test_base_determinism(
@@ -935,6 +989,7 @@ def _run_sequence(
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
+        row_max=(mode == "resident"),
     )
     pre.prepare(geo, sink_tokens, scale)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -960,6 +1015,8 @@ def _run_sequence(
         sol_kw = dict(
             sol_block_mask=sol["block_mask"], sol_pooled_k=sol["pooled_k"], sol_pooled_v=sol["pooled_v"], sol_mode=mode
         )
+        if mode == "resident":
+            sol_kw["sol_row_max"] = sol["row_max"]
         pk = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
         pv = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
         sems = ccl.get_ag_ping_pong_semaphore(sp_axis)

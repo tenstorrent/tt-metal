@@ -78,6 +78,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& sol_pooled_k = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_pooled_v = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& sol_row_max = std::nullopt,
     const std::string& sol_mode = "auto");
 
 }  // namespace ttnn::prim

@@ -398,12 +398,21 @@ void kernel_main() {
     constexpr uint32_t sol_pv_args_offset =
         sol_enabled ? sol_pk_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto sol_pv_args = TensorAccessorArgs<sol_pv_args_offset>();
+    // M4 (resident static max): the per-row max bound tensor's accessor follows pooled V's iff sol_static_max; the
+    // bias accessor and the chain args continue after it (the factory's "Sol-Attn accessors" comment).
+    constexpr bool sol_static_max = get_named_compile_time_arg_val("sol_static_max") == 1;
+    constexpr uint32_t sol_rm_args_offset =
+        (sol_enabled && sol_static_max) ? sol_pv_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
+    constexpr auto sol_rm_args = TensorAccessorArgs<sol_rm_args_offset>();
+    constexpr uint32_t sol_after_pv_offset = (sol_enabled && sol_static_max)
+                                                 ? sol_rm_args.next_compile_time_args_offset()
+                                                 : sol_pv_args.next_compile_time_args_offset();
     constexpr uint32_t sol_bias_args_offset =
-        (sol_enabled && !sol_gen_bias) ? sol_pv_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
+        (sol_enabled && !sol_gen_bias) ? sol_after_pv_offset : kFirstAccessorArgOffset;
     constexpr auto sol_bias_args = TensorAccessorArgs<sol_bias_args_offset>();
-    constexpr uint32_t chains_base_offset = sol_enabled ? (sol_gen_bias ? sol_pv_args.next_compile_time_args_offset()
-                                                                        : sol_bias_args.next_compile_time_args_offset())
-                                                        : pre_sol_args_offset;
+    constexpr uint32_t chains_base_offset =
+        sol_enabled ? (sol_gen_bias ? sol_after_pv_offset : sol_bias_args.next_compile_time_args_offset())
+                    : pre_sol_args_offset;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -560,15 +569,22 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t sol_mask_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 0) : 0;
     [[maybe_unused]] const uint32_t sol_pk_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 1) : 0;
     [[maybe_unused]] const uint32_t sol_pv_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 2) : 0;
-    [[maybe_unused]] const uint32_t sol_bias_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 3) : 0;
+    // M4: the row-max bound's address sits at +3 iff sol_static_max; everything after it shifts by one word.
+    constexpr uint32_t kSolRM = sol_static_max ? 1u : 0u;
+    [[maybe_unused]] const uint32_t sol_rm_addr =
+        (sol_enabled && sol_static_max) ? get_arg_val<uint32_t>(rotated_args_base + 3) : 0;
+    [[maybe_unused]] const uint32_t sol_bias_addr =
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 3 + kSolRM) : 0;
     // Chunk mode: head-chain members (q_chunk start within head, count) for the chain-wide kept union.
-    [[maybe_unused]] const uint32_t sol_n_members = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 4) : 0;
-    [[maybe_unused]] const uint32_t sol_my_start = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 5) : 0;
+    [[maybe_unused]] const uint32_t sol_n_members =
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 4 + kSolRM) : 0;
+    [[maybe_unused]] const uint32_t sol_my_start =
+        sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 5 + kSolRM) : 0;
     // Generated bias only: packed bf16 bias-per-token-count table (sol_bias_gen::kTableWords words) precedes the
     // chain members; with a sol_bias tensor the members follow my_start directly (unchanged layout).
-    [[maybe_unused]] const uint32_t sol_len_bias_table_base = rotated_args_base + 6;
+    [[maybe_unused]] const uint32_t sol_len_bias_table_base = rotated_args_base + 6 + kSolRM;
     [[maybe_unused]] const uint32_t sol_members_base =
-        rotated_args_base + 6 + (sol_gen_bias ? sol_bias_gen::kTableWords : 0u);
+        rotated_args_base + 6 + kSolRM + (sol_gen_bias ? sol_bias_gen::kTableWords : 0u);
     constexpr uint32_t sol_nb = get_named_compile_time_arg_val("sol_nb");
     constexpr uint32_t sol_nb_pad = get_named_compile_time_arg_val("sol_nb_pad");
     constexpr uint32_t sol_n_blocks_pad = get_named_compile_time_arg_val("sol_n_blocks_pad");
@@ -882,6 +898,9 @@ void kernel_main() {
         TensorAccessor(sol_pk_args, sol_pk_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, DHt));
     [[maybe_unused]] const auto sol_pv_generator = PaddedAddrGenerator(
         TensorAccessor(sol_pv_args, sol_pv_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, vDHt));
+    // M4: the per-row max bound, bf16 tile [1, NH, Q padded rows, 32] (one tile column, value in column 0).
+    [[maybe_unused]] const auto sol_rm_generator =
+        PaddedAddrGenerator(TensorAccessor(sol_rm_args, sol_rm_addr), TensorTileShape(1, NH, q_local_padded_Nt, 1));
     [[maybe_unused]] const auto sol_bias_generator = PaddedAddrGenerator(
         TensorAccessor(sol_bias_args, sol_bias_addr), TensorTileShape(1, NH, sol_nqc_pad, sol_n_blocks_pad / 32));
     // Pooled chunks are consumed on the first active ring iteration of every Q chunk.
@@ -1399,6 +1418,32 @@ void kernel_main() {
                         res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                }
+                if constexpr (sol_static_max) {
+                    // M4: each resident chunk's fixed row-max bound (Sq_chunk_t tiles, value in column 0) into its
+                    // slot of the max CB, once per call. The CB is exactly sol_resident_slots x Sq_chunk_t tiles and
+                    // is pushed in full (unused slots hold garbage nobody reads); compute waits for it on its first
+                    // active iteration and pops it after the final normalization, so the next call refills it.
+                    constexpr uint32_t cb_sol_row_max = get_named_compile_time_arg_val("cb_sol_row_max");
+                    constexpr uint32_t res_slots = get_named_compile_time_arg_val("sol_resident_slots");
+                    constexpr uint32_t rm_tile_bytes = get_tile_size(cb_sol_row_max);
+                    constexpr uint32_t rm_cap = res_slots * Sq_chunk_t;
+                    CircularBuffer cb_rm(cb_sol_row_max);
+                    cb_rm.reserve_back(rm_cap);
+                    const uint32_t rm_base = cb_rm.get_write_ptr();
+                    for (uint32_t i = 0; i < n_res; ++i) {
+                        const Slice rm_slice(
+                            0, res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, 1);
+                        fetch_block(
+                            sol_rm_generator,
+                            rm_slice,
+                            q_local_padded_Nt,
+                            cb_sol_row_max,
+                            rm_base + i * Sq_chunk_t * rm_tile_bytes,
+                            rm_tile_bytes,
+                            false);
+                    }
+                    cb_rm.push_back(rm_cap);
                 }
                 q_pushed = true;
             }

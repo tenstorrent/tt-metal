@@ -32,6 +32,7 @@ K chunks are ``k_chunk`` tokens inside each shard; global K chunk index = shard 
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -192,6 +193,61 @@ def build_constants(
     }
 
 
+# ----------------------------------------------------------------------------- static row max (M4, resident mode)
+
+
+def row_max_constants(head_dim: int, scale: float) -> dict:
+    """Host constants for `compute_row_max` (fp32 torch, replicated on upload).
+
+    ``e0_col`` [1, 1, D, 32]: column 0 all ones, the rest zero. A squared Q/K row times it is the row's squared
+    norm in tile column 0 with zeros in columns 1..31, i.e. already the one-tile-column layout the ring op takes.
+    ``row_max_bias`` [1, 1, 1, 32]: ln(64) / scale in column 0 only, the largest pooled-column bias the ring op
+    generates (ln(block length) / scale, block length <= 64), in the same raw logit units.
+    """
+    e0_col = torch.zeros(1, 1, head_dim, TILE)
+    e0_col[0, 0, :, 0] = 1.0
+    row_max_bias = torch.zeros(1, 1, 1, TILE)
+    row_max_bias[0, 0, 0, 0] = math.log(BLOCK) / scale
+    return {"e0_col": e0_col, "row_max_bias": row_max_bias}
+
+
+def compute_row_max(
+    q: ttnn.Tensor, k: ttnn.Tensor, *, consts: dict, ccl_manager, sp_axis: int, compute_kernel_config
+) -> ttnn.Tensor:
+    """Resident mode's static row max: bf16 tile [1, H, R, 32] from the local Q/K shards [1, H, R, D].
+
+    Column 0 of row r holds ``||q_r|| * max_over_all_keys ||k|| + ln(64) / scale`` in RAW (unscaled) logit units
+    (the ring op applies the softmax scale inside its exp); columns 1..31 are zero. By Cauchy-Schwarz it bounds
+    every raw logit of the row plus the largest pooled-column bias, so flash attention with this fixed max is exact
+    up to rounding and the kernel drops its running-max bookkeeping (sol_attn_status_2026-10-21.md, M4).
+
+    The key-norm max is per head over the WHOLE sequence: the local max is all-gathered along SP on a tile-shaped
+    [1, H, 32, 32] tensor (whole tiles per device, so the gather concatenates cleanly) and max-reduced, so every
+    device of the ring holds the same value. R keeps the Q shard's row count; TILE layout pads it like Q.
+    """
+    qq = ttnn.multiply(q, q)
+    q_norm = ttnn.sqrt(ttnn.matmul(qq, consts["e0_col"], compute_kernel_config=compute_kernel_config))  # [1,H,R,32]
+    ttnn.deallocate(qq)
+    kk = ttnn.multiply(k, k)
+    k_sq = ttnn.matmul(kk, consts["e0_col"], compute_kernel_config=compute_kernel_config)  # [1,H,R,32]
+    ttnn.deallocate(kk)
+    k_sq_max = ttnn.max(k_sq, dim=2, keepdim=True)  # [1,H,1,32]: column 0 = local max ||k||^2, the rest 0
+    ttnn.deallocate(k_sq)
+    k_sq_tile = ttnn.repeat_interleave(k_sq_max, TILE, dim=2)  # [1,H,32,32], tile-shaped for the gather
+    ttnn.deallocate(k_sq_max)
+    k_sq_all = ccl_manager.all_gather(k_sq_tile, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # [1,H,32*S,32]
+    ttnn.deallocate(k_sq_tile)
+    # Column 0 = global max ||k||, times a 2 % margin so the bf16 rounding of the norms and of the product can never
+    # put the bound below a row's true max (an overestimate only scales the bf16 exp terms, which costs nothing).
+    k_norm_max = ttnn.multiply(ttnn.sqrt(ttnn.max(k_sq_all, dim=2, keepdim=True)), 1.02)  # [1,H,1,32]
+    ttnn.deallocate(k_sq_all)
+    # H-broadcast of the per-head max over the Q rows, then the bias row (same broadcast as len_bias_row).
+    row_max = ttnn.add(ttnn.multiply(q_norm, k_norm_max), consts["row_max_bias"])  # [1,H,R,32]
+    ttnn.deallocate(q_norm)
+    ttnn.deallocate(k_norm_max)
+    return row_max
+
+
 # ----------------------------------------------------------------------------- torch reference
 
 
@@ -250,6 +306,7 @@ class SolPrepass:
         dense_prefix_queries: bool = True,
         mode: str = "gather",
         emit_bias: bool | None = None,
+        row_max: bool = False,
     ):
         # "gather": block mask [1,H,nqc_pad,n_blocks_pad], the reader gathers kept 64-token blocks (chains off).
         # "chunk": K-chunk mask [1,H,nqc_pad,nkc_pad] (any kept block in the chunk keeps the chunk); the reader
@@ -264,6 +321,9 @@ class SolPrepass:
         # emit_bias=False: the ring op generates the pooled-column bias on device (production path once the
         # kernel build carries sol_bias_gen.hpp). TT_SOL_EMIT_BIAS flips the default for A/B runs.
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
+        # row_max=True: also return "row_max", the static per-query-row logit bound the ring op's resident mode
+        # (sol_mode="resident", M4) takes as sol_row_max (compute_row_max). The model sets it for resident mode.
+        self.row_max = bool(row_max)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -389,6 +449,20 @@ class SolPrepass:
         ttnn.deallocate(chunk01)
         return {"block_mask": mask_u32, "pooled_k": self._pooled_k, "pooled_v": self._pooled_v, "bias": bias}
 
+    # Row-max constants depend only on (device, head dim, scale), not on the geometry: shared like _shared_consts.
+    _shared_row_max_consts: dict = {}
+
+    def _row_max(self, q: ttnn.Tensor, k: ttnn.Tensor, scale: float) -> ttnn.Tensor:
+        head_dim = int(q.shape[3])
+        key = (id(self.mesh_device), head_dim, scale)
+        consts = SolPrepass._shared_row_max_consts.get(key)
+        if consts is None:
+            consts = {name: self._upload(t, shard=False) for name, t in row_max_constants(head_dim, scale).items()}
+            SolPrepass._shared_row_max_consts[key] = consts
+        return compute_row_max(
+            q, k, consts=consts, ccl_manager=self.ccl_manager, sp_axis=self.sp_axis, compute_kernel_config=self.hifi4
+        )
+
     def _pool(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """[1,H,R,D] -> [1,H,nb_pad,D] block means (local shard)."""
         xt = ttnn.transpose(x, -2, -1)
@@ -404,6 +478,7 @@ class SolPrepass:
         c = self._consts
         geo = self.geo
         log2_scale = scale * LOG2E
+        row_max = self._row_max(q, k, scale) if self.row_max else None  # [1,H,R,32] (resident mode, M4)
         q_bar = self._pool(q)  # [1,H,nbp,D]
         kc_local = self._pool(k)
         vc_local = self._pool(v)
@@ -442,7 +517,9 @@ class SolPrepass:
         ttnn.deallocate(m2)
         if self.mode == "chunk":
             self._pooled_k, self._pooled_v = kc, vc
-            return self._finish_chunk_mode(block01, report_density)
+            out = self._finish_chunk_mode(block01, report_density)
+            out["row_max"] = row_max
+            return out
         # gather / compact: block-form mask
         if report_density:
             self.last_density = self._host_density(block01, self._block_cols())
@@ -454,4 +531,11 @@ class SolPrepass:
             ttnn.deallocate(bias_row)
         mask_u32 = ttnn.to_layout(ttnn.typecast(block01, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(block01)
-        return {"block_mask": mask_u32, "pooled_k": kc, "pooled_v": vc, "bias": bias, "q_bar": q_bar}
+        return {
+            "block_mask": mask_u32,
+            "pooled_k": kc,
+            "pooled_v": vc,
+            "bias": bias,
+            "q_bar": q_bar,
+            "row_max": row_max,
+        }

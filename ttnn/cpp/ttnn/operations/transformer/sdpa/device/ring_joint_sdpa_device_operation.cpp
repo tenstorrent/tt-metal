@@ -551,6 +551,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
+    // M4 static row max: resident mode replaces the running row max with sol_row_max; no other mode (and no
+    // non-Sol run: sol_resident_mode is false without the sol tensors) reads it.
+    TT_FATAL(
+        tensor_args.sol_row_max.has_value() == tensor_args.sol_resident_mode(args.sol_mode),
+        "sol_row_max is required by sol_mode=resident and rejected otherwise (got {} for sol_mode {})",
+        tensor_args.sol_row_max.has_value() ? "a tensor" : "none",
+        args.sol_mode);
     if (tensor_args.sol_enabled()) {
         TT_FATAL(
             tensor_args.sol_pooled_k.has_value() && tensor_args.sol_pooled_v.has_value(),
@@ -589,10 +596,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         if (tensor_args.sol_bias.has_value()) {
             sol_tile_tensors.push_back(&tensor_args.sol_bias.value());
         }
+        if (tensor_args.sol_row_max.has_value()) {
+            sol_tile_tensors.push_back(&tensor_args.sol_row_max.value());
+        }
         for (const auto* t : sol_tile_tensors) {
             TT_FATAL(
                 t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16,
-                "sol_pooled_k/v and sol_bias must be bf16 tile");
+                "sol_pooled_k/v, sol_bias and sol_row_max must be bf16 tile");
             TT_FATAL(
                 t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Sol-Attn tensors must be in DRAM");
@@ -657,6 +667,19 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 nqc * 32,
                 n_blocks_pad,
                 bias.logical_shape());
+        }
+        if (tensor_args.sol_row_max.has_value()) {
+            // One tile column per local Q row: [1, NH, q_rows_pad, 32]. Rows are compared on the padded extent so
+            // a Q shard whose logical length is not a tile multiple still matches its pre-pass output.
+            const auto& rm = tensor_args.sol_row_max.value();
+            TT_FATAL(
+                rm.logical_shape().rank() == 4 && rm.logical_shape()[0] == 1 && rm.logical_shape()[1] == q_shape[1] &&
+                    rm.padded_shape()[2] == input_tensor_q.padded_shape()[2] && rm.logical_shape()[3] == 32,
+                "sol_row_max must be [1, {}, {} (Q padded rows), 32], got {} (padded {})",
+                q_shape[1],
+                input_tensor_q.padded_shape()[2],
+                rm.logical_shape(),
+                rm.padded_shape());
         }
         // The on-device bias generator derives block lengths from the padded shard length and the live
         // logical_n; it covers at most 64 K chunks per shard like chunk mode and needs the pooled rows to
@@ -1303,6 +1326,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         if (tensor_args.sol_bias.has_value()) {
             input_tensors.emplace_back(tensor_args.sol_bias.value());
         }
+        if (tensor_args.sol_row_max.has_value()) {
+            input_tensors.emplace_back(tensor_args.sol_row_max.value());
+        }
     }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
@@ -1313,6 +1339,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.sol_pack_mode(args.sol_mode),
         tensor_args.sol_resident_mode(args.sol_mode),
         tensor_args.sol_bias_generated(),
+        // Presence selects the static-row-max kernel variant (sol_static_max compile-time arg + reader accessor).
+        tensor_args.sol_static_max(),
         args.joint_strategy,
         args.scale,
         args.is_causal,
@@ -1487,6 +1515,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& sol_pooled_k,
     const std::optional<ttnn::Tensor>& sol_pooled_v,
     const std::optional<ttnn::Tensor>& sol_bias,
+    const std::optional<ttnn::Tensor>& sol_row_max,
     const std::string& sol_mode) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
@@ -1735,7 +1764,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .sol_block_mask = sol_block_mask,
         .sol_pooled_k = sol_pooled_k,
         .sol_pooled_v = sol_pooled_v,
-        .sol_bias = sol_bias};
+        .sol_bias = sol_bias,
+        .sol_row_max = sol_row_max};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

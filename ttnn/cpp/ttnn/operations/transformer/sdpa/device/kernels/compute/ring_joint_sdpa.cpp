@@ -247,6 +247,8 @@ void kernel_main() {
     constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
     constexpr uint32_t sol_resident_slots = get_named_compile_time_arg_val("sol_resident_slots");
     constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
+    // M4: 1 when the op carries sol_row_max (a fixed per-row max bound the reader loads into the max slots).
+    constexpr bool sol_static_max = get_named_compile_time_arg_val("sol_static_max") == 1;
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(
         !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
@@ -646,6 +648,7 @@ void kernel_main() {
                 sol_resident_slots,
                 sol_res_block_words,
                 kv_cb_pages,
+                sol_static_max,
                 RingStreamingMaskCtx<
                     neginf_tile_idx,
                     causal_diag_tile_idx,
