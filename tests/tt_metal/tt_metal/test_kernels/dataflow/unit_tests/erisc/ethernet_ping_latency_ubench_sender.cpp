@@ -44,7 +44,8 @@ FORCE_INLINE void run_loop_iteration(
                 while (internal_::eth_txq_is_busy(TXQ_ID)) {
                 }
                 // Send data packet using unsafe API (assumes txq is ready)
-                internal_::eth_send_packet_bytes_unsafe(TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
+                internal_::eth_send_packet_bytes_without_txq_busy_check(
+                    TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
                 // Send credit update to receiver via stream register
                 while (internal_::eth_txq_is_busy(TXQ_ID)) {
                 }
@@ -70,7 +71,8 @@ FORCE_INLINE void run_loop_iteration(
             while (internal_::eth_txq_is_busy(TXQ_ID)) {
             }
             // Send data packet using unsafe API (assumes txq is ready)
-            internal_::eth_send_packet_bytes_unsafe(TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
+            internal_::eth_send_packet_bytes_without_txq_busy_check(
+                TXQ_ID, channel_addrs[i], channel_addrs[i], full_payload_size);
             // Send credit update to receiver via stream register
             while (internal_::eth_txq_is_busy(TXQ_ID)) {
             }

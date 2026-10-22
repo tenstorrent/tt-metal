@@ -205,7 +205,7 @@ protected:
             return 0;
         }
         const uint32_t word_addr = reinterpret_cast<uintptr_t>(&frame(slot)) >> 4;
-        internal_::eth_send_packet_unsafe(kLinkTxq, word_addr, word_addr, kFrameBytes >> 4);
+        internal_::eth_send_packet_without_txq_busy_check(kLinkTxq, word_addr, word_addr, kFrameBytes >> 4);
         return 1;
     }
     static FORCE_INLINE volatile uint32_t* control_vector() {

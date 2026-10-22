@@ -521,7 +521,7 @@ FORCE_INLINE void send_next_data(
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
     }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+    internal_::eth_send_packet_bytes_without_txq_busy_check(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)

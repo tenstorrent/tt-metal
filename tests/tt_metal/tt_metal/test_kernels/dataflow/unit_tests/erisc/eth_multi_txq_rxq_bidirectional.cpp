@@ -65,7 +65,7 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(local_eth_l1_src_addr) = num_messages_sent + 1;
             while (internal_::eth_txq_is_busy(data_txq_id)) {
             }
-            internal_::eth_send_packet_bytes_unsafe(
+            internal_::eth_send_packet_bytes_without_txq_busy_check(
                 data_txq_id, local_eth_l1_src_addr, remote_eth_l1_dst_addr, PAYLOAD_SIZE);
             while (internal_::eth_txq_is_busy(data_txq_id)) {
             }
@@ -81,7 +81,7 @@ void kernel_main() {
                 *reinterpret_cast<volatile uint32_t*>(receiver_credit_ack_src) = num_acks_sent + 1;
                 while (internal_::eth_txq_is_busy(ack_txq_id)) {
                 }
-                internal_::eth_send_packet_bytes_unsafe(
+                internal_::eth_send_packet_bytes_without_txq_busy_check(
                     ack_txq_id, receiver_credit_ack_src, receiver_credit_ack_dest, 16);
                 num_acks_sent++;
                 has_unsent_acks = num_acks_sent < num_messages;

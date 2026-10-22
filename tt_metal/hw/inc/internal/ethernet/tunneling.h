@@ -123,17 +123,6 @@ void eth_send_packet_bytes_without_txq_busy_check(
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
-// Old names. "unsafe" says nothing about what is skipped; use the *_without_txq_busy_check names.
-FORCE_INLINE
-void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
-    eth_send_packet_without_txq_busy_check(q_num, src_word_addr, dest_word_addr, num_words);
-}
-
-FORCE_INLINE
-void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
-    eth_send_packet_bytes_without_txq_busy_check(q_num, src_addr, dest_addr, num_bytes);
-}
-
 template <bool ctx_switch = true>
 FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
     WATCHER_CHECK_ETH_LINK_STATUS();

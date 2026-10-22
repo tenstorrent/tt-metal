@@ -49,7 +49,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
 private:
     FORCE_INLINE void update_sender_side_credits() const {
-        internal_::eth_send_packet_bytes_unsafe(
+        internal_::eth_send_packet_bytes_without_txq_busy_check(
             receiver_txq_id,
             local_receiver_credits_base_address,
             to_senders_credits_base_address,

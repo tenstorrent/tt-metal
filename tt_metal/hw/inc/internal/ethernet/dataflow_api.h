@@ -214,7 +214,7 @@ void eth_send_bytes_over_channel_payload_only_unsafe(
     uint32_t num_bytes_per_send_word_size = 1) {
     uint32_t num_bytes_sent = 0;
     while (num_bytes_sent < num_bytes) {
-        internal_::eth_send_packet_unsafe(
+        internal_::eth_send_packet_without_txq_busy_check(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
@@ -223,7 +223,7 @@ void eth_send_bytes_over_channel_payload_only_unsafe(
 FORCE_INLINE
 void eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
     uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
-    internal_::eth_send_packet_bytes_unsafe(0, src_addr, dst_addr, num_bytes);
+    internal_::eth_send_packet_bytes_without_txq_busy_check(0, src_addr, dst_addr, num_bytes);
 }
 
 /*
