@@ -78,8 +78,14 @@ MARGIN = 1.0
 # compares 17 mantissa bits of the fp32 keys (the stable engine's rank tag takes the low 6), about
 # 8e-6 relative, and the device's activation differs slightly from torch's, so every tie-freedom
 # predicate below is a tolerance rather than an exact comparison. 2e-3 is the bound from when the
-# sort compared TF32 keys (10 mantissa bits); it is kept as a conservative margin.
+# sort compared TF32 keys (10 mantissa bits); it is kept as a conservative margin where device keys
+# are held against torch.
 SORT_RESOLUTION = 2e-3
+# The stable-vs-unstable differential compares the device against itself on identical keys, so the
+# activation difference does not apply: the two engines can differ only where keys agree in the 17
+# bits the rank-tag engine compares (< ~1.5e-5 relative). 1e-4 clears that and keeps asserting in the
+# 1e-4..2e-3 band, where a regression to a 10-bit compare would show.
+DIFFERENTIAL_RESOLUTION = 1e-4
 
 
 def separated_gate_inputs(shape, k, score_func, margin=MARGIN, to_bf16=False):
@@ -230,8 +236,8 @@ def test_stable_matches_unstable(device, routing, score_func, input_dtype):
         "given identical keys, so this comparison says nothing about top-k"
     )
 
-    set_mask = boundary_strict(biased_stable, k)
-    order_mask = topk_strict(biased_stable, k)
+    set_mask = boundary_strict(biased_stable, k, resolution=DIFFERENTIAL_RESOLUTION)
+    order_mask = topk_strict(biased_stable, k, resolution=DIFFERENTIAL_RESOLUTION)
     tokens = set_mask.numel()
     logger.info(
         f"tie-free tokens: boundary {int(set_mask.sum())}/{tokens}, " f"full top-{k} {int(order_mask.sum())}/{tokens}"
