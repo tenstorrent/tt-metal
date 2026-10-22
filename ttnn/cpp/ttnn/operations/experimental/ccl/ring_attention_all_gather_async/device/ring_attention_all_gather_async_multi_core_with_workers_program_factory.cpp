@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -611,7 +612,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
     RingAttentionRankMapping rank_mapping,
-    RingAttentionLocalReadiness local_readiness) {
+    RingAttentionSliceReadiness slice_readiness) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -768,25 +769,31 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
-    if (local_readiness.bands > 0) {
-        TT_FATAL(fuse_op, "Two-part local slice requires a fused consumer");
-        // The gather reader waits for each neighbor's part-0 marker during its local prefetch: both directions must
-        // receive a slice.
-        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Two-part local slice requires Ring topology");
+    if (slice_readiness.bands > 0) {
+        TT_FATAL(fuse_op, "Slice readiness requires a fused consumer");
+        // Both directions receive slices, and on an even ring each direction's last one is the split diametric half
+        // (the gather reader's marker count assumes it).
+        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Slice readiness requires Ring topology");
         TT_FATAL(
             num_targets_forward > 0 && num_targets_backward > 0,
-            "Two-part local slice requires active traffic in both ring directions");
+            "Slice readiness requires active traffic in both ring directions");
         TT_FATAL(
-            local_readiness.truncate_tiles <= input_tensor[0].padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            "Two-part local slice truncation ({} tiles) exceeds the gathered slice",
-            local_readiness.truncate_tiles);
-        TT_FATAL(!partial_readiness_enabled, "Two-part local slice and midpoint partial readiness are exclusive");
-        TT_FATAL(output_bank_owned_schedule, "Two-part local slice currently requires the bank-owned packet schedule");
-        TT_FATAL(local_readiness.chunk_tiles > 0, "Two-part local slice needs the consumer's K chunk size");
+            slice_readiness.truncate_tiles <= input_tensor[0].padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            "Slice readiness truncation ({} tiles) exceeds the gathered slice",
+            slice_readiness.truncate_tiles);
+        TT_FATAL(!partial_readiness_enabled, "Slice readiness and midpoint partial readiness are exclusive");
+        TT_FATAL(output_bank_owned_schedule, "Slice readiness currently requires the bank-owned packet schedule");
+        TT_FATAL(slice_readiness.chunk_tiles > 0, "Slice readiness needs the consumer's K chunk size");
+        // The gather reader counts each slave link's markers in its own byte of the master's sync semaphore.
+        TT_FATAL(num_links <= 4, "Slice readiness supports at most 4 links per direction, got {}", num_links);
+        TT_FATAL(
+            ring_size * ttnn::ring_attention_all_gather::kReadinessParts < 256,
+            "Slice readiness marker count exceeds a byte for ring size {}",
+            ring_size);
         for (const auto& tensor : input_tensor) {
             TT_FATAL(
                 tensor.padded_shape()[2] == input_tensor[0].padded_shape()[2],
-                "Two-part local slice needs every gathered input to have the same rows");
+                "Slice readiness needs every gathered input to have the same rows");
         }
     }
     if (partial_readiness_enabled) {
@@ -985,9 +992,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
-            local_readiness.bands,                     // kLocalReadinessBands
-            local_readiness.chunk_tiles,               // kLocalReadinessChunkTiles
-            local_readiness.truncate_tiles,            // kLocalReadinessTruncateTiles
+            slice_readiness.bands,                     // kSliceReadinessBands
+            slice_readiness.chunk_tiles,               // kSliceReadinessChunkTiles
+            slice_readiness.truncate_tiles,            // kSliceReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -1042,9 +1049,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            local_readiness.bands,                              // kLocalReadinessBands
-            local_readiness.chunk_tiles,                        // kLocalReadinessChunkTiles
-            local_readiness.truncate_tiles,                     // kLocalReadinessTruncateTiles
+            slice_readiness.bands,                              // kSliceReadinessBands
+            slice_readiness.chunk_tiles,                        // kSliceReadinessChunkTiles
+            slice_readiness.truncate_tiles,                     // kSliceReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,

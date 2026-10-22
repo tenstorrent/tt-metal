@@ -418,7 +418,21 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+#ifdef RING_INTERLEAVE
+    constexpr bool ring_interleave = true;
+#else
+    constexpr bool ring_interleave = false;
+#endif
+    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID comes from its first step, the only
+    // one that advances the sequencer. A revisit is always within the iteration's pair, whose members differ in parity.
+    uint32_t step_ring_ids[2];
+    const uint32_t sdpa_steps =
+        ring_interleave ? ring_joint::interleaved_step_count(sdpa_ring_iterations) : sdpa_ring_iterations;
+    for (uint32_t step = 0; step < sdpa_steps; ++step) {
+        const ring_joint::InterleavedStep istep = ring_interleave
+                                                      ? ring_joint::interleaved_step(step, sdpa_ring_iterations)
+                                                      : ring_joint::InterleavedStep{step, 0, 1};
+        const uint32_t ring_iter = istep.ring_iter;
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         // Read this iteration's remainder ID and derive its count from the fixed base range.
         // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rotated_active_ordinal. Compute reads
@@ -459,12 +473,18 @@ void kernel_main() {
         }
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
-        const uint32_t ring_id =
-            packed_sources ? packed_source_ids[0]
-            : has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+        uint32_t ring_id;
+        if (packed_sources) {
+            ring_id = packed_source_ids[0];
+        } else if (has_sliding_window) {
+            ring_id = ring_index;
+        } else if (istep.piece == 0) {
+            ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            step_ring_ids[ring_iter & 1] = ring_id;
+        } else {
+            ring_id = step_ring_ids[ring_iter & 1];
+        }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (!packed_sources && !has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -477,6 +497,8 @@ void kernel_main() {
             packed_sources ? packed_kv.chunk_count()
                            : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
+        // Interleaved steps split every core's K range; the host gate leaves no core outside the K split.
+        ASSERT(!ring_interleave || ksplit_active || q_per_core == 0);
         if constexpr (ksplit_enabled) {
             // Idle cores drain their row's padded multicast slots, so they skip the row's K chunks too.
             if ((ksplit_active || q_per_core == 0) && !has_sliding_window) {
@@ -487,7 +509,8 @@ void kernel_main() {
                     chunk_size_t,
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
-                ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
+                ksplit_k_range = ring_joint::interleaved_piece(
+                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count), istep.piece, istep.pieces);
                 if (ksplit_active) {
                     ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
                 }
@@ -596,7 +619,8 @@ void kernel_main() {
         const bool is_last_ring_iter =
             !ksplit_active && !seg_active &&
             (has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                                   : is_last_active_ring_iter(active_ring_iter_mask, ring_iter)));
+                                                   : is_last_active_ring_iter(active_ring_iter_mask, ring_iter) &&
+                                                         istep.piece + 1 == istep.pieces));
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.

@@ -12,7 +12,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
-#include "ring_attention_local_readiness.hpp"
+#include "ring_attention_slice_readiness.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <algorithm>
@@ -49,10 +49,10 @@ enum CompileTimeArg : uint32_t {
     kPrefetchPackets,
     // Trace-safe cache-slot select, appended last so main's arg order is untouched.
     kHasSlotMetadata,
-    // Two-part local slice (ring_attention_local_readiness.hpp): K-split band count (0 = off) and K chunk tile rows.
-    kLocalReadinessBands,
-    kLocalReadinessChunkTiles,
-    kLocalReadinessTruncateTiles,
+    // Slice readiness (ring_attention_slice_readiness.hpp): K-split band count (0 = off) and K chunk tile rows.
+    kSliceReadinessBands,
+    kSliceReadinessChunkTiles,
+    kSliceReadinessTruncateTiles,
     kNumFixedCompileTimeArgs,
 };
 
@@ -81,13 +81,13 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
-constexpr uint32_t local_readiness_bands = get_compile_time_arg_val(kLocalReadinessBands);
-constexpr uint32_t local_readiness_chunk_tiles = get_compile_time_arg_val(kLocalReadinessChunkTiles);
-constexpr uint32_t local_readiness_truncate_tiles = get_compile_time_arg_val(kLocalReadinessTruncateTiles);
-constexpr bool local_readiness_enabled = local_readiness_bands > 0;
+constexpr uint32_t slice_readiness_bands = get_compile_time_arg_val(kSliceReadinessBands);
+constexpr uint32_t slice_readiness_chunk_tiles = get_compile_time_arg_val(kSliceReadinessChunkTiles);
+constexpr uint32_t slice_readiness_truncate_tiles = get_compile_time_arg_val(kSliceReadinessTruncateTiles);
+constexpr bool slice_readiness_enabled = slice_readiness_bands > 0;
 static_assert(
-    !local_readiness_enabled || (output_bank_owned_schedule && !partial_readiness_enabled),
-    "two-part local slice needs the bank-owned schedule and excludes midpoint partial readiness");
+    !slice_readiness_enabled || (output_bank_owned_schedule && !partial_readiness_enabled),
+    "slice readiness needs the bank-owned schedule and excludes midpoint partial readiness");
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -137,6 +137,162 @@ FORCE_INLINE void prefetch_bank_owned_slices(
             accessor,
             next_packet,
             [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
+    }
+}
+
+// Readiness markers (ring_attention_slice_readiness.hpp) from the upstream neighbor, forwarded to the fused consumer
+// one signal per marker, in order, once the marker has landed on every link of this direction. Every full slice carries
+// kReadinessParts markers and the split-forwarded diametric half one, which is always a direction's last slice, so
+// marker m (0-based) belongs to slice m / kReadinessParts + 1.
+// Nothing here blocks on another worker: poll() runs inside the local prefetch and the relay of the previous slice, and
+// a worker held there would stall its own sends, which upstream devices' relays (and so its partner links' markers)
+// wait on, around the ring. So the barrier of OpSignaler::synchronize_workers_and_signal_op is replaced by counts:
+// each slave adds its newly landed markers to the master's sync semaphore, in its own byte (slave i in byte i - 1),
+// and the master signals the consumer for the markers every link has.
+struct ReadinessMarkerForwarder {
+    size_t out_ready_sem = 0;
+    uint32_t ring_size = 0;
+    uint32_t total = 0;
+    uint32_t seen = 0;       // markers landed on this link and accounted for
+    uint32_t forwarded = 0;  // master: markers signaled to the consumer
+    OpSignaler* op_signaler = nullptr;
+
+    uint32_t sender_transport_rank(uint32_t marker) const {
+        const uint32_t slice = marker / ttnn::ring_attention_all_gather::kReadinessParts + 1;
+        if constexpr (direction == 1) {
+            return (my_transport_rank + slice) % ring_size;
+        } else {
+            return (my_transport_rank + ring_size - slice) % ring_size;
+        }
+    }
+    uint32_t landed() const {
+        invalidate_l1_cache();
+        const uint32_t value = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
+        return value < this->total ? value : this->total;
+    }
+    void poll() {
+        const uint32_t now = landed();
+        if constexpr (fuse_op) {
+            OpSignaler& sig = *this->op_signaler;
+            if (sig.num_workers_to_sync > 1 && !sig.curr_worker_is_master) {
+                if (now > this->seen) {
+                    sig.worker_sync_sem.up(
+                        sig.noc,
+                        sig.workers_noc_coords[0],
+                        sig.workers_noc_coords[1],
+                        (now - this->seen) << (8 * (sig.curr_worker_index - 1)));
+                }
+                this->seen = now;
+                return;
+            }
+            uint32_t ready = now;
+            if (sig.num_workers_to_sync > 1) {
+                const uint32_t reported = sig.worker_sync_sem.value();
+                for (uint32_t slave = 1; slave < sig.num_workers_to_sync; ++slave) {
+                    const uint32_t count = (reported >> (8 * (slave - 1))) & 0xFF;
+                    ready = count < ready ? count : ready;
+                }
+            }
+            if (ready > this->forwarded) {
+                if (sig.mcast_signal_op_cores) {
+                    for (uint32_t i = 0; i < sig.num_fused_op_cores_to_signal; i++) {
+                        sig.signal_op_sem.up(
+                            sig.noc,
+                            sig.signal_op_cores_noc_coords[i * 2],
+                            sig.signal_op_cores_noc_coords[i * 2 + 1],
+                            ready - this->forwarded);
+                    }
+                    this->forwarded = ready;
+                } else {
+                    for (; this->forwarded < ready; ++this->forwarded) {
+                        const uint32_t core = sender_transport_rank(this->forwarded);
+                        sig.signal_op_sem.up(
+                            sig.noc,
+                            sig.signal_op_cores_noc_coords[core * 2],
+                            sig.signal_op_cores_noc_coords[core * 2 + 1],
+                            1);
+                    }
+                }
+            }
+        }
+        this->seen = now;
+    }
+    // Until `markers` have landed on this link (the master signals the other links' share from later polls).
+    void wait_through(uint32_t markers) {
+        poll();
+        while (this->seen < markers) {
+            poll();
+        }
+    }
+    // Leave the sync semaphore clean for the next dispatch: every slave has reported every marker by now.
+    void finish() {
+        wait_through(this->total);
+        if constexpr (fuse_op) {
+            OpSignaler& sig = *this->op_signaler;
+            if (sig.num_workers_to_sync <= 1 || sig.curr_worker_is_master) {
+                while (this->forwarded < this->total) {
+                    poll();
+                }
+            }
+            if (sig.num_workers_to_sync > 1 && sig.curr_worker_is_master) {
+                sig.worker_sync_sem.set(0);
+            }
+        }
+    }
+};
+
+// A full slice in readiness parts, in the writer's send order (write_slice_in_parts), polling for upstream markers
+// between ranges. `from_output` reads a relayed slice back from the gathered output, else the local input slice.
+template <bool from_output, typename AddrGens>
+FORCE_INLINE void prefetch_slice_in_parts(
+    const Noc& noc,
+    CircularBuffer& cb_output,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    AddrGens& source_addrgens,
+    ReadinessMarkerForwarder& markers,
+    const std::array<uint32_t, num_inputs>& input_tensor_Wt,
+    const std::array<uint32_t, num_inputs>& input_tensor_Ht,
+    const std::array<uint32_t, num_inputs>& output_tensor_Wt,
+    const std::array<uint32_t, num_inputs>& output_tensor_Ht,
+    const std::array<uint32_t, num_inputs>& input_batch_head_count,
+    const std::array<uint32_t, num_inputs>& input_batch_base,
+    const std::array<uint32_t, num_inputs>& input_valid_pages,
+    const std::array<uint32_t, num_inputs>& worker_link,
+    uint32_t slice_tensor_rank,
+    uint32_t num_chunks) {
+    for (uint32_t part = 0; part < ttnn::ring_attention_all_gather::kReadinessParts; ++part) {
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            const uint32_t row_pages = input_tensor_Wt[input_idx];
+            const uint32_t input_pages_per_batch_head = row_pages * input_tensor_Ht[input_idx];
+            const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+            const uint32_t valid_rows = input_valid_pages[input_idx] / row_pages;
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                const uint32_t output_page_base =
+                    bh_idx * output_pages_per_batch_head + slice_tensor_rank * input_pages_per_batch_head;
+                const uint32_t source_page_base =
+                    from_output ? output_page_base : input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                for (uint32_t range = 0; range <= slice_readiness_bands; ++range) {
+                    const auto rows = ttnn::ring_attention_all_gather::readiness_rows(
+                        num_chunks, slice_readiness_bands, slice_readiness_chunk_tiles, valid_rows, part, range);
+                    if (rows.end <= rows.begin) {
+                        continue;
+                    }
+                    prefetch_bank_owned_slices<from_output>(
+                        noc,
+                        cb_output,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        source_addrgens[input_idx],
+                        source_page_base + rows.begin * row_pages,
+                        output_page_base + rows.begin * row_pages,
+                        (rows.end - rows.begin) * row_pages,
+                        worker_link[input_idx],
+                        num_links);
+                    markers.poll();
+                }
+            }
+        }
     }
 }
 
@@ -266,65 +422,53 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
+    ReadinessMarkerForwarder readiness_markers;
+    readiness_markers.out_ready_sem = out_ready_sem;
+    readiness_markers.ring_size = ring_size;
+    readiness_markers.op_signaler = &op_signaler;
+    if constexpr (slice_readiness_enabled) {
+        // Every slice this direction receives is full except a split-forwarded diametric half, always the last.
+        uint32_t slices = direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
+        if (split_forwarding_enabled && direction == 1) {
+            slices++;
+        }
+        readiness_markers.total = split_forwarding_enabled
+                                      ? (slices - 1) * ttnn::ring_attention_all_gather::kReadinessParts + 1
+                                      : slices * ttnn::ring_attention_all_gather::kReadinessParts;
+    }
+
     // Read the local slice into the packet CB before sending it over Fabric.
-    if constexpr (local_readiness_enabled) {
-        // In the writer's order: part 0 of every input and batch-head, then part 1.
-        // This direction's first slice goes to one neighbor: writer direction 1 sends toward lower transport ranks.
-        // A neighbor ranked below this device masks this slice's newest slab (dense causal skip), so split it as that
-        // neighbor's K bands are (ring_attention_local_readiness.hpp).
+    if constexpr (slice_readiness_enabled) {
+        // In the writer's order. This direction's first slice goes to one neighbor: writer direction 1 sends toward
+        // lower transport ranks. A neighbor ranked below this device masks this slice's newest slab (dense causal
+        // skip), so split it as that neighbor's K bands are (ring_attention_slice_readiness.hpp). The neighbor sends
+        // its own slice on the same schedule, so its first parts are forwarded from here as they land.
         const uint32_t receiver_transport_rank =
             direction == 1 ? (my_transport_rank + ring_size - 1) % ring_size : (my_transport_rank + 1) % ring_size;
         const uint32_t receiver_tensor_rank =
             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                 receiver_transport_rank, mesh_rows, mesh_cols, snake_orientation);
-        const uint32_t num_chunks = ttnn::ring_attention_all_gather::local_readiness_split_chunks(
-            input_valid_pages[0] / input_tensor_Wt[0],
-            local_readiness_truncate_tiles,
-            my_tensor_rank > receiver_tensor_rank,
-            local_readiness_chunk_tiles);
-        for (uint32_t part = 0; part < 2; ++part) {
-            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                const uint32_t row_pages = input_tensor_Wt[input_idx];
-                const uint32_t input_pages_per_batch_head = row_pages * input_tensor_Ht[input_idx];
-                const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
-                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                    const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
-                    const uint32_t output_page_base =
-                        bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
-                    const uint32_t valid_rows = input_valid_pages[input_idx] / row_pages;
-                    for (uint32_t range = 0; range <= local_readiness_bands; ++range) {
-                        const auto rows = ttnn::ring_attention_all_gather::local_readiness_rows(
-                            num_chunks, local_readiness_bands, local_readiness_chunk_tiles, valid_rows, part, range);
-                        if (rows.end <= rows.begin) {
-                            continue;
-                        }
-                        prefetch_bank_owned_slices<false>(
-                            noc_obj,
-                            cb_output,
-                            cb_fifo_limit,
-                            cb_fifo_size,
-                            input_tensor_addrgens[input_idx],
-                            input_page_base + rows.begin * row_pages,
-                            output_page_base + rows.begin * row_pages,
-                            (rows.end - rows.begin) * row_pages,
-                            worker_link[input_idx],
-                            num_links);
-                    }
-                }
-            }
-            if (part == 0) {
-                // The receive loop below runs only once this device's own slice has been prefetched, so it would see
-                // the neighbor's part-0 marker only as late as its completion. Both neighbors send on the same
-                // schedule: wait for that marker here, between this slice's parts, and signal the consumer now.
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
-                if constexpr (fuse_op) {
-                    const uint32_t first_sender_transport_rank = direction == 1
-                                                                     ? (my_transport_rank + 1) % ring_size
-                                                                     : (my_transport_rank + ring_size - 1) % ring_size;
-                    op_signaler.synchronize_workers_and_signal_op(first_sender_transport_rank);
-                }
-            }
-        }
+        prefetch_slice_in_parts<false>(
+            noc_obj,
+            cb_output,
+            cb_fifo_limit,
+            cb_fifo_size,
+            input_tensor_addrgens,
+            readiness_markers,
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            output_tensor_Ht,
+            input_batch_head_count,
+            input_batch_base,
+            input_valid_pages,
+            worker_link,
+            my_tensor_rank,
+            ttnn::ring_attention_all_gather::readiness_split_chunks(
+                input_valid_pages[0] / input_tensor_Wt[0],
+                slice_readiness_truncate_tiles,
+                my_tensor_rank > receiver_tensor_rank,
+                slice_readiness_chunk_tiles));
     } else {
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -442,14 +586,14 @@ void kernel_main() {
         // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
         // GlobalSemaphore.
         const uint32_t next_slice = slices_received + 1;
-        // Two-part local slice: the first slice (the neighbor's own) carries one extra marker, after its part 0.
-        const bool two_part_slice = local_readiness_enabled && next_slice == 1;
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
-        } else if constexpr (local_readiness_enabled) {
-            // Slice 1: its part 0 (marker 1). Later slices complete one marker later than in the legacy protocol.
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), two_part_slice ? 1 : next_slice + 1);
+        } else if constexpr (slice_readiness_enabled) {
+            // Forward the rest of this slice's parts as they land; it must be whole before it is relayed.
+            const bool split_half = split_forwarding_enabled && next_slice == slices_expected;
+            readiness_markers.wait_through(
+                split_half ? (next_slice - 1) * ttnn::ring_attention_all_gather::kReadinessParts + 1
+                           : next_slice * ttnn::ring_attention_all_gather::kReadinessParts);
         } else {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
         }
@@ -470,20 +614,12 @@ void kernel_main() {
             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                 sender_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
-        if constexpr (fuse_op) {
-            // In partial mode this first signal exposes the completed prefix of the shard. A two-part slice's part 0
-            // was signaled during the local prefetch.
-            if (!two_part_slice) {
-                op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
-            }
+        if constexpr (fuse_op && !slice_readiness_enabled) {
+            // In partial mode this first signal exposes the completed prefix of the shard.
+            op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
         }
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2);
-            if constexpr (fuse_op) {
-                op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
-            }
-        } else if (two_part_slice) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 2);
             if constexpr (fuse_op) {
                 op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
             }
@@ -499,6 +635,38 @@ void kernel_main() {
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             // The last slice we relay is the diametric shard of our downstream neighbor
             const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
+            if (slice_readiness_enabled && !is_split_forwarded_slice) {
+                // A full slice in readiness parts, split as the downstream neighbor's K bands are, while the next
+                // slice's parts are forwarded as they land.
+                const uint32_t receiver_transport_rank = direction == 1
+                                                             ? (my_transport_rank + ring_size - 1) % ring_size
+                                                             : (my_transport_rank + 1) % ring_size;
+                const uint32_t receiver_tensor_rank =
+                    ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                        receiver_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+                prefetch_slice_in_parts<true>(
+                    noc_obj,
+                    cb_output,
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    output_tensor_addrgens,
+                    readiness_markers,
+                    input_tensor_Wt,
+                    input_tensor_Ht,
+                    output_tensor_Wt,
+                    output_tensor_Ht,
+                    input_batch_head_count,
+                    input_batch_base,
+                    input_valid_pages,
+                    worker_link,
+                    sender_tensor_rank,
+                    ttnn::ring_attention_all_gather::readiness_split_chunks(
+                        input_valid_pages[0] / input_tensor_Wt[0],
+                        slice_readiness_truncate_tiles,
+                        sender_tensor_rank > receiver_tensor_rank,
+                        slice_readiness_chunk_tiles));
+                continue;
+            }
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
                 const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
                 const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
@@ -611,6 +779,9 @@ void kernel_main() {
         }
     }
 
+    if constexpr (slice_readiness_enabled) {
+        readiness_markers.finish();
+    }
     // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
     if constexpr (fuse_op) {
         noc_obj.async_atomic_barrier();

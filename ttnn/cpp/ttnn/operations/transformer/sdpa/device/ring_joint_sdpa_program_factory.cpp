@@ -1559,14 +1559,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
 
-    // Two-part local slice (RingAttentionLocalReadiness): each device sends its own slice to its neighbors as the
-    // leading share of every K-split band, a marker, then the rest, so the first remote ring step starts on that share
-    // instead of waiting for the whole slice. Limited to the plain chunked dense path, where the gather's slice is the
-    // valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the gather's on-device extent only
-    // when both run the metadata path.
+    // Progressive readiness (RingAttentionSliceReadiness): the gather sends every full slice, its own and the ones it
+    // relays, in parts that each hold a share of every K-split band, with a marker after each, so a remote ring step
+    // starts on the first part instead of waiting for the whole slice. Limited to the plain chunked dense path, where
+    // the gather's slice is the valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the
+    // gather's on-device extent only when both run the metadata path.
     const auto& ag_attrs_readiness = args.all_gather_operation_attributes;
     const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
-    const bool local_slice_readiness =
+    const bool slice_readiness =
         ag_attrs_readiness.topology == ttnn::ccl::Topology::Ring && ag_attrs_readiness.ring_size > 2 &&
         kernel_chunked && !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
         args.kv_stripe_split == 1 && !v_shares_k_buffer &&
@@ -1574,7 +1574,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         tensor_args.kv_actual_isl.has_value() == tensor_args.kv_pad_from_metadata(args.kv_stripe_split) &&
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
             readiness_gather_inputs, readiness_gather_outputs, ag_attrs_readiness.dim);
-    sdpa_fused_op_signaler->local_slice_readiness = local_slice_readiness;
+    sdpa_fused_op_signaler->slice_readiness = slice_readiness;
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
     // restore CBs, so no bf16 running sum spans the whole prefix.
     const bool seg_accum =
@@ -3238,6 +3238,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         defines["KV_VALID_END"] = "1";
     }
 
+    // Interleaved ring steps (ring_joint_ksplit.hpp): pairs of remote ring iterations alternate pieces of every core's
+    // K-split slice, so each direction's progressively signaled slice is used at half rate. Reader and compute walk the
+    // steps; the writer keeps whole ring iterations, which it can only where it has no per-iteration exchange with
+    // compute: single-Q K-split cores (and idle ones) on the streaming path.
+    if (slice_readiness && ksplit_count > 1 && max_q_per_core == 1 && !use_rotated_q_split && grouped_sources == 1 &&
+        !has_sliding_window && !seg_accum && use_streaming_compute) {
+        defines["RING_INTERLEAVE"] = "1";
+    }
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3455,7 +3463,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
         reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
         reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
-        // The gather's slice extent, for the two-part local slice (re-applied per dispatch with the scalars above).
+        // The gather's slice extent, for slice readiness (re-applied per dispatch with the scalars above).
         reader_args.push_back(fused_gather_slice_rows(args, tensor_args));
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
@@ -3902,11 +3910,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
             rank_mapping,
-            // The gather splits each first slice like its receiver's K bands: a receiver ranked below the sender masks
+            // The gather splits each slice like its receiver's K bands: a receiver ranked below the sender masks
             // the sender's newest slab (one Q slab of the chunk) under the dense causal skip.
-            local_slice_readiness
-                ? RingAttentionLocalReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split) : 0u}
-                : RingAttentionLocalReadiness{});
+            slice_readiness
+                ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split) : 0u}
+                : RingAttentionSliceReadiness{});
     }
 
     return desc;

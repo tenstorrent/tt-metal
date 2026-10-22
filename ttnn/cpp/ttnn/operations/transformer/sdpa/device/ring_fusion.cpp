@@ -5,6 +5,7 @@
 #include "ring_fusion.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::prim {
@@ -77,16 +78,15 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
         this->ring_size ? ((this->ring_index + this->backward_writes_expected + 1) % this->ring_size) : 0;
     // The forward chain's semaphore counts the local-slice pre-signal (the direction-1 all-gather
     // writer signals its own slice; see synchronize_workers_and_signal_op in
-    // ring_attention_all_gather_writer.cpp) plus one signal per received slice — which is why
-    // RingIdSequencer's dir-0 waits use received + 1. The diametric shard's second half is that
-    // chain's final arrival, so its count is 1 (local) + backward_writes_expected (full slices)
-    // + 1 (second half). Waiting for backward_writes_expected + 1 would be subsumed by the
-    // sequencer's earlier wait for shard ring_index + backward_writes_expected, i.e. a no-op.
-    // A two-part local slice adds one marker to that chain (its first slice's part 0).
-    const uint32_t split_second_half_wait = this->backward_writes_expected + 2 + (this->local_slice_readiness ? 1 : 0);
-    // Bit 0: split forwarding; bit 1: two-part local slice (keeps the argument layout fixed for every consumer).
+    // ring_attention_all_gather_writer.cpp) plus one signal per received full slice, or per part of one
+    // under slice readiness (ring_attention_slice_readiness.hpp) — which is why RingIdSequencer's dir-0
+    // waits use received + 1. The diametric shard's second half is that chain's final arrival, one
+    // signal after the pre-signal and backward_writes_expected full slices.
+    const uint32_t full_slice_signals = this->slice_readiness ? ttnn::ring_attention_all_gather::kReadinessParts : 1;
+    const uint32_t split_second_half_wait = 1 + this->backward_writes_expected * full_slice_signals + 1;
+    // Bit 0: split forwarding; bit 1: progressive readiness (keeps the argument layout fixed for every consumer).
     out_rt_args.push_back(
-        static_cast<uint32_t>((this->split_forwarding_enabled ? 1 : 0) | (this->local_slice_readiness ? 2 : 0)));
+        static_cast<uint32_t>((this->split_forwarding_enabled ? 1 : 0) | (this->slice_readiness ? 2 : 0)));
     out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
     out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));
 }

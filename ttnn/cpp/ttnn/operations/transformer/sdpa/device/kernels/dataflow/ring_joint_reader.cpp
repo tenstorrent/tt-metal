@@ -19,7 +19,7 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_local_readiness.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
@@ -452,7 +452,7 @@ void kernel_main() {
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++)};
     // Rows of K the fused gather sends from each device's slice, as the host bounds it (re-applied per dispatch with
-    // logical_nt); the metadata path narrows it below exactly as the gather does on device. Two-part local slice only.
+    // logical_nt); the metadata path narrows it below exactly as the gather does on device. Slice readiness only.
     uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
@@ -909,7 +909,24 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+#ifdef RING_INTERLEAVE
+    constexpr bool ring_interleave = true;
+#else
+    constexpr bool ring_interleave = false;
+#endif
+    // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID and slice direction come from its
+    // first step, the only one that advances the sequencer. A revisit is always within the iteration's pair, whose
+    // members differ in parity.
+    uint32_t step_ring_ids[2];
+    uint32_t step_dirs[2];
+    uint32_t ring_dir = 0;
+    const uint32_t sdpa_steps =
+        ring_interleave ? ring_joint::interleaved_step_count(sdpa_ring_iterations) : sdpa_ring_iterations;
+    for (uint32_t step = 0; step < sdpa_steps; ++step) {
+        const ring_joint::InterleavedStep istep = ring_interleave
+                                                      ? ring_joint::interleaved_step(step, sdpa_ring_iterations)
+                                                      : ring_joint::InterleavedStep{step, 0, 1};
+        const uint32_t ring_iter = istep.ring_iter;
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
         ring_joint::PackedKVSourceReadiness packed_readiness;
@@ -934,12 +951,21 @@ void kernel_main() {
             packed_sources || has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
-        const uint32_t ring_id =
-            packed_sources ? packed_source_ids[0]
-            : has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+        uint32_t ring_id;
+        if (packed_sources) {
+            ring_id = packed_source_ids[0];
+        } else if (has_sliding_window) {
+            ring_id = ring_index;
+        } else if (istep.piece == 0) {
+            ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            ring_dir = fused_op_receiver.last_dir;
+            step_ring_ids[ring_iter & 1] = ring_id;
+            step_dirs[ring_iter & 1] = ring_dir;
+        } else {
+            ring_id = step_ring_ids[ring_iter & 1];
+            ring_dir = step_dirs[ring_iter & 1];
+        }
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -950,7 +976,8 @@ void kernel_main() {
         // balanced Q chunks whose final iteration takes the normalize-only path.
         const bool is_last_ring_iter =
             has_sliding_window || (packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
+                                                  : is_last_active_ring_iter(active_ring_iter_mask, ring_iter) &&
+                                                        istep.piece + 1 == istep.pieces);
         // Iterate over KV blocks gathered on ring.
         // Sharded joint: the fused all-gather delivers one remote L/P shard per ring iteration (local
         // slice is read from the local joint tensor, same as spatial). Each shard is available right
@@ -979,12 +1006,13 @@ void kernel_main() {
                 chunk_size_t,
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
-            ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
+            ksplit_k_range = ring_joint::interleaved_piece(
+                ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count), istep.piece, istep.pieces);
         }
-        // Two-part local slice (ring_attention_local_readiness.hpp): this remote slice has landed only in part. Which
-        // chunks part 0 covers is the sender's split of its slice for this device, computed as the sender does, so a
-        // chunk is read early only if the sender sent it before its part-0 marker.
-        const uint32_t readiness_num_chunks = ttnn::ring_attention_all_gather::local_readiness_split_chunks(
+        // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
+        // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
+        // early only if the sender sent it before that part's marker.
+        const uint32_t readiness_num_chunks = ttnn::ring_attention_all_gather::readiness_split_chunks(
             gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t);
 
         // In causal balanced case processing KV received from other devices:
@@ -1272,10 +1300,11 @@ void kernel_main() {
                 const bool joint_chunk_is_local =
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
-                if (fused_op_receiver.slice_partial() && !source_is_local &&
-                    !ttnn::ring_attention_all_gather::local_readiness_in_part0(
-                        source_k_chunk, readiness_num_chunks, ksplit_count)) {
-                    fused_op_receiver.wait_slice_complete();
+                if (!source_is_local) {
+                    fused_op_receiver.wait_part(
+                        ring_dir,
+                        ttnn::ring_attention_all_gather::readiness_part_of(
+                            source_k_chunk, readiness_num_chunks, ksplit_count));
                 }
 
                 if (packed_sources) {

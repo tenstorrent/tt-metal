@@ -24,6 +24,7 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 
 import ast
 import csv
+import hashlib
 import math
 import operator
 import os
@@ -1716,6 +1717,37 @@ def expand_mla_k_reference(latent_k, w_uk):
     return torch.cat([k_nope, k_pe], dim=-1).to(latent_k.dtype)
 
 
+def cached_sdpa_reference(compute, key, tensors):
+    """compute() (the O(total_seq^2) CPU torch reference), cached on disk under RING_JOINT_REFERENCE_CACHE when set.
+
+    Developer convenience for repeated local runs: inputs come from a fixed seed, so the reference is identical run
+    to run. The key covers the reference parameters and every input's ordered values (large inputs at a fixed stride),
+    so a changed input generator misses the cache rather than reading a stale reference. It does not cover the
+    reference functions themselves: clear the directory after changing them."""
+    cache_dir = os.environ.get("RING_JOINT_REFERENCE_CACHE")
+    if not cache_dir:
+        return compute()
+    hasher = hashlib.sha256(repr(key).encode())
+    for tensor in tensors:
+        if tensor is None:
+            hasher.update(b"none")
+            continue
+        hasher.update(repr((tuple(tensor.shape), str(tensor.dtype))).encode())
+        # Ordered values (a permutation changes the key): small tensors whole, large ones at a fixed stride.
+        flat = tensor.reshape(-1)
+        hasher.update(flat[:: max(1, flat.numel() // (1 << 20))].contiguous().float().numpy().tobytes())
+    path = os.path.join(cache_dir, f"sdpa_ref_{hasher.hexdigest()[:32]}.pt")
+    if os.path.exists(path):
+        return torch.load(path)
+    ref = compute()
+    os.makedirs(cache_dir, exist_ok=True)
+    # A producer-unique temporary file, so concurrent producers of the same entry each publish a complete archive.
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    torch.save(ref, tmp_path)
+    os.replace(tmp_path, path)
+    return ref
+
+
 def run_ring_joint_sdpa_chunked(
     mesh_config,
     model: ModelConfig,
@@ -1956,25 +1988,32 @@ def run_ring_joint_sdpa_chunked(
         # O(total_seq^2) host SDPA that dominates wall-clock, while the device kernel — the only
         # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
-        if num_iterations == 1 and do_check:
+
+        def compute_reference():
             if sliding_window_size is None and operator_sink is None and model.scale is None:
-                ref_full = torch_sdpa_reference(Q_full, k_reference, v_reference, is_causal=True)
-            else:
-                ref_full = torch.cat(
-                    [
-                        torch_chunked_causal_sdpa_reference(
-                            Q_full[:, :, s:e, :],
-                            k_reference[:, :, :e, :],
-                            v_reference[:, :, :e, :],
-                            s,
-                            scale=model.scale,
-                            sliding_window_size=sliding_window_size,
-                            attention_sink=operator_sink,
-                        )
-                        for s, e in ((i * chunk_size, (i + 1) * chunk_size) for i in range(n_chunks))
-                    ],
-                    dim=2,
-                )
+                return torch_sdpa_reference(Q_full, k_reference, v_reference, is_causal=True)
+            return torch.cat(
+                [
+                    torch_chunked_causal_sdpa_reference(
+                        Q_full[:, :, s:e, :],
+                        k_reference[:, :, :e, :],
+                        v_reference[:, :, :e, :],
+                        s,
+                        scale=model.scale,
+                        sliding_window_size=sliding_window_size,
+                        attention_sink=operator_sink,
+                    )
+                    for s, e in ((i * chunk_size, (i + 1) * chunk_size) for i in range(n_chunks))
+                ],
+                dim=2,
+            )
+
+        if num_iterations == 1 and do_check:
+            ref_full = cached_sdpa_reference(
+                compute_reference,
+                (chunk_size, n_chunks, sliding_window_size, model.scale),
+                (Q_full, k_reference, v_reference, operator_sink),
+            )
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -8872,18 +8911,19 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
 # comparable to the absorbed rows above.
 if MESH_CONFIG.is_galaxy:
     # sp=8 tp=4. Projected, not measured: the attention-only calibration (4.80 / 3.46 ms) re-based to this util
-    # (x1.335) and scaled by the LoudBox speedup of the in-place QK and two-part first slice (-6.5% / -5.3%), so the
-    # band is +/-5% until the next Galaxy run re-calibrates it to a measured centre and +/-1.5%.
+    # (x1.335) and scaled by the LoudBox speedups of the in-place QK with the first slice in parts (-6.5% / -5.3%) and
+    # of progressive slice readiness with interleaved ring steps (-0.5% / -3.4%), so the band is +/-5% until the next
+    # Galaxy run re-calibrates it to a measured centre and +/-1.5%.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, ring_size, expected_util, margin)
-        ("kimi_k3_expanded_k", 8, 51.70, 0.05),
-        ("kimi_k2_7_expanded_k", 8, 47.20, 0.05),
+        ("kimi_k3_expanded_k", 8, 51.96, 0.05),
+        ("kimi_k2_7_expanded_k", 8, 48.86, 0.05),
     ]
 else:
-    # The Blackhole LoudBox ring (sp=8 tp=1): K3 4.31 ms, K2.7 3.10 ms, repeatable within 0.5%.
+    # The Blackhole LoudBox ring (sp=8 tp=1): K3 4.29 ms, K2.7 3.00 ms, repeatable within 0.5%.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
-        ("kimi_k3_expanded_k", 8, 53.83, 0.015),
-        ("kimi_k2_7_expanded_k", 8, 49.85, 0.015),
+        ("kimi_k3_expanded_k", 8, 54.10, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 51.50, 0.015),
     ]
 
 

@@ -26,9 +26,9 @@ struct RingSDPAFusedOpSignaler {
 
     // Set by the program factory when the all-gather relays the diametric slice split across both links
     bool split_forwarding_enabled = false;
-    // Set by the program factory when the all-gather sends each device's own slice in two parts (one extra marker
-    // on the first slice from each direction; see RingAttentionLocalReadiness)
-    bool local_slice_readiness = false;
+    // Set by the program factory when the all-gather sends every full slice in readiness parts, one marker each
+    // (see RingAttentionSliceReadiness)
+    bool slice_readiness = false;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
