@@ -103,7 +103,22 @@ def fx(tmp_path, monkeypatch):
             "paths": {"art": str(tmp_path / "art"), "repo": str(tmp_path / "repo")},
         }
         d.update(over)
-        (tmp_path / "repo").mkdir(exist_ok=True)
+        repo = tmp_path / "repo"
+        if not (repo / ".git").exists():  # F170: a real checkout (a stamp's git error is never an empty key)
+            repo.mkdir(exist_ok=True)
+            git(repo, "init", "-q", "-b", "main")
+            git(
+                repo,
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            )
         p = tmp_path / "spec.yaml"
         p.write_text(yaml.safe_dump(d))
         return str(p)

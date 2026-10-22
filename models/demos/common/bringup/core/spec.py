@@ -468,6 +468,11 @@ class Spec:
                     errs.append(f"ladder rung {r} misses '{k}'")
             if "seq" in r and "chunk" in r and r["seq"] % r["chunk"]:
                 errs.append(f"ladder rung {r['name']}: seq is not a multiple of chunk")
+            sdl = r.get("step_dump_layers")  # F159: a subset of the run's layers
+            if sdl is not None and not set(sdl) <= set(self.layers()):
+                errs.append(
+                    f"ladder rung {r['name']}: step_dump_layers {sorted(set(sdl) - set(self.layers()))} not run"
+                )
             if r.get("name") in names:
                 errs.append(f"duplicate ladder rung {r['name']}")
             names.add(r.get("name"))

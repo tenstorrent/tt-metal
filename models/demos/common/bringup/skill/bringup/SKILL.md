@@ -139,12 +139,32 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 
 ## 4. Supervise the run
 
-**Watch the orchestrator itself first (owner).** Your first job is to watch the orchestrator for waste and wrong
-behaviour, not to relay or justify what it does. When the orchestrator, a gate or an agent is about to spend time for
-no reason (a re-run of unchanged or already-passed work, a full gate after an administrative failure, an agent attempt
-that cannot succeed, unrelated tasks running, a missing flag), stop it at once, do the cheap correct thing by hand if
-one exists (commit-only, reuse a recorded result), and fix the orchestrator (a framework change with a selftest) so it
-never happens again. "The orchestrator does X" is never a reason given to the owner for waiting.
+**Monitor and improve the framework first (owner).** The overseer's most important duty is to monitor and improve the
+framework, not to act as its mouthpiece. When the framework wastes the owner's time (a re-run, a restart, an agent
+attempt that cannot succeed, a stamp that throws away passed work, unrelated tasks running, a missing flag), that is a
+framework bug: stop it at once, do the cheap correct thing by hand if one exists (commit-only, reuse a recorded
+result, run only the delta), fix the framework at once (dev tree, selftest, live at the next pause), and never explain
+or rationalize the waste to the owner as "the framework does X". Every hour wasted is an hour of the owner's progress
+lost.
+
+Gate rules (hard, owner 2026-10-22, F169):
+1. A gate never restarts. Every test is its own unit; a passed unit stays passed for its task until the code under
+   test changes (the model's code and tests, the forks, ttnn / tt_metal, the goldens). The overseer's edits (the spec,
+   waivers, timeouts, the framework, records) never re-run a passed unit.
+2. On a gate failure: classify it. Framework, waiver or infrastructure: fix it, run only the failed unit
+   (`gate <task> --unit <unit>`, minutes), then `gate <task> --continue` (the delta: the units not yet passed; it
+   commits when all have passed); `overseer classify --task <task> --as framework|waiver|infra` makes a resume do the
+   same and start no agent. Model code: the agent's attempt; its change re-runs every unit once.
+3. Never resume into a whole-gate re-run and never start an agent attempt for a failure the overseer fixed.
+   `gate --status` shows each unit (kept, failed, stopped, not run); `--rerun <unit>` re-runs a passed unit a framework
+   fix could change; `--fresh` (every unit) is the owner's call only.
+4. Batch spec and framework edits into pauses; never start CPU-heavy side work next to device gates without a core /
+   priority cap (taskset, nice 19, BRINGUP_CPU_THREADS; F171: the framework's own CPU jobs started outside a gate cap
+   themselves to a quarter of the cores at nice 19 while device work runs).
+5. Before any run over ~10 minutes, check for a reusable result; tell the owner what runs and why before starting it.
+6. The framework enforces what it can (F170): an agent's gate runs are kept (`gate --check`), a gate is split per test
+   segment, an unchanged tree is not measured again, a timeout or box error is retried once, a framework error stops
+   for you, a pause stops every agent loop. Anything else that wastes time is a framework bug to fix the same hour.
 
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
@@ -167,7 +187,13 @@ minutes, check whether an existing result can be reused: `python -m models.demos
 the same code is reused by itself, F150; `--fresh` / `verify --force` only for a deliberate re-check); the A/B sides
 (`orchestrator measure`, F116); the profiles kept outside the repo. Never re-run for an administrative reason (a commit
 hook, a file size, a log, a missing commit). When a re-run cannot be avoided, tell the owner what re-runs, why and for
-how long, before starting it.
+how long, before starting it. After a fix for a gate failure, follow the gate rules above: `gate --unit` on the failed
+unit, then `gate --continue` (DeepSeek-V4.1 FIX.10, 2026-10-22: four whole-gate re-runs of ~40 min each, two of which
+failed on something the single unit would have shown in 4 minutes). Across tasks (another task's gate reusing a
+stamp), a passed unit keeps its result unless something it reads changed (F162): the model's
+code, the forks, ttnn / tt_metal, the framework's measuring code, the spec without its waivers, the goldens, and the
+waivers its own tests read (a component test: its step's; a swap test: all). Records, docs, knowledge, the skill,
+selftests, approvals, tasks.yaml and other models' bring-up files never re-run it; edit them freely.
 
 ### Always be watching
 

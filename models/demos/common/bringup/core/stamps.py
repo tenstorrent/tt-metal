@@ -11,6 +11,12 @@ content, without the run's own records and the files that cannot change a measur
 Every unit a gate runs is kept under runs/<run>/stamps/<unit>.json by stamp: verdict, metrics, side outputs. A unit
 whose stamp has a PASS (rc 0, its metrics within the gate's limits) is not run again: its metrics and outputs are
 restored ("reused: same code"). A FAIL or HANG is never reused; a changed stamp always runs.
+
+F162: the code key is the tree a unit can depend on, not the whole tree: without the records and the orchestration
+(SKIP), without another model's bring-up files and frozen tests (its bringup/ non-Python files, its tests/bringup/),
+and with the spec counted without its owner waivers. A waiver changes only the units that read it (waiver_key):
+the component test of the waived step, every swap test (a waiver reaches the block of the step, F158), a test
+directory run whole; ladder, contract and profile units never read a waiver (only testing/component.py does).
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ SKIP = (
     + NO_MEASURE
     + (
         "*bringup/overseer.yaml",  # notes and the fix queue
+        "*bringup/approvals.yaml",  # F162: who approved what; no test reads it
         "*bringup/dashboard/*",
         "models/demos/common/bringup/core/stamps.py",
         "models/demos/common/bringup/core/verify.py",
@@ -64,7 +71,9 @@ ENV_IGNORED = {  # where a gate files its results, not what it measures
     "BRINGUP_DASHBOARD",
     "BRINGUP_AGENT_CMD",
     "TT_DEVICE_TIMING_LOG",
+    "BRINGUP_CPU_THREADS",  # F170 (audit item 12): how many CPU threads a job takes, not what it measures
 }
+ENV_IGNORED_PREFIXES = ("TT_METAL_JIT_SERVER",)  # F170: where kernels compile (a JIT server or locally), not the result
 KEEP = 8  # stamps kept per unit
 
 
@@ -72,28 +81,124 @@ def sha16(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+class GitError(RuntimeError):
+    """F170: git failed while a stamp was taken; a gate must not go on with an empty file map (one constant key would
+    reuse a PASS that never ran on this code)."""
+
+
 def _git(repo: Path, *a, inp: str | None = None) -> str:
-    return subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True, input=inp).stdout
+    r = subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True, input=inp)
+    if r.returncode != 0:  # F170: never an empty answer for a failed command (audit item 16)
+        raise GitError(f"git {' '.join(a[:3])} failed in {repo} (rc {r.returncode}): {r.stderr.strip()[:300]}")
+    return r.stdout
 
 
-def code_key(repo: Path) -> str:
-    """The content of the tree a gate runs on: committed, changed and untracked files alike (a commit of the same
-    content keeps the key), without SKIP."""
+_MODEL_FILES = re.compile(r"models/demos/([^/]+)/(bringup|tests/bringup)/")
+
+
+def _other_model(path: str, own: str | None) -> bool:
+    """F162: another model's bring-up records and frozen tests (never imported by this model's units); its Python
+    under bringup/ (hooks a prior-based bring-up may import) still counts."""
+    m = _MODEL_FILES.match(path)
+    if not m or own is None or m.group(1) == own:
+        return False
+    return m.group(2) == "tests/bringup" or not path.endswith(".py")
+
+
+def spec_text(spec) -> str:
+    """F162: the spec as its units read it, without the owner waivers (waiver_key stamps those per unit)."""
+    import copy
+
+    import yaml
+
+    d = copy.deepcopy(spec.data)
+    (d.get("tests") or {}).pop("waivers", None)
+    if d.get("tests") == {}:  # a spec whose tests section held only waivers reads as one without it
+        d.pop("tests")
+    return yaml.safe_dump(d, sort_keys=True)
+
+
+def waiver_key(spec, cmd: str) -> str:
+    """F162: the owner waivers a unit's tests can read (testing/component.py only): a component test reads its step's
+    waiver, a swap test or a whole test directory every waiver; other units none. '' when it reads none."""
+    w = (spec.get("tests.waivers") or {}) if spec is not None else {}
+    if not w:
+        return ""
+    if "test_swap_" in cmd or re.search(r"tests/bringup/?(\s|$|['\"])", cmd):
+        keep = w
+    elif "test_c_" in cmd:
+        keep = {k: v for k, v in w.items() if str(k).split(".")[-1] in cmd}
+    else:
+        keep = {}
+    return sha16(json.dumps(keep, sort_keys=True, default=str)) if keep else ""
+
+
+def _file_map(repo: Path, keep) -> dict:
+    """{path: content hash} of the tree as it is (committed, changed and untracked files alike, a commit of the same
+    content keeps the hash) for the paths ``keep(path)`` accepts."""
     files = {}
     for entry in _git(repo, "ls-tree", "-r", "-z", "HEAD").split("\0"):
         if "\t" in entry:
             meta, path = entry.split("\t", 1)
-            if not _SKIP.match(path):
+            if keep(path):
                 files[path] = meta.split()[2]
     changed = _git(repo, "diff", "HEAD", "--name-only", "-z").split("\0")
     changed += _git(repo, "ls-files", "-o", "--exclude-standard", "-z").split("\0")
-    changed = sorted({p for p in changed if p and not _SKIP.match(p)})
+    changed = sorted({p for p in changed if p and keep(p)})
     plain = [p for p in changed if (repo / p).is_file()]
     shas = _git(repo, "hash-object", "--stdin-paths", inp="\n".join(plain) + "\n").split() if plain else []
     files.update(zip(plain, shas))
     for p in set(changed) - set(plain):  # a deleted file, or a submodule at another commit
-        files[p] = _git(repo / p, "rev-parse", "HEAD").strip() if (repo / p).is_dir() else "-"
+        files[p] = _git(repo / p, "rev-parse", "HEAD").strip() if (repo / p / ".git").exists() else "-"
+    return files
+
+
+def code_key(repo: Path, spec=None) -> str:
+    """The content of the tree a gate runs on: committed, changed and untracked files alike (a commit of the same
+    content keeps the key), without SKIP; with the spec (F162) also without another model's bring-up files and with
+    the spec file counted without its waivers."""
+    files = _file_map(repo, lambda p: not _SKIP.match(p))
+    if spec is not None:
+        own = Path(spec.model_dir).name
+        files = {p: h for p, h in files.items() if not _other_model(p, own)}
+        try:
+            sp = str(Path(spec.path).resolve().relative_to(Path(repo).resolve()))
+        except (TypeError, ValueError):  # a spec outside the repo: hashed whole
+            sp = None
+        if sp in files:
+            files[sp] = sha16(spec_text(spec))
+        elif spec.path is not None:
+            files["<spec>"] = sha16(spec_text(spec))
     return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())))
+
+
+# F169: the code under test: what an agent's change can alter in a unit's verdict. The overseer's edits (the spec,
+# its waivers and timeouts, approvals, the framework, records, docs, knowledge, the skill) are not in it.
+UNDER_TEST_ROOTS = ("ttnn/", "tt_metal/")
+_NOT_CODE = re.compile(r".*(__pycache__/|\.md$)")
+
+
+def under_test_key(repo: Path, spec, paths=()) -> str:
+    """F169: the content of the model's own code and tests (models/demos/<model>/ without its bring-up records: of
+    bringup/ only the Python, e.g. hooks.py), the forks and ttnn / tt_metal (ttnn/, tt_metal/), the paths the task
+    (and a fix job's gate tasks) may change, and the goldens. A passed unit stays passed for its task while this key is
+    unchanged (gate --continue)."""
+    try:
+        own = str(Path(spec.model_dir).resolve().relative_to(Path(repo).resolve())).rstrip("/") + "/"
+    except ValueError:  # a model outside the repo
+        own = f"models/demos/{Path(spec.model_dir).name}/"
+    extra = list(paths) + list(spec.get("paths.own") or [])  # the task's paths; the spec's own code dirs
+    roots = UNDER_TEST_ROOTS + tuple(str(p).rstrip("/") for p in extra if p)
+
+    def keep(p: str) -> bool:
+        if _NOT_CODE.match(p) or _SKIP.match(p):
+            return False
+        if p.startswith(own + "bringup/"):
+            return p.endswith(".py")
+        return p.startswith(own) or any(p == r or p.startswith(r if r.endswith("/") else r + "/") for r in roots)
+
+    files = _file_map(repo, keep)
+    return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())) + "\n" + goldens_key(spec))
 
 
 def goldens_key(spec) -> str:
@@ -111,17 +216,22 @@ def goldens_key(spec) -> str:
 
 
 def env_key(env: dict) -> str:
-    keep = {k: v for k, v in env.items() if k.startswith(ENV_PREFIXES) and k not in ENV_IGNORED}
+    keep = {
+        k: v
+        for k, v in env.items()
+        if k.startswith(ENV_PREFIXES) and k not in ENV_IGNORED and not k.startswith(ENV_IGNORED_PREFIXES)
+    }
     return sha16(json.dumps(keep, sort_keys=True))
 
 
-def stamp(cmd: str, frozen, env: dict, code: str, goldens: str) -> dict:
+def stamp(cmd: str, frozen, env: dict, code: str, goldens: str, waivers: str = "") -> dict:
     return {
         "cmd": sha16(cmd),
         "frozen": sha16(json.dumps(frozen, sort_keys=True)),
         "env": env_key(env),
         "code": code,
         "goldens": goldens,
+        "waivers": waivers,  # F162: only the owner waivers this unit's tests read
     }
 
 
@@ -176,3 +286,38 @@ class Store:
             src = self.dir / unit / sid / name
             if src.exists():
                 shutil.copy2(src, results_dir / (f"{record_tid}{name}" if name.startswith("_") else name))
+
+
+class Delta:
+    """F169: a task's gate as units: runs/<run>/delta/<task>.json {unit: {verdict, under_test, cmd, env, sid, metrics,
+    s, t}}. A unit with a PASS on the current code under test is kept (not run) when its task's gate runs again; a
+    FAIL, a STOPPED (infrastructure: a timeout, a box error) or a never-run unit runs. A gate never restarts."""
+
+    def __init__(self, run_dir: Path, tid: str):
+        self.path = Path(run_dir) / "delta" / f"{tid}.json"
+
+    def all(self) -> dict:
+        try:
+            return json.loads(self.path.read_text()) if self.path.exists() else {}
+        except ValueError:
+            return {}
+
+    def get(self, unit: str) -> dict | None:
+        return self.all().get(unit)
+
+    def put(self, unit: str, rec: dict) -> None:
+        data = self.all()
+        data[unit] = dict(rec, t=rec.get("t") or time.strftime("%Y-%m-%dT%H:%M:%S"))
+        self._write(data)
+
+    def drop(self, units) -> list[str]:
+        data = self.all()
+        gone = [u for u in units if data.pop(u, None) is not None]
+        self._write(data)
+        return gone
+
+    def _write(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+        tmp.replace(self.path)
