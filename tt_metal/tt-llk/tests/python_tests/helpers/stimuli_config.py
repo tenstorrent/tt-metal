@@ -187,19 +187,21 @@ class StimuliConfig:
             self._operand_tile_size_bytes(name),
             self.num_faces,
             self.face_r_dim,
-            location,
         )
+        # location goes by keyword: the two writers take it at different positions.
         if dense:
             StimuliConfig.write_matrix_w_tile_dimensions(
                 *common_args,
                 self.tile_dimensions,
+                location=location,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
         else:
             StimuliConfig.write_matrix(
                 *common_args,
-                self.write_full_tiles,
+                location=location,
+                write_full_tiles=self.write_full_tiles,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
