@@ -278,3 +278,25 @@ def test_only_can_name_a_queued_fix(orch):  # noqa: F811
     OV.queue_fix(o.spec.bringup_dir, "Store the weights at load.", ["C.1"], tasks=led)
     assert o.run(only="FIX.1") == DONE
     assert o.led.state()["FIX.1"]["status"] == "PASS"
+
+
+def test_a_second_orchestrator_on_a_live_run_is_refused(tmp_path):
+    """F147: DeepSeek-V4.1 FIX.9 ran two orchestrators at once (a paused one still in its attempt loop)."""
+    import os
+    import subprocess
+
+    from models.demos.common.bringup.orchestrator import _live_orchestrator
+
+    pid_file = tmp_path / "orchestrator.pid"
+    assert _live_orchestrator(pid_file) is None
+    p = subprocess.Popen(["sleep", "30"])
+    try:
+        pid_file.write_text(f"{p.pid} now\n")
+        assert _live_orchestrator(pid_file) == p.pid
+        pid_file.write_text(f"{os.getpid()} now\n")
+        assert _live_orchestrator(pid_file) is None
+    finally:
+        p.kill()
+        p.wait()
+    pid_file.write_text(f"{p.pid} now\n")
+    assert _live_orchestrator(pid_file) is None  # a dead process does not block
