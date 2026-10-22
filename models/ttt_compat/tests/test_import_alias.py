@@ -122,7 +122,7 @@ def test_real_package_alias():
     ttnn = pytest.importorskip("ttnn")
     if not hasattr(ttnn, "Tensor"):  # e.g. the source tree's ttnn/ directory without a build
         pytest.skip("ttnn is not built")
-    old =importlib.import_module("models.tt_transformers.demo.trace_region_config")
+    old = importlib.import_module("models.tt_transformers.demo.trace_region_config")
     new = importlib.import_module("models.ttt_compat.demo.trace_region_config")
     assert old is new
     assert old.__spec__.name == "models.ttt_compat.demo.trace_region_config"

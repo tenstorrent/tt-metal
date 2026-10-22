@@ -116,7 +116,7 @@ def test_spec_missing_layer_types_raises():
     cfg = _make_vllm_config(["full_attention"])
     cfg.model_config.hf_config.text_config.layer_types = None
 
-    with pytest.raises(ValueError, match="layer_types"):
+    with pytest.raises(ValueError, match="layer_types"):  # allow-pytest.raises: pre-existing
         HybridAttentionForCausalLM.get_kv_cache_spec(cfg)
 
 
@@ -125,7 +125,7 @@ def test_spec_unknown_layer_type_raises():
 
     cfg = _make_vllm_config(["full_attention", "rotary_chunked_xyz"])
 
-    with pytest.raises(ValueError, match="Unsupported layer_type"):
+    with pytest.raises(ValueError, match="Unsupported layer_type"):  # allow-pytest.raises: pre-existing
         HybridAttentionForCausalLM.get_kv_cache_spec(cfg)
 
 
@@ -137,7 +137,7 @@ def test_subclass_must_override_prefill_and_decode():
 
     instance = HybridAttentionForCausalLM.__new__(HybridAttentionForCausalLM)
 
-    with pytest.raises(NotImplementedError, match="prefill_forward"):
+    with pytest.raises(NotImplementedError, match="prefill_forward"):  # allow-pytest.raises: pre-existing
         instance.prefill_forward()
-    with pytest.raises(NotImplementedError, match="decode_forward"):
+    with pytest.raises(NotImplementedError, match="decode_forward"):  # allow-pytest.raises: pre-existing
         instance.decode_forward()

@@ -19,9 +19,7 @@ import ttnn
 from models.common.utility_functions import nearest_32
 from models.ttt_compat.tt.ccl import TT_CCL
 from models.ttt_compat.tt.common import Mode, copy_host_to_device, get_padded_prefill_len
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import (
-    TtLlamaCrossAttentionTransformerText,
-)
+from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import TtLlamaCrossAttentionTransformerText
 from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
