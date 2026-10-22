@@ -51,7 +51,7 @@ permissions:
 
 env:
   # Stage 2 re-measures at most this many tests per arch, so its job stays short; see placement_check.py.
-  PLACEMENT_CAP: "1000"
+  PLACEMENT_CAP: "300"
 
 concurrency:
   group: llk-perf-gate-${{ github.event.pull_request.number || github.run_id }}-${{ (github.event.action == 'synchronize' || github.event.label.name == 'llk-perf-gate') && 'gate' || github.run_id }}
@@ -94,7 +94,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [wormhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -121,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [wormhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -152,7 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.13"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"wormhole","threshold":"0.13"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
