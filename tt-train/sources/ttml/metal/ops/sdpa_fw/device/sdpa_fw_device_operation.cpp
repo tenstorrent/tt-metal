@@ -177,28 +177,6 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             value_shape);
     }
 
-    // Knobs: tile multiples dividing S; 0 = auto.
-    TT_FATAL(
-        args.q_chunk_size % tt::constants::TILE_HEIGHT == 0U,
-        "q_chunk_size must be a multiple of {} (got {})",
-        tt::constants::TILE_HEIGHT,
-        args.q_chunk_size);
-    TT_FATAL(
-        args.q_chunk_size == 0U || qSt % args.q_chunk_size == 0U,
-        "q_chunk_size ({}) must divide the sequence length ({})",
-        args.q_chunk_size,
-        qSt);
-    TT_FATAL(
-        args.k_chunk_size % tt::constants::TILE_HEIGHT == 0U,
-        "k_chunk_size must be a multiple of {} (got {})",
-        tt::constants::TILE_HEIGHT,
-        args.k_chunk_size);
-    TT_FATAL(
-        args.k_chunk_size == 0U || qSt % args.k_chunk_size == 0U,
-        "k_chunk_size ({}) must divide the sequence length ({})",
-        args.k_chunk_size,
-        qSt);
-
     // TODO(vmelnykov): #28205 - Implement dropout support in SDPA forward operation
     // Currently dropout is not implemented
     TT_FATAL(
