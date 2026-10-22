@@ -13,6 +13,7 @@ contiguity, slot remaps, the v1 reload commands).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import sys
 from types import SimpleNamespace
 
@@ -28,6 +29,9 @@ from models.demos.glm53_flash.tt.vllm_config import (
     PrefillPlanner,
     ServingGeometry,
     SlotTable,
+    WaveCall,
+    WaveMember,
+    WavePlanner,
     greedy_rows,
     max_tokens_all_users,
 )
@@ -117,13 +121,128 @@ def test_slot_table_balances_columns():
 
 
 def test_slot_table_rows_independent_placement():
-    g = ServingGeometry(rows=2, cols=2, users_per_row=2, max_seq_len=64, rows_independent=True)
+    # phase 2 affinity ("row"): column balance first (user 1 lives on column 1), then row balance, then the lowest indices
+    g = ServingGeometry(rows=2, cols=2, users_per_row=2, max_seq_len=64, rows_independent=True, wave_affinity="row")
     t = SlotTable(g)
     placed = [(s.row, s.user) for s in (t.allocate(i) for i in range(4))]
-    # column balance first (user 1 lives on column 1), then row balance, then the lowest indices
     assert placed == [(0, 0), (1, 1), (1, 0), (0, 1)]
     assert t.flat_indices(2) == [g.flat(1, 0)] and t.read_index(2) == 2
     assert t.column_loads() == [2, 2] and t.row_loads() == [2, 2]
+    # phase 1 affinity ("user", the default): one slot index across every row before the next, so a burst of
+    # `rows` arrivals shares the slot index (one wave); consecutive indices alternate the columns
+    gu = ServingGeometry(rows=2, cols=2, users_per_row=4, max_seq_len=64, rows_independent=True)
+    assert gu.wave_user_order() == [0, 2, 1, 3]  # column 0's first index, column 1's first, then their seconds
+    tu = SlotTable(gu)
+    placed = [(s.row, s.user) for s in (tu.allocate(i) for i in range(6))]
+    assert placed == [(0, 0), (1, 0), (0, 2), (1, 2), (0, 1), (1, 1)]
+    assert tu.column_loads() == [4, 2] and tu.row_loads() == [3, 3]
+    tu.release(1)  # (1, 0) frees: the next arrival takes it (the lowest index with a free row)
+    s6 = tu.allocate(6)
+    assert (s6.row, s6.user) == (1, 0)
+    # the 8x4 at 1 M: 4 users per row, one per column -> the first 8 arrivals land on slot index 0 of rows 0..7
+    g8 = ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1048576, rows_independent=True)
+    assert g8.wave_user_order() == [0, 1, 2, 3] and g8.request_capacity == 32 and g8.chunk_unit == 32
+    t8 = SlotTable(g8)
+    assert [(s.row, s.user) for s in (t8.allocate(i) for i in range(9))] == [(r, 0) for r in range(8)] + [(0, 1)]
+    # the non-partitioned layout: plain index order
+    assert ServingGeometry(rows=2, cols=4, users_per_row=3, max_seq_len=64, partitioned=False).wave_user_order() == [
+        0,
+        1,
+        2,
+    ]
+    with expect_error(ValueError, "wave_affinity"):
+        ServingGeometry(rows=2, cols=2, users_per_row=2, max_seq_len=64, wave_affinity="column")
+    with expect_error(ValueError, "wave_rows"):
+        ServingGeometry(rows=2, cols=2, users_per_row=2, max_seq_len=64, wave_rows=1024)
+
+
+def test_sp_eligibility_is_exact_only_while_the_other_rows_are_free():
+    g = ServingGeometry(rows=4, cols=2, users_per_row=2, max_seq_len=4096, rows_independent=True)
+    t = SlotTable(g)
+    a = t.allocate(0)  # (0, 0)
+    assert (a.row, a.user) == (0, 0) and t.sp_eligible(0)
+    b = t.allocate(1)  # (1, 0): slot index 0 is live on another row -> neither may replicate into it
+    assert (b.row, b.user) == (1, 0) and not t.sp_eligible(0) and not t.sp_eligible(1)
+    c = t.allocate(2)  # (2, 0)
+    t.release(1)
+    t.release(2)
+    assert t.sp_eligible(0)  # free again on every other row
+    a.sp_only = False  # a wave chunk ran: the prefix exists on row 0 only, SP is never exact again
+    assert not t.sp_eligible(0)
+    # policy off / replicated rows
+    tp = SlotTable(dataclasses.replace(g, sp_fallback=False))
+    tp.allocate(0)
+    assert not tp.sp_eligible(0)
+    tr = SlotTable(ServingGeometry(rows=4, cols=2, users_per_row=2, max_seq_len=4096))
+    tr.allocate(0)
+    tr.allocate(1)
+    assert tr.sp_eligible(0) and tr.sp_eligible(1)
+    with expect_error(RuntimeError, "holds no request"):
+        t.sp_eligible(3)
+    del c
+
+
+def test_wave_planner_groups_walks_and_traces():
+    g = ServingGeometry(
+        rows=4, cols=2, users_per_row=2, max_seq_len=65536, rows_independent=True, traced_prefill_lengths=(256, 2048)
+    )
+    t = SlotTable(g)
+    pp = PrefillPlanner(g)
+    wp = WavePlanner(g, t, pp)
+    assert [(s.row, s.user) for s in (t.allocate(i) for i in range(4))] == [(0, 0), (1, 0), (2, 0), (3, 0)]
+    e = t.allocate(6)  # slot index 0 is full on every row -> (0, 1): alone on its index -> SP-eligible
+    assert (e.row, e.user) == (0, 1) and t.sp_eligible(6) and not t.sp_eligible(0)
+    # logical 3 (row 3) is live but has no chunk this step: row 3 idles in the waves of slot index 0
+    steps = wp.plan([(0, 0, 5000), (1, 0, 1000), (6, 2048, 3000), (2, 2048, 2100)])
+    kinds = [type(s).__name__ for s in steps]
+    assert kinds == ["SPStep", "WaveStep", "WaveStep", "WaveStep"]
+    sp = steps[0]
+    assert sp.logical == 6 and sp.plan.kind == "eager" and sp.plan.chunks == ((2048, 3000),)
+    w1, w2, w3 = (s.call for s in steps[1:])
+    # wave 1: the first wave_rows chunk of every member of slot index 0 (rows 0, 1, 2), padded to the longest
+    assert [(m.logical, m.row, m.start, m.end) for m in w1.members] == [
+        (0, 0, 0, 2048),
+        (1, 1, 0, 1000),
+        (2, 2, 2048, 2100),
+    ]
+    assert w1.user == 0 and w1.t_pad == 2048 and w1.traced_length is None  # member 2 starts at 2048: eager
+    assert w1.idle_rows == [3] and w1.member_of_row(1).logical == 1 and w1.member_of_row(3) is None
+    # waves 2 and 3: only request 0 has tokens left; the last chunk is padded to a tile multiple
+    assert [(m.logical, m.start, m.end) for m in w2.members] == [(0, 2048, 4096)] and w2.t_pad == 2048
+    assert [(m.logical, m.start, m.end) for m in w3.members] == [(0, 4096, 5000)] and w3.t_pad == 928
+    # a wave of fresh prompts within a captured length is traced at that length
+    tr = wp.plan([(0, 0, 300), (1, 0, 100)])
+    assert len(tr) == 1 and tr[0].call.traced_length == 2048 and tr[0].call.t_pad == 320
+    assert wp.plan([(0, 0, 300), (1, 0, 100)], enable_trace=False)[0].call.traced_length is None
+    assert wp.plan([(0, 0, 200)])[0].call.traced_length == 256
+    # phase 2 ("row" affinity): one group, a row serves its requests one after the other
+    gr = dataclasses.replace(g, wave_affinity="row", traced_prefill_lengths=())
+    t2 = SlotTable(gr)
+    p2 = WavePlanner(gr, t2, PrefillPlanner(gr))
+    placed = [(s.row, s.user) for s in (t2.allocate(i) for i in range(6))]
+    assert placed == [(0, 0), (1, 1), (2, 0), (3, 1), (1, 0), (0, 1)]  # column balance, then row balance
+    for logical in range(6):
+        t2.physical(logical).sp_only = False
+    # rows 0 and 1 hold two pending requests each: a row serves them one after the other (the k-th wave takes the
+    # head of every row's queue), members may sit on different slot indices
+    waves = [s.call for s in p2.plan([(0, 0, 3000), (1, 0, 100), (5, 0, 2048), (4, 0, 64)])]
+    assert all(c.user is None for c in waves)
+    assert [[(m.logical, m.row, m.user) for m in c.members] for c in waves] == [
+        [(0, 0, 0), (1, 1, 1)],
+        [(0, 0, 0), (4, 1, 0)],
+        [(5, 0, 1)],
+    ]
+    assert [c.t_pad for c in waves] == [2048, 960, 2048]
+    with expect_error(ValueError, "appears twice"):
+        p2.plan([(0, 0, 64), (0, 64, 128)])
+    with expect_error(RuntimeError, "holds no request"):
+        p2.plan([(7, 0, 64)])
+    with expect_error(ValueError, "at most one per row"):
+        WaveCall(rows=2, t_pad=64, members=(WaveMember(0, 0, 0, 0, 64), WaveMember(1, 0, 1, 0, 64)))
+    with expect_error(ValueError, "exceeds t_pad"):
+        WaveCall(rows=2, t_pad=32, members=(WaveMember(0, 0, 0, 0, 64),))
+    with expect_error(ValueError, "slot index"):
+        WaveCall(rows=2, t_pad=64, members=(WaveMember(0, 0, 1, 0, 64),), user=0)
 
 
 def test_slot_table_remap_and_moves():
@@ -234,6 +353,8 @@ class _FakeMesh:
 class _FakeMeshModel:
     """``GLM53MeshModel``'s serving surface on torch tensors with deterministic token functions."""
 
+    wave_per_row_users = False  # phase 1: every member of a wave shares the slot index
+
     def __init__(self, rows: int, cols: int, max_batch: int, max_seq_len: int, traced=(256, 512, 1024, 2048)):
         self.rows, self.cols = rows, cols
         self.max_batch = max_batch
@@ -338,9 +459,42 @@ class _FakeMeshModel:
             return logits_or_res[1]
         return logits_or_res.logits[1]
 
+    # waves (per-row prefill ownership): one chunk of a different prompt per row, the model answers per row
+    def _wave(self, kind: str, call: WaveCall):
+        assert len(call.members) >= 1 and all(r in call.ids for r in (m.row for m in call.members))
+        assert call.user is None or all(m.user == call.user for m in call.members)
+        self.calls.append(
+            (kind, call.user, call.t_pad, call.traced_length, [(m.row, m.user, m.start, m.end) for m in call.members])
+        )
+        out = {}
+        for m in call.members:
+            ids = call.ids[m.row]
+            assert int(ids.numel()) == m.end - m.start <= call.t_pad
+            first = _first_token(m.user, ids)
+            logits = torch.zeros(VOCAB)
+            logits[first] = 1.0
+            out[m.row] = (first, logits)
+        return out
 
-def _adapter(rows=2, cols=4, users_per_row=4, max_seq_len=65536, warm=True):
-    model = _FakeMeshModel(rows, cols, users_per_row, max_seq_len)
+    def prefill_wave(self, call: WaveCall):
+        return self._wave("prefill_wave", call)
+
+    def prefill_traced_wave(self, call: WaveCall):
+        assert call.traced_length in self._captured and all(m.start == 0 for m in call.members)
+        return self._wave("prefill_traced_wave", call)
+
+
+class _FakeMeshModelNoWaves(_FakeMeshModel):
+    """A mesh model without the row-local wave prefill (today's device side)."""
+
+    prefill_wave = None
+    prefill_traced_wave = None
+
+
+def _adapter(
+    rows=2, cols=4, users_per_row=4, max_seq_len=65536, warm=True, independent=False, model_cls=_FakeMeshModel
+):
+    model = model_cls(rows, cols, users_per_row, max_seq_len)
     g = ServingGeometry(
         rows=rows,
         cols=cols,
@@ -348,13 +502,16 @@ def _adapter(rows=2, cols=4, users_per_row=4, max_seq_len=65536, warm=True):
         max_seq_len=max_seq_len,
         traced_prefill_lengths=tuple(model.trace_prefill_lengths()),
         pad_token_id=PAD,
+        rows_independent=independent,
+        wave_affinity="row" if model.wave_per_row_users else "user",
     )
     a = GLM53FlashForCausalLM(model, g)
     if warm:  # the plugin's order: eager prefill, eager decode, traced prefill, traced decode
+        n = g.request_capacity
         a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
-        a.warmup_model_decode(enable_trace=False, max_batch_size=users_per_row, num_blocks=1, can_sample_on_device=True)
+        a.warmup_model_decode(enable_trace=False, max_batch_size=n, num_blocks=1, can_sample_on_device=True)
         a.warmup_model_prefill(enable_trace=True, can_sample_on_device=True)
-        a.warmup_model_decode(enable_trace=True, max_batch_size=users_per_row, num_blocks=1, can_sample_on_device=True)
+        a.warmup_model_decode(enable_trace=True, max_batch_size=n, num_blocks=1, can_sample_on_device=True)
     return a, model
 
 
@@ -651,6 +808,104 @@ def test_slot_remap_release_and_move_notification():
     assert b.slots.physical(0).user == 1 and b.slots.column_loads() == [1, 1, 0, 0]
     b.release_persistent_capture()
     assert b.trace_id is None and b.tt_supported_decode_batch_sizes == ()
+
+
+# ----------------------------------------------------------------------------- per-row prefill ownership
+def _decode_kw(**kw):
+    base = dict(reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
+    base.update(kw)
+    return base
+
+
+def test_rows_independent_needs_the_wave_prefill():
+    with expect_error(NotImplementedError, "prefill_wave"):
+        _adapter(independent=True, warm=False, model_cls=_FakeMeshModelNoWaves)
+    a, m = _adapter(independent=True)  # the fake has it: capacity = rows x users_per_row, the wave warm-up ran
+    assert a.geometry.request_capacity == 8 and a.tt_supported_decode_batch_sizes == (8,)
+    waves = [c for c in m.calls if c[0] == "prefill_wave"]
+    assert len(waves) == 1 and waves[0][1] == 0 and waves[0][2] == 128 and [r for r, *_ in waves[0][4]] == [0, 1]
+
+
+def test_wave_prefill_routes_rows_and_decodes_per_row():
+    """2 rows x 4 users per row (one per column): the first two arrivals share slot index 0 (one per row) and form
+    one traced wave; the third sits alone on index 1 and takes the sequence-parallel path; decode feeds each
+    request's token to its own (row, user) only."""
+    a, m = _adapter(independent=True)
+    toks = torch.zeros(3, 300, dtype=torch.int32)
+    toks[0, :300] = torch.arange(300) % 50
+    toks[1, :100] = torch.arange(100) % 20 + 1
+    toks[2, :40] = 5
+    logits = a.prefill_forward(
+        toks, prompt_lens=[300, 100, 40], start_pos=torch.tensor([0, 0, 0]), empty_slots=[0, 1, 2], enable_trace=True
+    )
+    assert logits.shape == (3, 1, VOCAB)
+    placed = {i: (a.slots.physical(i).row, a.slots.physical(i).user) for i in range(3)}
+    assert placed == {0: (0, 0), 1: (1, 0), 2: (0, 1)}
+    waves = [c for c in m.calls if c[0] == "prefill_traced_wave"]
+    assert waves[-1][1:] == (0, 320, 512, [(0, 0, 0, 300), (1, 0, 0, 100)])
+    assert [c for c in m.calls if c[0] == "prefill_traced"][-1] == ("prefill_traced", 1, 40, 256)
+    assert int(logits[0, 0].argmax()) == _first_token(0, toks[0, :300].long())
+    assert int(logits[1, 0].argmax()) == _first_token(0, toks[1, :100].long())
+    assert int(logits[2, 0].argmax()) == _first_token(1, toks[2, :40].long())
+    assert not a.slots.physical(0).sp_only and not a.slots.physical(1).sp_only and a.slots.physical(2).sp_only
+    assert [a.slots.physical(i).prefilled_to for i in range(3)] == [300, 100, 40]
+    # decode: every request's token at its own (row, user) flat index, nothing replicated
+    out = a.decode_forward(
+        torch.tensor([[11], [22], [33], [0]], dtype=torch.int32),
+        torch.tensor([300, 100, 40, -1]),
+        sampling_params=_greedy(4),
+        **_decode_kw(reload_sampling_params=True, reset_sampling_state=True),
+    )
+    step = [c for c in m.calls if c[0] == "decode"][-1]
+    fed_ids, fed_pos = step[1], step[2]
+    B = 4
+    assert fed_ids[0 * B + 0] == 11 and fed_pos[0] == 300  # (row 0, user 0)
+    assert fed_ids[1 * B + 0] == 22 and fed_pos[1 * B] == 100  # (row 1, user 0)
+    assert fed_ids[0 * B + 1] == 33 and fed_pos[1] == 40  # (row 0, user 1)
+    assert fed_ids[1 * B + 1] == PAD and fed_pos[1 * B + 1] == 0  # (row 1, user 1) idle
+    assert [int(out[i, 0]) for i in range(3)] == [_next_token(11, 300), _next_token(22, 100), _next_token(33, 40)]
+    assert int(out[3, 0]) == 0
+
+
+def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
+    a, m = _adapter(independent=True, max_seq_len=65536)
+    L = 2048 * 2 + 100
+    ids = (torch.arange(L) % 60).to(torch.int32).reshape(1, L)
+    # a lone prompt: SP (today's eager device chunks of 16 K) while slot index 0 is free on row 1
+    a.prefill_forward(ids, prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    assert [c for c in m.calls if c[0] == "prefill_traced"][-1] == ("prefill_traced", 0, 2048, 2048)
+    assert a.slots.physical(0).sp_only and a.slots.physical(0).prefilled_to == 2048
+    # a second prompt lands on (1, 0): slot index 0 is no longer free on the other row, so request 0's next chunk
+    # and the new prompt go through waves; the 2148-token continuation is walked in 2048-row device chunks
+    both = torch.zeros(2, L, dtype=torch.int32)
+    both[0] = ids[0]
+    both[1, :3000] = torch.arange(3000) % 7 + 1
+    out, _ = a.prefill_forward(
+        both, prompt_lens=[L, 3000], start_pos=torch.tensor([2048, 0]), empty_slots=[0, 1], sampling_params=_greedy(2)
+    )
+    waves = [c for c in m.calls if c[0] == "prefill_wave"]
+    assert [w[4] for w in waves[-2:]] == [[(0, 0, 2048, 4096), (1, 0, 0, 2048)], [(0, 0, 4096, L), (1, 0, 2048, 3000)]]
+    assert [w[2] for w in waves[-2:]] == [2048, 960] and all(w[3] is None for w in waves[-2:])
+    assert int(out[0, 0]) == _first_token(0, ids[0, 4096:L].long()) and int(out[1, 0]) == _first_token(
+        0, both[1, 2048:3000].long()
+    )
+    assert [a.slots.physical(i).prefilled_to for i in range(2)] == [L, 3000]
+    assert not a.slots.physical(0).sp_only and not a.slots.physical(1).sp_only
+    # the other row frees up again: request 0 stays on waves (its prefix lives on row 0 only)
+    a.release_request(1)
+    assert not a.slots.sp_eligible(0)
+    # the mid-prefill guard still holds under waves
+    a.prefill_forward(
+        torch.full((1, 64), 3, dtype=torch.int32),
+        prompt_lens=[32],
+        start_pos=torch.tensor([0]),
+        empty_slots=[2],
+        sampling_params=_greedy(1),
+    )
+    with expect_error(RuntimeError, "mid-prefill"):
+        a.decode_forward(
+            torch.tensor([[1], [0], [0], [0]], dtype=torch.int32), torch.tensor([L, -1, -1, -1]), **_decode_kw()
+        )
 
 
 def test_kv_accounting_hooks():
