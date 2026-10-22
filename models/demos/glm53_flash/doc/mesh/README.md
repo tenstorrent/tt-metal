@@ -940,3 +940,13 @@ count (160.8 -> 178.2 -> 188.1 -> 199.0 ms) far less than the batch, i.e. the lo
 `GLM53_REGIONS_KEEP_STACKED=1`):** TTFT 33.3 / 27.3 / 27.3 / 27.2 s (1964-2400 tok/s), decode 91.4 ms = 10.9 tok/s
 per user (350 aggregate) on the block expert op, needles 32/32, rows and users agree, 3.83 GiB free after the
 prefills. This is the configuration `GLM53_PREFILL_EXPERTS=auto` selects at 64 K (block validation next).
+
+**Vision demo, today's defaults (02:28, `mm_2x4_demo_defaults.log`):** ISL 286 (256 image tokens), TTFT 1147 ms
+(tower 60 ms), decode 73.7 ms = 13.6 tok/s per user (27 aggregate over 2 slots), first token == HF. README row.
+**`GLM53_PREFILL_EXPERTS=auto` on the rows 6-7 block (02:20-02:38, `regions_auto_2x4_e2e.log`):** the planner drops
+the stacked copy (45 layers bfp4 do not fit twice on 8 chips, as documented) -> regions prefill + regions decode; the
+traced prefill works through the regions path (128 tokens: traced 345 ms, eager 705 ms), first token 102647 == HF
+(chain PCC 0.8738), chain decode 133.5 ms at 4 users/row; the chain test only failed its 0.99 residual-PCC bar
+because the scheduler did not lower it (every other e2e run uses 0.5). The 8x4 comparison of auto (regions + stacked
+copy) against the blocks default on the 32-user short-prompt row is queued (`sched_auto_8x4.sh`); the default
+flips if TTFT and decode are at least equal and the first token still matches.
