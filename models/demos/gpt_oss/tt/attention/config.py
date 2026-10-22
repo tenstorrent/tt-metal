@@ -200,6 +200,13 @@ class ProgramConfig:
 
     def get_prefill_sdpa_config(self, mesh_device, seq_len: int, sliding_window=None) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for prefill mode based on sequence length and layer type (sliding_window set or None)"""
+        return self.prefill_sdpa_config_candidates(mesh_device, seq_len, sliding_window)[0]
+
+    def prefill_sdpa_config_candidates(self, mesh_device, seq_len: int, sliding_window=None):
+        """The prefill SDPA configs to try in order: the tuned chunks first; with L1 held resident by a caller
+        (prefill_l1_end, e.g. the batched DFlash runners), then halved chunks (k first, then q, down to one tile), whose
+        circular buffers fit below less L1 (the SDPA's L1 use is not modelled here: attention/prefill.py takes the first
+        that builds)."""
         # The per-length chunk tables and the full compute grid were tuned on Blackhole only; other architectures
         # keep the small/large chunk rule on an 8x8 grid.
         blackhole = ttnn.device.is_blackhole(mesh_device)
@@ -218,12 +225,19 @@ class ProgramConfig:
         # On Blackhole, prefill SDPA spreads batch x heads x q-chunks over the whole compute grid (P150: 11x10 = 110
         # cores, not 64), so long sequences get ~1.7x the cores.
         grid = mesh_device.compute_with_storage_grid_size() if blackhole else ttnn.CoreCoord(8, 8)
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid,
-            exp_approx_mode=False,
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-        )
+        chunks = [(q_chunk, k_chunk)]
+        while self.prefill_l1_end and (q_chunk > ttnn.TILE_SIZE or k_chunk > ttnn.TILE_SIZE):
+            if k_chunk >= q_chunk and k_chunk > ttnn.TILE_SIZE:
+                k_chunk //= 2
+            else:
+                q_chunk //= 2
+            chunks.append((q_chunk, k_chunk))
+        return [
+            ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid, exp_approx_mode=False, q_chunk_size=q, k_chunk_size=k
+            )
+            for q, k in chunks
+        ]
 
     def get_prefill_sdpa_compute_kernel_config(self, mesh_device) -> ttnn.WormholeComputeKernelConfig:
         """Compute kernel config of the prefill SDPA: prefill_sdpa_math_fidelity on Blackhole, else as decode"""

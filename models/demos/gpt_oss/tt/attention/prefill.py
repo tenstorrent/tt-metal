@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 import ttnn
 
 from ..batched_prefill import fill_batch_idx
@@ -17,6 +19,9 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
+
+# (seq_len, sliding window, prefill_l1_end, tuned q / k chunks) -> index of the prefill SDPA candidate that builds
+_SDPA_FIT = {}
 
 
 def prefill_sequence_parallel_supported(mesh_config, weights: AttentionWeights, x) -> bool:
@@ -173,20 +178,40 @@ def prefill_forward(
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
-    # Scaled dot-product attention
-    tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
-        tt_q,
-        tt_k,
-        tt_v,
-        is_causal=True,
-        sliding_window_size=config.sliding_window,
-        program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len, config.sliding_window),
-        compute_kernel_config=program_config.get_prefill_sdpa_compute_kernel_config(mesh_device),
-        attention_sink=weights.sinks,
-        # Heads written side by side, [B, 1, S, nh * dh]: what nlp_concat_heads makes of the default layout, without
-        # that op (measured 8K 182.6 -> 179.7 ms TTFT, bit-identical).
-        output_concat_heads=True,
-    )
+    # Scaled dot-product attention. With L1 held resident by a caller (prefill_l1_end), the tuned chunks' circular
+    # buffers may not fit below it: the first candidate config that builds is used (remembered per shape and L1 end).
+    candidates = program_config.prefill_sdpa_config_candidates(mesh_device, seq_len, config.sliding_window)
+    c0 = candidates[0]
+    fit_key = (seq_len, config.sliding_window, program_config.prefill_l1_end, c0.q_chunk_size, c0.k_chunk_size)
+    fits = _SDPA_FIT
+    i = fits.get(fit_key, 0)
+    while True:
+        try:
+            tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                is_causal=True,
+                sliding_window_size=config.sliding_window,
+                program_config=candidates[i],
+                compute_kernel_config=program_config.get_prefill_sdpa_compute_kernel_config(mesh_device),
+                attention_sink=weights.sinks,
+                # Heads written side by side, [B, 1, S, nh * dh]: what nlp_concat_heads makes of the default layout,
+                # without that op (measured 8K 182.6 -> 179.7 ms TTFT, bit-identical).
+                output_concat_heads=True,
+            )
+            break
+        except RuntimeError as e:  # (raised when the program is built, before anything is enqueued)
+            if "clash with L1 buffers" not in str(e) or i + 1 >= len(candidates):
+                raise
+            i += 1
+    if fits.get(fit_key) != i:
+        fits[fit_key] = i
+        if i:
+            logger.info(
+                f"prefill SDPA at {seq_len} tokens (window {config.sliding_window}): q / k chunks "
+                f"{candidates[i].q_chunk_size} / {candidates[i].k_chunk_size} fit below the resident L1"
+            )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)
