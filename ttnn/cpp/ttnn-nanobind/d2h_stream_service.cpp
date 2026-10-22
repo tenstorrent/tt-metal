@@ -45,8 +45,7 @@ void py_module_types(nb::module_& mod) {
                std::optional<tt::tt_metal::CoreCoord> metadata_master_core,
                uint32_t metadata_size_bytes,
                bool parallel_host_read,
-               uint32_t host_read_thread_count,
-               bool metadata_ring) {
+               uint32_t host_read_thread_count) {
                 tt::tt_metal::D2HStreamService::Config cfg{
                     .global_spec = std::move(global_spec),
                     .mapper = std::move(mapper),
@@ -58,7 +57,6 @@ void py_module_types(nb::module_& mod) {
                     .metadata_size_bytes = metadata_size_bytes,
                     .parallel_host_read = parallel_host_read,
                     .host_read_thread_count = host_read_thread_count,
-                    .metadata_ring = metadata_ring,
                 };
                 new (self) tt::tt_metal::D2HStreamService(mesh_device, std::move(cfg));
             },
@@ -72,16 +70,12 @@ void py_module_types(nb::module_& mod) {
             nb::arg("metadata_master_core").none() = nb::none(),
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("parallel_host_read") = true,
-            nb::arg("host_read_thread_count") = 0u,
-            nb::arg("metadata_ring") = false)
+            nb::arg("host_read_thread_count") = 0u)
         .def(
             "read_metadata",
             [](tt::tt_metal::D2HStreamService& self) {
                 std::vector<std::byte> metadata(self.metadata_size_bytes());
-                {
-                    nb::gil_scoped_release release;  // the read blocks until the device sends a record
-                    self.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
-                }
+                self.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
                 return nb::bytes(reinterpret_cast<const char*>(metadata.data()), metadata.size());
             },
             "Metadata-only read: returns the per-transfer record as bytes; asserts cross-chip equality. Metadata-only "
@@ -126,11 +120,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::D2HStreamService::notify_backing_ready,
             "Host-only path: bump each device's write-ack to release one transfer. Owner-only; raises if worker_cores "
             "set.")
-        .def(
-            "barrier",
-            [](tt::tt_metal::D2HStreamService& self, std::optional<uint32_t> timeout_ms) { self.barrier(timeout_ms); },
-            nb::arg("timeout_ms") = nb::none(),
-            "Block until all sockets have drained; with timeout_ms, raise once it expires.")
+        .def("barrier", &tt::tt_metal::D2HStreamService::barrier, "Block until all sockets have drained.")
         .def(
             "get_backing_tensor",
             &tt::tt_metal::D2HStreamService::get_backing_tensor,
@@ -154,13 +144,8 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::D2HStreamService::get_slot_count,
             "Data-CB depth in socket-page slots (owner-only).")
         .def(
-            "get_metadata_ring_slots",
-            &tt::tt_metal::D2HStreamService::get_metadata_ring_slots,
-            "Record slots in the service-core metadata ring; 1 without metadata_ring (owner-only, metadata mode).")
-        .def(
             "get_sockets",
             &tt::tt_metal::D2HStreamService::get_sockets,
-            nb::rv_policy::reference_internal,
             "Underlying per-device D2H sockets (diagnostic).")
         .def(
             "get_worker_cores",
