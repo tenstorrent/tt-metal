@@ -23,6 +23,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "device/repeat_utils.hpp"
@@ -40,6 +41,18 @@ struct UpperRepeatDims {
     static constexpr uint32_t page_size = 3;
 };
 
+// A row-major shard pads the row to a whole number of shards. A view to the logical width would re-derive the
+// shard from the unpadded row, so keep the padded width.
+ttnn::Tensor view_keeping_row_padding(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    const uint32_t padded_width = tensor.padded_shape()[-1];
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || padded_width == tensor.logical_shape()[-1]) {
+        return ttnn::view(tensor, logical_shape);
+    }
+    auto padded_shape = logical_shape;
+    padded_shape[-1] = padded_width;
+    return tt::tt_metal::view(tensor, logical_shape, padded_shape);
+}
+
 ttnn::Tensor repeat_upper_dims_rm(
     const ttnn::Tensor& tensor,
     const uint32_t dim,
@@ -56,13 +69,13 @@ ttnn::Tensor repeat_upper_dims_rm(
         std::accumulate(input_shape.cbegin() + dim + 1, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
     collapsed_shape_vector[UpperRepeatDims::page_size] = input_shape[-1];
 
-    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
+    auto input_tensor = view_keeping_row_padding(tensor, ttnn::Shape(collapsed_shape_vector));
 
     std::optional<Tensor> prim_output = std::nullopt;
     if (optional_output_tensor.has_value()) {
         auto collapsed_out = collapsed_shape_vector;
         collapsed_out[UpperRepeatDims::repeat] *= repetitions;
-        prim_output = ttnn::view(optional_output_tensor.value(), ttnn::Shape(collapsed_out));
+        prim_output = view_keeping_row_padding(optional_output_tensor.value(), ttnn::Shape(collapsed_out));
     }
 
     constexpr bool is_final_dim = false;
@@ -71,7 +84,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
-    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
+    return view_keeping_row_padding(out_tensor, ttnn::Shape(expected_shape));
 }
 
 ttnn::Tensor repeat_last_dim_rm(
@@ -541,8 +554,17 @@ ttnn::Tensor repeat_native(
                     break;
                 }
             }
+            // The composite path ends in interleaved_to_sharded, which rejects an unaligned row-major output page.
+            // Such an output is written natively, even from unaligned input rows.
+            const bool unaligned_rows_native =
+                working_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+                repeat::is_unaligned_row_major_shard_page(output_mem_config, working_tensor.element_size());
             native_sharded = repeat::is_native_repeat_sharding(
-                working_tensor.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, native_dim, native_reps);
+                working_tensor.tensor_spec(),
+                std::optional<MemoryConfig>{output_mem_config},
+                native_dim,
+                native_reps,
+                unaligned_rows_native);
         }
     }
 

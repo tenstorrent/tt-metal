@@ -87,22 +87,40 @@ bool is_replication_locally_contained(
     return group_size != 0 && (per_core_rows % group_size) == 0;
 }
 
+bool is_unaligned_row_major_shard_page(const MemoryConfig& memory_config, uint32_t element_size) {
+    if (!memory_config.is_sharded() || !memory_config.shard_spec().has_value()) {
+        return false;
+    }
+    return (memory_config.shard_spec()->shape[1] * element_size) % hal::get_l1_alignment() != 0;
+}
+
 bool is_native_repeat_sharding(
     const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<MemoryConfig>& output_memory_config,
     int32_t repeat_dim,
-    uint32_t num_repeats) {
+    uint32_t num_repeats,
+    bool unaligned_rows_native) {
     if (!side_native(input_spec.memory_config(), input_spec.layout())) {
         return false;
     }
     if (is_unevenly_sharded(input_spec)) {
         return false;
     }
-    // The native rank-collapse view cannot discard padding from a split row's final shard.
-    // Keep partial final shards on codegen/composite; a full row on one core can still be viewed.
     if (input_spec.layout() == Layout::ROW_MAJOR) {
         const auto& shard = input_spec.memory_config().shard_spec()->shape;
-        if (input_spec.padded_shape()[-1] > shard[1] && input_spec.logical_shape()[-1] % shard[1] != 0) {
+        // A row narrower than its shard is one padded page, and repeat's views keep that padding. It has no other
+        // route: codegen and the composite path unshard it first, and the row-major unshard cannot copy a page
+        // wider than its row. A split row's partial final shard pads only its last page, which the rank-collapse
+        // view cannot keep.
+        const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
+        if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1]) {
+            return false;
+        }
+        // Codegen and the composite path copy unaligned WIDTH/BLOCK pages faster than the staged kernel.
+        const auto layout = input_spec.memory_config().memory_layout();
+        if (!narrow_row && !unaligned_rows_native &&
+            (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+            input_spec.compute_page_size_bytes() % hal::get_l1_alignment() != 0) {
             return false;
         }
     }

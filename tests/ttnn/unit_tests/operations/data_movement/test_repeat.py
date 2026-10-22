@@ -261,6 +261,17 @@ def test_pc_with_different_shapes_in_sequence(device):
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
 
 
+def _assert_derived_placement(output, input_memory):
+    # With no memory_config, an unaligned row-major shard page takes codegen or the composite path, which place the
+    # output on a spec derived for its shape, with an L1-aligned page, or in L1 interleaved when none exists.
+    memory = output.memory_config()
+    if memory.is_sharded():
+        assert memory.memory_layout == input_memory.memory_layout
+        assert memory.shard_spec.shape[1] * output.element_size() % ttnn.get_l1_alignment() == 0
+    else:
+        assert memory == ttnn.L1_MEMORY_CONFIG
+
+
 @pytest.mark.parametrize(
     "dtype, shape, grid, repeats",
     [
@@ -300,7 +311,10 @@ def test_repeat_width_sharded_row_major_subaligned_rows(device, dtype, shape, gr
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
-    assert output.memory_config() == expected_memory
+    if memory_config.shard_spec.shape[1] * input_tensor.element_size() % ttnn.get_l1_alignment():
+        _assert_derived_placement(output, memory_config)
+    else:
+        assert output.memory_config() == expected_memory
 
 
 @pytest.mark.parametrize("rank", [3, 4, 5])
@@ -347,7 +361,10 @@ def test_repeat_sharded_row_major_placement(device, rank, strategy, split_row, a
         kwargs["optional_output_tensor"] = preallocated
     output = ttnn.repeat(tensor, repeats, **kwargs)
     assert torch.equal(ttnn.to_torch(output).to(torch.int64) & 0xFFFFFFFF, expected_input.repeat(*repeats))
-    assert output.memory_config() == expected_memory
+    if output_mode == "implicit" and not aligned:
+        _assert_derived_placement(output, input_memory)
+    else:
+        assert output.memory_config() == expected_memory
     if output_mode in ("preallocated", "both"):
         assert output.buffer_address() == preallocated.buffer_address()
         assert torch.equal(ttnn.to_torch(preallocated).to(torch.int64) & 0xFFFFFFFF, expected_input.repeat(*repeats))
@@ -476,7 +493,10 @@ def test_repeat_split_shards_supported_dtypes(device, dtype, strategy, aligned, 
         kwargs = {"memory_config": config(output_shape), "optional_output_tensor": target}
     output = ttnn.repeat(source, repeats, **kwargs)
     assert torch.equal(read(output), expected_input.repeat(*repeats))
-    assert output.memory_config() == config(output_shape)
+    if not preallocate and not aligned:
+        _assert_derived_placement(output, config(shape))
+    else:
+        assert output.memory_config() == config(output_shape)
     if preallocate:
         assert output.buffer_address() == target.buffer_address()
         assert torch.equal(read(target), expected_input.repeat(*repeats))
