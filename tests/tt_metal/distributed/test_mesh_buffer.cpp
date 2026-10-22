@@ -315,12 +315,27 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferForEveryLocalDevice) {
     }
 }
 
+// Local device coordinates in the order MeshBuffer visits them; the first one holds the reference buffer.
+std::vector<MeshCoordinate> local_coords(const MeshDevice& mesh_device) {
+    std::vector<MeshCoordinate> coords;
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        if (mesh_device.is_local(coord)) {
+            coords.push_back(coord);
+        }
+    }
+    return coords;
+}
+
 TEST_F(MeshBufferTest2x4, GetDeviceBufferConcurrentFirstUse) {
     // Threads racing on the first use of a device buffer must all get the same one.
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const auto coords = local_coords(*mesh_device_);
+    if (coords.size() < 2) {
+        GTEST_SKIP() << "Needs two local devices";
+    }
     // Not the first device, whose buffer is the reference one and is built at allocation.
-    const MeshCoordinate coord{1, 3};
+    const MeshCoordinate& coord = coords[1];
     constexpr int kNumThreads = 8;
     // A fresh MeshBuffer per round, so that every round races on an entry that is not built yet.
     constexpr int kNumRounds = 20;
@@ -337,7 +352,12 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferConcurrentFirstUse) {
                 while (!start.load()) {
                     std::this_thread::yield();
                 }
-                device_buffers[i] = mesh_buffer->get_device_buffer(coord);
+                // An exception escaping the thread would terminate the test binary.
+                try {
+                    device_buffers[i] = mesh_buffer->get_device_buffer(coord);
+                } catch (const std::exception& e) {
+                    ADD_FAILURE() << e.what();
+                }
             });
         }
         start = true;
@@ -360,6 +380,10 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
     if (getenv("TT_METAL_EMULE_MODE")) {
         GTEST_SKIP() << "Emule builds every device buffer at allocation";
     }
+    const auto coords = local_coords(*mesh_device_);
+    if (coords.size() < 2) {
+        GTEST_SKIP() << "Needs two local devices";
+    }
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto mesh_buffer =
@@ -367,7 +391,7 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
 
     mesh_buffer->deallocate();
     EXPECT_FALSE(mesh_buffer->is_allocated());
-    EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(MeshCoordinate{1, 3}));
+    EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[1]));
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
