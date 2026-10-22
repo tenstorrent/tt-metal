@@ -53,6 +53,9 @@ struct FusedRingConfig {
     std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
     bool full_mesh{false};
+    // Full mesh only: tensor (K ownership and causal) ranks are column-major instead of row-major, for
+    // SP-major shards with SP on mesh axis 1. Set from full_mesh_outer_axis.
+    bool column_major{false};
     ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
     uint32_t mesh_rows{0};
     uint32_t mesh_cols{0};

@@ -390,10 +390,11 @@ ProgramDescriptor build_ring_program_descriptor(
     // block-cyclic arg, and that collision does not surface as a merge conflict.
     const RingAttentionRankMapping rank_mapping{
         .full_mesh = fused.full_mesh,
+        .column_major = fused.column_major,
         .orientation = fused.snake_orientation,
         .mesh_rows = fused.mesh_rows,
         .mesh_cols = fused.mesh_cols};
-    reader_ct.push_back(rank_mapping.full_mesh ? 1u : 0u);
+    reader_ct.push_back(rank_mapping.full_mesh ? (rank_mapping.column_major ? 2u : 1u) : 0u);
     reader_ct.push_back(static_cast<uint32_t>(rank_mapping.orientation));
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
@@ -621,8 +622,11 @@ ProgramDescriptor build_ring_program_descriptor(
             .route_plan_hash = fused.route_plan_hash};
         const auto position =
             ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan, fused.topology);
+        // The plan reports row-major tensor ranks; a column-major op maps the same transport rank instead.
         TT_FATAL(
-            position.transport_rank == transport_rank && position.tensor_rank == tensor_rank,
+            position.transport_rank == transport_rank &&
+                (fused.column_major ? transport_to_tensor_rank(args, position.transport_rank) == tensor_rank
+                                    : position.tensor_rank == tensor_rank),
             "indexer_score fused full-mesh rank plan drift at coordinate {}",
             coord);
         forward_coord = position.forward_coord;
