@@ -276,3 +276,21 @@ overwrites the slow core's occupied slot, its BRISC blocks in cb_reserve_back (a
 behind it (the packer included). Fix: credits per slot (WFREE[s] >= GY x round; XFREE likewise per slot on the owner),
 plus a flush between each data write and its valid-semaphore write (codex's other point: separate command FIFOs).
 Also kept: the W reader on the last row (the start of its column's path); x multicast halves from the owner.
+
+### Step 5: the x chain v2 - the gather straight into the engine's L1 (tt/x_gather.py XGather + fused_head.HeadSE)
+x lands as K steps in the engine owners' L1 (no x_full in DRAM): packets of up to 4 tiles within one K step, row tile R
+over link (R / 2) % 2 (orthogonal to the ring's even / odd halves), relays read the owners' L1; after each shard a port
+increments the downstream watcher's (direction, link) counter, and the watcher raises XREADY on all 110 engine cores per
+shard in the engine's order (own shard first - loaded by the engine itself - then by distance). Gate / up streams W
+once in that order. Movers on column 11 (simple placement).
+| x chain (gather -> gate / up -> down), us, PCC | GLM-Flash | K3 (E 448) |
+|---|---|---|
+| serial: tp_gather + lin2c chain | 646 | 1724 |
+| v1 fused (chunked gather via DRAM, W 8x) | 595-603 | 1543-1567 |
+| **v2 fused (gather into L1, W once)** | **610**, 0.99973 | **1314**, 0.99964 |
+| shared expert W from DRAM a call, v1 -> v2 | 53.5 -> 6.7 MB | 281 -> 35.1 MB |
+| x_full DRAM traffic (write + relay / engine reads) v1 -> v2 | ~63 MB -> 0 | ~110 MB -> 0 |
+Per chip (K3): gather ends 638-741 us (585 alone - the engine's NoC traffic), engines 1113-1314: the line's end chips
+get their distance-3 shard last (~730 us), then that shard's gate / up (~180) and all of down (382) -> 1314. GLM-Flash:
+gather 369-422, engines 457-610 (tail = one shard of gate / up ~50 + down 145). The floor of this structure is
+gather end + one shard of gate / up + down; next: down + the reduce-scatter as one stage (matmul_reduce_scatter port).

@@ -135,3 +135,63 @@ class HeadXChain:
             self.state["key"], self.state["desc"] = key, md
         ttnn.generic_op([x, x_full] + list(wl) + [h] + list(wld) + [y], self.state["desc"])
         return y
+
+
+class HeadSE:
+    """The fused head's x chain, v2: x [rows, H / TP] a chip -> the x all-gather straight into the shared expert
+    engine's L1 (tt/x_gather.py) -> gate / up (each weight block read once, steps in shard arrival order: own shard
+    first) -> h in L1 -> down -> y [rows, H] (this chip's partial). The engine on columns 0 .. GX - 1, the movers on
+    the next column."""
+
+    def __init__(self, mesh_device, *, rows, H, I, glu, GX=11, GY=10, num_links=2, fidelity=ttnn.MathFidelity.HiFi2):
+        from models.demos.moe_block.tt.se_engine import SeEngine
+        from models.demos.moe_block.tt.x_gather import XGather
+
+        self.mesh = mesh_device
+        grid = mesh_device.compute_with_storage_grid_size()
+        assert GX < grid.x, "no column left for the movers"
+        self.eng = SeEngine(mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, fidelity=fidelity)
+        movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        self.xg = XGather(
+            mesh_device,
+            self.eng,
+            num_links=num_links,
+            sub_core_grid=movers,
+            placement="simple" if grid.x - GX < 4 else "auto",
+        )
+        self.rows, self.H = rows, H
+        self.state = dict(key=None)
+
+    def upload(self, w_gu, w_down):
+        return self.eng.upload(w_gu, w_down)
+
+    def run(self, x, w):
+        from models.demos.moe_block.tt.se_engine import XREADY
+
+        y = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.rows, self.H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+        )
+        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()))
+        if self.state["key"] != key:
+            md = ttnn.MeshProgramDescriptor()
+            for coord in self.xg.chips:
+                prog = ttnn.ProgramDescriptor()
+                c0, k0 = self.xg.pieces(coord, prog, x, XREADY)
+                order, need = self.xg.step_order(coord)
+                p = self.xg.chips[coord]["rings"][0]["p"]
+                c1, k1, sems = self.eng.pieces(
+                    x,
+                    w,
+                    y,
+                    order=order,
+                    need=need,
+                    x_k0=p * self.xg.klt,
+                    x_ct=self.xg.klt,
+                    extra_sem_cores=[self.xg.watcher_core(coord)],
+                )
+                prog.cbs, prog.kernels, prog.semaphores = c0 + c1, k0 + k1, sems
+                r, c = coord
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+            self.state["key"], self.state["desc"] = key, md
+        ttnn.generic_op([x, w, y, self.eng.arena], self.state["desc"])
+        return y

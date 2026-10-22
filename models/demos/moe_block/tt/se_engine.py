@@ -30,7 +30,8 @@ NXS, NWS = 2, 3  # (x / W slots a core)
 # Credits are per slot: one aggregate count let a fast row credit two successive W slots while a slow row credited
 # none, so the reader overwrote the slow row's occupied slot (its BRISC then blocked in cb_reserve_back: the hang)
 XV, XFREE, WV, WFREE = 0, NXS, 2 * NXS, 2 * NXS + NWS
-NSEM = 2 * (NXS + NWS)
+XREADY = 2 * (NXS + NWS)  # (x shards landed, in this chip's step order: the gather's watcher increments it)
+NSEM = XREADY + 1
 XIN, WIN, ACCG, ACCD, HOWN, OUT = 0, 1, 2, 3, 4, 5  # CB ids
 SH, SW = 2, 2  # (DEST sub-block: 4 fp32 tiles, half sync; SW = 2 = one gate / up pair)
 
@@ -44,6 +45,7 @@ constexpr uint32_t XSLOT = get_compile_time_arg_val(9), WSLOT = get_compile_time
 constexpr uint32_t KT = get_compile_time_arg_val(12), NTH = get_compile_time_arg_val(13), HT = get_compile_time_arg_val(14);
 constexpr uint32_t NG = NSG + NPD * GX;  // x (and W) steps a call
 constexpr uint32_t XV = 0, XFREE = NXS, WV = 2 * NXS, WFREE = 2 * NXS + NWS;  // (one a slot each)
+constexpr uint32_t XREADY = 2 * (NXS + NWS);
 constexpr uint32_t CB_XIN = 0, CB_WIN = 1, CB_HOWN = 4, CB_OUT = 5;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
@@ -60,19 +62,20 @@ void kernel_main() {
     size_t a = 0;
     const uint32_t cx = get_arg_val<uint32_t>(a++), cy = get_arg_val<uint32_t>(a++);
     const uint32_t lx = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
-    const uint32_t x_addr = get_arg_val<uint32_t>(a++), load_x = get_arg_val<uint32_t>(a++);
+    const uint32_t x_addr = get_arg_val<uint32_t>(a++), x_ct = get_arg_val<uint32_t>(a++), x_k0 = get_arg_val<uint32_t>(a++);
     const uint32_t xin = get_arg_val<uint32_t>(a++), xown = get_arg_val<uint32_t>(a++), hown = get_arg_val<uint32_t>(a++);
     const uint32_t words = get_arg_val<uint32_t>(a++), rdx = get_arg_val<uint32_t>(a++), rdy = get_arg_val<uint32_t>(a++);
     const uint32_t ord0 = a;  // order[NSG], then the GX columns' NoC x (this row)
-    const uint32_t oxs = ord0 + NSG;
+    const uint32_t oxs = ord0 + NSG, need0 = oxs + GX;  // (need[g]: XREADY before gate / up step g's x is here)
     auto order = [&](uint32_t g) { return get_arg_val<uint32_t>(ord0 + g); };
     auto owner = [&](uint32_t g) { return g < NSG ? order(g) % GX : (g - NSG) % GX; };
-    if (load_x) {  // (alone: my x steps from DRAM x [rows, H])
+    if (x_ct) {  // my x steps within DRAM x's columns [x_k0, x_k0 + x_ct) (x [rows, x_ct]: the whole x, or my shard)
         const auto xg = TensorAccessor(x_args, x_addr, 2048);
         for (uint32_t s = cx, j = 0; s < NSG; s += GX, ++j)
-            for (uint32_t r = 0; r < MT; ++r)
-                for (uint32_t kk = 0; kk < KB; ++kk)
-                    noc_async_read(xg.get_noc_addr((cy * MT + r) * KT + s * KB + kk), xown + ((j * MT + r) * KB + kk) * 2048, 2048);
+            if (s * KB >= x_k0 && s * KB < x_k0 + x_ct)
+                for (uint32_t r = 0; r < MT; ++r)
+                    for (uint32_t kk = 0; kk < KB; ++kk)
+                        noc_async_read(xg.get_noc_addr((cy * MT + r) * x_ct + s * KB + kk - x_k0), xown + ((j * MT + r) * KB + kk) * 2048, 2048);
         noc_async_read_barrier();
     }
     uint32_t gs = 0;  // (my next x step to send)
@@ -83,7 +86,7 @@ void kernel_main() {
         invalidate_l1_cache();
         if (gs < NG) {  // send my step gs once its slot is free on the whole row (and h is packed, for down)
             if (gs >= NSG && !h_ok) h_ok = cb_pages_available_at_front(CB_HOWN, MT * POMAX);
-            const bool ready = gs < NSG || h_ok;
+            const bool ready = gs < NSG ? *sem(XREADY) >= get_arg_val<uint32_t>(need0 + gs) : h_ok;
             if (ready && (gs < NXS || *sem(XFREE + gs % NXS) >= GX * (nf[gs % NXS] + 1))) {
                 const uint32_t src = gs < NSG ? xown + (order(gs) / GX) * MT * KB * 2048 : hown;
                 const uint32_t bytes = (gs < NSG ? KB : POMAX) * MT * 2048;
@@ -155,7 +158,8 @@ void kernel_main() {
     const uint32_t xa = ord0 + NSG + 2 * GX + 1;
     const uint32_t cx = get_arg_val<uint32_t>(xa), lx = get_arg_val<uint32_t>(xa + 1), ry = get_arg_val<uint32_t>(xa + 2);
     const uint32_t xin = get_arg_val<uint32_t>(xa + 3), xown = get_arg_val<uint32_t>(xa + 4), hown = get_arg_val<uint32_t>(xa + 5);
-    const uint32_t vxs = xa + 6;  // (the GX columns' NoC x, this row)
+    const uint32_t vxs = xa + 6;  // (the GX columns' NoC x, this row; then the GY rows' NoC y; then need[NSG])
+    const uint32_t need0 = vxs + GX + GY;
     auto order = [&](uint32_t g) { return get_arg_val<uint32_t>(ord0 + g); };
     auto owner = [&](uint32_t g) { return g < NSG ? order(g) % GX : (g - NSG) % GX; };
     uint32_t gs = cx > 0 ? 0 : NG, nf[NXS] = {};
@@ -166,7 +170,7 @@ void kernel_main() {
         invalidate_l1_cache();
         if (gs < NG) {
             if (gs >= NSG && !h_ok) h_ok = cb_pages_available_at_front(CB_HOWN, MT * POMAX);
-            if ((gs < NSG || h_ok) && (gs < NXS || *sem(XFREE + gs % NXS) >= GX * (nf[gs % NXS] + 1))) {
+            if ((gs < NSG ? *sem(XREADY) >= get_arg_val<uint32_t>(need0 + gs) : h_ok) && (gs < NXS || *sem(XFREE + gs % NXS) >= GX * (nf[gs % NXS] + 1))) {
                 const uint32_t src = gs < NSG ? xown + (order(gs) / GX) * MT * KB * 2048 : hown;
                 const uint32_t bytes = (gs < NSG ? KB : POMAX) * MT * 2048;
                 const uint32_t dst = xin + (gs % NXS) * XSLOT * 2048;
@@ -337,6 +341,12 @@ void kernel_main() {
 """
 
 
+def _u32(vals):
+    bad = [(i, v) for i, v in enumerate(vals) if not isinstance(v, int) or v < 0 or v >= 1 << 32]
+    assert not bad, f"runtime args not uint32: {bad[:8]} in {vals[:12]}"
+    return vals
+
+
 def _dbg():
     """(debug) compute defines from SE_DBG=NO_L1ACC,NO_RELOAD,NO_GLU (the defines' values are 1)."""
     import os
@@ -476,8 +486,13 @@ class SeEngine:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, dims=(0, 1), mesh_shape=(R, C)),
         )
 
-    def pieces(self, x, w, y, *, load_x=True):
-        """(CBs, kernels, semaphores) of the engine (the same on every chip). x: DRAM [rows, H] when load_x."""
+    def pieces(self, x, w, y, *, order=None, need=None, x_k0=0, x_ct=None, extra_sem_cores=()):
+        """(CBs, kernels, semaphores) of the engine on one chip. x: DRAM [rows, x_ct tiles], the columns x_k0 .. of
+        the full x the engine loads itself (x_ct None: all of x; 0: none). order: gate / up step order (None: the
+        engine's); need[i]: XREADY count before step order[i]'s x is in L1 (None: all there)."""
+        order = [int(v) for v in (order if order is not None else self.order)]
+        need = [int(v) for v in need] if need is not None else [0] * self.NSG
+        x_ct, x_k0 = int(self.KT if x_ct is None else x_ct), int(x_k0)
         mesh, GX, GY, cx0 = self.mesh, self.GX, self.GY, self.cx0
         b, off = self.base, self.off
         virt = lambda cx, cy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + cx, cy))  # noqa: E731
@@ -522,7 +537,7 @@ class SeEngine:
             self.NTH,
             self.HT,
         ]
-        x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+        xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         b_rt, n_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -530,7 +545,7 @@ class SeEngine:
             for cy in range(GY):
                 lx, rx, ry = virt(0, cy).x, virt(GX - 1, cy).x, virt(c, cy).y
                 rd = virt(c, self.rrow)
-                b_rt[cx0 + c][cy] = (
+                b_rt[cx0 + c][cy] = _u32(
                     [
                         c,
                         cy,
@@ -538,7 +553,8 @@ class SeEngine:
                         rx,
                         ry,
                         int(x.buffer_address()),
-                        int(load_x),
+                        x_ct,
+                        x_k0,
                         b + off["xin"],
                         b + off["xown"],
                         b + off["hown"],
@@ -546,11 +562,12 @@ class SeEngine:
                         rd.x,
                         rd.y,
                     ]
-                    + self.order[:nsg]
+                    + order[:nsg]
                     + [virt(cc, cy).x for cc in range(GX)]
+                    + need[:nsg]
                 )
                 v = virt(c, cy)
-                n_rt[cx0 + c][cy] = (
+                n_rt[cx0 + c][cy] = _u32(
                     [
                         cy,
                         v.x,
@@ -566,13 +583,14 @@ class SeEngine:
                         b + off["wst"],
                         b + off["words"],
                     ]
-                    + self.order[:nsg]
+                    + order[:nsg]
                     + self.h0
                     + self.po
                     + [self.rrow]
                     + [c, virt(0, cy).x, v.y, b + off["xin"], b + off["xown"], b + off["hown"]]
                     + [virt(cc, cy).x for cc in range(GX)]
                     + [virt(c, yy).y for yy in range(GY)]
+                    + need[:nsg]
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -583,7 +601,7 @@ class SeEngine:
                 kernel_source=_BRISC,
                 source_type=st,
                 core_ranges=allc,
-                compile_time_args=ct + x_ct,
+                compile_time_args=ct + xa_ct,
                 runtime_args=b_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_0),
             ),
@@ -623,7 +641,12 @@ class SeEngine:
                     config=comp,
                 )
             )
-        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(NSEM)]
+        semc = (
+            allc
+            if not extra_sem_cores
+            else ttnn.CoreRangeSet(list(allc.ranges()) + [ttnn.CoreRange(c, c) for c in extra_sem_cores])
+        )
+        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=semc, initial_value=0) for i in range(NSEM)]
         return cbs, kernels, sems
 
     def run_alone(self, x, w):
