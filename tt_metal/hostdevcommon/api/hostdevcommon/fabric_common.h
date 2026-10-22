@@ -167,9 +167,6 @@ constexpr Routing2DRouteTableCapacity derive_2d_route_table_capacity(
 // The two mesh axes. Values match the control plane's axis_dim and the FABRIC_EXPRESS_AXIS define:
 // 0 is the Y axis (N/S travel), 1 is the X axis (E/W travel).
 enum class Fabric2DAxis : std::uint8_t { Y = 0, X = 1 };
-static_assert(
-    static_cast<std::uint8_t>(Fabric2DAxis::Y) == 0 && static_cast<std::uint8_t>(Fabric2DAxis::X) == 1,
-    "Fabric2DAxis must number Y = 0, X = 1, matching AxisRouteTopology::axis_dim and FABRIC_EXPRESS_AXIS");
 
 struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
