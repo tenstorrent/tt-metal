@@ -93,6 +93,7 @@ import binascii
 import contextlib
 import email.policy
 import hashlib
+import itertools
 import json
 import os
 import queue
@@ -303,6 +304,11 @@ class _FileStore:
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
             self._load()
+
+    def usage(self) -> dict:
+        """The files stored and their bytes, for the live console."""
+        with self._lock:
+            return {"count": len(self._files), "bytes": self._bytes}
 
     def _load(self) -> None:
         loaded = []
@@ -800,6 +806,12 @@ class V41GenerationServer(GenerationServer):
         self.engine.capture_vision()
         cache = self.engine.weight_cache
         self.files = _FileStore(os.path.join(cache.path, "files") if cache else None)
+
+    def stats(self) -> dict:
+        stats = super().stats()
+        if self.engine.images is not None:
+            stats["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
+        return stats
 
     def upload_file(self, fields: dict) -> dict:
         """`POST /files <https://api-docs.deepseek.com/api/create-file>`_: store the image, then decode it and encode
