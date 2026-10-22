@@ -418,8 +418,7 @@ void kernel_main() {
                     rank_stamped,
                     tie_order,
                     /*ct_steps=*/false,
-                    /*bottom_dead=*/output_tiles == 1>(
-                    0, (int)!largest, end_phase, 0, 0, 0, tile0_sorted);
+                    /*bottom_dead=*/output_tiles == 1>(0, (int)!largest, end_phase, 0, 0, 0, tile0_sorted);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
