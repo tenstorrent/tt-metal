@@ -208,8 +208,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * after clamping it to 2**24; every fp32 >= 2**24 is an even integer, so the clamp keeps
  * parity and integer-ness and the int32 round trip stays exact. (-1)**40000 gives 1, and a
  * -0 base keeps its sign for any odd integer pow. A negative base with a NaN or +/-inf pow
- * returns NaN (torch instead gives 1 for |base| == 1 and 0/inf otherwise); a -0 base with
- * +/-inf pow still takes the zero-base result (+0 / +inf).
+ * returns NaN; for a +/-inf pow torch instead gives 1 for |base| == 1 and 0/inf otherwise.
+ * A -0 base with +/-inf pow still takes the zero-base result (+0 / +inf).
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -319,9 +319,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // |pow| removes a -0 exponent: the integer round trip below would bring that back as +0,
-    // which the bit-exact compare reports as non-integer, and give NaN instead of 1 for a -0
-    // base.
+    // |pow| feeds the positive-only int32 conversion below, which ignores the sign (without
+    // abs, pow = -3 would round-trip to +3 and read as non-integer). It also removes a -0
+    // exponent: the integer round trip would bring that back as +0, which the bit-exact
+    // compare reports as non-integer, and give NaN instead of 1 for a -0 base.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     v_if(base < 0.0f) {  // negative base
