@@ -3954,7 +3954,7 @@ class SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture
 TEST_P(SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture, TensixSfpuCompute) {
     const auto& [num_tiles, sfpu_op, en_32bit_dest] = GetParam();
     if (sfpu_op == "rand" && !en_32bit_dest && (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE)) {
-        GTEST_SKIP() << "The WH/BH rand kernel stores FP32, so it needs a 32-bit Dest (as ttnn's rand sets)";
+        GTEST_SKIP() << "The WH/BH rand kernel stores FP32, so it needs a 32-bit Dest (as the rand op sets)";
     }
     CoreRange core_range({0, 0}, {0, 0});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
