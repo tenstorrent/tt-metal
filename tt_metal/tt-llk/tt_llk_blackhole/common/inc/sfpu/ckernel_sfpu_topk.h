@@ -2356,27 +2356,70 @@ inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 }
 
 // K >= 32: every quadrant is one block of 8 groups at distance 32, whatever m_iter, so the register set of each group,
-// the group offsets and the quadrant starts are constants and nothing is decided at run time.
-template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET0, std::uint32_t II = 0>
+// the group offsets and the quadrant starts are constants and nothing is decided at run time. Consecutive groups rotate
+// over the register sets and step the dest counter by 4 (by 20 into the second half of the block), so a run of groups
+// with its counter steps is one replay window per starting set, recorded where it first executes.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET>
+[[gnu::always_inline]] inline void topk_merge_k32_group()
+{
+    constexpr std::uint32_t ld_dist = 64;
+    bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, SET % topk_merge_macro_sets<FUSED>()>(top_min ? ld_dist : 0, top_min ? 0 : ld_dist);
+}
+
+// R groups on sets SET, SET + 1, ... with the counter step of 4 between them.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET, std::uint32_t R, std::uint32_t I = 0>
+[[gnu::always_inline]] inline void topk_merge_k32_run_words()
+{
+    if constexpr (I < R)
+    {
+        if constexpr (I > 0)
+        {
+            TTI_INCRWC(0, 4, 0, 0);
+        }
+        topk_merge_k32_group<is_fp32_dest_acc_en, top_min, FUSED, SET + I>();
+        topk_merge_k32_run_words<is_fp32_dest_acc_en, top_min, FUSED, SET, R, I + 1>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET, bool RECORD>
+[[gnu::always_inline]] inline void topk_merge_k32_run()
+{
+    constexpr std::uint32_t R     = FUSED ? 3 : 4;
+    constexpr std::uint32_t words = FUSED ? 2 : 4;
+    constexpr std::uint32_t len   = R * words + R - 1;
+    constexpr std::uint32_t slot  = (SET % topk_merge_macro_sets<FUSED>()) * len;
+    static_assert(slot + len <= REPLAY_BUF_SIZE, "merge run window must fit the replay buffer");
+    if constexpr (RECORD)
+    {
+        load_replay_buf<Exec>(slot, len, [] { topk_merge_k32_run_words<is_fp32_dest_acc_en, top_min, FUSED, SET, R>(); });
+    }
+    else
+    {
+        lltt::replay(slot, len);
+    }
+}
+
+// One quadrant: groups 0 to 7 with the counter stepping 4 between them and 20 into group 4; SET is group 0's register set.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET, bool REC1, bool REC2>
 [[gnu::always_inline]] inline void topk_merge_block_k32()
 {
-    if constexpr (II < 8)
+    if constexpr (FUSED)
     {
-        if constexpr (II > 0)
-        {
-            if constexpr ((II & 3) == 0)
-            {
-                TTI_INCRWC(0, 10, 0, 0);
-                TTI_INCRWC(0, 10, 0, 0);
-            }
-            else
-            {
-                TTI_INCRWC(0, 4, 0, 0);
-            }
-        }
-        constexpr std::uint32_t ld_dist = 64;
-        bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, (SET0 + II) % topk_merge_macro_sets<FUSED>()>(top_min ? ld_dist : 0, top_min ? 0 : ld_dist);
-        topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, SET0, II + 1>();
+        topk_merge_k32_run<is_fp32_dest_acc_en, top_min, FUSED, SET, REC1>();
+        TTI_INCRWC(0, 4, 0, 0);
+        topk_merge_k32_group<is_fp32_dest_acc_en, top_min, FUSED, SET + 3>();
+        TTI_INCRWC(0, 10, 0, 0);
+        TTI_INCRWC(0, 10, 0, 0);
+        topk_merge_k32_run<is_fp32_dest_acc_en, top_min, FUSED, SET + 4, REC2>();
+        TTI_INCRWC(0, 4, 0, 0);
+        topk_merge_k32_group<is_fp32_dest_acc_en, top_min, FUSED, SET + 7>();
+    }
+    else
+    {
+        topk_merge_k32_run<is_fp32_dest_acc_en, top_min, FUSED, SET, REC1>();
+        TTI_INCRWC(0, 10, 0, 0);
+        TTI_INCRWC(0, 10, 0, 0);
+        topk_merge_k32_run<is_fp32_dest_acc_en, top_min, FUSED, SET + 4, REC2>();
     }
 }
 
@@ -2387,21 +2430,24 @@ inline void _topk_merge_k32_macros_()
     topk_validate_mode_combo<is_fp32_dest_acc_en, false, FUSED, false, TopkTieOrder::Unset>();
     _topk_merge_macros_init_<FUSED>();
     constexpr std::uint32_t sets = topk_merge_macro_sets<FUSED>();
+    // Each window is recorded by its first use: 2 starting sets are seen in the first quadrant of the fused merge, the third in the second.
+    constexpr bool second_rec = FUSED;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 0>();
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 0, true, FUSED>();
     set_dst_write_addr(2);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 8 % sets>();
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 8 % sets, second_rec && sets == 3, false>();
     set_dst_write_addr(4);
     set_dst_write_addr(16);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 16 % sets>();
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 16 % sets, false, false>();
     set_dst_write_addr(18);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 24 % sets>();
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 24 % sets, false, false>();
     set_dst_write_addr(20);
     set_dst_write_addr(16);
     bitonic_topk_step_macro_drain<FUSED>();
+    topk_replay_init = 0;
 }
 
 // Each set's group is recorded once, executing in the first quadrant, and every later group replays it after a counter step.
@@ -2483,7 +2529,7 @@ inline void _bitonic_topk_merge(const int m_iter)
         }
         return;
     }
-    if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
+    if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED)
     {
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
         return;
