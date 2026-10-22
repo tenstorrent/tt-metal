@@ -22,6 +22,7 @@ import torch
 from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
+    CHAIN_HSLOTS,
     RESULT_WORDS,
     chain_step,
     drafts_step,
@@ -61,6 +62,7 @@ class FakeMTP:
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
         self.layers, self.multi = [0], False
+        self.history, self.backfills = None, []
 
     def _run(self):
         """The three passes and the drafts step on the upload the lane holds."""
@@ -311,6 +313,7 @@ class LayersMTP:
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
         self.layers, self.multi = list(mtps), True
+        self.history = None
         self.program = MtpProgramMirror(mtps, embedding, lm_head, table_rows=B)
 
     def _run(self):
@@ -466,3 +469,39 @@ def test_layers_a_different_commit_drafts_from_the_host_description(layers_adapt
         model, source, committed[SPEC_ROW, : m - 1].tolist(), positions[SPEC_ROW].tolist(), m - 1, slot_hidden
     )
     assert got == want
+
+
+# ---------------------------------------------------------------------- the ring backfill's bookkeeping
+def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
+    """With the MTP history (tt/mtp_backfill.py): the first draft after the prompt (the rings reset) and a draft
+    after steps without drafts backfill first; drafts after a verify (chained, re-drafted by the chain check, or
+    host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
+    lane = adapter.models[1]
+    lane.mtp.history = object()
+    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append((slot, a))
+    adapter.chain_check = True
+    rows_seen = []
+    enqueue = lane.verify_enqueue
+
+    def verify_enqueue(tokens, positions, chain=None):
+        rows_seen.append(chain[CHAIN_HSLOTS : CHAIN_HSLOTS + SPEC_SLOTS].tolist())
+        return enqueue(tokens, positions, chain)
+
+    lane.verify_enqueue = verify_enqueue
+    p = 600
+    drafts = start(adapter, p)
+    assert lane.mtp.backfills == [(0, p - 1)]
+    seq = SEQ[: p + 1]
+    for _ in range(5):
+        committed, positions, counts, _ = verify(adapter, seq[-1], len(seq) - 1, drafts)
+        seq += committed[SPEC_ROW, : int(counts[SPEC_ROW])].tolist()
+        drafts = propose(adapter, committed, positions, counts)
+    assert lane.mtp.backfills == [(0, p - 1)] and adapter.chain_stats["backfills"] == 1
+    assert rows_seen == [[1, 1, 1, 1]] * 5, "slot 0's request in every verify slot (slot + 1)"
+    # Steps without drafts (the lane served several requests): the next draft, after a plain step, backfills.
+    q = len(seq) + 7
+    start(adapter, q)
+    assert lane.mtp.backfills[-1] == (0, q - 1) and adapter.chain_stats["backfills"] == 2
+    # A plain step right after a draft continues the rings: no backfill.
+    start(adapter, q + 1)
+    assert adapter.chain_stats["backfills"] == 2

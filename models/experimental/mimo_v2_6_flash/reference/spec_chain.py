@@ -72,6 +72,7 @@ from .spec_inputs import (
 CHAIN_ROW = 2  # the verify upload's row (reference.spec_inputs.pack_verify)
 CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS = 0, 1, 2, 3
 CHAIN_WORDS = CHAIN_SLOTS + SPEC_SLOTS
+CHAIN_HSLOTS = CHAIN_WORDS  # the history's: each verify slot's request slot + 1 (0: none; reference/mtp_backfill.py)
 NO_SLOT = 0xFFFFFFFF
 ACCEPT_WORDS = GROUPS * OUT_WORDS
 ACCEPT_AT, ARGMAX_AT, STATUS_AT, DRAFTS_AT, RESULT_WORDS = 0, 32, 48, 64, 80
@@ -83,11 +84,14 @@ STASH_POSITIONS, STASH_TOKENS = 0, SPEC_SLOTS
 STASH_WORDS = STASH_TOKENS + SPEC_SLOTS
 
 
-def chain_row(max_batch, source=None, limit=0):
+def chain_row(max_batch, source=None, limit=0, hslots=None):
     """The verify upload's chain row, int32 values [max_batch]: ``source`` the pass's DraftSource when a draft chains
-    behind it (None: an idle row), ``limit`` the first bonus position the draft is declined at."""
-    assert max_batch >= CHAIN_WORDS
+    behind it (None: an idle row), ``limit`` the first bonus position the draft is declined at, ``hslots`` each verify
+    slot's request slot in the lane (None: no history write) for the history (reference/mtp_backfill.py)."""
+    assert max_batch >= CHAIN_HSLOTS + SPEC_SLOTS
     row = [0] * max_batch
+    for j, h in enumerate(hslots or []):
+        row[CHAIN_HSLOTS + j] = 0 if h is None else int(h) + 1
     if source is not None:
         assert 1 <= len(source.slots) <= SPEC_SLOTS
         row[CHAIN_SOURCE], row[CHAIN_COLUMNS], row[CHAIN_LIMIT] = 1, len(source.slots), int(limit)

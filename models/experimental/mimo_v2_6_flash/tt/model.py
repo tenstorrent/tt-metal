@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 
 from ..reference.model import load_layer_weights
+from ..reference.mtp_backfill import HISTORY_ROWS
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from .attention import TtMiMoAttention, page_table_width
@@ -580,17 +581,28 @@ class TtMiMoModel:
             start.deallocate(True)
         return x, padded
 
-    def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None):
+    def prefill_enqueue(
+        self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None, history_continues=False
+    ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
         ``start_pos > 0`` continues a user whose first start_pos tokens are in the cache. ``layers``: run only these
-        layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``."""
+        layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``. With the MTP
+        history each chunk also writes its last rows' final normed hidden into the slot's history
+        (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
+        entries stay), else it is the request's first and the slot's other entries are invalidated."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
+        hist = self._history()
         for s in range(0, n, chunk):
             x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers)
+            if hist is not None and slot < SPEC_SLOTS:
+                writes = hist.chunk_writes(slot, start_pos + s, tokens[s : s + chunk], 0, history_continues or s > 0)
+                write_list = hist.prefill_list(writes)
+                hist.prefill(x, self.final_norm, write_list, len(writes))
+                write_list.deallocate(True)
             if s + chunk < n:
                 x.deallocate(True)
         seq_len = n - s
@@ -635,6 +647,9 @@ class TtMiMoModel:
         layers = range(len(self.layers)) if layers is None else layers
         keys = list(dict.fromkeys(self._table_key(i) for i in layers))
         tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, keys)
+        hist, history_list = self._history(), None
+        if hist is not None:
+            history_list = hist.prefill_list(self._prefill_batch_writes(chunks, padded))
         rows = kv_lib.replicated(self.plan, torch.arange(num, dtype=torch.int32), ttnn.uint32)
         tables = {
             k: kv_lib.BatchFillTables(kv_lib.per_chip(self.plan, fills[k], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), rows)
@@ -645,15 +660,24 @@ class TtMiMoModel:
         tokens_tt = self._to_device_tokens(tokens)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
-        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers)
+        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list)
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
         # Enqueued: freeing them now is ordered with the work that reads them.
         for t in [*tables.values()]:
             t.release()
-        for t in [rows, tokens_tt, picks_tt, *ats]:
+        for t in [rows, tokens_tt, picks_tt, *ats, *([history_list] if history_list is not None else [])]:
             t.deallocate(True)
         return {"logits": logits, "row": list(range(num)), "hidden": None}
+
+    def _prefill_batch_writes(self, chunks, padded):
+        """The MTP history's write list of a prefill batch: each user's first chunk (a request's first: the slot's
+        other entries invalidated), its rows at r * padded of the pass. Slots past the history's write nothing."""
+        hist, writes = self._history(), []
+        for r, c in enumerate(chunks):
+            if c[1] < SPEC_SLOTS:
+                writes += hist.chunk_writes(c[1], 0, c[0], r * padded, False)
+        return writes
 
     def _prefill_batch_host(self, chunks, padded, keys):
         """Host inputs of a prefill batch: tokens int32 [R * S]; per page table key its fill rows [tp, R, blocks];
@@ -673,11 +697,12 @@ class TtMiMoModel:
         picks = [r * TILE + (c[0].numel() - 1) % TILE for r, c in enumerate(chunks)]
         return tokens, fills, starts, picks
 
-    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers):
+    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list=None):
         """A prefill batch from device inputs only (trace-capturable when the RoPE mats are pinned): tokens [1, R * S]
         uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts), and
         each user's last-token row among those tiles (uint32 [1, R]). Returns the users' last-token logits, row-major
-        [1, 1, R, vocab / tp]: the LM head and the readback see only those rows."""
+        [1, 1, R, vocab / tp]: the LM head and the readback see only those rows. ``history_list``: the MTP history's
+        write list over the pass's rows (int32 [4 * R * HISTORY_ROWS], ``_prefill_batch_writes``)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
         with self._prefill_reduce(padded, num):
@@ -693,6 +718,8 @@ class TtMiMoModel:
                 )
                 x.deallocate(True)
                 x = y
+        if history_list is not None:
+            self._history().prefill(x, self.final_norm, history_list, history_list.shape[-1] // 4)
         if num * padded == TILE:
             tiles = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
@@ -740,6 +767,9 @@ class TtMiMoModel:
             "ats": [kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32) for _ in range(num)],
             "picks": kv_lib.replicated(self.plan, torch.zeros(1, num, dtype=torch.int32), ttnn.uint32),
             "rope": {name: setup.get_prefill_rot_mats(0, padded) for name, setup in self.rope_setups.items()},
+            # The MTP history's write list (tt/mtp_backfill.py): every user's HISTORY_ROWS entries, rewritten per
+            # replay.
+            "history": (self._history().prefill_list([], num * HISTORY_ROWS) if self._history() is not None else None),
             "logits": ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, num, self.vocab_local]),
                 self.logits_dtype,
@@ -754,7 +784,14 @@ class TtMiMoModel:
         for name, setup in self.rope_setups.items():
             setup.begin_prefill_chunk(pinned={(0, padded): trace["rope"][name]})
         logits = self._prefill_batch_device(
-            trace["tokens"], trace["tables"], trace["ats"], trace["picks"], num, padded, range(len(self.layers))
+            trace["tokens"],
+            trace["tables"],
+            trace["ats"],
+            trace["picks"],
+            num,
+            padded,
+            range(len(self.layers)),
+            trace["history"],
         )
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -797,6 +834,10 @@ class TtMiMoModel:
         ttnn.copy_host_to_device_tensor(
             kv_lib.replicated(self.plan, picks_host, ttnn.uint32, device=False), trace["picks"]
         )
+        if trace["history"] is not None:
+            writes = self._prefill_batch_writes(chunks, padded)
+            host = self._history().prefill_list(writes, num * HISTORY_ROWS, device=False)
+            ttnn.copy_host_to_device_tensor(host, trace["history"])
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return {"logits": trace["logits"], "row": list(range(num)), "hidden": None, "persistent": True}
 
@@ -1086,7 +1127,7 @@ class TtMiMoModel:
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
         variants = [False] + ([True] if self.sampler is not None and not greedy_only else [])
         for sample in variants:
-            warm = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+            warm = self._decode_step(inputs, greedy_only, sample)
             self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
             if sample and self.verify_sampler is not None:
                 # Compiles SampleVerify before any capture (its steps 1-2 are the sampled step's own programs, which
@@ -1098,15 +1139,17 @@ class TtMiMoModel:
             self._release(warm)
         if self.spec_chain is not None:
             # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces compile here too, on the
-            # persistent buffers their captures use.
+            # persistent buffers their captures use; so do the history's kernel steps (tt/mtp_backfill.py).
             self.spec_chain.warm()
+        if self._history() is not None:
+            self._history().warm(self.mtp.inputs)
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
             fabric = getattr(self.plan, "fabric_gather", None)
             phase = fabric.phase if fabric is not None else None
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            output = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+            output = self._decode_step(inputs, greedy_only, sample)
             self._feed_back(inputs, output, tokens_written=written)
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
             # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
@@ -1125,6 +1168,22 @@ class TtMiMoModel:
             "sampled": captured[1] if len(captured) > 1 else None,
         }
 
+    def _history(self):
+        """The MTP drafter's target-hidden history (tt/mtp_backfill.py), or None."""
+        return self.mtp.history if self.mtp is not None else None
+
+    def _decode_step(self, inputs, greedy_only, sample):
+        """The decode trace's step: with the MTP history, its input tokens kept at the start and its slots' final
+        norm rows written into the history at the end (before the positions advance)."""
+        hist = self._history()
+        if hist is not None:
+            hist.stage(inputs[0])
+        output = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+        if hist is not None:
+            assert output.get("hidden") is self.norm_buffers[0], "the history reads the final norm's buffer"
+            hist.decode(inputs[1], output["hidden"])
+        return output
+
     def release_decode_trace(self):
         if self.decode_trace is not None:
             ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
@@ -1140,12 +1199,12 @@ class TtMiMoModel:
         return trace["output"]
 
     # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
-    def setup_mtp(self, ckpt, cache_dir, layers=(0,)):
+    def setup_mtp(self, ckpt, cache_dir, layers=(0,), backfill=False):
         """Load the MTP layers ``layers`` (one, or one per draft: TtMiMoMTP) as the speculative drafter (its caches
         and trace: TtMiMoMTP.setup_cache, capture_spec_traces), and make the packed uploads of the verify and draft
-        traces (persistent: before any capture)."""
+        traces (persistent: before any capture). ``backfill``: the target-hidden history and the ring backfill."""
         assert self.mtp is None and self.decode_trace is None
-        self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layers)
+        self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layers, backfill=backfill)
         kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
         self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 
@@ -1163,13 +1222,13 @@ class TtMiMoModel:
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
         self.spec_inputs.derive_verify(inputs, rope)
-        self._release(self._decode_inputs(inputs, serial=SPEC_SLOTS))
+        self._release(self._verify_step(inputs))
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self.spec_inputs.derive_verify(inputs, rope)
-        output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
+        output = self._verify_step(inputs)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
         # replays interleave on the gather phases they were captured with.
@@ -1199,6 +1258,15 @@ class TtMiMoModel:
             assert fabric is None or fabric.phase == (phase if phase is not None else 0), "fabric phase moved"
             ttnn.synchronize_device(self.mesh_device)
             self.verify_trace["accept"] = accept_id
+
+    def _verify_step(self, inputs):
+        """The verify trace's step: with the MTP history, its slots' final norm rows written into their requests'
+        rings (the verify upload's chain row names them) at the end."""
+        output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
+        hist = self._history()
+        if hist is not None:
+            hist.verify(self.spec_inputs.verify_packed, output["hidden"])
+        return output
 
     def capture_spec_traces(self):
         """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""

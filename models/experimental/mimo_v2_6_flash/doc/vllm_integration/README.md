@@ -286,8 +286,7 @@ vllm serve ... --no-async-scheduling \
   plugin's walk); every propose after a verify returns the chained drafts, the first ones equal to the host plan's;
   logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
   kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
-- **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
-  ~128 decode tokens draft from less context); async scheduling (a chain program writing the next verify's inputs
+- **Open.** Async scheduling (a chain program writing the next verify's inputs
   from the result on device, the host one step behind); the accept step's SampleScan on all-greedy passes (only
   SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
   verify rows exceed the 4-user kernels); the trace region size with both extra traces.
@@ -351,6 +350,45 @@ whole sequence after steps of every accepted count (`tests/test_spec_decode_host
   `tests/test_spec_decode_tp8_dp4.py` (Galaxy): speculative greedy == plain greedy, and chained == host-planned
   drafts, with 3 layers and with 1.
 - **Plugin.** No change: still 3 drafts per step.
+
+### MTP ring backfill (target-hidden history)
+
+The MTP rings only hold what the lane's drafts wrote, while vLLM's MTP layers see every position. Two gaps: a new
+request's rings start empty (the prompt's rows are never drafted), and a lane serving several requests decodes
+without drafting, so when it drops back to one request the rings miss the positions in between; in both cases the
+first ~128 drafts attend a window with missing or stale entries. `MIMO_MTP_BACKFILL=1` (default, with the decode
+RoPE tables; `tt/mtp_backfill.py`, `kernels/mtp_history.cpp`, host mirror `reference/mtp_backfill.py`) closes both
+with one mechanism, for 1 and 3 MTP layers:
+
+- **History.** Each decode slot that may speculate (4 per lane) keeps a ring of 128 rows (the MTP window), indexed
+  by position % 128: the target's final normed hidden (bf16, from the final norm's persistent buffer), the position
+  and the token the step took there. Every plain decode step writes its slots' rows (in the decode trace: a copy of
+  the step's input tokens at its start, an untilize of the final norm tile and one one-core kernel at its end); every
+  verify pass writes its slots' rows into their requests' rings (in the verify trace; the chain row carries each
+  slot's request slot), rows past the committed ones being rewritten by the next step, which starts there; every
+  prefill chunk writes the final norm of its last 128 rows (eager chunks, and the traced first-chunk batches through
+  a persistent write list) and invalidates the slot's other entries unless it continues its request.
+- **Backfill.** Before a host-planned draft whose request's rows the rings do not continue (`mtp_ring`: the lane's
+  rings hold that slot's rows up to A - 1; after a prompt, after steps without drafts) the adapter replays the
+  backfill trace: a plan step (the rows of the whole ring, 256 positions from the block holding A - 127, real where
+  the history holds h_q and the token x[q + i + 1] <= A), one gather of the history rows and their cos / sin, then per
+  MTP layer its input over the 256 rows (enorm / hnorm, eh_proj, the block's input norm) and its K / V written into
+  the whole ring by one `paged_fill_cache` (`TtMiMoAttention.fill_kv_rows`: no attention, MLP or LM head). The other
+  rows write garbage where no query reads before a draft rewrites them (below the window, at A and past it). With 3
+  layers, layer i's last i rows before A need drafts: the plan stashes rows A - 2, A - 1 (hidden, layer-0 token,
+  position) and the draft right after re-runs them in every layer. Chained drafts always continue the rings.
+- **Exactness** (host, `tests/test_mtp_backfill_host.py`): a lane serving request X (its prompt in chunks, a plain
+  step, speculative steps with every accepted count), then X beside a second request for 3, 12 or 40 plain steps
+  (its prompt resets the rings), then X alone again: every draft equals the drafts of an MTP that saw every position
+  (a recomputation over X's whole sequence), for 1 and 3 layers; without the backfill the first drafts differ.
+  `tests/test_spec_inputs_tp8.py` `test_mtp_history_tp8` checks the kernel's four modes bit for bit on a Galaxy row;
+  `tests/test_spec_decode_tp8_dp4.py` runs with and without it.
+- **Cost.** Per decode step ~10-20 us (one copy, one untilize of [32, 4096], one kernel moving 4 rows of 8 KB and a
+  4 KB page) against a ~13 ms step; per verify pass one kernel; per prefill chunk a final norm and untilize of its
+  rows and one kernel; per backfill (once per transition: a new request's first draft, a lane back to one request)
+  up to 128 real rows x 1 or 3 layers, as 256-row passes: about 1 ms on device (to measure). Memory per chip: 4 MB
+  of history rows (4 slots x 128 x 4096 bf16), a 4 KB page, ~6 KB of backfill inputs (and 2 x 256 x 128 bf16 cos / sin
+  tails with compact RoPE tables).
 
 ## Not done
 

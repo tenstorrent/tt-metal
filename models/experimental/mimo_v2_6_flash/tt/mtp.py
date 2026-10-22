@@ -39,6 +39,10 @@ With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables, at every cont
 of the tables at the derived positions, as in decode; without them (MIMO_DEVICE_ROPE=0) a one-layer draft also copies
 its six cos / sin, and every-layer drafting is not available (its positions are known on device only).
 
+With the backfill (tt/mtp_backfill.py, MIMO_MTP_BACKFILL) a second traced program fills every layer's ring from the
+history of the target's hidden before a draft that does not continue the rings (``enqueue_backfill``): after a
+prompt, after the lane served several requests.
+
 An MTP layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its own
 final norm feeds the target's LM head. Each layer's KV cache is a small ring addressed at mtp_cache_position(t) with
@@ -60,6 +64,7 @@ from ..reference.spec_inputs import pack_mtp_layers
 from .common import TILE, as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .mtp_backfill import MtpHistory
 from .spec_chain import SpecChain
 
 
@@ -146,10 +151,11 @@ def make_layer_inputs(plan, max_batch, hidden_size):
 
 
 class TtMiMoMTP:
-    def __init__(self, model, ckpt=None, cache_dir=None, layers=(0,), weight_dtype=ttnn.bfloat8_b):
+    def __init__(self, model, ckpt=None, cache_dir=None, layers=(0,), weight_dtype=ttnn.bfloat8_b, backfill=False):
         """``model``: the replica's TtMiMoModel (embedding, LM head, RoPE setups, greedy head, final hidden buffer).
         ``layers``: the MTP layers to load, one (it drafts every token) or MAX_DRAFTS (0, 1, 2: draft i + 1 from layer
-        i). ``ckpt`` may be None when ``cache_dir`` already holds their tensors (a later replica)."""
+        i). ``ckpt`` may be None when ``cache_dir`` already holds their tensors (a later replica). ``backfill``: keep
+        the target-hidden history and the backfill program (with the decode RoPE tables)."""
         layers = (layers,) if isinstance(layers, int) else tuple(layers)
         assert len(layers) == 1 or layers == tuple(range(MAX_DRAFTS)), f"MTP layers {layers}: one, or one per draft"
         self.model, self.cfg, self.plan = model, model.cfg, model.plan
@@ -159,7 +165,10 @@ class TtMiMoMTP:
         self.page_table = None
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts
         self.inputs = None  # every layer: LayerInputs
+        self.backfill = backfill
+        self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
         self.trace = None
+        self.backfill_trace = None
 
     def setup_cache(self):
         """The ring KV caches, their page table, the greedy heads, with every layer the program's LayerInputs, and the
@@ -184,6 +193,10 @@ class TtMiMoMTP:
             # The hidden table's first part is the final norm buffer (TtMiMoModel.norm_buffers, one tile of rows).
             assert m.norm_buffers is not None and m.norm_buffers[0].shape[-2] == TILE == m.max_batch
             self.inputs = make_layer_inputs(self.plan, m.max_batch, self.cfg.hidden_size)
+        if self.backfill and m.rope_tables is not None:
+            self.history = MtpHistory(
+                self.plan, m.max_batch, self.cfg.hidden_size, len(self.layers), m.rope_table_tails
+            )
         assert m.verify_sampler is not None and m.greedy_head is not None, "the chain reads the verify's buffers"
         heads = [h.next_tokens for h in self.heads]
         m.spec_chain = SpecChain(
@@ -312,6 +325,39 @@ class TtMiMoMTP:
         sin.deallocate(True)
         chain.drafts()
 
+    def _body_backfill(self):
+        """The backfill program: the plan step, the history rows' gather and their cos / sin, then per layer its input
+        over the rows (row-invariant prefill norms) and its K / V filled into its whole ring."""
+        m, hist = self.model, self.history
+        hist.backfill_plan(self.inputs)
+        hidden, (cos, sin) = hist.gather(m)
+        rows = hidden.shape[-2]
+        for i, layer in enumerate(self.layers):
+            e = ttnn.embedding(hist.tokens[i], m.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            e = ttnn.reshape(e, (1, 1, rows, self.cfg.hidden_size))
+            en = layer.enorm(e, prefill=True)
+            e.deallocate(True)
+            hn = layer.hnorm(hidden, prefill=True)
+            cat = ttnn.concat([en, hn], dim=-1)
+            en.deallocate(True)
+            hn.deallocate(True)
+            xs = ttnn.linear(
+                cat,
+                layer.eh_proj,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.mm_config,
+            )
+            cat.deallocate(True)
+            x = self.plan.all_gather(xs, dim=-1)
+            xs.deallocate(True)
+            h = layer.block.input_norm(x, prefill=True)
+            x.deallocate(True)
+            layer.block.attn.fill_kv_rows(h, cos, sin, hist.table, layer.kv_cache)
+            h.deallocate(True)
+        for t in (hidden, cos, sin):
+            t.deallocate(True)
+
     # ------------------------------------------------------------------ host
     def _rope_host(self, plan=None):
         """Host cos / sin of the fill, step2 and step3 true positions (-1 idle; None: an idle run), when there are
@@ -371,11 +417,33 @@ class TtMiMoMTP:
         ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(m.mesh_device)
         self.trace = {"id": trace_id, "inputs": inputs}
+        if self.history is not None:
+            # The backfill program: compiled by an idle run (an idle upload fills the rings' scratch blocks and leaves
+            # the stash), then captured.
+            self.history.upload_backfill()
+            self._body_backfill()
+            ttnn.synchronize_device(m.mesh_device)
+            backfill_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
+            self._body_backfill()
+            ttnn.end_trace_capture(m.mesh_device, backfill_id, cq_id=0)
+            ttnn.synchronize_device(m.mesh_device)
+            self.backfill_trace = backfill_id
 
     def release_trace(self):
         if self.trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.trace["id"])
             self.trace = None
+        if self.backfill_trace is not None:
+            ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
+            self.backfill_trace = None
+
+    def enqueue_backfill(self, slot, a):
+        """Fill every layer's ring from the history of the request in lane ``slot`` before a draft whose first row is
+        at ``a`` (non-blocking; enqueue the draft right after it): the window a - HISTORY_ROWS + 1 .. a - 1, and with
+        every layer the stash rows a - 2, a - 1 the draft then re-runs."""
+        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS
+        self.history.upload_backfill(slot, a)
+        ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):
         """One layer: draft after the replica's last decode or verify step (non-blocking): it reads that step's final

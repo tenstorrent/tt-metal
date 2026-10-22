@@ -25,6 +25,10 @@ same tokens. Without the tables every draft is host-planned.
 Both drafters run: every MTP layer (MIMO_MTP_LAYERS=3, draft i + 1 from layer i, the passes planned on device from the
 stash; the chain checks then also cover a draft planned again on the stash its chained twin left) and one layer
 (MIMO_MTP_LAYERS=1, the drafter before it). Every-layer drafting needs the decode RoPE tables.
+
+With the decode RoPE tables the target-hidden history and the ring backfill run (MIMO_MTP_BACKFILL, tt/mtp_backfill.py):
+the first draft after the prompt backfills the rings from the prompt's last rows; the test also runs once without it
+(the mean accepted length of both is logged: the backfill's effect on the first drafts).
 """
 
 import time
@@ -55,19 +59,23 @@ PROMPT = (
 )
 
 
+@pytest.mark.parametrize("backfill", [True, False], ids=["backfill", "no_backfill"])
 @pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
 @pytest.mark.parametrize(
     "device_rope", ["whole", "compact", None], ids=["rope_tables", "compact_rope_tables", "host_rope"]
 )
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, monkeypatch):
+def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, monkeypatch):
     if mtp_layers > 1 and device_rope is None:
         pytest.skip("every-layer drafting plans its passes on device: it needs the decode RoPE tables")
+    if not backfill and (mtp_layers == 1 or device_rope != "whole"):
+        pytest.skip("without the backfill: once (3 MTP layers, whole RoPE tables)")
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")
     monkeypatch.setattr(generator_vllm, "MTP_LAYERS", mtp_layers)
+    monkeypatch.setattr(generator_vllm, "MTP_BACKFILL", backfill)
     monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", device_rope is not None)
     if device_rope == "compact":  # the 1M entry's tables at this test's short context
         monkeypatch.setattr(generator_vllm, "ROPE_TABLE_FULL_WIDTH_MAX_LEN", 0)
@@ -239,8 +247,11 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, monkeypatch):
         assert stats["checked"] == LOGITS_CHECKS
     else:
         assert stats["chained"] == 0 and stats["host"] == len(counts)
+    # The first draft after the prompt backfills; the chained ones continue the rings.
+    assert stats["backfills"] == (1 if backfill and device_rope else 0)
     logger.info(
-        f"MTP spec decode ({mtp_layers} MTP layers): mean accepted {sum(counts) / len(counts):.2f} over "
+        f"MTP spec decode ({mtp_layers} MTP layers, backfill {backfill}): mean accepted "
+        f"{sum(counts) / len(counts):.2f} over "
         f"{len(counts)} verifies "
         f"(histogram {[counts.count(m) for m in range(1, MAX_DRAFTS + 2)]}); "
         f"{1e3 * plain_s / STEPS:.1f} ms/token plain, {1e3 * spec_s / (len(seq) - prompt.numel() - 1):.1f} ms/token "

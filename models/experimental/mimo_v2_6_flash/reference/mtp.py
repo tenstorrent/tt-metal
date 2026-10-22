@@ -208,3 +208,24 @@ class MtpProgramMirror:
                 self.outputs.append(out[-1])
             self.heads[i] = head
         return drafts_step(mtp, self.heads, layers=MAX_DRAFTS)
+
+
+def backfill_rings(mtps, histories, embedding, history, upload, stash=None, stash_hidden=None):
+    """The backfill trace (tt/mtp_backfill.py) on the host: its plan (reference.mtp_backfill.backfill_plan) on the
+    lane's ``history`` (reference.mtp_backfill.History) and the upload, then every MTP layer over the plan's rows,
+    row r writing its K / V at position S0 + r of that layer's cache (``histories``, PositionalHistory; the outputs
+    are not used). With every layer it also rewrites the stash page and the stash's hidden rows (``stash``,
+    ``stash_hidden`` [T, hidden], changed in place). Returns the new stash page."""
+    from .mtp_backfill import BACKFILL_ROWS, backfill_plan, backfill_start
+
+    plan, stash = backfill_plan(upload, history.page, len(mtps), stash, history.rows)
+    if not upload[0]:
+        return stash
+    a = upload[2]
+    positions = backfill_start(a, history.rows) + torch.arange(BACKFILL_ROWS)
+    rows = history.hidden[torch.tensor(plan["hidden"])]
+    for mtp, cache, tokens in zip(mtps, histories, plan["tokens"]):
+        mtp(rows, embedding[torch.tensor(tokens)], positions, cache)
+    for k, e in plan["stash_rows"]:
+        stash_hidden[k] = history.hidden[e]
+    return stash
