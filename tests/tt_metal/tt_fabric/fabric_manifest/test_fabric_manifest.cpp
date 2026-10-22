@@ -825,7 +825,8 @@ void expect_fields(
 
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
 // tensix mux on VC0 in mux mode), or a different router on the same chip and routing plane, feeding at most one
-// channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Credits
+// channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Only the
+// worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Credits
 // are on the backing the mesh's credit transport names, and only VC0 with bubble flow control gets first-level acks.
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& fabric_context = manifest.at("fabric_context");
@@ -895,6 +896,8 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
 
                 expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size, serviced);
                 expect_fields(sender.at("fields"), manifest::k_sender_channel_fields, manifest.at("vocabulary"), is_2d);
+                const bool worker_channel = producer == "worker" || producer == "tensix_mux";
+                EXPECT_EQ(sender.at("fields").at("buffer_index_sem").is_null(), !worker_channel);
 
                 const auto& credits = sender.at("credits");
                 const bool acked = vc == 0 && vc0_bubble_flow_control;
@@ -1424,6 +1427,12 @@ void check_enums(const json& manifest) {
         static_cast<uint32_t>(TerminationSignal::IMMEDIATELY_TERMINATE));
     EXPECT_EQ(value_of("RouterState", "running"), static_cast<uint32_t>(RouterState::RUNNING));
     EXPECT_EQ(value_of("NocCmdBuf", "at_cmd_buf"), static_cast<uint32_t>(manifest::NocCmdBuf::AT_CMD_BUF));
+    EXPECT_EQ(
+        value_of("ConnectionValue", "unused_connection_value"),
+        static_cast<uint32_t>(connection_interface::unused_connection_value));
+    EXPECT_EQ(
+        value_of("ConnectionValue", "close_connection_request_value"),
+        static_cast<uint32_t>(connection_interface::close_connection_request_value));
 }
 
 }  // namespace
@@ -1477,6 +1486,10 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
+
+    EXPECT_EQ(lower_enum_name(connection_interface::unused_connection_value), "unused_connection_value");
+    EXPECT_EQ(lower_enum_name(connection_interface::open_connection_value), "open_connection_value");
+    EXPECT_EQ(lower_enum_name(connection_interface::close_connection_request_value), "close_connection_request_value");
 
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
     EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
