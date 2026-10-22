@@ -293,17 +293,33 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if spec_k:
             from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
 
-            generator.spec_choice = spec_policy.SpecChoice(
-                "fixed",
-                spec_k,
-                [],
-                False,
-                "vLLM speculative_config (model-owned drafter)",
-                True,
-                ring_rows=spec_policy.RING_ROWS_SPEC,
-            )
+            adapt_ks = cls.adaptive_ks(spec_k, B)
+            if adapt_ks:
+                generator.spec_choice = spec_policy.SpecChoice(
+                    "adaptive",
+                    max(adapt_ks),
+                    adapt_ks,
+                    False,
+                    "vLLM speculative_config (model-owned drafter), adaptive verification length (DSV41_VLLM_SPEC_ADAPT)",
+                    True,
+                    ring_rows=spec_policy.RING_ROWS_SPEC,
+                )
+            else:
+                generator.spec_choice = spec_policy.SpecChoice(
+                    "fixed",
+                    spec_k,
+                    [],
+                    False,
+                    "vLLM speculative_config (model-owned drafter)",
+                    True,
+                    ring_rows=spec_policy.RING_ROWS_SPEC,
+                )
             # BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on its scratch memory (demo DSV41_SPEC_EARLY)
             generator.enable_spec(spec_k)
+            if adapt_ks:
+                from models.demos.blackhole.deepseek_v41_flash.tt.spec_adapt import AdaptiveVerify
+
+                generator.spec = AdaptiveVerify(generator.spec, log=lambda m: logger.info(m))
             # compile pass of the verify round NOW, before any trace exists: it creates every lazily built persistent tensor (packed inputs, Engram rows, per-T constants); the lazy first use
             # in ``_spec_seed`` ran it after the prefill trace was captured: a persistent tensor allocated under a live trace is clobbered by its replays (hang on the first request)
             sp = generator.spec
@@ -313,9 +329,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 # temporaries otherwise do not fit next to a bf16 KV pool (paged read mode: +161 MiB/bank at B=4 / 1M; "Out of Memory ... 67 MB" in SpecRunner.prepare). A no-op later.
                 pm_.teardown_dyn()
             generator.m._admit_idle()  # every user owns a page (the verify round's pool.ensure grows all of them)
-            sp.prepare(torch.zeros(B, sp.n, dtype=torch.long), torch.full((B,), 130, dtype=torch.long))
+            if adapt_ks:  # every runner of the adaptive set is compiled before ANY trace exists
+                sp.prepare(torch.full((B,), 130, dtype=torch.long))
+            else:
+                sp.prepare(torch.zeros(B, sp.n, dtype=torch.long), torch.full((B,), 130, dtype=torch.long))
             generator.spec_buckets = {}
-            dr = sp.drafter_root
+            dr = sp.seedr.drafter_root if adapt_ks else sp.drafter_root
+            if adapt_ks and getattr(dr, "G", 1) > 1:
+                raise ValueError(
+                    "DSV41_VLLM_SPEC_ADAPT needs one drafter chunk (4 users per drafter pass: batch 4); a batch with decode buckets runs the fixed-k verify (DSV41_VLLM_SPEC_ADAPT=0)"
+                )
             if os.environ.get("DSV41_VLLM_BUCKETING", "1") == "1" and getattr(dr, "G", 1) > 1:
                 # decode buckets of the verify round (VLLM_BUCKETS_NOTES.md): the users u < Ub of every mesh row, Ub a multiple of the drafter chunk (4): one runner per bucket sharing the
                 # weights, the pool and the drafter rings; every runner is COMPILED here, before any trace exists (the traces are captured after each seeding)
@@ -383,7 +406,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             import ttnn
             from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
 
-            for r_ in [self.spec] + list(self.spec_buckets.values()):
+            for r_ in self._spec_runners() + list(self.spec_buckets.values()):
                 with corruptible(self.m.md):
                     r_.snaps = r_.dec.snapshot_states()
                     r_.capture_trace()
@@ -396,7 +419,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     if snap is not None:
                         ttnn.deallocate(snap)
                 r_.snaps = None
-            logger.info(f"DSV4.1 vLLM: spec traces captured ({1 + len(self.spec_buckets)} runner(s))")
+            logger.info(
+                f"DSV4.1 vLLM: spec traces captured ({len(self._spec_runners()) + len(self.spec_buckets)} runner(s))"
+            )
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
         if hasattr(self.m, "mem_report"):
@@ -495,6 +520,23 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
 
     # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------
     @staticmethod
+    def adaptive_ks(spec_k, batch):
+        """Candidate verification lengths of the adaptive speculative decode (tt/spec_adapt.py), [] = the fixed-k runner of today. ``DSV41_VLLM_SPEC_ADAPT``: unset = on for ``num_speculative_tokens`` >= 5 at
+        batch 4 (one drafter chunk), 1 = on, 0 = off (exactly the fixed-k path). ``DSV41_VLLM_SPEC_KS`` (default 3,5): the candidates below the plugin's draft length, which always is one of them.
+        """
+        env = os.environ.get("DSV41_VLLM_SPEC_ADAPT")
+        on = (spec_k >= 5 and int(batch) == 4) if env in (None, "") else env == "1"
+        if not on or spec_k < 2:
+            return []
+        ks = {int(x) for x in os.environ.get("DSV41_VLLM_SPEC_KS", "3,5").split(",") if x.strip()}
+        ks = sorted({k for k in ks if 0 < k < spec_k} | {spec_k})
+        return ks if len(ks) > 1 else []
+
+    def _spec_runners(self):
+        """every SpecRunner of the launch (the adaptive set, or the one fixed-k runner)."""
+        return self.spec.all_runners() if self.spec_adapt is not None else [self.spec]
+
+    @staticmethod
     def configured_spec_k():
         """Draft length of the server's ``speculative_config`` (0 = plain decode). The loader hands ``initialize_vllm_model`` no vLLM config (``get_current_vllm_config`` is the default one in the
         engine process), so the server's own command line is read (sys.argv survives the engine-core spawn); DSV41_VLLM_SPEC_K is an explicit override for scripts / tests.
@@ -592,7 +634,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
         self.kv_cache = None
-        self.spec = getattr(generator, "spec", None)  # fixed-k SpecRunner (speculative_config) or None (plain decode)
+        self.spec = getattr(
+            generator, "spec", None
+        )  # fixed-k SpecRunner / AdaptiveVerify (speculative_config) or None (plain decode)
+        self.spec_adapt = None
         self.spec_k = self.spec.k if self.spec is not None else 0
         self.spec_bucket_calls = {}
         self.spec_buckets = dict(
@@ -602,6 +647,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self.spec_drafts = torch.zeros(
                 self.B, self.spec.k, dtype=torch.int32
             )  # next proposal per physical slot (the last round / the seeding)
+            self.spec_adapt = (
+                self.spec if hasattr(self.spec, "runner_for") else None
+            )  # adaptive verification length (tt/spec_adapt.py)
+            self.spec_conf = torch.zeros(
+                self.B, self.spec.k
+            )  # the draft head's acceptance probability of each of those drafts (adaptive choice)
+            self.choose_hist = {}
             self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
             self.spec_has = torch.zeros(self.B, dtype=torch.bool)
             # speculation applies to requests with ISL <= DSV41_VLLM_SPEC_ISL_MAX: longer requests of the same server run plain (draftless rounds / ordinary decode steps). Default: no limit below the
@@ -784,7 +836,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         want_logits = not device_sampling
         self.m.release_trace()  # decode trace: recaptured by the next decode step
         if self.spec is not None:
-            self.spec.release()  # spec trace: a prefill replay (or its allocations) must not clobber it; re-captured by the seeding below
+            self.spec.release()  # spec trace(s): a prefill replay (or its allocations) must not clobber it; re-captured by the seeding below
             for b_ in self.spec_buckets.values():
                 b_.release()
         self._first_decode_after_prefill = True
@@ -1274,6 +1326,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         d = self.spec.d_final
         act = active_B.nonzero().reshape(-1)
         self.spec_drafts[act] = d[act, :K].to(torch.int32)
+        self._stash_conf(act)
         self.spec_last[act] = firstB[act]
         self.spec_has[act] = True
         self.spec_has[idle.nonzero().reshape(-1)] = False
@@ -1281,6 +1334,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         logger.info(
             f"DSV4.1 spec seeding of {len(act)} rows took {time.perf_counter() - t0:.2f} s (replayed first token != prefill first token on {bad} rows)"
         )
+
+    def _stash_conf(self, rows):
+        """keep the draft head's acceptance probabilities [B, 5] (``conf_final`` of the seeding) of the drafts just stored for the physical slots ``rows`` (the adaptive choice of the next round reads them)."""
+        if self.spec_adapt is not None and getattr(self.spec, "conf_final", None) is not None:
+            self.spec_conf[rows] = self.spec.conf_final[rows].float()
 
     def _spec_seed_taps(self, need, draft=True):
         """Seed the drafter of the users ``need`` {model user: the token fed now} from the taps their PREFILL left (tt/prefill_taps.py): the drafter's ring rows of the last 128 prompt
@@ -1307,6 +1365,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         act = torch.tensor(users, dtype=torch.long)
         if draft:
             self.spec_drafts[act] = self.spec.d_final[act, :K].to(torch.int32)
+            self._stash_conf(act)
             self.spec_has[act] = True
         self.spec_last[act] = first[act]
         logger.info(
@@ -1356,6 +1415,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         d = self.spec.d_final
         act = torch.tensor([p for p, _, _ in items], dtype=torch.long)
         self.spec_drafts[act] = d[act, :K].to(torch.int32)
+        self._stash_conf(act)
         self.spec_last[act] = first[act]
         self.spec_has[act] = True
         logger.info(
@@ -1384,19 +1444,27 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         K = self.spec.k
         if n != K + 1:
             raise ValueError(f"verify block width {n} != 1 + K ({1 + K})")
-        runner, Ub = self.spec, self.U
+        nv_l = num_valid_drafts.reshape(-1).tolist()
+        sp_l = start_pos.reshape(W, -1)[:, 0].tolist()
+        base_runner = self.spec
+        kv = K  # drafts verified by this round
+        if self.spec_adapt is not None:
+            # adaptive verification length: the block the plugin built is [W, 1 + K] (K = the largest candidate), the offered rows carry the k that ``propose_draft_tokens`` chose (batch-uniform); the
+            # runner of k verifies the first k + 1 columns and the plugin walks its accept trimmed to the width answered (argmax_ids of width k + 1)
+            kv, base_runner = self.spec.runner_for(max([nv for nv, pos in zip(nv_l, sp_l) if pos >= 0] or [0]))
+            n = kv + 1
+            tokens = tokens[:, :n]
+        runner, Ub = base_runner, self.U
         if self.spec_buckets:
             need = VS.pick_bucket(self.slots.users_needed(self.U), sorted(self.spec_buckets) + [self.U])
             if need < self.U:
                 runner, Ub = self.spec_buckets[need], need
-        B = VS.MESH_ROWS * Ub if runner is not self.spec else self.B
-        row_of = None if runner is self.spec else {int(q): r for r, q in enumerate(runner.phys.tolist())}
+        B = VS.MESH_ROWS * Ub if runner is not base_runner else self.B
+        row_of = None if runner is base_runner else {int(q): r for r, q in enumerate(runner.phys.tolist())}
         X = torch.zeros(B, n, dtype=torch.long)
         base = torch.zeros(B, dtype=torch.long)
         force = torch.zeros(B)  # idle users: commit nothing beyond the (dummy) first token
         rows = []
-        sp_l = start_pos.reshape(W, -1)[:, 0].tolist()
-        nv_l = num_valid_drafts.reshape(-1).tolist()
         tok0 = tokens[:, 0].tolist()
         for i in range(W):
             pos = sp_l[i]
@@ -1406,16 +1474,22 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if p not in self.slots.live:
                 raise RuntimeError(f"verify of logical slot {i} (user {p}) that was never prefilled")
             nv = int(nv_l[i])
-            if nv not in (0, K):
-                raise ValueError(
-                    f"row {i}: {nv} valid drafts of {K}: the device round verifies all K or forces 0 accepted"
-                )
+            if self.spec_adapt is None:
+                if nv not in (0, K):
+                    raise ValueError(
+                        f"row {i}: {nv} valid drafts of {K}: the device round verifies all K or forces 0 accepted"
+                    )
+            elif nv > kv:
+                raise ValueError(f"row {i}: {nv} valid drafts of a block verified at k={kv}")
             rows.append((i, p, pos, p if row_of is None else row_of[p], nv))
         if rows:
             ii, rr = torch.tensor([x[0] for x in rows]), torch.tensor([x[3] for x in rows])
             X[rr] = tokens[ii].long().clamp(min=0)
             base[rr] = torch.tensor([x[2] for x in rows])
             force[rr] = torch.tensor([-1.0 if x[4] > 0 else 0.0 for x in rows])
+        trimmed = [
+            (x[1], x[4]) for x in rows if 0 < x[4] < kv
+        ]  # (user, valid drafts): a row whose offer the scheduler cut (context room): natural accept, X beyond nv is the plugin's filler
         rows = [x[:4] for x in rows]
         ok_l, has_l = self.spec_ok.tolist(), self.spec_has.tolist()
         need_ = {p: int(tok0[i]) for i, p, pos, _ in rows if ok_l[p] and not has_l[p]}
@@ -1444,6 +1518,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         a, mm, d = runner._round(X, base, force)
         runner.sample_cfg = None
         t1 = time.perf_counter()
+        if self.spec_adapt is not None:
+            self.spec.note_round(kv, 1e3 * (t1 - t0))
         self.timing["decode"] = t1 - t0
         self._calls["decode"] += 1
         if rows:
@@ -1459,6 +1535,20 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     self.book.tok[pp[sel], pos_t[sel] + j] = X[rr[sel], j].to(torch.int32)
             self.book.n[pp] = pos_t + m_t + 1
             self.spec_drafts[pp] = d[rr, :K].to(torch.int32)
+            if self.spec_adapt is not None:
+                if runner.conf is not None:
+                    self.spec_conf[pp] = runner.conf[rr].float()
+                for (
+                    p_,
+                    nv_,
+                ) in (
+                    trimmed
+                ):  # a device accept beyond the offered count (a filler token equal to the model's choice) would leave the drafter ahead of the plugin: reseed that row
+                    if int(mm[p_ if row_of is None else row_of[p_]]) > nv_:
+                        logger.warning(
+                            f"DSV4.1 spec: user {p_} accepted {int(mm[p_])} > offered {nv_} drafts: reseeding"
+                        )
+                        self.spec_has[p_] = False
             self.spec_last[pp] = a[rr, m_t]
             self.spec_has[pp] = self.spec_ok[pp]
             self.spec_stats["accepted"] += int(m_t.sum())
@@ -1481,7 +1571,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             ss = self.spec_stats
             logger.info(
                 f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms (adapter: verify pre {1e3 * st['pre'] / st['n']:.2f} + post {1e3 * st['post'] / st['n']:.2f}, propose {1e3 * st['prop'] / st['n']:.2f} ms per round; plugin: verify-return -> propose {1e3 * st['rp'] / st['n']:.2f}, propose-end -> next verify {1e3 * st['pv'] / st['n']:.2f} ms per round), "
-                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)})"
+                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K if self.spec_adapt is None else 'adaptive k rounds ' + str(dict(sorted(self.spec.k_hist.items()))) + ' chosen ' + str(dict(sorted(self.choose_hist.items())))}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)})"
             )
             st.update(n=0, t=0.0, g=0.0, pre=0.0, post=0.0, prop=0.0, rp=0.0, pv=0.0)
         out = torch.zeros(W, n, dtype=torch.int32)
@@ -1579,7 +1669,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if offer:
             oi, op = torch.tensor([x[0] for x in offer]), torch.tensor([x[1] for x in offer])
             ids[oi, :K] = self.spec_drafts[op]
-            nv[oi] = min(K, int(num_drafts))
+            kk = K
+            if self.spec_adapt is not None:
+                # adaptive verification length: ONE k for the whole next round (the device block has one width), from the confidence of the drafts of the offered rows and the profiled round times
+                pos_hi = int(self.book.n[op].max()) + K + 1
+                kk = self.spec.choose(self.spec_conf[op], torch.ones(len(offer), dtype=torch.bool), max_pos=pos_hi)
+                self.choose_hist[kk] = self.choose_hist.get(kk, 0) + 1
+            nv[oi] = min(kk, int(num_drafts))
         st = self._sstat_dict()
         if st["ret"] is not None and t_prop - st["ret"] < 2.0:
             st["rp"] += t_prop - st["ret"]

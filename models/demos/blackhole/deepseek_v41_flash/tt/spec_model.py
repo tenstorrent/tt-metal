@@ -117,6 +117,18 @@ def _moe_view(moe, Tn, buffers):
     return mv, buffers
 
 
+def spec_pos_buckets(max_pos, k):
+    """Position-bucket ladder of the spec runner of verification length ``k``: ``DSV41_SPEC_POS_BUCKETS_K<k>`` (comma list, '0' = none) overrides, else ``pos_buckets`` at ``DSV41_SPEC_POS_FACTOR``
+    (default 4; DSV41_POS_BUCKETS, when set, still overrides both). A shorter ladder for one runner of an adaptive set saves its captured traces (3-4 per bucket).
+    """
+    raw = os.environ.get(f"DSV41_SPEC_POS_BUCKETS_K{k}")
+    if raw is not None and os.environ.get("DSV41_POS_BUCKETS") is None:
+        if raw.strip() in ("", "0"):
+            return []
+        return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
+    return pos_buckets(max_pos, int(os.environ.get("DSV41_SPEC_POS_FACTOR", "4")))
+
+
 class SpecRunner:
     def __init__(self, model, k, max_pos=None, drafter=None, draft=True, Ub=None):
         """``drafter``: an existing (root) drafter of a sibling runner (adaptive verification length): shared weights + rings, viewed for this block size."""
@@ -254,9 +266,7 @@ class SpecRunner:
         self.tid = None
         # position buckets (tt/indexer.py ``set_pos_bucket``): one set of traces per bucket, replayed while every position of the block stays below it
         self.idx_views = list(idx_by_id.values())
-        self.pos_buckets = (
-            pos_buckets(self.max_pos, int(os.environ.get("DSV41_SPEC_POS_FACTOR", "4"))) if self.idx_views else []
-        )
+        self.pos_buckets = spec_pos_buckets(self.max_pos, k) if self.idx_views else []
         self.tr, self.cur_bucket = {}, None
         # sampled verify (adapter): a round with sampled rows replays three traces, A (verify block -> logits) | S (the in-trace sampler draws every block row) | B (accept / commit / draft over the
         # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace
@@ -417,6 +427,10 @@ class SpecRunner:
         """position buckets of this runner, ascending, ending with None (the whole key slab)."""
         return list(self.pos_buckets) + [None]
 
+    def bucket_for(self, mx):
+        """the position bucket whose traces serve a block that reaches position ``mx`` (None = the whole key slab)."""
+        return next((b for b in self.pos_buckets if mx <= b), None)
+
     def set_bucket(self, P):
         for iv in self.idx_views:
             iv.set_pos_bucket(P)
@@ -424,8 +438,7 @@ class SpecRunner:
 
     def _use(self, base):
         """bind the traces of the smallest position bucket that covers the block rows (base + n) of every user."""
-        mx = int(base.max()) + self.n + 1
-        P = next((b for b in self.pos_buckets if mx <= b), None)
+        P = self.bucket_for(int(base.max()) + self.n + 1)
         t = self.tr[P]
         self.tid, self.tid_a, self.tid_s, self.tid_b, self.pack_mono, self.pack_b = (
             t["tid"],
