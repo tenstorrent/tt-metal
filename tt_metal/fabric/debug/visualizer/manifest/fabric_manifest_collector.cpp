@@ -514,7 +514,9 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
     sender.fields = collect_fields(
         inputs,
         manifest::k_sender_channel_fields,
-        {.compact = c, .fabric_position = index.fabric_position},
+        {.compact = c,
+         .fabric_position = index.fabric_position,
+         .worker_channel = ctx.producer_slots.worker_channel(index.vc) == index.channel},
         ctx.emission,
         [&](const std::string& name) { return sender_channel_value(args, name, sender.serviced_by); });
     return sender;
