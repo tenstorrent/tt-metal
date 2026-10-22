@@ -1,0 +1,1349 @@
+
+dump_configuration.py:
+Scope,Name,Value
+environment,TT_DEVICE_TIMING_LOG,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/.device_timing.jsonl
+environment,TT_METAL_CACHE,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/built
+environment,TT_METAL_CCACHE_KERNEL_SUPPORT,1
+environment,TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,python3 /localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-408973.log 2>&1
+environment,TT_METAL_ENV,dev
+environment,TT_METAL_HOME,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal
+environment,TT_METAL_JIT_PREPROCESS,1
+environment,TT_METAL_JIT_SERVER_ENDPOINT,bgdepyc04:12345
+environment,TT_METAL_JIT_SERVER_KEEPALIVE,1
+environment,TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,1
+environment,TT_METAL_LLK_ASSERTS,1
+environment,TT_METAL_OPERATION_TIMEOUT_SECONDS,5
+environment,TT_METAL_WATCHER,1
+environment,TT_METAL_WATCHER_DISABLE_ASSERT,1
+environment,TT_METAL_WATCHER_DISABLE_DISPATCH,1
+environment,TT_METAL_WATCHER_NOINLINE,1
+rtOptions,arc_debug_buffer_size,0
+rtOptions,arch_name,
+rtOptions,build_map_enabled,false
+rtOptions,cache_dir,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/built/tt-metal-cache
+rtOptions,clear_dram,false
+rtOptions,clear_l1,false
+rtOptions,compile_hash_string,0010001000111_0nulloptnulloptnulloptnulloptnulloptnullopt_false_false_false_true_false_true__0_false_false_false_0
+rtOptions,core_grid_override_todeprecate,(unset)
+rtOptions,custom_fabric_mesh_graph_desc_path,
+rtOptions,disable_dma_ops,true
+rtOptions,disable_fabric_2_erisc_mode,false
+rtOptions,disable_precompiled_fw,false
+rtOptions,disable_sfploadmacro,false
+rtOptions,dispatch_core_config_type,WORKER
+rtOptions,dispatch_data_collection_enabled,false
+rtOptions,dispatch_progress_update_ms,100
+rtOptions,dispatch_timeout_command_to_execute,python3 /localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/tools/tt-triage.py --disable-progress --skip-version-check --llm-output --llm-output-path=/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/generated/tt-triage/triage.txt > /tmp/safe-pytest-triage-408973.log 2>&1
+rtOptions,dram_backed_cq,false
+rtOptions,dump_build_commands,false
+rtOptions,enable_2_erisc_mode,true
+rtOptions,enable_channel_trimming_capture,false
+rtOptions,enable_fabric_bw_telemetry,false
+rtOptions,enable_fabric_code_profiling_rx_ch_fwd,false
+rtOptions,enable_fabric_mesh_pass_through,false
+rtOptions,enable_fabric_telemetry,false
+rtOptions,enable_fabric_vc2,false
+rtOptions,erisc_iram_enabled,false
+rtOptions,experimental_noc_debug_dump_enabled,false
+rtOptions,fabric_kernel_opt_level,(unset)
+rtOptions,fabric_router_sync_timeout_ms,(unset)
+rtOptions,fabric_telemetry_channels_monitor_all,true
+rtOptions,fabric_telemetry_chips_monitor_all,true
+rtOptions,fabric_telemetry_enabled,false
+rtOptions,fabric_telemetry_eriscs_monitor_all,true
+rtOptions,fabric_telemetry_stats_mask,15
+rtOptions,fabric_trimming_override_path,
+rtOptions,fabric_trimming_profile_path,
+rtOptions,fast_dispatch,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_all_chips,true
+rtOptions,feature_ATOMIC_DEBUG_DELAY_enabled,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_file_name,
+rtOptions,feature_ATOMIC_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_ATOMIC_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_DPRINT_all_chips,true
+rtOptions,feature_DPRINT_enabled,false
+rtOptions,feature_DPRINT_file_name,
+rtOptions,feature_DPRINT_one_file_per_risc,false
+rtOptions,feature_DPRINT_prepend_device_core_risc,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_all_chips,true
+rtOptions,feature_ENABLE_L1_DATA_CACHE_enabled,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_file_name,
+rtOptions,feature_ENABLE_L1_DATA_CACHE_one_file_per_risc,false
+rtOptions,feature_ENABLE_L1_DATA_CACHE_prepend_device_core_risc,true
+rtOptions,feature_READ_DEBUG_DELAY_all_chips,true
+rtOptions,feature_READ_DEBUG_DELAY_enabled,false
+rtOptions,feature_READ_DEBUG_DELAY_file_name,
+rtOptions,feature_READ_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_READ_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,feature_WRITE_DEBUG_DELAY_all_chips,true
+rtOptions,feature_WRITE_DEBUG_DELAY_enabled,false
+rtOptions,feature_WRITE_DEBUG_DELAY_file_name,
+rtOptions,feature_WRITE_DEBUG_DELAY_one_file_per_risc,false
+rtOptions,feature_WRITE_DEBUG_DELAY_prepend_device_core_risc,true
+rtOptions,force_context_reinit,false
+rtOptions,force_jit_compile,false
+rtOptions,gathering_enabled,false
+rtOptions,hw_cache_invalidation_enabled,false
+rtOptions,inspector_capture_tensor_specs,true
+rtOptions,inspector_enabled,true
+rtOptions,inspector_initialization_is_important,false
+rtOptions,inspector_log_mesh_buffers,false
+rtOptions,inspector_log_mesh_sockets,false
+rtOptions,inspector_log_path,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/generated/inspector
+rtOptions,inspector_log_runtime_entries,false
+rtOptions,inspector_rpc_server_enabled,true
+rtOptions,inspector_rpc_server_host,localhost
+rtOptions,inspector_rpc_server_port,50051
+rtOptions,inspector_warn_on_write_exceptions,true
+rtOptions,jit_analytics_enabled,false
+rtOptions,kernel_dir,(unset)
+rtOptions,kernels_early_return,false
+rtOptions,kernels_nullified,false
+rtOptions,lightweight_kernel_asserts,true
+rtOptions,llk_asserts,true
+rtOptions,log_kernels_compilation_commands,false
+rtOptions,logs_dir,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/
+rtOptions,mock_cluster_desc_path,
+rtOptions,mock_enabled,false
+rtOptions,num_hw_cqs,1
+rtOptions,numa_based_affinity,false
+rtOptions,profiler_buffer_usage_enabled,false
+rtOptions,profiler_cpp_post_process,false
+rtOptions,profiler_disable_dump_to_files,false
+rtOptions,profiler_disable_push_to_tracy,false
+rtOptions,profiler_do_dispatch_cores,false
+rtOptions,profiler_enabled,false
+rtOptions,profiler_mid_run_dump,false
+rtOptions,profiler_noc_events_enabled,false
+rtOptions,profiler_noc_events_report_path,
+rtOptions,profiler_perf_counter_mode,0
+rtOptions,profiler_program_support_count,1000
+rtOptions,profiler_sum,false
+rtOptions,profiler_sync_enabled,false
+rtOptions,profiler_trace_only,false
+rtOptions,profiler_trace_tracking,false
+rtOptions,record_noc_transfers,false
+rtOptions,relaxed_memory_ordering_disabled,false
+rtOptions,reliability_mode,(unset)
+rtOptions,riscv_debug_info_enabled,true
+rtOptions,root_dir,/localdev/adamjanovic/2026_10_21/0820_adamjanovic_ab-tilize-run-base/clones/rms_norm_run1/tt-metal/
+rtOptions,serialize_inspector_on_dispatch_timeout,true
+rtOptions,simulator_enabled,false
+rtOptions,simulator_path,
+rtOptions,simulator_serve_over_sockets,true
+rtOptions,skip_eth_cores_with_retrain,false
+rtOptions,skip_loading_fw,false
+rtOptions,system_kernel_dir,/usr/share/tenstorrent/kernels/
+rtOptions,target_device,0
+rtOptions,test_mode_enabled,false
+rtOptions,timeout_duration_for_operations,5s
+rtOptions,tracy_mid_run_push,false
+rtOptions,use_mesh_graph_descriptor_2_0,false
+rtOptions,validate_kernel_binaries,false
+rtOptions,visible_devices,
+rtOptions,watcher_append,false
+rtOptions,watcher_auto_unpause,false
+rtOptions,watcher_debug_delay,0
+rtOptions,watcher_disabled_features,"ASSERT, DISPATCH"
+rtOptions,watcher_dump_all,false
+rtOptions,watcher_enabled,true
+rtOptions,watcher_hash,0010001000111
+rtOptions,watcher_interval,1000
+rtOptions,watcher_noc_sanitize_linked_transaction,false
+rtOptions,watcher_noinline,true
+rtOptions,watcher_phys_coords,false
+rtOptions,watcher_skip_logging,false
+rtOptions,watcher_text_start,false
+ttnnConfig,cache_path,/home/adamjanovic/.cache/ttnn
+ttnnConfig,comparison_mode_pcc,0.9999
+ttnnConfig,comparison_mode_should_raise_exception,false
+ttnnConfig,enable_comparison_mode,false
+ttnnConfig,enable_detailed_buffer_report,false
+ttnnConfig,enable_detailed_tensor_report,false
+ttnnConfig,enable_fast_runtime_mode,true
+ttnnConfig,enable_graph_python_stack_traces,false
+ttnnConfig,enable_graph_report,false
+ttnnConfig,enable_logging,false
+ttnnConfig,enable_model_cache,false
+ttnnConfig,model_cache_path,/home/adamjanovic/.cache/ttnn/models
+ttnnConfig,report_name,std::nullopt
+ttnnConfig,root_report_path,generated/ttnn/reports
+ttnnConfig,throw_exception_on_fallback,false
+ttnnConfig,tmp_dir,/tmp/ttnn
+ttnnConfig,validate_program_args,false
+
+check_cb_inactive.py:
+  pass
+
+check_dram_health.py:
+Dev,GDDR Inst,DDR Bank,Corrected Reads,Corrected Writes,Uncorrected Reads,Uncorrected Writes,Train,BIST,Endpoints,Temp Top,Temp Bot,Speed MT/s
+0,0,0,0,0,0,0,SUCCESS,SUCCESS,"0-0 (d0,0), 0-1 (d0,1), 0-11 (d0,2)",44,46,16000
+0,1,1,0,0,0,0,SUCCESS,SUCCESS,"0-2 (d1,0), 0-10 (d1,1), 0-3 (d1,2)",40,44,16000
+0,2,2,0,0,0,0,SUCCESS,SUCCESS,"0-9 (d2,0), 0-4 (d2,1), 0-8 (d2,2)",42,46,16000
+0,3,3,0,0,0,0,SUCCESS,SUCCESS,"0-5 (d3,0), 0-7 (d3,1), 0-6 (d3,2)",44,48,16000
+0,4,4,0,0,0,0,SUCCESS,SUCCESS,"9-0 (d4,0), 9-1 (d4,1), 9-11 (d4,2)",46,46,16000
+0,5,5,0,0,0,0,SUCCESS,SUCCESS,"9-2 (d5,0), 9-10 (d5,1), 9-3 (d5,2)",44,46,16000
+0,6,6,0,0,0,0,SUCCESS,SUCCESS,"9-9 (d6,0), 9-4 (d6,1), 9-8 (d6,2)",44,46,16000
+0,7,7,0,0,0,0,SUCCESS,SUCCESS,"9-5 (d7,0), 9-7 (d7,1), 9-6 (d7,2)",44,46,16000
+
+check_eth_status.py:
+Dev,Loc,Port Status,Link,Heartbeat,Retrain Count,CRC Errors,Corr CW,Uncorr CW,RX Link Up,ERR_STAT,TXQ Resends,RXQ Drops,ETH FW
+0,"10-1 (e0,11)",Up,Up,Released,0,0,2573511,0,Up,0x0,0,0,1.12.0
+0,"11-1 (e0,9)",Up,Up,Released,0,0,1667111,0,Up,0x0,0,0,1.12.0
+0,"6-1 (e0,8)",Up,Up,Released,0,0,1266913,0,Up,0x0,0,0,1.12.0
+0,"12-1 (e0,7)",Up,Up,Released,0,0,697157,0,Up,0x0,0,0,1.12.0
+0,"13-1 (e0,6)",Up,Up,Released,0,0,357868,0,Up,0x0,0,0,1.12.0
+0,"7-1 (e0,10)",Up,Up,Released,0,0,505447,0,Up,0x0,0,0,1.12.0
+0,"4-1 (e0,5)",Up,Up,Released,0,0,136173,0,Up,0x0,0,0,1.12.0
+0,"3-1 (e0,4)",Up,Up,Released,0,0,679780,0,Up,0x0,0,0,1.12.0
+
+check_l1_status.py:
+  pass
+
+check_noc_locations.py:
+  pass
+
+device_info.py:
+Dev,Tray/Board,Chip,ASIC,Arch,Board,Bus ID,PCI BDF,Unique ID,ARC FW,Postcode
+0,Board 0x4123191e020,0,0,blackhole,p150,0x01,0000:01:00.0,0x8246323c0400,19.12.0,N/A
+
+device_telemetry.py:
+Dev,AI Clk,ARC Clk,ASIC Temp,Board Temp,ETH Live,DDR Status,DDR Speed,ARC Uptime
+0,1350 MHz,800 MHz,47.5 C,0.0 C,0x3ED00000 (8 live),0x55555555,16000 MT/s,0:00:17
+
+dump_op_mesh.py:
+R\C,C0,C1
+0,(Device 3)\n(unused),(Device 0)\n1: GenericOpDeviceOperation
+1,(Device 1)\n(unused),(Device 2)\n(unused)
+
+dump_op_window.py:
+Op Id,Status,Op Name,Devices
+1,RUNNING,GenericOpDeviceOperation,0
+
+dump_running_operations.py:
+Op Id,Op Name,Op Params,Prev Op Id,Prev Op Name,Prev Op Params,Device Cnt,Core Cnt,Devices,Cores
+1,GenericOpDeviceOperation,"Tensor[0]\n  logical_shape: [1, 1, 8192, 1024]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]\n\nTensor[1]\n  logical_shape: [1, 1, 1, 1024]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: INTERLEAVED\n  buffer_type: DRAM\n  shard_spec: none\n  nd_shard_spec: none\n  created_with_nd_shard_spec: 0\n  per_core_allocation: 0\n  range_lockstep_allocation: 0\n  alignment: [32, 32]\n\nTensor[2]\n  logical_shape: [1, 1, 8192, 1024]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]\n\nTensor[3]\n  logical_shape: [1, 1, 8192, 1024]\n  dtype: BFLOAT16\n  tile_shape: {32, 32}\n  face_shape: {16, 16}\n  num_faces: 4\n  memory_layout: BLOCK_SHARDED\n  buffer_type: L1\n  shard_spec: GRID_2D""},created_with_nd_shard_spec=0,per_core_allocation=0,range_lockstep_allocation=0\n  alignment: Alignment([32, 32]",N/A,N/A,N/A,1,48,0,"0:1-2 (0,0)\n0:1-3 (0,1)\n0:1-4 (0,2)\n0:1-5 (0,3)\n0:1-6 (0,4)\n..."
+
+check_binary_integrity.py:
+  pass
+
+check_core_magic.py:
+  pass
+
+check_noc_status.py:
+  pass
+    Device 0: eth [15-1 (e0,3)]: erisc1: Skipping: erisc1 is not halted
+    Device 0: eth [2-1 (e0,2)]: erisc0: Skipping: erisc0 is not halted
+    Device 0: eth [1-1 (e0,0)]: erisc0: Skipping: erisc0 is not halted
+    Device 0: functional_workers [1-2 (0,0)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [1-3 (0,1)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [4-3 (3,1)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [2-5 (1,3)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [2-7 (1,5)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [3-7 (2,5)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [5-7 (4,5)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [13-7 (9,5)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [4-8 (3,6)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [5-8 (4,6)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [2-9 (1,7)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [6-9 (5,7)]: brisc: Skipping: brisc is not halted
+    Device 0: functional_workers [15-9 (11,7)]: brisc: Skipping: brisc is not halted
+    Device 0: eth [15-1 (e0,3)]: erisc1: Skipping: erisc1 is not halted
+    Device 0: eth [2-1 (e0,2)]: erisc0: Skipping: erisc0 is not halted
+    Device 0: eth [1-1 (e0,0)]: erisc0: Skipping: erisc0 is not halted
+
+dump_callstacks.py:
+Dev,Loc,RiscV,NEO,Kernel ID,Kernel Name,Subdevice,Go Message,Preload,Waypoint,PC,Kernel Callstack
+0,"1-2 (0,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"1-2 (0,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-2 (0,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-2 (0,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-2 (0,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-2 (1,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"2-2 (1,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"2-2 (1,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"2-2 (1,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd4,\n#0 0x00007CD4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"2-2 (1,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-2 (2,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-2 (2,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"3-2 (2,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-2 (2,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-2 (2,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-2 (3,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"4-2 (3,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"4-2 (3,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-2 (3,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-2 (3,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-2 (4,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"5-2 (4,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-2 (4,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-2 (4,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-2 (4,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-2 (5,0)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4880,\n#0 0x00004880 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:34
+0,"6-2 (5,0)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68e8,\n#0 0x000068E8 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"6-2 (5,0)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-2 (5,0)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-2 (5,0)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"16-2 (12,0)",brisc,N/A,1,cq_prefetch,0,GO,False,R,0x1109c,"\n#0 0x0001109C in process_stall () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 1903:39\n#1 process_cmd<false, false> () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 2621:35\n#2 kernel_main_hd () at ./tt_metal/impl/dispatch/kernels/cq_prefetch.cpp 3272:41"
+0,"1-3 (0,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"1-3 (0,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-3 (0,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-3 (0,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-3 (0,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-3 (1,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"2-3 (1,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-3 (1,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-3 (1,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-3 (1,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-3 (2,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-3 (2,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"3-3 (2,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"3-3 (2,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-3 (2,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-3 (3,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"4-3 (3,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-3 (3,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-3 (3,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-3 (3,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-3 (4,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4898,\n#0 0x00004898 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"5-3 (4,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-3 (4,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-3 (4,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-3 (4,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-3 (5,1)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4880,\n#0 0x00004880 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:34
+0,"6-3 (5,1)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-3 (5,1)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"6-3 (5,1)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"6-3 (5,1)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"16-3 (12,1)",brisc,N/A,2,cq_dispatch,0,GO,False,R,0xba3c,\n#0 0x0000BA3C in process_wait () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1128:22\n#1 process_cmd_d () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1347:25\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch.cpp 1675:44
+0,"16-3 (12,1)",trisc0,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,K,0xe1d8,\n#0 0x0000E1D8 in dispatch_subordinate_realtime_profiler () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp 67:39\n#1 dispatch_subordinate_realtime_profiler () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp 29:7\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 16:43\n#3 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#4 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 92:15
+0,"16-3 (12,1)",trisc1,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,K,0xe96c,\n#0 0x0000E96C in dispatch_subordinate_telemetry () at ./tt_metal/impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp 143:9\n#1 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp 18:35\n#2 run_kernel () at ./tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h 38:16\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/trisck.cc 92:15
+0,"16-3 (12,1)",trisc2,N/A,4,cq_dispatch_subordinate_compute,0,GO,False,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"16-3 (12,1)",ncrisc,N/A,3,cq_dispatch_subordinate,0,GO,False,R,0xd6e0,"\n#0 0x0000D6E0 in wrap_gt () at ./tt_metal/impl/dispatch/kernels/cq_common.hpp 62:19\n#1 cb_acquire_pages_dispatch_s<207, 1> () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 529:19\n#2 kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp 869:70\n#3 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16"
+0,"1-4 (0,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-4 (0,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-4 (0,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-4 (0,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-4 (0,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-4 (1,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"2-4 (1,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"2-4 (1,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c4,\n#0 0x000072C4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"2-4 (1,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-4 (1,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-4 (2,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-4 (2,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"3-4 (2,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-4 (2,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-4 (2,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-4 (3,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"4-4 (3,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-4 (3,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-4 (3,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-4 (3,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-4 (4,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"5-4 (4,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"5-4 (4,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-4 (4,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-4 (4,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-4 (5,2)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"6-4 (5,2)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"6-4 (5,2)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-4 (5,2)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-4 (5,2)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"1-5 (0,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-5 (0,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-5 (0,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-5 (0,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-5 (0,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-5 (1,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"2-5 (1,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"2-5 (1,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"2-5 (1,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-5 (1,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-5 (2,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-5 (2,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-5 (2,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-5 (2,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"3-5 (2,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-5 (3,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"4-5 (3,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-5 (3,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-5 (3,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-5 (3,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-5 (4,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"5-5 (4,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"5-5 (4,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-5 (4,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-5 (4,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-5 (5,3)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4880,\n#0 0x00004880 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:34
+0,"6-5 (5,3)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"6-5 (5,3)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-5 (5,3)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-5 (5,3)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"1-6 (0,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-6 (0,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"1-6 (0,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-6 (0,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-6 (0,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-6 (1,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4898,\n#0 0x00004898 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"2-6 (1,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"2-6 (1,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-6 (1,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-6 (1,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-6 (2,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-6 (2,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-6 (2,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-6 (2,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd4,\n#0 0x00007CD4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"3-6 (2,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-6 (3,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"4-6 (3,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-6 (3,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-6 (3,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-6 (3,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-6 (4,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"5-6 (4,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-6 (4,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-6 (4,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd4,\n#0 0x00007CD4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"5-6 (4,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-6 (5,4)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4898,\n#0 0x00004898 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"6-6 (5,4)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"6-6 (5,4)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-6 (5,4)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-6 (5,4)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"1-7 (0,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-7 (0,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"1-7 (0,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-7 (0,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-7 (0,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-7 (1,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"2-7 (1,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"2-7 (1,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c4,\n#0 0x000072C4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"2-7 (1,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd4,\n#0 0x00007CD4 in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 14:44\n#1 main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 148:32
+0,"2-7 (1,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-7 (2,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"3-7 (2,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-7 (2,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-7 (2,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-7 (2,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-7 (3,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"4-7 (3,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-7 (3,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-7 (3,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-7 (3,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-7 (4,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"5-7 (4,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"5-7 (4,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-7 (4,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-7 (4,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-7 (5,5)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"6-7 (5,5)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-7 (5,5)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-7 (5,5)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"6-7 (5,5)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"1-8 (0,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-8 (0,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-8 (0,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-8 (0,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-8 (0,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-8 (1,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"2-8 (1,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"2-8 (1,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-8 (1,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"2-8 (1,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-8 (2,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"3-8 (2,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-8 (2,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-8 (2,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-8 (2,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-8 (3,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"4-8 (3,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-8 (3,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-8 (3,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"4-8 (3,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-8 (4,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"5-8 (4,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-8 (4,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"5-8 (4,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-8 (4,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-8 (5,6)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"6-8 (5,6)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-8 (5,6)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-8 (5,6)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-8 (5,6)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"1-9 (0,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"1-9 (0,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-9 (0,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"1-9 (0,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"1-9 (0,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"2-9 (1,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"2-9 (1,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"2-9 (1,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-9 (1,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"2-9 (1,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"3-9 (2,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"3-9 (2,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"3-9 (2,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-9 (2,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"3-9 (2,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"4-9 (3,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"4-9 (3,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68ec,\n#0 0x000068EC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-9 (3,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72c8,\n#0 0x000072C8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-9 (3,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"4-9 (3,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"5-9 (4,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x4884,\n#0 0x00004884 in wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 327:30
+0,"5-9 (4,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f8,\n#0 0x000068F8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 137:21
+0,"5-9 (4,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-9 (4,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cdc,\n#0 0x00007CDC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"5-9 (4,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"6-9 (5,7)",brisc,N/A,8,rms_norm_writer,0,GO,True,NTW,0x489c,\n#0 0x0000489C in invalidate_l1_cache () at ./tt_metal/hw/inc/internal/tt-1xx/cache.h 16:5\n#1 wait_ncrisc_trisc () at ./tt_metal/hw/firmware/src/tt-1xx/brisc.cc 334:28
+0,"6-9 (5,7)",trisc0,N/A,9,rms_norm_compute,0,GO,True,W,0x68f0,\n#0 0x000068F0 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-9 (5,7)",trisc1,N/A,9,rms_norm_compute,0,GO,True,W,0x72cc,\n#0 0x000072CC in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:16
+0,"6-9 (5,7)",trisc2,N/A,9,rms_norm_compute,0,GO,True,W,0x7cd8,\n#0 0x00007CD8 in main () at ./tt_metal/hw/firmware/src/tt-1xx/trisc.cc 135:27
+0,"6-9 (5,7)",ncrisc,N/A,7,rms_norm_reader,0,GO,True,NKFW,0xb410,\n#0 0x0000B410 in NOC_STATUS_READ_REG () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 180:5\n#1 ncrisc_noc_posted_writes_sent () at ./tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h 729:32\n#2 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 88:9
+0,"16-11 (12,9)",brisc,N/A,5,cq_realtime_profiler,0,GO,False,K,0xabc8,\n#0 0x0000ABC8 in realtime_profiler_drain_records () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp 134:5
+0,"16-11 (12,9)",ncrisc,N/A,6,cq_realtime_profiler_push,0,GO,False,K,0xaf94,\n#0 0x0000AF94 in kernel_main () at ./tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp 154:29\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 73:16
+
+dump_circular_buffers.py:
+Dev,Loc,CB,Kind,Address,Size,Page Size,Size (pages),Pushed,Popped,Occupancy
+0,"1-2 (0,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-2 (0,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-2 (0,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-2 (0,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-2 (0,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-2 (0,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-2 (0,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-2 (0,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-2 (0,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-2 (0,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-2 (1,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-2 (1,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-2 (1,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-2 (1,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-2 (1,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-2 (1,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-2 (1,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-2 (1,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-2 (1,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-2 (1,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-2 (2,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-2 (2,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-2 (2,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-2 (2,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-2 (2,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-2 (2,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-2 (2,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-2 (2,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-2 (2,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-2 (2,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-2 (3,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-2 (3,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-2 (3,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-2 (3,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-2 (3,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-2 (3,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-2 (3,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-2 (3,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-2 (3,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-2 (3,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-2 (4,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-2 (4,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-2 (4,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-2 (4,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-2 (4,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-2 (4,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-2 (4,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-2 (4,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-2 (4,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-2 (4,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-2 (5,0)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-2 (5,0)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-2 (5,0)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-2 (5,0)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-2 (5,0)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-2 (5,0)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-2 (5,0)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-2 (5,0)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-2 (5,0)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-2 (5,0)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-3 (0,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-3 (0,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-3 (0,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-3 (0,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-3 (0,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-3 (0,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-3 (0,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-3 (0,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-3 (0,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-3 (0,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-3 (1,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-3 (1,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-3 (1,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-3 (1,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-3 (1,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-3 (1,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-3 (1,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-3 (1,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-3 (1,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-3 (1,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-3 (2,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-3 (2,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-3 (2,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-3 (2,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-3 (2,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-3 (2,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-3 (2,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-3 (2,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-3 (2,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-3 (2,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-3 (3,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-3 (3,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-3 (3,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-3 (3,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-3 (3,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-3 (3,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-3 (3,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-3 (3,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-3 (3,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-3 (3,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-3 (4,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-3 (4,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-3 (4,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-3 (4,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-3 (4,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-3 (4,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-3 (4,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-3 (4,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-3 (4,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-3 (4,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-3 (5,1)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-3 (5,1)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-3 (5,1)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-3 (5,1)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-3 (5,1)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-3 (5,1)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-3 (5,1)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-3 (5,1)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-3 (5,1)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-3 (5,1)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-4 (0,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-4 (0,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-4 (0,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-4 (0,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-4 (0,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-4 (0,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-4 (0,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-4 (0,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-4 (0,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-4 (0,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-4 (1,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-4 (1,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-4 (1,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-4 (1,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-4 (1,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-4 (1,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-4 (1,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-4 (1,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-4 (1,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-4 (1,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-4 (2,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-4 (2,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-4 (2,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-4 (2,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-4 (2,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-4 (2,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-4 (2,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-4 (2,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-4 (2,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-4 (2,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-4 (3,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-4 (3,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-4 (3,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-4 (3,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-4 (3,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-4 (3,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-4 (3,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-4 (3,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-4 (3,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-4 (3,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-4 (4,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-4 (4,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-4 (4,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-4 (4,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-4 (4,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-4 (4,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-4 (4,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-4 (4,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-4 (4,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-4 (4,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-4 (5,2)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-4 (5,2)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-4 (5,2)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-4 (5,2)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-4 (5,2)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-4 (5,2)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-4 (5,2)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-4 (5,2)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-4 (5,2)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-4 (5,2)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-5 (0,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-5 (0,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-5 (0,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-5 (0,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-5 (0,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-5 (0,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-5 (0,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-5 (0,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-5 (0,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-5 (0,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-5 (1,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-5 (1,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-5 (1,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-5 (1,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-5 (1,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-5 (1,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-5 (1,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-5 (1,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-5 (1,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-5 (1,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-5 (2,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-5 (2,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-5 (2,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-5 (2,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-5 (2,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-5 (2,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-5 (2,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-5 (2,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-5 (2,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-5 (2,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-5 (3,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-5 (3,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-5 (3,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-5 (3,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-5 (3,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-5 (3,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-5 (3,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-5 (3,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-5 (3,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-5 (3,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-5 (4,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-5 (4,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-5 (4,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-5 (4,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-5 (4,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-5 (4,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-5 (4,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-5 (4,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-5 (4,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-5 (4,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-5 (5,3)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-5 (5,3)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-5 (5,3)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-5 (5,3)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-5 (5,3)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-5 (5,3)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-5 (5,3)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-5 (5,3)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-5 (5,3)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-5 (5,3)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-6 (0,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-6 (0,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-6 (0,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-6 (0,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-6 (0,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-6 (0,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-6 (0,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-6 (0,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-6 (0,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-6 (0,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-6 (1,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-6 (1,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-6 (1,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-6 (1,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-6 (1,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-6 (1,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-6 (1,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-6 (1,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-6 (1,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-6 (1,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-6 (2,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-6 (2,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-6 (2,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-6 (2,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-6 (2,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-6 (2,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-6 (2,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-6 (2,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-6 (2,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-6 (2,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-6 (3,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-6 (3,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-6 (3,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-6 (3,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-6 (3,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-6 (3,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-6 (3,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-6 (3,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-6 (3,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-6 (3,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-6 (4,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-6 (4,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-6 (4,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-6 (4,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-6 (4,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-6 (4,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-6 (4,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-6 (4,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-6 (4,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-6 (4,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-6 (5,4)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-6 (5,4)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-6 (5,4)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-6 (5,4)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-6 (5,4)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-6 (5,4)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-6 (5,4)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-6 (5,4)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-6 (5,4)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-6 (5,4)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-7 (0,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-7 (0,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-7 (0,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-7 (0,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-7 (0,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-7 (0,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-7 (0,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-7 (0,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-7 (0,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-7 (0,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-7 (1,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-7 (1,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-7 (1,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-7 (1,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-7 (1,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-7 (1,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-7 (1,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-7 (1,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-7 (1,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-7 (1,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-7 (2,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-7 (2,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-7 (2,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-7 (2,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-7 (2,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-7 (2,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-7 (2,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-7 (2,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-7 (2,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-7 (2,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-7 (3,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-7 (3,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-7 (3,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-7 (3,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-7 (3,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-7 (3,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-7 (3,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-7 (3,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-7 (3,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-7 (3,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-7 (4,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-7 (4,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-7 (4,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-7 (4,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-7 (4,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-7 (4,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-7 (4,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-7 (4,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-7 (4,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-7 (4,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-7 (5,5)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-7 (5,5)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-7 (5,5)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-7 (5,5)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-7 (5,5)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-7 (5,5)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-7 (5,5)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-7 (5,5)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-7 (5,5)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-7 (5,5)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-8 (0,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-8 (0,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-8 (0,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-8 (0,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-8 (0,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-8 (0,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-8 (0,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-8 (0,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-8 (0,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-8 (0,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-8 (1,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-8 (1,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-8 (1,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-8 (1,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-8 (1,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-8 (1,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-8 (1,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-8 (1,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-8 (1,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-8 (1,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-8 (2,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-8 (2,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-8 (2,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-8 (2,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-8 (2,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-8 (2,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-8 (2,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-8 (2,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-8 (2,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-8 (2,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-8 (3,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-8 (3,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-8 (3,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-8 (3,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-8 (3,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-8 (3,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-8 (3,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-8 (3,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-8 (3,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-8 (3,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-8 (4,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-8 (4,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-8 (4,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-8 (4,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-8 (4,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-8 (4,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-8 (4,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-8 (4,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-8 (4,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-8 (4,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-8 (5,6)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-8 (5,6)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-8 (5,6)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-8 (5,6)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-8 (5,6)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-8 (5,6)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-8 (5,6)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-8 (5,6)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-8 (5,6)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-8 (5,6)",16,local,0x100000,262144,2048,128,128,0,128
+0,"1-9 (0,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"1-9 (0,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"1-9 (0,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"1-9 (0,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"1-9 (0,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"1-9 (0,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"1-9 (0,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"1-9 (0,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"1-9 (0,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"1-9 (0,7)",16,local,0x100000,262144,2048,128,128,0,128
+0,"2-9 (1,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"2-9 (1,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"2-9 (1,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"2-9 (1,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"2-9 (1,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"2-9 (1,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"2-9 (1,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"2-9 (1,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"2-9 (1,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"2-9 (1,7)",16,local,0x100000,262144,2048,128,128,0,128
+0,"3-9 (2,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"3-9 (2,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"3-9 (2,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"3-9 (2,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"3-9 (2,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"3-9 (2,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"3-9 (2,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"3-9 (2,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"3-9 (2,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"3-9 (2,7)",16,local,0x100000,262144,2048,128,128,0,128
+0,"4-9 (3,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"4-9 (3,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"4-9 (3,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"4-9 (3,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"4-9 (3,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"4-9 (3,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"4-9 (3,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"4-9 (3,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"4-9 (3,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"4-9 (3,7)",16,local,0x100000,262144,2048,128,128,0,128
+0,"5-9 (4,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"5-9 (4,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"5-9 (4,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"5-9 (4,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"5-9 (4,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"5-9 (4,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"5-9 (4,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"5-9 (4,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"5-9 (4,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"5-9 (4,7)",16,local,0x100000,262144,2048,128,128,0,128
+0,"6-9 (5,7)",1,local,0x140000,262144,2048,128,128,128,0
+0,"6-9 (5,7)",2,local,0x1b480,2048,2048,1,1,1,0
+0,"6-9 (5,7)",3,local,0x1bc80,106496,4096,26,32,32,0
+0,"6-9 (5,7)",4,local,0x35c80,106496,4096,26,32,32,0
+0,"6-9 (5,7)",6,local,0x4fc80,8192,2048,4,4,4,0
+0,"6-9 (5,7)",7,local,0x51c80,425984,4096,104,128,128,0
+0,"6-9 (5,7)",9,local,0xb9c80,106496,4096,26,32,32,0
+0,"6-9 (5,7)",10,local,0xd3c80,131072,4096,32,40,40,0
+0,"6-9 (5,7)",11,local,0xf3c80,16384,4096,4,5,5,0
+0,"6-9 (5,7)",16,local,0x100000,262144,2048,128,128,0,128
+
+dump_fabric_stream_regs.py:
+  pass
+
+dump_fast_dispatch.py:
+Dev,Loc,RiscV,NEO,Kernel Name,worker_type,cq_id,servicing_device_id
+0,"16-2 (12,0)",brisc,N/A,cq_prefetch,PREFETCH_HD,0,0
+0,"16-3 (12,1)",brisc,N/A,cq_dispatch,DISPATCH_HD,0,0
+
+dump_lightweight_asserts.py:
+Dev,Loc,RiscV,NEO,Kernel Name,Assert line with callstack,Arguments and Locals
+0,"1-2 (0,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-2 (1,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-2 (2,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-2 (3,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-2 (4,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-2 (5,0)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-3 (0,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-3 (1,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-3 (2,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-3 (3,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-3 (4,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-3 (5,1)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-4 (0,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-4 (1,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-4 (2,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-4 (3,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-4 (4,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-4 (5,2)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-5 (0,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-5 (1,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-5 (2,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-5 (3,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-5 (4,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-5 (5,3)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-6 (0,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-6 (1,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-6 (2,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-6 (3,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-6 (4,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-6 (5,4)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-7 (0,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-7 (1,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-7 (2,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-7 (3,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-7 (4,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-7 (5,5)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-8 (0,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-8 (1,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-8 (2,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-8 (3,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-8 (4,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-8 (5,6)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"1-9 (0,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"2-9 (1,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"3-9 (2,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"4-9 (3,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"5-9 (4,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+0,"6-9 (5,7)",ncrisc,N/A,rms_norm_reader,\nASSERT() not found! Check the first code line in the stack trace.\nncrisc does not have debug hardware - defaulting to top callstack\n#0 0x0000B40C in lightweight_assert_trap () at ./tt_metal/hw/inc/internal/debug/assert_common.h 28:19\n#1 _start () at ./tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc 87:9,
+
+dump_mesh_sockets.py:
+  pass
+
+dump_semaphores.py:
+Dev,Loc,Kind,Id,Address,Value,Initial
+0,"1-2 (0,0)",program,0,0xa120,14,0
+0,"1-2 (0,0)",program,1,0xa130,11,0
+0,"2-2 (1,0)",program,0,0xa120,14,0
+0,"2-2 (1,0)",program,1,0xa130,11,0
+0,"3-2 (2,0)",program,0,0xa120,14,0
+0,"3-2 (2,0)",program,1,0xa130,11,0
+0,"4-2 (3,0)",program,0,0xa120,14,0
+0,"4-2 (3,0)",program,1,0xa130,11,0
+0,"5-2 (4,0)",program,0,0xa120,14,0
+0,"5-2 (4,0)",program,1,0xa130,11,0
+0,"6-2 (5,0)",program,0,0xa120,14,0
+0,"6-2 (5,0)",program,1,0xa130,11,0
+0,"16-2 (12,0)",program,0,0xa090,4352,128
+0,"16-2 (12,0)",program,1,0xa0a0,1,0
+0,"16-2 (12,0)",program,2,0xa0b0,131,128
+0,"1-3 (0,1)",program,0,0xa120,14,0
+0,"1-3 (0,1)",program,1,0xa130,11,0
+0,"2-3 (1,1)",program,0,0xa120,14,0
+0,"2-3 (1,1)",program,1,0xa130,11,0
+0,"3-3 (2,1)",program,0,0xa120,14,0
+0,"3-3 (2,1)",program,1,0xa130,11,0
+0,"4-3 (3,1)",program,0,0xa120,14,0
+0,"4-3 (3,1)",program,1,0xa130,11,0
+0,"5-3 (4,1)",program,0,0xa120,14,0
+0,"5-3 (4,1)",program,1,0xa130,11,0
+0,"6-3 (5,1)",program,0,0xa120,14,0
+0,"6-3 (5,1)",program,1,0xa130,11,0
+0,"16-3 (12,1)",program,0,0xa090,4270,0
+0,"16-3 (12,1)",program,1,0xa0a0,3,0
+0,"16-3 (12,1)",program,2,0xa0b0,0,0
+0,"1-4 (0,2)",program,0,0xa120,14,0
+0,"1-4 (0,2)",program,1,0xa130,11,0
+0,"2-4 (1,2)",program,0,0xa120,14,0
+0,"2-4 (1,2)",program,1,0xa130,11,0
+0,"3-4 (2,2)",program,0,0xa120,14,0
+0,"3-4 (2,2)",program,1,0xa130,11,0
+0,"4-4 (3,2)",program,0,0xa120,14,0
+0,"4-4 (3,2)",program,1,0xa130,11,0
+0,"5-4 (4,2)",program,0,0xa120,14,0
+0,"5-4 (4,2)",program,1,0xa130,11,0
+0,"6-4 (5,2)",program,0,0xa120,14,0
+0,"6-4 (5,2)",program,1,0xa130,11,0
+0,"1-5 (0,3)",program,0,0xa120,14,0
+0,"1-5 (0,3)",program,1,0xa130,11,0
+0,"2-5 (1,3)",program,0,0xa120,14,0
+0,"2-5 (1,3)",program,1,0xa130,11,0
+0,"3-5 (2,3)",program,0,0xa120,14,0
+0,"3-5 (2,3)",program,1,0xa130,11,0
+0,"4-5 (3,3)",program,0,0xa120,14,0
+0,"4-5 (3,3)",program,1,0xa130,11,0
+0,"5-5 (4,3)",program,0,0xa120,14,0
+0,"5-5 (4,3)",program,1,0xa130,11,0
+0,"6-5 (5,3)",program,0,0xa120,14,0
+0,"6-5 (5,3)",program,1,0xa130,11,0
+0,"1-6 (0,4)",program,0,0xa120,14,0
+0,"1-6 (0,4)",program,1,0xa130,11,0
+0,"2-6 (1,4)",program,0,0xa120,14,0
+0,"2-6 (1,4)",program,1,0xa130,11,0
+0,"3-6 (2,4)",program,0,0xa120,14,0
+0,"3-6 (2,4)",program,1,0xa130,11,0
+0,"4-6 (3,4)",program,0,0xa120,14,0
+0,"4-6 (3,4)",program,1,0xa130,11,0
+0,"5-6 (4,4)",program,0,0xa120,14,0
+0,"5-6 (4,4)",program,1,0xa130,11,0
+0,"6-6 (5,4)",program,0,0xa120,14,0
+0,"6-6 (5,4)",program,1,0xa130,11,0
+0,"1-7 (0,5)",program,0,0xa120,14,0
+0,"1-7 (0,5)",program,1,0xa130,11,0
+0,"2-7 (1,5)",program,0,0xa120,14,0
+0,"2-7 (1,5)",program,1,0xa130,11,0
+0,"3-7 (2,5)",program,0,0xa120,14,0
+0,"3-7 (2,5)",program,1,0xa130,11,0
+0,"4-7 (3,5)",program,0,0xa120,14,0
+0,"4-7 (3,5)",program,1,0xa130,11,0
+0,"5-7 (4,5)",program,0,0xa120,14,0
+0,"5-7 (4,5)",program,1,0xa130,11,0
+0,"6-7 (5,5)",program,0,0xa120,14,0
+0,"6-7 (5,5)",program,1,0xa130,11,0
+0,"1-8 (0,6)",program,0,0xa120,14,0
+0,"1-8 (0,6)",program,1,0xa130,11,0
+0,"2-8 (1,6)",program,0,0xa120,14,0
+0,"2-8 (1,6)",program,1,0xa130,11,0
+0,"3-8 (2,6)",program,0,0xa120,14,0
+0,"3-8 (2,6)",program,1,0xa130,11,0
+0,"4-8 (3,6)",program,0,0xa120,14,0
+0,"4-8 (3,6)",program,1,0xa130,11,0
+0,"5-8 (4,6)",program,0,0xa120,14,0
+0,"5-8 (4,6)",program,1,0xa130,11,0
+0,"6-8 (5,6)",program,0,0xa120,14,0
+0,"6-8 (5,6)",program,1,0xa130,11,0
+0,"1-9 (0,7)",program,0,0xa120,14,0
+0,"1-9 (0,7)",program,1,0xa130,11,0
+0,"2-9 (1,7)",program,0,0xa120,14,0
+0,"2-9 (1,7)",program,1,0xa130,11,0
+0,"3-9 (2,7)",program,0,0xa120,14,0
+0,"3-9 (2,7)",program,1,0xa130,11,0
+0,"4-9 (3,7)",program,0,0xa120,14,0
+0,"4-9 (3,7)",program,1,0xa130,11,0
+0,"5-9 (4,7)",program,0,0xa120,14,0
+0,"5-9 (4,7)",program,1,0xa130,11,0
+0,"6-9 (5,7)",program,0,0xa120,14,0
+0,"6-9 (5,7)",program,1,0xa130,11,0
+
+dump_watcher_ringbuffer.py:
+  pass
+    Device 0: functional_workers [1-2 (0,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-2 (1,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-2 (2,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-2 (3,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-2 (4,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-2 (5,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-2 (6,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-2 (7,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-2 (8,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-2 (9,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-2 (10,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-2 (11,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-2 (12,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-3 (0,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-3 (1,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-3 (2,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-3 (3,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-3 (4,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-3 (5,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-3 (6,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-3 (7,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-3 (8,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-3 (9,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-3 (10,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-3 (11,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-3 (12,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-4 (0,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-4 (1,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-4 (2,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-4 (3,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-4 (4,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-4 (5,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-4 (6,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-4 (7,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-4 (8,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-4 (9,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-4 (10,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-4 (11,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-4 (12,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-5 (0,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-5 (1,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-5 (2,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-5 (3,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-5 (4,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-5 (5,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-5 (6,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-5 (7,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-5 (8,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-5 (9,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-5 (10,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-5 (11,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-5 (12,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-6 (0,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-6 (1,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-6 (2,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-6 (3,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-6 (4,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-6 (5,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-6 (6,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-6 (7,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-6 (8,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-6 (9,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-6 (10,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-6 (11,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-6 (12,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-7 (0,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-7 (1,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-7 (2,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-7 (3,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-7 (4,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-7 (5,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-7 (6,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-7 (7,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-7 (8,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-7 (9,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-7 (10,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-7 (11,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-7 (12,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-8 (0,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-8 (1,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-8 (2,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-8 (3,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-8 (4,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-8 (5,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-8 (6,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-8 (7,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-8 (8,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-8 (9,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-8 (10,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-8 (11,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-8 (12,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-9 (0,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-9 (1,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-9 (2,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-9 (3,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-9 (4,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-9 (5,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-9 (6,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-9 (7,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-9 (8,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-9 (9,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-9 (10,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-9 (11,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-9 (12,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-10 (0,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-10 (1,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-10 (2,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-10 (3,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-10 (4,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-10 (5,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-10 (6,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-10 (7,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-10 (8,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-10 (9,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-10 (10,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-10 (11,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-10 (12,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [1-11 (0,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [2-11 (1,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [3-11 (2,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [4-11 (3,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [5-11 (4,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [6-11 (5,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [7-11 (6,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [11-11 (7,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [12-11 (8,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [13-11 (9,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [14-11 (10,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [15-11 (11,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: functional_workers [16-11 (12,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [15-1 (e0,3)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [2-1 (e0,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [16-1 (e0,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [1-1 (e0,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [10-1 (e0,11)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [11-1 (e0,9)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [6-1 (e0,8)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [12-1 (e0,7)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [13-1 (e0,6)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [7-1 (e0,10)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [4-1 (e0,5)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: eth [3-1 (e0,4)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-0 (d0,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-1 (d0,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-10 (d1,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-3 (d1,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-4 (d2,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-8 (d2,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-7 (d3,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [0-6 (d3,2)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-0 (d4,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-1 (d4,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-2 (d5,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-10 (d5,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-9 (d6,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-4 (d6,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-5 (d7,0)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+    Device 0: dram [9-7 (d7,1)]: Skipping: Cannot find member: debug_ring_buf_msg_t::current_ptr
+
+firmware_versions.py:
+Dev,ETH FW,DM App FW,DM BL FW,Flash Bundle,CM FW
+0,1.12.0,0.28.0.0,0.0.0.0,19.12.0.0,0.34.0.0
+
+system_info.py:
+OS,Version,Kernel,Machine,KMD,UMD,tt-exalens
+Linux,22.04,5.15.0-179-generic,x86_64,2.9.0,0.9.12,0.4.1
+
+check_arc.py:
+Dev,Loc,Postcode,Up time,Clock MHz,Heartbeats/s
+0,"8-0 (a0,0)",N/A,0:00:19.300000,800,9.997085251371567
+
+check_broken_components.py:
+  Device 0: eth [2-1 (e0,2)]: erisc0: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [1-1 (e0,0)]: erisc0: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [1-2 (0,0)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [1-3 (0,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-3 (3,1)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-5 (1,3)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-5 (3,3)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-7 (1,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [3-7 (2,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-7 (4,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [13-7 (9,5)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [4-8 (3,6)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [5-8 (4,6)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [2-9 (1,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [6-9 (5,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: functional_workers [15-9 (11,7)]: brisc: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [1-1 (e0,0)]: erisc0: Was halted by triage but is no longer halted - core was broken during triage.
+  Device 0: eth [2-1 (e0,2)]: erisc0: Was halted by triage but is no longer halted - core was broken during triage.
+Device,Broken Cores
+0,"brisc: 5-8 (4,6), 1-3 (0,1), 1-2 (0,0), 4-5 (3,3), 2-5 (1,3), 15-9 (11,7), 6-9 (5,7), 2-9 (1,7), 5-7 (4,5), 4-8 (3,6), 2-7 (1,5), 13-7 (9,5), 3-7 (2,5), 4-3 (3,1)\nerisc0: 2-1 (e0,2), 1-1 (e0,0)"

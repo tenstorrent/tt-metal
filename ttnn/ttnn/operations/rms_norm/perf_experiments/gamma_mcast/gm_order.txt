@@ -1,0 +1,370 @@
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+focus|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i8192x1024|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=(120, McastCoreOrder.RowMajor)
+i8192x1024|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=2|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i7168x2048|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i7168x2048|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+i640x6144|abl|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|off|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|all|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+i32x7168|abl|R3|cores=23|G=23|resident=1|direct=1|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+rmg8192x5120|abl|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+nog8192x5120|abl|R1|cores=120|G=1|resident=0|direct=0|block_rows=2|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+fp32d8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+fp32d8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+bfp8g8192x5120|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+bfp8g8192x5120|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+b8192x1024|abl|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|off|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+rmg640x6144|all|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg640x6144|abl|R3|cores=120|G=12|resident=1|direct=0|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+i2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+rmx2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+rmx2400x1024|abl|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|off|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|all|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i320x6144|abl|R3|cores=120|G=24|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+i8192x5000|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x5000|abl|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+h8192x1024|abl|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|off|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|all|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+w32x7168|abl|R3|cores=28|G=28|resident=1|direct=1|block_rows=1|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|off|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+b7168x2048|all|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=(10, McastCoreOrder.ColumnMajor)
+b7168x2048|abl|R3|cores=110|G=11|resident=1|direct=1|block_rows=23|topo=None
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)
+focus|off|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=None
+focus|all|R1|cores=120|G=1|resident=1|direct=1|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i8192x7168|off|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=None
+i8192x7168|all|R1|cores=120|G=1|resident=0|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+i640x6144|off|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=None
+i640x6144|all|R3|cores=120|G=12|resident=1|direct=1|block_rows=1|topo=(10, McastCoreOrder.ColumnMajor)
+rmg8192x5120|off|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=None
+rmg8192x5120|all|R1|cores=120|G=1|resident=1|direct=0|block_rows=1|topo=(120, McastCoreOrder.RowMajor)
+b8192x1024|off|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=None
+b8192x1024|all|R3|cores=64|G=8|resident=1|direct=1|block_rows=32|topo=(8, McastCoreOrder.ColumnMajor)
+i2400x1024|off|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=None
+i2400x1024|all|R1|cores=75|G=1|resident=1|direct=1|block_rows=1|topo=(75, McastCoreOrder.RowMajor)
+h8192x1024|off|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=None
+h8192x1024|all|R1-HS|cores=64|G=1|resident=1|direct=1|block_rows=4|topo=(64, McastCoreOrder.RowMajor)

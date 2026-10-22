@@ -1,0 +1,220 @@
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v0 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v2 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v0 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v2 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=2351732 maxabs_vs_base=0.125
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v0 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v2 pcc=nan maxabs=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v0 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v2 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v3 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v4 pcc=nan maxabs=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v3 pcc=0.999753 maxabs=0.606
+SF_RESULT b8192x1024 v4 pcc=0.999753 maxabs=0.606
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v6 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 v6 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v6 pcc=nan maxabs=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v6 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 base pcc=nan maxabs=0
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v7 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=0
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v7 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024 v3 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v7 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v3 pcc=0.999753 maxabs=0.606
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v7 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v9 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v10 pcc=nan maxabs=0
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922
+SF_RESULT b8192x1024 v8 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024 v9 pcc=0.999892 maxabs=0.5606
+SF_RESULT b8192x1024 v10 pcc=nan maxabs=14.01
+SF_RESULT b8192x1024_fp32 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_fp32 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_nog v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_nog v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x2048 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x2048 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x1024 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x1024 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b640x7168 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b640x7168 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w32x7168 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w32x7168 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i32x7168 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i32x7168 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1024 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1024 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT h2048x1024 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT h2048x1024 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1000_mask v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1000_mask v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch_fp32 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch_fp32 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT ragged448x384 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT ragged448x384 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w3232x96 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w3232x96 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b99991x64 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b99991x64 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_rmg v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_rmg v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144_rm v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144_rm v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i2048x1024_fp32 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i2048x1024_fp32 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1000_mask v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1000_mask v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i64x16384 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i64x16384 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_bf8 v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_bf8 v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_stream v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_stream v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_stream v1 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_stream v5 pcc=nan maxabs=0 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_fp32 v1 pcc=0.999985 maxabs=0.2641 mismatches_vs_base=3309128 maxabs_vs_base=0.0625
+SF_RESULT b8192x1024_fp32 v5 pcc=0.999985 maxabs=0.2641 mismatches_vs_base=3309128 maxabs_vs_base=0.0625
+SF_RESULT b8192x1024_nog v1 pcc=0.999992 maxabs=0.05839 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_nog v5 pcc=0.999992 maxabs=0.05839 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x2048 v1 pcc=0.999985 maxabs=0.1973 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x2048 v5 pcc=0.999985 maxabs=0.1973 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x1024 v1 pcc=0.999985 maxabs=0.1698 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b7168x1024 v5 pcc=0.999985 maxabs=0.1698 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b640x7168 v1 pcc=0.999986 maxabs=0.2265 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b640x7168 v5 pcc=0.999986 maxabs=0.2265 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w32x7168 v1 pcc=0.999987 maxabs=0.133 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w32x7168 v5 pcc=0.999987 maxabs=0.133 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i32x7168 v1 pcc=0.999987 maxabs=0.133 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i32x7168 v5 pcc=0.999987 maxabs=0.133 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1024 v1 pcc=0.999985 maxabs=0.1818 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1024 v5 pcc=0.999985 maxabs=0.1818 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144 v1 pcc=0.999987 maxabs=0.1576 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144 v5 pcc=0.999987 maxabs=0.1576 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT h2048x1024 v1 pcc=0.999985 maxabs=0.1662 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT h2048x1024 v5 pcc=0.999985 maxabs=0.1662 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1000_mask v1 pcc=0.999985 maxabs=0.1732 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1000_mask v5 pcc=0.999985 maxabs=0.1732 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch v1 pcc=0.999986 maxabs=0.1691 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch v5 pcc=0.999986 maxabs=0.1691 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b256x3072_2ch_fp32 v1 pcc=0.999986 maxabs=0.2132 mismatches_vs_base=325520 maxabs_vs_base=0.0625
+SF_RESULT b256x3072_2ch_fp32 v5 pcc=0.999986 maxabs=0.2132 mismatches_vs_base=325520 maxabs_vs_base=0.0625
+SF_RESULT ragged448x384 v1 pcc=0.999985 maxabs=0.1351 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT ragged448x384 v5 pcc=0.999985 maxabs=0.1351 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w3232x96 v1 pcc=0.999984 maxabs=0.1672 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT w3232x96 v5 pcc=0.999984 maxabs=0.1672 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b99991x64 v1 pcc=0.999983 maxabs=0.1679 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b99991x64 v5 pcc=0.999983 maxabs=0.1679 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_rmg v1 pcc=0.999984 maxabs=0.1727 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_rmg v5 pcc=0.999984 maxabs=0.1727 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144_rm v1 pcc=0.999984 maxabs=0.156 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i640x6144_rm v5 pcc=0.999984 maxabs=0.156 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i2048x1024_fp32 v1 pcc=0.999985 maxabs=0.2216 mismatches_vs_base=831736 maxabs_vs_base=0.0625
+SF_RESULT i2048x1024_fp32 v5 pcc=0.999985 maxabs=0.2216 mismatches_vs_base=831736 maxabs_vs_base=0.0625
+SF_RESULT i8192x1000_mask v1 pcc=0.999985 maxabs=0.1732 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x1000_mask v5 pcc=0.999985 maxabs=0.1732 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i64x16384 v1 pcc=0.999988 maxabs=0.1638 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i64x16384 v5 pcc=0.999988 maxabs=0.1638 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_bf8 v1 pcc=0.999885 maxabs=0.2484 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_bf8 v5 pcc=0.999885 maxabs=0.2484 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_stream v1 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024_stream v5 pcc=0.999985 maxabs=0.1922 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_stream v1 pcc=0.999984 maxabs=0.1727 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT i8192x5120_stream v5 pcc=0.999984 maxabs=0.1727 mismatches_vs_base=0 maxabs_vs_base=0
+SF_RESULT b8192x1024 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x2048 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x2048 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x2048 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x1024 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x1024 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b7168x1024 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT w32x7168 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT w32x7168 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT w32x7168 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i32x7168 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT i32x7168 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i32x7168 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i8192x1024 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT i8192x1024 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i8192x1024 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_fp32 base pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_fp32 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_fp32 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_nog base pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_nog v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024_nog v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024 base pcc=0.999985 maxabs=0.1922 relrms=0.0063341
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922 relrms=0.0063341
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922 relrms=0.0063341
+SF_RESULT b7168x2048 base pcc=0.999985 maxabs=0.1973 relrms=0.0064616
+SF_RESULT b7168x2048 v1 pcc=0.999985 maxabs=0.1973 relrms=0.0064616
+SF_RESULT b7168x2048 v5 pcc=0.999985 maxabs=0.1973 relrms=0.0064616
+SF_RESULT b7168x1024 base pcc=0.999985 maxabs=0.1698 relrms=0.0062345
+SF_RESULT b7168x1024 v1 pcc=0.999985 maxabs=0.1698 relrms=0.0062345
+SF_RESULT b7168x1024 v5 pcc=0.999985 maxabs=0.1698 relrms=0.0062345
+SF_RESULT w32x7168 base pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT w32x7168 v1 pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT w32x7168 v5 pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT i32x7168 base pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT i32x7168 v1 pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT i32x7168 v5 pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT i8192x1024 base pcc=0.999985 maxabs=0.1818 relrms=0.0059507
+SF_RESULT i8192x1024 v1 pcc=0.999985 maxabs=0.1818 relrms=0.0059507
+SF_RESULT i8192x1024 v5 pcc=0.999985 maxabs=0.1818 relrms=0.0059507
+SF_RESULT b8192x1024_fp32 base pcc=0.999987 maxabs=0.2016 relrms=0.0070048
+SF_RESULT b8192x1024_fp32 v1 pcc=0.999985 maxabs=0.2641 relrms=0.0087961
+SF_RESULT b8192x1024_fp32 v5 pcc=0.999985 maxabs=0.2641 relrms=0.0087961
+SF_RESULT b8192x1024_nog base pcc=0.999992 maxabs=0.05839 relrms=0.0041259
+SF_RESULT b8192x1024_nog v1 pcc=0.999992 maxabs=0.05839 relrms=0.0041259
+SF_RESULT b8192x1024_nog v5 pcc=0.999992 maxabs=0.05839 relrms=0.0041259
+SF_RESULT b8192x1024 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b256x3072_2ch v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b256x3072_2ch v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i32x7168 v1 pcc=nan maxabs=0 relrms=nan
+SF_RESULT i32x7168 v5 pcc=nan maxabs=0 relrms=nan
+SF_RESULT b8192x1024 v1 pcc=0.999985 maxabs=0.1922 relrms=0.0063341
+SF_RESULT b8192x1024 v5 pcc=0.999985 maxabs=0.1922 relrms=0.0063341
+SF_RESULT b256x3072_2ch v1 pcc=0.999986 maxabs=0.1691 relrms=0.0062588
+SF_RESULT b256x3072_2ch v5 pcc=0.999986 maxabs=0.1691 relrms=0.0062588
+SF_RESULT i32x7168 v1 pcc=0.999987 maxabs=0.133 relrms=0.0074278
+SF_RESULT i32x7168 v5 pcc=0.999987 maxabs=0.133 relrms=0.0074278
