@@ -2210,8 +2210,8 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 // (DFBs and CBs are mutually exclusive, so dfb_allocation_metadata_ owns the whole region.)
                 // The scratchpad address is delivered as a CRTA, so it sits at the same L1 offset on every core of
                 // the kernel. The kernel's core ranges were registered in add_kernel.
-                const uint64_t addr = allocate_ephemeral_memory(
-                    this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
+                const uint64_t addr =
+                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
@@ -2315,7 +2315,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        const uint64_t computed_addr = allocate_ephemeral_memory(
+        const uint64_t computed_addr = allocate_dfb(
             this->cb_allocation_metadata_,
             circular_buffer->core_ranges(),
             circular_buffer->size(),

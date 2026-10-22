@@ -70,7 +70,7 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
     }
 }
 
-DeviceAddr allocate_ephemeral_memory(
+DeviceAddr allocate_dfb(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
     auto& regions = metadata.regions;
     uint64_t computed_addr = 0;
@@ -105,6 +105,42 @@ DeviceAddr allocate_ephemeral_memory(
         }
     }
     return computed_addr;
+}
+
+DeviceAddr allocate_scratchpad(
+    EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
+    auto& regions = metadata.regions;
+    for (const CoreRange& core_range : cores.ranges()) {
+        TT_FATAL(
+            std::any_of(
+                regions.begin(),
+                regions.end(),
+                [&core_range](const auto& region) { return region.core_range == core_range; }),
+            "Internal error: core range {} was not registered before allocation",
+            core_range.str());
+    }
+
+    // Take the max region end over EVERY region that intersects `cores` (not just exact-range matches), so the
+    // allocation cannot overlap one on an overlapping-but-different core range. Mark each such region exactly once.
+    std::vector<EphemeralAllocationMetadata::LockstepAllocationRegion*> touched;
+    for (auto& region : regions) {
+        if (cores.intersects(region.core_range)) {
+            touched.push_back(&region);
+        }
+    }
+    uint64_t addr = 0;
+    for (const auto* region : touched) {
+        TT_FATAL(
+            !region->l1_regions.empty(),
+            "Base address of core range {} is unknown. Call prepare_ephemeral_allocation() before allocating.",
+            region->core_range.str());
+        addr = std::max(addr, region->l1_regions.back().second);
+    }
+    addr = align(addr, alignment);
+    for (auto* region : touched) {
+        region->mark_address(addr, size);
+    }
+    return addr;
 }
 
 void invalidate_ephemeral_allocation_metadata(EphemeralAllocationMetadata& metadata) {

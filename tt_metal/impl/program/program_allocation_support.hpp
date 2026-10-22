@@ -67,13 +67,15 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 //
 // side-effect:
 //  - starts each region that has no allocations at its base address.
-//  - "seal" persistent_l1 to prevent collision between address spaces during `allocate_ephemeral_memory`.
+//  - "seal" persistent_l1 to prevent collision between address spaces during allocation.
 void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 
-// Performs lockstep allocation of a program-local resource across `cores`.
+// The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
+
+// Performs lockstep allocation of a circular buffer or dataflow buffer across `cores`.
 //
 // Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
-// of `cores`.
+// of `cores`. The address is read from the regions whose core_range exactly matches a range of `cores`.
 //
 // pre-condition:
 //  - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
@@ -81,7 +83,22 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.
-DeviceAddr allocate_ephemeral_memory(
+DeviceAddr allocate_dfb(
+    EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
+
+// Performs lockstep allocation of a scratchpad across `cores`.
+//
+// Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
+// of `cores`. The address is above every region whose core_range intersects `cores`, so it never overlaps an earlier
+// allocation, but may reserve more than needed.
+//
+// pre-condition:
+//  - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
+//  - prepare_ephemeral_allocation() has been called on `metadata`, and no region has been added since.
+//
+// side-effect:
+//  - mutates `metadata` regions that have core_range intersecting with `cores`.
+DeviceAddr allocate_scratchpad(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
 // Clears all allocations recorded in `metadata`; the registered core ranges are kept.
