@@ -4,7 +4,7 @@
 
 The single-chip baseline is ``optimized_decoder.OptimizedDecoder``: same op graph, precision policy (including the
 per-layer BFP4 exceptions), program-config rules and paged-cache contract. This class shards it 4 ways over the
-mesh's one axis (``doc/multichip_decoder/mesh_plan.md``, README):
+mesh's one axis (README):
 
 Weights (one DRAM width-sharded copy per chip, as on one chip)
 * QKV column-parallel by head: chip ``d`` owns Q heads ``4d..4d+3`` and, on sliding layers, KV heads ``2d, 2d+1``.
@@ -20,7 +20,7 @@ partial sums are summed by a one-shot ring ``all_reduce_async`` (persistent scra
 residual adds run full-width on every chip. Input and output share ``decode_input_memory_config()``. Full layers at
 B >= 8 (a multiple of 4) attend by user instead of by head: chip ``d`` gathers all 16 Q heads of users
 ``[dB/4, (d+1)B/4)`` and reads only their pages of the replicated cache (``_decode_attention_user_split``;
-``doc/optimized_multichip_decoder/README.md``).
+tenstorrent/tt-agentic-bringup-qb2#93).
 
 Prefill (one request, logical ``[1, 1, S, 3840]``): residual **sharded on hidden**, ``[1, 1, S, 960]`` per chip in
 DRAM (``prefill_input_mesh_mapper()``, i.e. ``ttnn.ShardTensorToMesh(dim=3)``, at the stack entry). Residual norms
@@ -36,14 +36,9 @@ stack, so their residual layouts differ; within each pass every layer kind has t
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import HF_PREFIX, MAX_DECODE_BATCH, TILE, rope_tables
-from models.autoports.google_gemma_4_12b_it.tt.fused_decoder import DEFAULT_PREFILL_CHUNK, interleave_perm
-from models.autoports.google_gemma_4_12b_it.tt.optimized_decoder import (
-    DEFAULT_POLICY,
-    FIDELITY,
-    OptimizedDecoder,
-    layer_policy,
-)
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import HF_PREFIX, MAX_DECODE_BATCH, TILE, rope_tables
+from models.demos.gemma4_12b_qb2.tt.fused_decoder import DEFAULT_PREFILL_CHUNK, interleave_perm
+from models.demos.gemma4_12b_qb2.tt.optimized_decoder import DEFAULT_POLICY, FIDELITY, OptimizedDecoder, layer_policy
 
 MESH_SHAPE = (1, 4)
 TP = 4
@@ -108,7 +103,7 @@ MULTICHIP_POLICY = {
     # all_gather_async ignores the barrier semaphore when it gets a persistent output
     # (all_gather_async_default_program_factory.cpp), so "barrier" runs without one and cross-invocation skew is not
     # bounded by the op. Default "none": the barrier really runs, +5 us per split full layer (reduced model, B=8 / 32,
-    # doc/optimized_full_model/logs/split_gather_ab.json; logits identical)
+    # bring-up A/B; logits identical)
     "decode_split_ag_buffers": "none",
     # where the user-split gathers write: "dram" (interleaved, persistent buffers per decode_split_ag_buffers) or "l1"
     # (interleaved, fresh per call; persistent L1 buffers for every batch size would break the 128 KB headroom)
@@ -584,7 +579,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.prefill_gate_up_dtype = mid[p["prefill_mlp_act_dtype"]["gate_up"]]
         self.prefill_product_dtype = mid[p["prefill_mlp_act_dtype"]["product"]]
         if self.meta_rope:
-            from models.autoports.google_gemma_4_12b_it.tt.fused_decoder import rot_transformation_mat
+            from models.demos.gemma4_12b_qb2.tt.fused_decoder import rot_transformation_mat
 
             if "rope_trans" not in shared:
                 trans = rot_transformation_mat()

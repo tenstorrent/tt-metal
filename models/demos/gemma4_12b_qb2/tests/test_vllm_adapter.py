@@ -25,7 +25,7 @@ Checks (the model is ``GEMMA4_VLLM_TEST_LAYERS`` real layers, default ``0,5``: o
 * ``test_seeded_rows_follow_request``: a seeded request samples the same tokens alone and inside a batch at another
   slot (seeds aligned to the input position on every reset).
 
-  pytest models/autoports/google_gemma_4_12b_it/tests/test_vllm_adapter.py
+  pytest models/demos/gemma4_12b_qb2/tests/test_vllm_adapter.py
 """
 
 import copy
@@ -39,17 +39,19 @@ MAX_MODEL_LEN = 16384
 MAX_SEQS = 32
 POOL_BLOCKS = 2000
 LAYERS = os.environ.get("GEMMA4_VLLM_TEST_LAYERS", "0,5")
-ARCH = "Gemma4UnifiedForConditionalGeneration"
-TARGET = "models.autoports.google_gemma_4_12b_it.tt.generator_vllm:Gemma4AutoportForCausalLM"
+ARCH = "TTGemma4_12BQB2ForCausalLM"  # vllm_metadata.json's arch with the plugin's TT prefix
+DEMOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TARGET = "models.demos.gemma4_12b_qb2.tt.generator_vllm:Gemma4_12BQB2ForCausalLM"
 
 
 def vllm_config():
     from vllm.engine.arg_utils import EngineArgs
 
-    os.environ.setdefault("TT_MODEL_CLASS_OVERRIDES", f"{ARCH}={TARGET}")
+    os.environ.setdefault("EXTRA_MODELS_DIR", DEMOS_DIR)
     os.environ.setdefault("MESH_DEVICE", "P300x2")
     args = EngineArgs(
         model="google/gemma-4-12B-it",
+        hf_overrides={"architectures": [ARCH]},
         block_size=64,
         max_model_len=MAX_MODEL_LEN,
         max_num_seqs=MAX_SEQS,
@@ -67,9 +69,9 @@ def setup():
     from vllm.model_executor.model_loader.utils import get_model_architecture
     from vllm.v1.core.kv_cache_utils import get_kv_cache_groups
 
-    from models.autoports.google_gemma_4_12b_it.tt.generator import Gemma4Generator
-    from models.autoports.google_gemma_4_12b_it.tt.model import Gemma4Model
-    from models.autoports.google_gemma_4_12b_it.tt.multichip_decoder import close_qb2_mesh, open_qb2_mesh
+    from models.demos.gemma4_12b_qb2.tt.generator import Gemma4Generator
+    from models.demos.gemma4_12b_qb2.tt.model import Gemma4Model
+    from models.demos.gemma4_12b_qb2.tt.multichip_decoder import close_qb2_mesh, open_qb2_mesh
 
     torch.set_num_threads(16)
     os.environ["GEMMA4_12B_VLLM_LAYERS"] = LAYERS

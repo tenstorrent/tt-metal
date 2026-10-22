@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM serving adapter for the ``google/gemma-4-12B-it`` autoport on a QB2 (``tenstorrent/vllm-tt-plugin``).
+"""vLLM serving adapter for the ``google/gemma-4-12B-it`` text decoder on a QB2 (``tenstorrent/vllm-tt-plugin``).
 
 The adapter only translates the plugin's model interface (``docs/MODEL_INTERFACE.md`` of the plugin) to the
 low-level API of ``tt/generator.py``; every device program, trace, cache layout and the sampler are the generator's:
@@ -34,9 +34,9 @@ low-level API of ``tt/generator.py``; every device program, trace, cache layout 
   intermediate prefill chunks) returns logits; it is never used by greedy or plain top-k / top-p / temperature
   requests, which run the traced on-device sampler.
 
-Registration (per launch): ``TT_MODEL_CLASS_OVERRIDES="Gemma4UnifiedForConditionalGeneration=
-models.autoports.google_gemma_4_12b_it.tt.generator_vllm:Gemma4AutoportForCausalLM"`` (the checkpoint's architecture;
-the plugin registers both the bare and the ``TT``-prefixed name, ahead of its built-in ``models.demos.gemma4`` class).
+Registration: ``vllm_metadata.json`` registers the architecture ``Gemma4_12BQB2ForCausalLM`` through the plugin's
+``EXTRA_MODELS_DIR`` (``models/demos``); the server selects it with
+``--hf-overrides '{"architectures": ["TTGemma4_12BQB2ForCausalLM"]}'``.
 """
 
 import atexit
@@ -50,10 +50,10 @@ from collections import Counter, deque
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import MAX_DECODE_BATCH
-from models.autoports.google_gemma_4_12b_it.tt.generator import DECODE_BUCKETS, Gemma4Generator, SamplingParams
-from models.autoports.google_gemma_4_12b_it.tt.model import BLOCK_SIZE, HF_MODEL, Gemma4Model, text_config
-from models.autoports.google_gemma_4_12b_it.tt.multichip_decoder import MESH_SHAPE, TP, fabric_router_config
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import MAX_DECODE_BATCH
+from models.demos.gemma4_12b_qb2.tt.generator import DECODE_BUCKETS, Gemma4Generator, SamplingParams
+from models.demos.gemma4_12b_qb2.tt.model import BLOCK_SIZE, HF_MODEL, Gemma4Model, text_config
+from models.demos.gemma4_12b_qb2.tt.multichip_decoder import MESH_SHAPE, TP, fabric_router_config
 
 # KV token budget handed to the plugin (it adds one block per user and 8 sliding windows per user of headroom).
 # 1048576 tokens = 4 full-context requests of full-attention blocks: 20512 blocks x 557056 B (8 shared buffers x K, V
@@ -127,7 +127,7 @@ class _DecodeOutput:
         self.read = None  # Gemma4Generator.read_decode_output result (a DeferredRead when overlapped)
 
 
-class Gemma4AutoportForCausalLM:
+class Gemma4_12BQB2ForCausalLM:
     model_capabilities = {
         "supports_sample_on_device": True,
         "max_device_top_k": 32,  # SplitTopKSampling keeps 32 candidates per row
@@ -169,7 +169,7 @@ class Gemma4AutoportForCausalLM:
         import hashlib
         import sys
 
-        from models.autoports.google_gemma_4_12b_it.tt.precision import built_precision_summary
+        from models.demos.gemma4_12b_qb2.tt.precision import built_precision_summary
 
         m = self.model
         cfg = text_config()
@@ -365,7 +365,7 @@ class Gemma4AutoportForCausalLM:
         )
         self.kv_caches = caches
         print(
-            f"Gemma4 autoport vLLM KV: {num_blocks} blocks (+1 scratch) x {len(buffers)} shared buffers x [k, v], "
+            f"Gemma-4-12B vLLM KV: {num_blocks} blocks (+1 scratch) x {len(buffers)} shared buffers x [k, v], "
             f"{len(groups)} vLLM groups ({len(present)} used), group windows {self.generator.group_window}"
         )
         return caches

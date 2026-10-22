@@ -24,7 +24,7 @@ model's ``[1, 1, 32, 65536]`` BF16 shard:
 Both levels keep every candidate that can reach a row's global top 32: a chunk's top 64 contains every element of
 the chunk that is in the chip's top 32, and the chip's top 32 contains every element in the global top 32. Greedy
 ties resolve to the lowest global id whenever a chip holds at most 32 logits tied at the row maximum, the guarantee
-of TTSampling's tie-break (``_adjust_values_for_tiebreak``, KNOWN LIMITATION; doc/optimized_full_model README).
+of TTSampling's tie-break (``_adjust_values_for_tiebreak``, known limitation).
 """
 
 import torch
@@ -35,7 +35,7 @@ from models.common.sampling.tt_sampling import TTSampling
 LEVEL1_CHUNKS = 16
 # Level-2 width 1024: at 512 columns (16 x top-32) ttnn.topk takes its single-core program (73 us); padding the 512
 # survivors to 1024 costs 32 us of pads; keeping the top 64 per chunk at level 1 gives 1024 directly
-# (sampler 354.8 / 347.9 / 331.8 us for 512 / pad / level-1 k = 64; doc/optimized_full_model work log 11)
+# (sampler 354.8 / 347.9 / 331.8 us for 512 / pad / level-1 k = 64; bring-up measurement)
 LEVEL2_WIDTH = 1024
 
 

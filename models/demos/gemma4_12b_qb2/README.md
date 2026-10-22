@@ -29,7 +29,7 @@ stages. Tracking issue: tenstorrent/tt-agentic-bringup-qb2#93.
   - The 8 full-attention layers turn it on for every chunked-prefill call.
   - Without it, full-attention prefill PCC drops to 0.9865 at 131K tokens and 0.97 at 262K.
 - vllm-tt-plugin `main`, unmodified. The adapter is registered through
-  `TT_MODEL_CLASS_OVERRIDES=Gemma4UnifiedForConditionalGeneration=models.autoports.google_gemma_4_12b_it.tt.generator_vllm:Gemma4AutoportForCausalLM`.
+  `TT_MODEL_CLASS_OVERRIDES=Gemma4UnifiedForConditionalGeneration=models.demos.gemma4_12b_qb2.tt.generator_vllm:Gemma4AutoportForCausalLM`.
 
 ## Serving (tt-inference-server)
 - Spec `id_gemma4-12b-qb2_gemma-4-12B-it_p300x2`, selected with `--impl gemma4-12b-qb2`.

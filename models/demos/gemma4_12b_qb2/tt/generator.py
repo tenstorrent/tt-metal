@@ -51,11 +51,11 @@ from typing import Any, List, Optional
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import MAX_DECODE_BATCH
-from models.autoports.google_gemma_4_12b_it.tt.model import PREFILL_BUCKETS, Gemma4Model, pretrained_source
-from models.autoports.google_gemma_4_12b_it.tt.multichip_decoder import NUM_LINKS
-from models.autoports.google_gemma_4_12b_it.tt.sampling import SplitTopKSampling
 from models.common.sampling.tt_sampling import TTSampling
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import MAX_DECODE_BATCH
+from models.demos.gemma4_12b_qb2.tt.model import PREFILL_BUCKETS, Gemma4Model, pretrained_source
+from models.demos.gemma4_12b_qb2.tt.multichip_decoder import NUM_LINKS
+from models.demos.gemma4_12b_qb2.tt.sampling import SplitTopKSampling
 
 SAMPLERS = {"split_topk": SplitTopKSampling, "ttsampling": TTSampling}
 

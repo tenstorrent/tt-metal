@@ -213,7 +213,7 @@ class FunctionalDecoder(LightweightModule):
             packer_l1_acc=False,
         )
         # Decode SDPA also uses HiFi4 + FP32 dest: BF16 dest left isolated decode rows at PCC ~0.9977 on
-        # real layer-0 weights (doc/functional_decoder/logs/decode_precision_variants.log). With 16 BF16
+        # real layer-0 weights (bring-up measurement). With 16 BF16
         # Q heads the op takes its half-tile path, whose softmax exp is always approximate regardless of
         # math_approx_mode (FP32 Q, which would select full tiles, is rejected by the op).
         self.compute_sdpa_decode = self.compute_hifi4_fp32

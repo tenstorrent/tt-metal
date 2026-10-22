@@ -196,8 +196,8 @@ class PrecisionConfig:
         path = Path(precision)
         if not path.is_file():
             raise FileNotFoundError(
-                f"precision config {path} not found: the model's dtype / fidelity policy is read from it "
-                f"(doc/datatype_sweep/README.md); pass precision='baseline' for the stage-7 policy"
+                f"precision config {path} not found: the model's dtype / fidelity policy is read from it; "
+                f"pass precision='baseline' for the stage-7 policy"
             )
         return cls(json.loads(path.read_text()), path, num_layers)
 

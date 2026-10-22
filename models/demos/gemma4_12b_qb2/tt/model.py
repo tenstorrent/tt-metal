@@ -43,11 +43,11 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import MAX_DECODE_BATCH, TILE
-from models.autoports.google_gemma_4_12b_it.tt.fused_decoder import DEFAULT_PREFILL_CHUNK
-from models.autoports.google_gemma_4_12b_it.tt.multichip_decoder import MESH_SHAPE, TP, MultichipDecoder, mesh_ccl
-from models.autoports.google_gemma_4_12b_it.tt.optimized_decoder import FIDELITY
-from models.autoports.google_gemma_4_12b_it.tt.precision import PrecisionConfig, built_precision_summary, deep_merge
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import MAX_DECODE_BATCH, TILE
+from models.demos.gemma4_12b_qb2.tt.fused_decoder import DEFAULT_PREFILL_CHUNK
+from models.demos.gemma4_12b_qb2.tt.multichip_decoder import MESH_SHAPE, TP, MultichipDecoder, mesh_ccl
+from models.demos.gemma4_12b_qb2.tt.optimized_decoder import FIDELITY
+from models.demos.gemma4_12b_qb2.tt.precision import PrecisionConfig, built_precision_summary, deep_merge
 
 HF_MODEL = "google/gemma-4-12B-it"
 HF_REVISION = os.environ.get("HF_REVISION", "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7")
@@ -71,6 +71,8 @@ def pretrained_source():
     if MOUNTED_SNAPSHOT is not None:
         return str(MOUNTED_SNAPSHOT), None
     return HF_MODEL, HF_REVISION
+
+
 TEXT_PREFIX = "model.language_model."
 
 BLOCK_SIZE = 64
@@ -82,12 +84,12 @@ PREFILL_BUCKETS = (128, 256, 512, 1024, 2048, 4096, 8192)
 # LM head (tied embedding, vocab-sharded, [3840, 65536] per chip). dtype / fidelity come from the precision config
 # (tt/precision.py); the program follows the dtype unless ``lm_head`` overrides "program":
 # * BFP8: a 1D-multicast program over the 11 x 10 grid (19 output tiles per core) reading the DRAM-interleaved weight:
-#   720 us vs 878 / 761 us for the DRAM-sharded program with 2 / 3 readers per bank (doc/optimized_full_model/logs/
-#   lm_head_probe3.json);
+#   720 us vs 878 / 761 us for the DRAM-sharded program with 2 / 3 readers per bank (bring-up LM-head
+#   probe);
 # * BFP4: the DRAM-sharded program with 3 reader cores per bank (columns padded to 66048 per chip so each bank shard
 #   splits over its readers) and in0_block_w 1 on the L1 width-sharded normalized hidden state: 403 us vs 525 us for the
 #   best 1D-multicast geometry; 4 readers exceed the op's limit (workers_per_bank <= 3), in0_block_w 8 overflows L1
-#   (doc/datatype_sweep/logs/lm_head_bfp4_probe.json).
+#   (bring-up datatype sweep).
 LM_HEAD_POLICY = {"dtype": ttnn.bfloat8_b, "fidelity": "hifi2", "in0_block_w": 8, "program": None, "readers": 3}
 LM_HEAD_PROGRAM_BY_DTYPE = {ttnn.bfloat8_b: "mcast1d", ttnn.bfloat4_b: "dram_sharded", ttnn.bfloat16: "mcast1d"}
 _DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
@@ -336,7 +338,7 @@ class Gemma4Model:
         ]
         # decode entry gather into persistent DRAM outputs per decode batch (as the layers' user-split gathers, with
         # the barrier semaphore): measured equal to the fresh L1 output (1319.4 vs 1320.7 us per reduced-model step,
-        # doc/optimized_full_model/logs/ccl_buffers_ab.json), so the default keeps the fresh L1 output
+        # bring-up A/B), so the default keeps the fresh L1 output
         self.entry_gather_bufs = {}
         if persistent_entry_gather:
             for b in range(1, MAX_DECODE_BATCH + 1):

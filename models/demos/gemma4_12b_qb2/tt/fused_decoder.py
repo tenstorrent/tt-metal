@@ -8,7 +8,7 @@ Same layer, constructor and runtime contract as ``functional_decoder.FunctionalD
 - any logical prefill length;
 - trace-safe decode of 1..32 users, where ``-1`` skips a user.
 Only the op graph differs. The rewrites relative to the functional decoder are listed below;
-``doc/fused_decoder/README.md`` has the measurements.
+The bring-up measurements are in tenstorrent/tt-agentic-bringup-qb2#93.
 
 Prefill
 * Every projection (QKV, o_proj, gate, up, down) runs on ``ttnn.experimental.minimal_matmul``.
@@ -49,14 +49,8 @@ import math
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import (
-    HF_PREFIX,
-    MAX_DECODE_BATCH,
-    TILE,
-    _round_up,
-    rope_tables,
-)
 from models.common.lightweightmodule import LightweightModule
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import HF_PREFIX, MAX_DECODE_BATCH, TILE, _round_up, rope_tables
 
 DEFAULT_PREFILL_CHUNK = 8192
 SLIDING_Q_TILE = 256  # largest prefill SDPA Q tile on sliding layers

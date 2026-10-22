@@ -9,7 +9,7 @@ Same layer, constructor and runtime contract as ``fused_decoder.FusedDecoder`` (
 - any logical prefill length;
 - trace-safe decode of 1..32 users, where ``-1`` skips a user.
 The fused op graph is kept; this stage changes precision, layouts and program configs.
-``doc/optimized_decoder/README.md`` has the measurements behind every default below.
+The bring-up measurements behind every default below are in tenstorrent/tt-agentic-bringup-qb2#93.
 
 Precision (``DEFAULT_POLICY`` plus the per-layer exceptions of ``layer_policy``)
 * BF16 activations, residual and norms; BFP8 weights with LoFi matmuls; BFP8 KV cache (prefill casts the
@@ -48,8 +48,8 @@ import math
 import torch
 
 import ttnn
-from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import HF_PREFIX, MAX_DECODE_BATCH, TILE, rope_tables
-from models.autoports.google_gemma_4_12b_it.tt.fused_decoder import (
+from models.demos.gemma4_12b_qb2.tt.functional_decoder import HF_PREFIX, MAX_DECODE_BATCH, TILE, rope_tables
+from models.demos.gemma4_12b_qb2.tt.fused_decoder import (
     DEFAULT_PREFILL_CHUNK,
     SLIDING_ATTN_BLOCK,
     SLIDING_Q_TILE,
