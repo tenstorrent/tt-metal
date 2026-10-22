@@ -983,7 +983,18 @@ ALWI void unary_max_int32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
 }
 
-#ifndef ARCH_QUASAR  // Quasar has no UInt32 Dest format
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -1111,7 +1122,18 @@ ALWI void unary_min_int32_tile_init() {
         SFPU_UNARY_INIT_FN(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
 }
 
-#ifndef ARCH_QUASAR  // Quasar has no UInt32 Dest format
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_min : if x < value --> x, else value
 // clang-format off
 /**

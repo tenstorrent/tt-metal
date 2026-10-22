@@ -26,7 +26,8 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
     calculate_unary_max_min<IS_MAX_OP, DataFormat::Float32, APPROXIMATION_MODE, ITERATIONS>(value);
 }
 
-// Quasar has no UInt32 Dest format, so the compute API leaves out unary_*_uint32_tile; only the Int32 path exists.
+// Quasar has no UInt32 data format: the compute API's unary_*_uint32_tile static_assert when called, so only the
+// Int32 path is reachable here.
 template <bool IS_MAX_OP, bool IS_UNSIGNED, bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_unary_max_min_int32(const std::uint32_t value) {
     static_assert(!IS_UNSIGNED, "unary_max_uint32_tile / unary_min_uint32_tile are not supported on Quasar");
