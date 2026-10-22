@@ -236,6 +236,7 @@ def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
     an agent that runs its own gate command rewrites them."""
     tid = task["id"]
     out = [ledger.results_dir / f"{tid}.json", *sorted(ledger.results_dir.glob(f"{tid}_*.json"))]
+    out += sorted(ledger.results_dir.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
     if task.get("step") == "optests":
         out.append(ledger.results_dir / "fork_calls.json")
         if "fork_calls_scaled.json" in (task.get("gate") or {}).get("cmd", ""):  # F64: the scaled run's calls

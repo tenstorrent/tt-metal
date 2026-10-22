@@ -18,6 +18,7 @@ their host time (F46; the profile lists them as ``bridged_steps``, and their tra
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -411,7 +412,13 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     }
     path = metrics.results_dir() / f"{metrics.record_task()}_profile.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(out, indent=1) + "\n")
+    slim = dict(out)
+    if "ops" in slim:  # F148: the per-op rows go gzipped beside it (the repo's 500 KB hook refused a 613 KB profile)
+        ops_name = f"{metrics.record_task()}_ops.json.gz"
+        with gzip.open(path.parent / ops_name, "wt") as f:
+            json.dump(slim.pop("ops"), f)
+        slim["ops_file"] = ops_name
+    path.write_text(json.dumps(slim, indent=1) + "\n")
     s.profiles_dir.mkdir(parents=True, exist_ok=True)
     (s.profiles_dir / f"{metrics.record_task()}_{time.strftime('%Y%m%dT%H%M%S')}.json").write_text(
         json.dumps(out, indent=1)
