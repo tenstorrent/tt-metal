@@ -49,6 +49,8 @@ def _time(mesh, f):
         ttnn.synchronize_device(mesh)
         progs = [r for r in per_chip_programs(mesh) if r]
         ts.append(max(sum(r) for r in progs))
+        if os.environ.get("TIME_SPLIT"):  # (each program's slowest chip)
+            logger.info(f"TIME_SPLIT {[round(max(r[i] for r in progs), 1) for i in range(len(progs[0]))]}")
     return statistics.median(ts), out
 
 

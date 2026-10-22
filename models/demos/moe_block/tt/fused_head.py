@@ -11,6 +11,8 @@ the last column."""
 from dataclasses import dataclass
 from typing import Literal
 
+import torch
+
 import ttnn
 from models.demos.moe_block.tt.lin2c import XREADY, Lin2c, semaphores
 from models.demos.moe_block.tt.tp_gather import TpGather
@@ -216,7 +218,10 @@ class HeadSE3:
         KB=None,
         num_links=2,
         fidelity=ttnn.MathFidelity.HiFi2,
+        rs_dim=None,
     ):
+        """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter by the
+        matmul_reduce_scatter op on h (the engine stops at h); None: the engine's own down, y the chip's partial."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -227,12 +232,27 @@ class HeadSE3:
         # steps give the x families more owners: less x a core)
         G = tuple(mesh_device.shape)[1]
         klt = H // 32 // G
+        self.mesh, self.rs_dim, self.num_links = mesh_device, rs_dim, num_links
+        self.xg = None
+        if rs_dim is not None:
+            self._warm_rs(rows, H, I)
         for kb in (
             [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
         ):
             try:
                 self.eng = SeEngine3(
-                    mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=kb, fidelity=fidelity, shards=G
+                    mesh_device,
+                    rows=rows,
+                    H=H,
+                    I=I,
+                    glu=glu,
+                    GX=GX,
+                    GY=GY,
+                    MT=MT,
+                    KB=kb,
+                    fidelity=fidelity,
+                    shards=G,
+                    down=rs_dim is None,
                 )
                 break
             except ValueError:
@@ -240,6 +260,8 @@ class HeadSE3:
         else:
             raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows")
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        if rs_dim is not None:
+            ttnn.deallocate(self.eng.arena)
         self.xg = XGather3(
             mesh_device,
             self.eng,
@@ -247,19 +269,83 @@ class HeadSE3:
             sub_core_grid=movers,
             placement="simple" if grid.x - GX < 4 else "auto",
         )
-        self.rows, self.H = rows, H
+        if rs_dim is not None:  # (the gather's semaphores above the arena too: the arena is freed every call)
+            self.eng.alloc_arena()
+        self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.state = dict(key=None)
 
     def upload(self, w_gu, w_down):
-        return self.eng.upload(w_gu, w_down)
+        """w_gu / w_down per device (row-major mesh order). With rs_dim: (engine weights, W_down [I, H] bf8 a chip)."""
+        if self.rs_dim is None:
+            return self.eng.upload(w_gu, w_down)
+        R, C = tuple(self.mesh.shape)
+        glob = torch.cat([torch.cat(list(w_down[r * C : (r + 1) * C]), dim=1) for r in range(R)], dim=0)
+        wd = ttnn.from_torch(
+            glob,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        return self.eng.upload(w_gu, w_down), wd
+
+    def _ring(self):
+        if self.xg is not None:
+            return self.xg.ring
+        cfg = ttnn.get_fabric_config()  # (as the gather decides it)
+        return cfg in (ttnn.FabricConfig.FABRIC_2D_TORUS_X, ttnn.FabricConfig.FABRIC_2D_TORUS_XY) and (
+            tuple(self.mesh.shape)[1] > 2
+        )
+
+    def _warm_rs(self, rows, H, I):
+        """The op's persistent L1 (staging, mailbox) before the arena and the gather's semaphores (a call on zeros):
+        the arena is freed for the op's CBs every call, and must find its place free again."""
+        zeros = lambda shape, dt: ttnn.from_torch(  # noqa: E731
+            torch.zeros(shape),
+            dtype=dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h, wd = zeros((1, 1, rows, I), ttnn.bfloat16), zeros((I, H), ttnn.bfloat8_b)
+        for t in (self._rs(h, wd), h, wd):
+            ttnn.deallocate(t)
+
+    def _rs(self, h, wd):
+        from ttnn.operations.ccl import Topology
+        from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
+
+        return matmul_reduce_scatter(
+            h,
+            wd,
+            cluster_axis=1,
+            scatter_dim=self.rs_dim,
+            topology=Topology.Ring if self._ring() else Topology.Linear,
+            num_links=self.num_links,
+        )
 
     def run(self, x, w):
+        if self.rs_dim is not None:
+            w, wd = w
+            if not self.eng.arena.is_allocated():  # (the arena is call scratch: freed for the op's CBs below)
+                self.eng.alloc_arena()
+            h = self._run(x, w, self.I)
+            self.state.update(key=None, desc=None)  # (its CB descriptors hold the arena's buffer)
+            ttnn.deallocate(self.eng.arena)  # (the queue keeps the order: the op's CBs reuse its L1 after it)
+            out = self._rs(h, wd)
+            ttnn.deallocate(h)
+            return out
+        return self._run(x, w, self.H)
+
+    def _run(self, x, w, width):
         from models.demos.moe_block.tt.se_engine3 import XREADY
 
         y = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.rows, self.H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([1, 1, self.rows, width]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
         )
-        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()))
+        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), id(self.eng.arena))
         if self.state["key"] != key:
             md = ttnn.MeshProgramDescriptor()
             e = self.eng

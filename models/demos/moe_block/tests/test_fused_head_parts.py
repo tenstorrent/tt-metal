@@ -102,6 +102,7 @@ CHAIN = {
     "glm": (4096, 1024, "silu", 8, 4),
     "k3": (7168, 3072, "situ", 8, 4),
 }
+RS_DIM = {"glm": -2, "k3": -1}  # (the SE reduce-scatter: GLM's rows to their owners, K3's width)
 
 
 @pytest.mark.parametrize(
@@ -429,6 +430,7 @@ def test_head_se3(mesh_device, device_params):
             glu=glu,
             MT=int(os.environ.get("SE_MT", "2")),
             KB=int(os.environ.get("SE_KB", "0")) or None,
+            rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter)
         )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
@@ -444,23 +446,34 @@ def test_head_se3(mesh_device, device_params):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
         )
         us, y = _time(mesh_device, lambda: head.run(xt, w))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+        ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
         act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
+        ps, refs = [], []
         for d in range(R * C):
             r = d // C
             xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
             hh = xf @ wg[d]
-            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+            refs.append(act_host(act, hh[:, :I], hh[:, I:]) @ wd[d])
+        for d in range(R * C):
+            r, c = divmod(d, C)
+            if head.rs_dim is None:
+                ps.append(pcc(ys[d], refs[d].reshape(-1)))
+            else:  # (chip (r, c): block c of the sum over its TP row)
+                tot = sum(refs[r * C + cc] for cc in range(C))
+                ps.append(pcc(ys[d], torch.chunk(tot, C, dim=head.rs_dim)[c].reshape(-1)))
         logger.info(
-            f"HSE3 {name} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
+            f"HSE3 {name}{' +RS' if head.rs_dim else ''} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
             f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
         )
         assert os.environ.get("SE_PROBE") or min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
-        ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1, unfragmented:)
+        if head.eng.arena.is_allocated():
+            ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1, unfragmented:)
         del head  # (the gather's global semaphores too)
         import gc
 
+        from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter_program_descriptor as mrs
+
+        mrs._MESH_CACHE.clear()  # (its staging / mailbox L1 tensors: the next arena wants the L1 unfragmented)
         gc.collect()

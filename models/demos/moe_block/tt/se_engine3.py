@@ -47,6 +47,9 @@ constexpr uint32_t HT = get_compile_time_arg_val(6), POMAX = get_compile_time_ar
 constexpr uint32_t S0 = get_compile_time_arg_val(9), S1 = get_compile_time_arg_val(10), KT = get_compile_time_arg_val(11);
 constexpr uint32_t XREADY = get_compile_time_arg_val(12), HCNT = get_compile_time_arg_val(13), HFREE = get_compile_time_arg_val(14);
 constexpr auto x_args = TensorAccessorArgs<15>();
+#ifdef SE_NODOWN
+constexpr auto h_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+#endif
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
 // x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
@@ -94,10 +97,14 @@ void kernel_main() {
     }
     constexpr auto mx0 = McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
     constexpr auto mx1 = McastArgs<get_named_compile_time_arg_val("x1_ct_offset"), get_named_compile_time_arg_val("x1_rt_offset")>();
+#ifndef SE_NODOWN
     constexpr auto mh = McastArgs<get_named_compile_time_arg_val("h_ct_offset"), get_named_compile_time_arg_val("h_rt_offset")>();
+#endif
     Noc noc;
+#ifndef SE_NODOWN
     auto sh = mh.optional_sender(noc);
     auto rh = mh.optional_receiver(noc);
+#endif
     auto s0 = mx0.optional_sender(noc);
     auto r0 = mx0.optional_receiver(noc);
     auto s1 = mx1.optional_sender(noc);
@@ -128,6 +135,19 @@ void kernel_main() {
                 cb_push_back(CB_XIN, MT * KB);
             }
         }
+#ifdef SE_NODOWN
+        {  // (no down here: my h block [MT][po] to DRAM h [rows, HT] - the down + reduce-scatter reads it)
+        DeviceZoneScopedN("SE-HOUT");
+        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0);
+        const auto hg = TensorAccessor(h_args, get_arg_val<uint32_t>(np0 + 3 + 2 * nports), 2048);
+        cb_wait_front(CB_HOWN, MT * POMAX);
+        for (uint32_t r = 0; r < MT; ++r)
+            for (uint32_t t = 0; t < po; ++t)
+                noc_async_write(hown + (r * POMAX + t) * 2048, hg.get_noc_addr((m * CR + cy * MT + r) * HT + h0 + t), 2048);
+        noc_async_write_barrier();
+        cb_pop_front(CB_HOWN, MT * POMAX);
+        }
+#else
         DeviceZoneScopedN("SE-HX");
         // h: every core's h block [MT][POMAX] into every row core's h-all slot (m % 2) as block cx ([GX][MT][POMAX]):
         // one kernel_lib rotating round a column; the receivers' readiness ack is the slot's credit
@@ -141,6 +161,7 @@ void kernel_main() {
         }
         cb_push_back(CB_HALL, HA);
         cb_pop_front(CB_HOWN, MT * POMAX);
+#endif
     }
     noc_async_atomic_barrier();
 }
@@ -159,6 +180,7 @@ constexpr uint32_t WV = get_compile_time_arg_val(15), WFREE = get_compile_time_a
 constexpr auto w_args = TensorAccessorArgs<18>();
 constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 constexpr uint32_t CB_WIN = 1, CB_OUT = 4, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
+constexpr uint32_t NPD1 = NPD ? NPD : 1, NSD1 = NSD ? NSD : 1;  // (no down: 0, never divided by)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i)); }
 // the column's W stream: block b of a chunk (gate / up pass b / NSG, step b % NSG; then down) held by row b % GY,
 // multicast down the column into W slot (round % NWS); every core pushes what lands and credits the slot's next holder
@@ -180,7 +202,7 @@ void kernel_main() {
         return pg * NSG + get_arg_val<uint32_t>(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
     };
     auto bsize = [&](uint32_t b) {  // (tiles)
-        return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD);
+        return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD1);
     };
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
     // my blocks from DRAM, once: my W-own is one contiguous region in one bank (per-bank layout, wbase its offset),
@@ -256,7 +278,7 @@ void kernel_main() {
         }
         if (p < NPY && cb_pages_available_at_front(CB_OUT, MT * PWDMAX)) {  // down pass p's y (chunk p / NPD)
             cb_wait_front(CB_OUT, MT * PWDMAX);
-            const uint32_t m = p / NPD, pd = p % NPD, l1 = get_read_ptr(CB_OUT);
+            const uint32_t m = p / NPD1, pd = p % NPD1, l1 = get_read_ptr(CB_OUT);
             uint32_t c0 = n0d;
             for (uint32_t i = 0; i < pd; ++i) c0 += get_arg_val<uint32_t>(wd0 + i);
             const uint32_t w = get_arg_val<uint32_t>(wd0 + pd);
@@ -370,6 +392,7 @@ void kernel_main() {
         }
         cb_push_back(HOWN, MT * POMAX);
         }
+#ifndef SE_NODOWN
         DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
         cb_wait_front(HALL, HA);
@@ -399,6 +422,7 @@ void kernel_main() {
             cb_push_back(OUT, MT * PWDMAX);
         }
         cb_pop_front(HALL, HA);
+#endif
     }
 }
 """
@@ -446,8 +470,10 @@ class SeEngine3:
         fidelity=ttnn.MathFidelity.HiFi2,
         w_dtype=ttnn.bfloat8_b,
         shards=1,
+        down=True,
     ):
-        """shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
+        """down False: no down here - h [rows, I] goes to DRAM (y) for the down + reduce-scatter stage.
+        shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
         self.mesh = mesh_device
         self.shards = shards
         self.rows, self.H, self.I, self.glu = rows, H, I, glu
@@ -479,13 +505,14 @@ class SeEngine3:
         pnd = column_split(self.NTH, GX, 1)
         self.n0d = [sum(pnd[:c]) for c in range(GX)]
         self.PWDMAX = 8 // MT
-        self.NPD = max(-(-p // self.PWDMAX) for p in pnd)
-        self.wd = [_split(p, self.NPD, 1) for p in pnd]
+        self.down = down
+        self.NPD = max(-(-p // self.PWDMAX) for p in pnd) if down else 0
+        self.wd = [_split(p, self.NPD, 1) if down else [] for p in pnd]
         self.KBD = KBD
         assert self.HT % KBD == 0
-        self.NSD = self.HT // KBD
+        self.NSD = self.HT // KBD if down else 0
         self.NB = self.NPG * self.NSG + self.NPD * self.NSD
-        self.WSLOT = max(self.KB * max(sum(self.wg, [])), KBD * max(sum(self.wd, [])))  # (tiles)
+        self.WSLOT = max(self.KB * max(sum(self.wg, [])), KBD * max(sum(self.wd, []), default=0))  # (tiles)
         self.fid, self.w_dtype = fidelity, w_dtype
         self.wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
 
@@ -511,9 +538,9 @@ class SeEngine3:
             ("xin", 2 * MT * self.KB * 2048),
             ("win", NWS * self.WSLOT * self.wtb),
             ("hown", MT * self.POMAX * 2048),
-            ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048),
+            ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
             ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
-            ("out", NOUT * MT * self.PWDMAX * 2048),
+            ("out", NOUT * MT * self.PWDMAX * 2048 if down else 0),
             ("words", 256),
         ]:
             off[k], o = o, al(o + v)
@@ -522,18 +549,24 @@ class SeEngine3:
             raise ValueError(f"se_engine3: arena {o // 1024} KB > {ARENA_MAX // 1024} KB of L1 (KB {self.KB})")
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
         self.crs = cores
-        shard = ttnn.ShardSpec(cores, [1, o // 4], ttnn.ShardOrientation.ROW_MAJOR)
-        self.arena = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, GX * GY, o // 4]),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            mesh_device,
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard),
-        )
-        self.base = int(self.arena.buffer_address())
+        self.alloc_arena()
         self.groups = {}
         for c in range(GX):
             self.groups.setdefault((tuple(self.wg[c]), tuple(self.wd[c])), []).append(c)
+
+    def alloc_arena(self):
+        """The arena (call scratch: x, the weights, every CB) as an L1 tensor; base its address (the programs bake it)."""
+        o, n = self.arena_bytes, self.GX * self.GY
+        shard = ttnn.ShardSpec(self.crs, [1, o // 4], ttnn.ShardOrientation.ROW_MAJOR)
+        self.arena = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, n, o // 4]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard),
+        )
+        self.base = int(self.arena.buffer_address())
+        return self.arena
 
     def dram_bytes(self):
         w = (self.KT * 2 * self.HT + self.HT * self.NTH) * self.wtb
@@ -563,8 +596,8 @@ class SeEngine3:
                     for i in range(self.NSD):
                         blk = wdt[i * KBD * 32 : (i + 1) * KBD * 32, c0 * 32 : (c0 + pw) * 32]
                         blocks.append(blk.reshape(KBD, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
-                for cy in range(GY):
-                    reg = torch.cat(blocks[cy::GY])
+                for cy in range(GY):  # (a row may hold none: fewer blocks than rows without the down's)
+                    reg = torch.cat(blocks[cy::GY]) if blocks[cy::GY] else torch.zeros(0, 32, dtype=wgt.dtype)
                     pad = self.wown_t * 32 - reg.shape[0]
                     regions.append(torch.cat([reg, torch.zeros(pad, 32, dtype=reg.dtype)]) if pad else reg)
             devs.append([r.reshape(-1, 32, 32) for r in regions])
@@ -604,8 +637,9 @@ class SeEngine3:
         cb(XIN, "xin", 2 * MT * self.KB * 2048, ttnn.bfloat16, 2048)
         cb(WIN, "win", NWS * self.WSLOT * self.wtb, self.w_dtype, self.wtb)
         cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
-        cb(HALL, "hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
-        cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
+        if self.down:
+            cb(HALL, "hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
+            cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
         cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -637,6 +671,7 @@ class SeEngine3:
                     + [virt(cc, cy).x for cc in range(GX)]
                     + sor
                     + tail
+                    + [int(y.buffer_address())]
                 )
                 n_rt[cx0 + c][cy] = (
                     [
@@ -700,11 +735,12 @@ class SeEngine3:
             WFREE,
             NOUT,
         ]
+        nd = "" if self.down else "#define SE_NODOWN\n"
         self.brisc = ttnn.KernelDescriptor(
-            kernel_source=_probes() + _BRISC,
+            kernel_source=nd + _probes() + _BRISC,
             source_type=st,
             core_ranges=allc,
-            compile_time_args=bct + xa_ct,
+            compile_time_args=bct + xa_ct + ([] if self.down else y_ct),
             runtime_args=b_rt,
             config=dm("RISCV_0", ttnn.NOC.NOC_0),
         )
@@ -738,7 +774,7 @@ class SeEngine3:
                     c_rt[cx0 + c][cy] = list(wg) + list(wd) + list(self.h0) + [self.HT]  # (+ the h column offsets)
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=f"#define SE_GLU {glu_code}\n" + _probes() + _COMPUTE,
+                    kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[
@@ -782,7 +818,7 @@ class SeEngine3:
             ("x0", ttnn.Mcast1DRotatingSenderConfig(sender_grid=cols(self.fam0))),
             ("x1", ttnn.Mcast1DRotatingSenderConfig(sender_grid=cols(self.fam1))),
             ("h", ttnn.Mcast1DRotatingSenderConfig()),
-        ]
+        ][: 3 if self.down else 2]
         for name, cfg in fams:
             mc = ttnn.Mcast1D(
                 self.mesh, rect, ttnn.Mcast1DShape.PerRow, cfg, ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0)
