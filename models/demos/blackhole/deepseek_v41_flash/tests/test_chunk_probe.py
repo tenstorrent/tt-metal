@@ -85,7 +85,12 @@ def test_chunk_probe(mesh_device):
             rec.clear()
             c0 = ncap[0]
             t0 = time.perf_counter()
-            res = m.prefill_interleaved(items, CHUNK, s_pad_max=WMAX if MODE == "single" else None)
+            res = m.prefill_interleaved(
+                items,
+                CHUNK,
+                s_pad_max=WMAX if MODE == "single" else None,
+                want_logits=bool(os.environ.get("PROBE_SAVE")),
+            )
             wall = time.perf_counter() - t0
             n = len(rec)
             td = [r[2] for r in rec]
@@ -95,5 +100,10 @@ def test_chunk_probe(mesh_device):
                 f"replay_mean={sum(td) / n * 1e3:.1f}ms host_mean={sum(r[1] for r in rec) / n * 1e3:.1f}ms "
                 + " ".join(f"s0={rec[i][0]}:{td[i] * 1e3:.0f}ms" for i in pos)
                 + f" first={[int(res[b][0]) for b in range(B)]}"
+            )
+        if os.environ.get("PROBE_SAVE") and rep == REPS - 1:
+            torch.save(
+                torch.stack([res[b][1] for b in range(B)]).float(),
+                f"{os.environ['PROBE_SAVE']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}",
             )
     log("PROBE DONE")

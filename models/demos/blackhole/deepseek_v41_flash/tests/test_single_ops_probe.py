@@ -151,4 +151,20 @@ def test_single_ops(mesh_device):
             want[u, :, o : o + Cc8] = src[u]
         ok &= bool(torch.equal(got, want))
     print(f"PROBE key_append (U={U}, per-(row,user) offsets, offset 0 = scratch): all rows equal {ok}", flush=True)
+    # (e) gather of uint32 data above 65535 (global slots of a 1M context), row-major, and the same through the tile path
+    data = torch.randint(0, 1 << 21, (1, 1, C, 4128), generator=g, dtype=torch.int64).to(torch.int32)
+    data[:, :, :, 4096:] = -1
+    idx = torch.randint(0, 4128, (1, 1, C, 512), generator=g, dtype=torch.int64).to(torch.int32)
+    want = torch.gather(data[0, 0].to(torch.int64), 1, idx[0, 0].to(torch.int64)).reshape(1, 1, C, 512)
+    for name, lay in (("rm", ttnn.ROW_MAJOR_LAYOUT), ("tile", ttnn.TILE_LAYOUT)):
+        d = _rep(md, data, ttnn.uint32, lay)
+        i = _rep(md, idx, ttnn.uint32, lay)
+        o = ttnn.gather(d, 3, index=i)
+        ttnn.synchronize_device(md)
+        got = ttnn.to_torch(ttnn.get_device_tensors(ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT))[0]).to(torch.int64)
+        w = want.to(torch.int64) & 0xFFFFFFFF
+        print(
+            f"PROBE gather uint32 values < 2^21 ({name}): equal {bool(torch.equal(got & 0xFFFFFFFF, w))}; mismatching entries {int((got & 0xFFFFFFFF != w).sum())}",
+            flush=True,
+        )
     print("PROBE DONE", flush=True)

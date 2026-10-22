@@ -729,7 +729,7 @@ class DSV41PrefillIndexer:
         for u in range(U):
             qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, C, IDIM])
             wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, C, IHEADS])
-            kvarg = {"kv_len_tensor": nvalid} if PS.use_kv_tensor() else {"kv_len": Lc}
+            kvarg = {"kv_len_tensor": nvalid} if PS.use_kv_tensor() else {"kv_len": Lc + 32}
             sc = ttnn.experimental.indexer_score_dsa(
                 qu, self.slab, wu, chunk_start_idx=Lc, program_config=self.cfg, cache_batch_idx=u, **kvarg
             )  # [1,1,C,Lc+32] RM: only the columns [0, nvalid) are written

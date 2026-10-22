@@ -144,6 +144,11 @@ SCENARIOS = [
         for n in ("1k", "2k", "4k", "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1m")
     ],
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
+    _s(f"{PROMPTS}/long/needle_32k.json", 4, 1048576, 48, "needle32k_b4", instruct=True, chunk=512),
+    _s(f"{PROMPTS}/long/needle_64k.json", 4, 1048576, 48, "needle64k_b4", instruct=True, chunk=512),
+    _s(f"{PROMPTS}/long/needle_128k.json", 4, 1048576, 48, "needle128k_b4", instruct=True, chunk=512),
+    _s(f"{PROMPTS}/long/needle_256k.json", 4, 1048576, 48, "needle256k_b4", instruct=True, chunk=512),
+    _s(f"{PROMPTS}/long/needle_1m.json", 4, 1048576, 48, "needle1m_b4", instruct=True, chunk=512),
     # a 1M-context build (tables / pool sized for 1,048,576 tokens, prefill chunk 512) with short GSM8K prompts: decode speed of plain vs speculative decoding at the long-context capacity
     _s(GSM, 4, 1048576, 384, "gsm8k_b4_m1M", instruct=True, stop_at_eos=True, chunk=512),
     _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
@@ -426,7 +431,7 @@ def _run_demo(
                 torch.save(
                     lg_,
                     os.environ["DSV41_PREFILL_LOGITS"]
-                    + f".{os.environ.get('DSV41_CUR_SCENARIO')}.umoe{os.environ.get('DSV41_PF_MHC_UMOE', 'd')}",
+                    + f".{os.environ.get('DSV41_CUR_SCENARIO')}.umoe{os.environ.get('DSV41_PF_MHC_UMOE', 'd')}.single{os.environ.get('DSV41_PF_SINGLE', '0')}",
                 )
                 for u_ in range(min(batch_size, 2)):
                     v_, i_ = lg_[u_].topk(5)
@@ -921,6 +926,18 @@ def test_dsv41_demo_session(mesh_device, device_params):
             os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
         if rowtok:
             os.environ["DSV41_PREFILL_ROW_TOKENS"] = rowtok[si % len(rowtok)]
+        sing = [m for m in os.environ.get("DSV41_PF_SINGLE_LIST", "").split(",") if m]
+        if (
+            sing
+        ):  # per-scenario DSV41_PF_SINGLE (A/B in ONE process: same build, same host); the chunk trace is torn down so the next prefill captures in the new mode
+            os.environ["DSV41_PF_SINGLE"] = sing[si % len(sing)]
+            for _, (_, m_, _) in cache.items():
+                pm_ = getattr(m_, "prefill_model", None)
+                if pm_ is not None and getattr(pm_, "dyn", None) is not None:
+                    pm_.teardown_dyn()
+                    pm_.dyn_out = None
+                    pm_.head_out = []
+            logger.info(f"=== PF_SINGLE_LIST scenario {si} {s.id}: DSV41_PF_SINGLE={os.environ['DSV41_PF_SINGLE']} ===")
         if ab:
             spec = ab.split("|")[si % len(ab.split("|"))]
             for k in [k for k in os.environ if k.startswith("DSV41_PFA_") and k != "DSV41_PFA_AB"]:
