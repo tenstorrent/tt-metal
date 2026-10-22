@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
+#include <algorithm>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -683,12 +684,10 @@ tt::tt_metal::TensorTopology union_topology(
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords) {
     TT_FATAL(!operands.empty(), "Cannot compute the union label of no operands");
     const auto fully_replicated = [](const tt::tt_metal::TensorTopology& label) {
-        for (const auto& placement : label.placements()) {
-            if (std::holds_alternative<Shard>(placement)) {
-                return false;
-            }
-        }
-        return true;
+        const auto& placements = label.placements();
+        return std::all_of(placements.begin(), placements.end(), [](const auto& placement) {
+            return std::holds_alternative<Replicate>(placement);
+        });
     };
     const tt::tt_metal::TensorTopology& primary = operands.front().get();
     if (fully_replicated(primary)) {
