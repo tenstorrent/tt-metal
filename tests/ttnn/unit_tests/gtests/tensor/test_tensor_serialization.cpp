@@ -566,8 +566,10 @@ std::vector<float> shard_values(const Tensor& tensor, const MeshCoordinate& coor
 }
 
 // Runs `dump_tensor_flatbuffer` in LOCAL mode expecting it to be rejected, and checks that the rejection names
-// `diagnostic` and that no file was created.
+// `diagnostic` and that no file was created. The path is a fixed name under the temp directory, so a file left by an
+// earlier interrupted run is removed first.
 void expect_dump_rejected(const TemporaryFile& file, const Tensor& tensor, const std::string& diagnostic) {
+    std::filesystem::remove(file.path());
     EXPECT_THAT(
         [&]() { dump_tensor_flatbuffer(file.string(), tensor, DumpTensorMode::LOCAL); },
         ThrowsMessage<std::runtime_error>(HasSubstr(diagnostic)));
