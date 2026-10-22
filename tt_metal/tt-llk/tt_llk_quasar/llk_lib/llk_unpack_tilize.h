@@ -45,21 +45,18 @@ inline void _llk_unpack_tilize_set_src_offset_(const TensorShape& tensor_shape, 
 /**
  * @brief Builds the MOP for unpack tilize of full 32x32 tiles using the fused HW instruction.
  *
- * Unpacks and tilizes block_ct_dim tiles per invocation into SrcA or SrcB; for DEST see llk_unpack_tilize_to_dest.h. Bank 0
- * holds the run @ref _llk_unpack_tilize_ launches, bank 1 the shorter tail run of @ref _llk_unpack_tilize_tail_.
+ * Unpacks and tilizes block_ct_dim tiles per invocation into SrcA or SrcB; for DEST see llk_unpack_tilize_to_dest.h.
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
- * @tparam MOP_BANK: MOP config bank to program, values = <0/1>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length).
  */
-template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST, std::uint32_t MOP_BANK = 0>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t block_ct_dim)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
-    static_assert(MOP_BANK == 0 || MOP_BANK == 1, "MOP_BANK can only be 0 or 1");
     LLK_ASSERT(block_ct_dim <= MOP_LOOP_LEN_MAX, "block_ct_dim exceeds the MOP loop length");
 
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
@@ -80,27 +77,13 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, set_opposite_dvalid_instrn, unpack_tile_instrn);
         temp.set_last_outer_loop_instr(reset_src_reg_instrn);
-        if constexpr (MOP_BANK == 0)
-        {
-            temp.program_bank0_sw_cntl(instrn_buffer);
-        }
-        else
-        {
-            temp.program_bank1_sw_cntl(instrn_buffer);
-        }
+        temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else
     {
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
         temp.set_last_outer_loop_instr(reset_src_reg_instrn);
-        if constexpr (MOP_BANK == 0)
-        {
-            temp.program_bank0_sw_cntl(instrn_buffer);
-        }
-        else
-        {
-            temp.program_bank1_sw_cntl(instrn_buffer);
-        }
+        temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
 
@@ -116,18 +99,17 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param full_ct_dim: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet.
- * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length), in [1, full_ct_dim]. When full_ct_dim is not a
- *        multiple, MOP bank 1 gets the full_ct_dim % block_ct_dim tail run for @ref _llk_unpack_tilize_tail_.
+ * @param block_ct_dim: Number of tiles unpacked per MOP invocation (MOP inner loop length), a divisor of full_ct_dim.
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
  * @note On the math thread, pair with @ref _llk_math_eltwise_unary_datacopy_init_ (T1; tilize moves the tilized SrcA tile to dest); on the pack thread, pair
  * with
- *       @ref _llk_pack_init_ (T2). @ref _llk_unpack_tilize_ is the matching execute call on this thread, @ref _llk_unpack_tilize_tail_ for the tail.
+ *       @ref _llk_pack_init_ (T2). @ref _llk_unpack_tilize_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_init_(
     const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)
 {
-    LLK_ASSERT(block_ct_dim >= 1 && block_ct_dim <= full_ct_dim, "block_ct_dim must be in [1, full_ct_dim]");
+    LLK_ASSERT(block_ct_dim >= 1 && full_ct_dim % block_ct_dim == 0, "block_ct_dim must divide full_ct_dim");
 
     // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
@@ -151,37 +133,7 @@ inline void _llk_unpack_tilize_init_(
         cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
-    _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST, 0>(buf_desc_id, block_ct_dim);
-    if (const std::uint32_t tail_ct_dim = full_ct_dim % block_ct_dim; tail_ct_dim != 0)
-    {
-        _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST, 1>(buf_desc_id, tail_ct_dim);
-    }
-}
-
-/**
- * @brief Points the L1 and DEST counters at the first tile of a run into SrcA or SrcB.
- *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
- * @param l1_tile_idx: Within-row column index into the L1 buffer. The L1 base is carried by
- *        @ref _llk_unpack_tilize_set_src_offset_, which the caller must set for the tile row.
- */
-template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_tilize_set_counters_(const std::uint32_t l1_tile_idx)
-{
-    // RT: for the best performance, setting counters should be placed in a REPLAY buffer
-    // in the mop_config, but for back compatibility with APIs, the counter functions must
-    // be programmable with users input offset idx
-
-    // Reset Dest counters for Unpacker to 0
-    // Set Source counter to L1 base + offset
-
-    // The value field of the TT_SET_SRC_TILE_FACE_ROW_IDX instruction is 18 bits wide, but only values up to 11 bits are actually
-    // passed on when using FACE_SEL; anything larger is truncated and aliases back to an earlier tile.
-    LLK_ASSERT(l1_tile_idx < (1u << 11), "l1_tile_idx exceeds the 11 bits the src face index can carry");
-
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, l1_tile_idx);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0); // Clear face counter (the to-dest path leaves it non-zero)
+    _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, block_ct_dim);
 }
 
 /**
@@ -196,23 +148,23 @@ inline void _llk_unpack_tilize_set_counters_(const std::uint32_t l1_tile_idx)
 template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
 {
-    _llk_unpack_tilize_set_counters_<UNP_SEL>(l1_tile_idx);
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-}
+    // RT: for the best performance, setting counters should be placed in a REPLAY buffer
+    // in the mop_config, but for back compatibility with APIs, the counter functions must
+    // be programmable with users input offset idx
 
-/**
- * @brief Unpacks and tilizes the tail of a row, full_ct_dim % block_ct_dim full 32x32 tiles, from l1_tile_idx into SrcA or SrcB.
- *
- * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
- * @param l1_tile_idx: Within-row column index of the first tail tile, i.e. the last multiple of block_ct_dim below full_ct_dim.
- * @note Only when @ref _llk_unpack_tilize_init_ was given a full_ct_dim that is not a multiple of block_ct_dim, which programs the tail run
- *       into MOP bank 1.
- */
-template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_tilize_tail_(const std::uint32_t l1_tile_idx)
-{
-    _llk_unpack_tilize_set_counters_<UNP_SEL>(l1_tile_idx);
-    ckernel::ckernel_template::run_bank1_sw_cntl(instrn_buffer);
+    // Reset Dest counters for Unpacker to 0
+    // Set Source counter to L1 base + offset
+
+    // The value field of the TT_SET_SRC_TILE_FACE_ROW_IDX instruction is 18 bits wide, but only values up to 11 bits are actually
+    // passed on when using FACE_SEL; anything larger is truncated and aliases back to an earlier tile.
+    LLK_ASSERT(l1_tile_idx < FACE_SEL_IDX_LIMIT, "l1_tile_idx exceeds the 11 bits the src face index can carry");
+
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, l1_tile_idx);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, 0); // Clear face counter (the to-dest path leaves it non-zero)
+
+    // Runs MOP
+    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
 
 /**
@@ -417,13 +369,15 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Tile shape info: num faces, face row/col dim, etc.
  * @param full_ct_dim: Number of tiles in a row of the input tensor (row-major).
- * @param block_ct_dim: Number of tiles in a row of a block.
+ * @param block_ct_dim: Number of tiles in a row of a block, a divisor of full_ct_dim.
  * @note @ref _llk_unpack_tilize_strided_small_faces_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_tilize_strided_init_small_faces_(
     const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
 {
+    LLK_ASSERT(block_ct_dim >= 1 && full_ct_dim % block_ct_dim == 0, "block_ct_dim must divide full_ct_dim");
+
     // Disable transpose
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);

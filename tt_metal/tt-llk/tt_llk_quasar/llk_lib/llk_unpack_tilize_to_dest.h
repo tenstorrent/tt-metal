@@ -114,7 +114,7 @@ inline void _llk_unpack_tilize_to_dest_set_src_offset_(const TensorShape& tensor
 inline void _llk_unpack_tilize_to_dest_set_counters_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
 {
     // Only 11 bits of the value reach the unpacker under FACE_SEL; anything larger aliases back to an earlier tile.
-    LLK_ASSERT(l1_tile_idx < (1u << 11), "l1_tile_idx exceeds the 11 bits the src face index can carry");
+    LLK_ASSERT(l1_tile_idx < FACE_SEL_IDX_LIMIT, "l1_tile_idx exceeds the 11 bits the src face index can carry");
 
     // UNPACR_TILIZE addresses DEST through the Z (face) counter, one tile per step, so the DEST bank is folded into that
     // index: the SEC base registers do not move the unpacker (see _llk_unpack_dest_bank_tile_offset_). The tile counter

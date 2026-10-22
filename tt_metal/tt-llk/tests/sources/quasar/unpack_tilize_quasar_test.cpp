@@ -168,17 +168,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
                         _llk_unpack_tilize_set_src_offset_<SRC_SEL>(tensor_shape, y * y_stride_external);
-                        // A row of FULL_CT_DIM tiles in runs of BLOCK_CT_DIM; a row that is not a multiple ends with the bank-1 tail run.
+                        // A row of FULL_CT_DIM tiles in runs of BLOCK_CT_DIM, a divisor of FULL_CT_DIM.
                         for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
                         {
-                            if (FULL_CT_DIM - x >= BLOCK_CT_DIM)
-                            {
-                                _llk_unpack_tilize_<SRC_SEL>(x /*l1_tile_idx*/);
-                            }
-                            else
-                            {
-                                _llk_unpack_tilize_tail_<SRC_SEL>(x /*l1_tile_idx*/);
-                            }
+                            _llk_unpack_tilize_<SRC_SEL>(x /*l1_tile_idx*/);
                         }
                     }
                 }
