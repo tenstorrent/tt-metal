@@ -48,6 +48,14 @@ def _copy(mesh, dst, t, dtype):
     ttnn.copy_host_to_device_tensor(_replicate(mesh, t, dtype, device=False), dst)
 
 
+def hold_prefill_l1(model):
+    """The batched runners' resident L1 (persistent buffers, captured traces' outputs) stays allocated across prefills:
+    the model's prefill ops fit their circular buffers below the lowest of it (Model.set_prefill_l1_end, as
+    dflash/runner.py does for batch 1). Called after each allocation of resident L1 (it only moves down)."""
+    if hasattr(model, "set_prefill_l1_end"):
+        model.set_prefill_l1_end(model.mesh_device.lowest_occupied_compute_l1_address() or 0)
+
+
 class _TPAllReduce:
     """TP all-reduce of [rows, hidden] partial sums over the mesh row with all_reduce_async: persistent scratch and a
     global semaphore per slot, two slots used alternately (each call is an all-rank synchronization, so no device reuses
@@ -417,6 +425,8 @@ def _even_lm_head(model):
     cache = os.environ.get("TT_CACHE_PATH")
     name = os.path.join(cache, "b32_lm_head_even.weight") if cache else None
     full = None
+    if name is not None and not glob.glob(name + "_dtype_*") and not os.access(cache, os.W_OK):
+        name = None  # (a read-only cache, as CI mounts the shared one: built in memory, not cached)
     if name is None or not glob.glob(name + "_dtype_*"):
         w = model.lm_head_weight
         full = ttnn.to_torch(w, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1))
@@ -1090,15 +1100,21 @@ class BatchedDraft:
             first = max(0, (n - self.window) // self.block_size * self.block_size)
             chunk = n - first + self.block_size
             assert chunk <= self.ring * self.block_size
+        src = features.buffer_address()
+
+        def free(t):  # (a slice of the whole tensor is the tensor itself: the caller's features stay allocated)
+            if t.buffer_address() != src:
+                t.deallocate(True)
+
         for s0 in range(first, n, chunk):
             rows = min(chunk, -(-(n - s0) // self.block_size) * self.block_size)
             tx = ttnn.slice(features, [0, 0, s0, 0], [1, 1, min(s0 + rows, avail), self.ctx_in])
             if s0 + rows > avail:
                 txp = ttnn.pad(tx, [(0, 0), (0, 0), (0, s0 + rows - avail), (0, 0)], value=0.0)
-                tx.deallocate(True)
+                free(tx)
                 tx = txp
             ctx = self._linear(tx, self.fc_full)
-            tx.deallocate(True)
+            free(tx)
             ctx = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
             cos = self.rope.cos_matrix_prefill[:, :, s0 : s0 + rows, :]
             sin = self.rope.sin_matrix_prefill[:, :, s0 : s0 + rows, :]
@@ -1626,6 +1642,7 @@ class BatchedDFlashRunner:
         )
         self._use(self.lanes[0])
         self.traces = None
+        hold_prefill_l1(model)
 
     def _use(self, lane):
         """The passes read lane's inputs and page tables (the attributes they use are set to lane's tensors)."""
@@ -1638,6 +1655,7 @@ class BatchedDFlashRunner:
 
     def prefill(self, prompts, u0=0):
         """prompts: users u0, u0 + 1, ...; returns their first tokens."""
+        hold_prefill_l1(self.model)
         firsts = []
         for u, p in enumerate(prompts, start=u0):
             logits = self.generator.prefill_forward_text(
@@ -1763,6 +1781,7 @@ class BatchedDFlashRunner:
         self._use(self.lanes[0])
         self.round_out = self.lanes[0].round_out
         self.traces = (tid,)
+        hold_prefill_l1(self.model)  # (the passes' first run allocated more resident L1: all-reduce scratch, outputs)
 
     def release_traces(self):
         if self.traces is not None:

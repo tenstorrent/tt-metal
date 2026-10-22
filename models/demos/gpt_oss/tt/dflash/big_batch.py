@@ -34,6 +34,7 @@ from .batched import (
     _replicate,
     _ResNorm,
     _TPAllReduce,
+    hold_prefill_l1,
 )
 
 
@@ -136,6 +137,7 @@ class BigPlain:
             _replicate(mesh, page_table[g * U32 : (g + 1) * U32].contiguous(), ttnn.int32) for g in range(self.G)
         ]
         self.trace = None
+        hold_prefill_l1(model)
 
     # -- the step ---------------------------------------------------------------------------------------------------
     def _attention(self, li, layer, x, rope):
@@ -276,6 +278,7 @@ class BigPlain:
         self.out = self.step()
         ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
         self.trace = tid
+        hold_prefill_l1(self.model)
 
     def release(self):
         if self.trace is not None:
@@ -346,6 +349,7 @@ class VerifyPlain:
         self.pos = _replicate(mesh, torch.zeros(users, dtype=torch.int32), ttnn.int32)
         self.pos_rows = _replicate(mesh, torch.zeros(1, users, dtype=torch.int32), ttnn.uint32)
         self.trace = None
+        hold_prefill_l1(model)
 
     def step(self):
         rot = []
