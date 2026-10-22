@@ -294,3 +294,12 @@ Per chip (K3): gather ends 638-741 us (585 alone - the engine's NoC traffic), en
 get their distance-3 shard last (~730 us), then that shard's gate / up (~180) and all of down (382) -> 1314. GLM-Flash:
 gather 369-422, engines 457-610 (tail = one shard of gate / up ~50 + down 145). The floor of this structure is
 gather end + one shard of gate / up + down; next: down + the reduce-scatter as one stage (matmul_reduce_scatter port).
+
+### Parked: down with all of K in DEST (user ask), superseded by the row-chunk-major direction
+Tried: h for all of I resident in L1 ("h all", each owner writes its rows into every row core once), the W_down block
+[I/32 x 2] streamed once a pass, each 2 x 2 sub-block walking all of K in DEST, packing once; h-all and down's W slots
+reusing gate / up's L1 behind a barrier (each core tells its row and its column's reader once its gate / up is done, its
+x sends are out and the gather stopped reading its x-own). GLM-Flash: correct, 339 us (vs 340: no gain). K3: wrong
+(PCC 0.993; at K3's H with I 512: 0.07), GLM at KB 4: NaN, and 0.992 with the partials moved out of the reused
+region - an aliasing / ordering bug in the reuse not found before the direction changed. Not committed; the committed
+engine (65eaae64c66) stays. Lesson for the next engine: no L1 reuse across phases without a proof of who still reads.
