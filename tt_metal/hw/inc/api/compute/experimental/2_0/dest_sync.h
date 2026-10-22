@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include "api/compute/common_globals.h"
+#include "llk_compute_api_claim.h"
 #include "llk_dest_chain.h"
 
 namespace ckernel {
@@ -34,6 +35,7 @@ namespace detail {
 // Join / take wrappers: one noinline copy per unit per thread, so every op call site costs a call (TRISC2 size).
 template <dest_dvalid_client UNIT>
 __attribute__((noinline)) void dest_join() {
+    LLK_COMPUTE_API_CLAIM(2_0, legacy);  // every 2.0 op init joins
     _llk_dest_chain_join_<UNIT>();
 }
 
