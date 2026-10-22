@@ -6,9 +6,11 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -120,7 +122,15 @@ std::vector<uint32_t> echo_slot_words(const std::vector<uint32_t>& echo_block, u
         fmt::format("echo slot of hart {} (not launched)", hart), poison, echo_slot_words(echo_block, hart));
 }
 
-KernelHandle create_echo_kernel(Program& program, const CoreCoord& logical_core, uint32_t hart, uint32_t ct_marker) {
+// The kernel echoes kEchoRuntimeArgCount unique args from `first_runtime_arg` and kEchoCommonArgCount common args from
+// `first_common_arg`.
+KernelHandle create_echo_kernel_from(
+    Program& program,
+    const CoreCoord& logical_core,
+    uint32_t hart,
+    uint32_t ct_marker,
+    uint32_t first_runtime_arg,
+    uint32_t first_common_arg) {
     return CreateKernel(
         program,
         kEchoKernelPath,
@@ -134,7 +144,13 @@ KernelHandle create_echo_kernel(Program& program, const CoreCoord& logical_core,
                 kArgsEchoMagic,
                 static_cast<uint32_t>(kTl1EchoSlotBytes),
                 kEchoRuntimeArgCount,
-                kEchoCommonArgCount}});
+                kEchoCommonArgCount,
+                first_runtime_arg,
+                first_common_arg}});
+}
+
+KernelHandle create_echo_kernel(Program& program, const CoreCoord& logical_core, uint32_t hart, uint32_t ct_marker) {
+    return create_echo_kernel_from(program, logical_core, hart, ct_marker, 0, 0);
 }
 
 // First-time set. Common runtime args may be set only once per kernel.
@@ -383,7 +399,7 @@ uint32_t dram_runtime_args_ceiling() {
 class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {};
 
 // Unique and common runtime args up to the DRAM-core kernel-config area are accepted; one word more throws from both
-// the unique and the common API. The kernel is never launched.
+// the unique and the common API. A kernel with args at the ceiling launches and echoes its last unique and common args.
 TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
     MIMIR_SKIP_UNLESS_EMU();
     const uint32_t cce_index = GetParam();
@@ -414,9 +430,39 @@ TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
     EXPECT_ANY_THROW(unique_then_common(ceiling - first_set_count + 1));
     EXPECT_NO_THROW(common_then_unique(ceiling - first_set_count));
     EXPECT_ANY_THROW(common_then_unique(ceiling - first_set_count + 1));
+
+    // 99 unique args leave room for the 16 B alignment of the common args, with or without the watcher's count words.
+    constexpr uint32_t ceiling_unique_count = 99;
+    const uint32_t ceiling_common_count = ceiling - ceiling_unique_count;
+    std::vector<uint32_t> runtime_args(ceiling_unique_count);
+    std::iota(runtime_args.begin(), runtime_args.end(), 0x52000000u);
+    std::vector<uint32_t> common_args(ceiling_common_count);
+    std::iota(common_args.begin(), common_args.end(), 0xC4000000u);
+    EchoArguments arguments{.ct_marker = kEchoCtMarkerBase + cce_index};
+    std::copy(runtime_args.end() - kEchoRuntimeArgCount, runtime_args.end(), arguments.runtime.begin());
+    std::copy(common_args.end() - kEchoCommonArgCount, common_args.end(), arguments.common.begin());
+    Program program = CreateProgram();
+    const KernelHandle kernel = create_echo_kernel_from(
+        program,
+        logical_core,
+        hart,
+        arguments.ct_marker,
+        ceiling_unique_count - kEchoRuntimeArgCount,
+        ceiling_common_count - kEchoCommonArgCount);
+    SetRuntimeArgs(program, kernel, logical_core, runtime_args);
+    SetCommonRuntimeArgs(program, kernel, common_args);
+    poison_echo_slots(device, cce_index);
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments))
+        << ceiling_unique_count << " unique and " << ceiling_common_count << " common args";
 }
 
-// After a launch, changing the count of unique runtime args, or setting common runtime args a second time, throws.
+std::vector<uint32_t> words_of(const RuntimeArgsData& args) {
+    return std::vector<uint32_t>(args.data(), args.data() + args.size());
+}
+
+// After a launch, changing the count of unique runtime args throws, and so does setting common runtime args a second
+// time with the same count. Neither rejected call changes the stored args.
 TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
     MIMIR_SKIP_UNLESS_EMU();
     const uint32_t cce_index = GetParam();
@@ -436,8 +482,18 @@ TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
     EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments));
 
     EXPECT_ANY_THROW(
-        SetRuntimeArgs(program, kernel, logical_core, std::vector<uint32_t>(kEchoRuntimeArgCount + 1, 0x5050)));
-    EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(kEchoCommonArgCount + 2, 0x6060)));
+        SetRuntimeArgs(program, kernel, logical_core, std::vector<uint32_t>(kEchoRuntimeArgCount + 1, 0x5050)))
+        << "unique runtime arg count changed";
+    EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(kEchoCommonArgCount, 0x6060)))
+        << "common runtime args set twice";
+    EXPECT_EQ(
+        words_of(GetRuntimeArgs(program, kernel, logical_core)),
+        std::vector<uint32_t>(arguments.runtime.begin(), arguments.runtime.end()))
+        << "a rejected SetRuntimeArgs changed the stored unique args";
+    EXPECT_EQ(
+        words_of(GetCommonRuntimeArgs(program, kernel)),
+        std::vector<uint32_t>(arguments.common.begin(), arguments.common.end()))
+        << "a rejected SetCommonRuntimeArgs changed the stored common args";
 }
 
 INSTANTIATE_TEST_SUITE_P(MM8, MimirDmRuntimeArgs, ::testing::Values(0u), cce_param_name);

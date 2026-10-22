@@ -13,6 +13,8 @@ void kernel_main() {
     constexpr uint32_t slot_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t num_runtime_args = get_compile_time_arg_val(4);
     constexpr uint32_t num_common_args = get_compile_time_arg_val(5);
+    constexpr uint32_t first_runtime_arg = get_compile_time_arg_val(6);
+    constexpr uint32_t first_common_arg = get_compile_time_arg_val(7);
 
     uint32_t hart_id;
     asm volatile("csrr %0, mhartid" : "=r"(hart_id));
@@ -25,10 +27,10 @@ void kernel_main() {
     slot[1] = hart_id;
     slot[2] = ct_marker;
     for (uint32_t i = 0; i < num_runtime_args; i++) {
-        slot[3 + i] = get_arg_val<uint32_t>(i);
+        slot[3 + i] = get_arg_val<uint32_t>(first_runtime_arg + i);
     }
     for (uint32_t i = 0; i < num_common_args; i++) {
-        slot[3 + num_runtime_args + i] = get_common_arg_val<uint32_t>(i);
+        slot[3 + num_runtime_args + i] = get_common_arg_val<uint32_t>(first_common_arg + i);
     }
     asm volatile("fence rw, rw" ::: "memory");
     slot[0] = echo_magic;

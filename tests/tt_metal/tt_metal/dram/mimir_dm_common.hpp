@@ -94,17 +94,16 @@ inline bool wait_for_status_magics(
     return false;
 }
 
-// Adds every kernel to `program`, launches it with launch_on_idle_cces, waits for every status magic, ends the Program
-// and returns each status line (`status_words` words) in launch order. nullopt when `host_deadline` passed: a kernel
-// may still be running, and nothing else may run in this session (MIM-601).
-inline std::optional<std::vector<std::vector<uint32_t>>> run_cce_kernels_with_deadline(
+// Launches `program`, which already holds the kernels of `launches`, with launch_on_idle_cces, waits for every status
+// magic, ends the Program and returns each status line (`status_words` words) in launch order. nullopt when
+// `host_deadline` passed: a kernel may still be running, and nothing else may run in this session (MIM-601).
+inline std::optional<std::vector<std::vector<uint32_t>>> launch_and_wait_for_statuses(
     IDevice* device,
     Program& program,
     const std::vector<CceKernelLaunch>& launches,
     const std::vector<uint32_t>& done_magics,
     uint32_t status_words,
     std::chrono::seconds host_deadline) {
-    add_cce_kernels(device, program, launches);
     launch_on_idle_cces(device, program, launches);
     if (!wait_for_status_magics(device, launches, done_magics, host_deadline)) {
         return std::nullopt;
@@ -116,6 +115,18 @@ inline std::optional<std::vector<std::vector<uint32_t>>> run_cce_kernels_with_de
             read_cce_tl1(device, launch.cce_index, tl1_done_block(launch.hart), status_words * sizeof(uint32_t)));
     }
     return statuses;
+}
+
+// Adds every kernel to `program`, then runs launch_and_wait_for_statuses.
+inline std::optional<std::vector<std::vector<uint32_t>>> run_cce_kernels_with_deadline(
+    IDevice* device,
+    Program& program,
+    const std::vector<CceKernelLaunch>& launches,
+    const std::vector<uint32_t>& done_magics,
+    uint32_t status_words,
+    std::chrono::seconds host_deadline) {
+    add_cce_kernels(device, program, launches);
+    return launch_and_wait_for_statuses(device, program, launches, done_magics, status_words, host_deadline);
 }
 
 // Reads the data with read_words(byte_offset, bytes) and compares it with `expected`. On a mismatch, records the first
