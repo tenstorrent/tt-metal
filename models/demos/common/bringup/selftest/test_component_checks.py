@@ -326,3 +326,13 @@ def test_a_scale_error_fails_the_rel_gate_that_pcc_would_pass(gspec, monkeypatch
     assert not run_component_test(s, "attn_norm", 0, checks="auto")
     m = got()
     assert m["pcc_attn_norm_L00"] > 0.9999 and m["err_attn_norm_L00"] > m["err_attn_norm_L00_limit"]
+
+
+def test_frozen_tests_keep_the_structural_column_factor_under_its_old_name():
+    """F146: DeepSeek-V4.1's frozen experts tests read lim["component_col_factor"] (renamed struct_col_factor by F138);
+    only that structural factor keeps its old name, never the removed fixed accuracy numbers."""
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    lim = CC.limits(None)
+    assert lim["component_col_factor"] == lim["struct_col_factor"]
+    assert "component_rel" not in lim and "component_floor" not in lim and "component_row" not in lim
