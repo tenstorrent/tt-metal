@@ -501,3 +501,30 @@ Precision (user rule: accumulate fp32, exchange bf16 unless measured): x gather 
 gate / up between-shard partials fp32 in L1 (not exchanged); SE reduce-scatter: own partials fp32 (HOLD), exchanged
 sub-blocks bf16, adds in fp32 DEST; output bf16. No fp32 on any wire. Router logits: not built yet - bf16 vs fp32
 exchange to be measured on routing-pick agreement.
+
+### The router chain in the program, under the x chain (tt/router_stream.py)
+Logits wire format measured first (host emulation of the line's chain with the block test's weights, 1280 tokens):
+bf16 partials on the wire change the picks in 2.7-5.9% of the rows (max |logit error| 0.02-0.03 on logits of std
+1.3-1.7) - **the logits exchange stays fp32** (the user's exception; everything else exchanged is bf16).
+- Cores: the mover column's 5 free cells (ports at rows 0-3, watcher at 5) = RB = 5 router cores; core j owns row tile j
+  of every block, so at its fin it holds 32 owner tokens with all E. L1 addresses are allocated in lockstep over the
+  grid, so the engine's arena is also carved on the router cores and the ports (the router's buffers live there).
+- Router matmul: x (own shard, DRAM) and W_r [H / TP, E] (bf16, HiFi4) streamed in K blocks, K-outer with the G row
+  tiles' partials accumulated fp32 in L1 (packer L1 accumulation). GLM 76-82 us, K3 ~200 us on 5 cores.
+- Logits reduce-scatter (se_rs.LogitsPlan: the SE reduce-scatter's schedule and protocol, CPU model 8 / 8 line / ring):
+  a router core pushes each hand-off into its port's L1 (+1 on the port's word of it); the port's sender polls them
+  between its own packets - GLM-type (logits_first): between every x-gather packet; K3: after the x gather - and
+  sends them fp32 into the downstream router core's zone with a fused increment. Relays add in fp32 DEST.
+- Owner: sigmoid + bias in DEST (scores), top-K by the biased score, weights = (biased - bias) / sum x route scale,
+  router_topk's joint rows. The scan is scalar on 4 RISCs a core (BRISC, NCRISC, UNPACK, PACK threads: 8 tokens each).
+| fused head, us (SE PCC; routing vs host fp32) | GLM-Flash | K3 |
+|---|---|---|
+| x chain + SE reduce-scatter | 248.2 | 449.9 |
+| + router chain, top-K on one RISC a core | 405.9 | 833.8 |
+| + top-K on 4 RISCs a core | **261.2** (0.99988; picks 99.53%, weights PCC 0.9955) | **474.1** (0.99987; 99.22%, 0.9912) |
+Same routing quality as the block's ttnn router chain (0.9957 / 0.9916 weights PCC). The scalar scan is L1-load bound
+(~48 cycles an element, ~16 us a K3 token; a face-row max prefilter changed nothing): K3's top-K ends ~400-420 us,
+GLM's under the RS. K3's gather end moved 220-257 -> 252-277 us (the router's DRAM reads: W_r read by each of the 5
+cores). Next: the SFPU top-K (ttnn topk's LLK) if the routing gather + planner behind it land on the critical path;
+W_r multicast instead of 5 reads.
+Mock Galaxy (8 x 4, TP ring): the head with the in-program reduce-scatter and the router chain builds and enqueues.
