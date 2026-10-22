@@ -120,17 +120,18 @@ def test_repeat_narrow_rows(device, rank, strategy, output, preallocate):
     "layout, grid, shard, shape, repeats",
     [
         (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [1, 1, 2, 1]),
-        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [3, 1, 1, 1]),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [1, 1, 3, 1]),
         (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1]),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [3, 1, 1, 1]),
         (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [4, 3], [1, 2, 1]),
     ],
-    ids=["block_new_axis", "block_outer_x3", "width_new_axis", "width_rank2"],
+    ids=["block_new_axis", "block_rows_x3", "width_new_axis", "width_outer_x3", "width_rank2"],
 )
 @pytest.mark.parametrize("output, preallocate", INTERLEAVED_OUTPUTS)
 def test_repeat_narrow_rows_rank_expansion(device, layout, grid, shard, shape, repeats, output, preallocate):
     # A repeat vector longer than the input rank adds leading axes before routing. That view keeps the padded row
     # too: re-deriving the shard from the logical width throws for WIDTH, and for BLOCK reads 12-byte pages out of
-    # 16-byte slots.
+    # 16-byte slots. Each repeated group fits in one shard's rows, so native takes every case.
     input_memory = _sharded(layout, _cores(*grid), shard)
     result = _repeat(device, shape, input_memory, repeats, _output_memory(output, None), preallocate, "native")
     if output == "implicit":
