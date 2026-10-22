@@ -24,6 +24,7 @@
 #include <numa.h>
 #include <tt-metalium/device.hpp>
 #include "impl/device/device_impl.hpp"
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -344,9 +345,17 @@ public:
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
 
-    ParallelJob(const std::function<void(size_t)>& fn, size_t num_calls) :
-        fn_(fn), claims_(num_calls), participant_of_call_(num_calls) {
-        remaining_.add(static_cast<int64_t>(num_calls));
+    // Inline capacity covers one call per device on a 32-chip Galaxy.
+    using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;
+    using ParticipantOfCall = ttsl::SmallVector<size_t, 32>;
+
+    ParallelJob(
+        const std::function<void(size_t)>& fn, Participants participants, ParticipantOfCall participant_of_call) :
+        fn_(fn),
+        claims_(participants.size()),
+        participant_of_call_(std::move(participant_of_call)),
+        participants_(std::move(participants)) {
+        remaining_.add(static_cast<int64_t>(participant_of_call_.size()));
     }
 
     ParallelJob(const ParallelJob&) = delete;
@@ -355,15 +364,7 @@ public:
     ParallelJob& operator=(ParallelJob&&) = delete;
     ~ParallelJob() = default;
 
-    void assign(size_t call, NumaAwareExecutor* executor) {
-        auto participant = std::find(participants_.begin(), participants_.end(), executor);
-        participant_of_call_[call] = participant - participants_.begin();
-        if (participant == participants_.end()) {
-            participants_.push_back(executor);
-        }
-    }
-
-    const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
+    const Participants& participants() const { return participants_; }
 
     void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
 
@@ -438,11 +439,11 @@ private:
 
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>& fn_;
-    // Indexed by participant; sized for the worst case of one participant per call.
+    // Indexed by participant.
     std::vector<Claim> claims_;
-    std::vector<size_t> participant_of_call_;
+    ParticipantOfCall participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
-    std::vector<NumaAwareExecutor*> participants_;
+    Participants participants_;
     Completion remaining_;
     std::atomic<size_t> refs_ = 0;
     std::mutex exception_mutex_;
@@ -577,18 +578,22 @@ public:
         if (device_ids.empty()) {
             return;
         }
+        ParallelJob::Participants executors;
+        ParallelJob::ParticipantOfCall participant_of_call(device_ids.size());
+        for (size_t call = 0; call < device_ids.size(); call++) {
+            auto* executor = workers_[phys_device_to_thread_id_.at(device_ids[call])].get();
+            auto participant = std::find(executors.begin(), executors.end(), executor);
+            participant_of_call[call] = participant - executors.begin();
+            if (participant == executors.end()) {
+                executors.push_back(executor);
+            }
+        }
         // One worker would run every call in order while the caller waits for it.
-        const uint32_t first_thread_id = phys_device_to_thread_id_.at(device_ids[0]);
-        if (std::all_of(device_ids.begin() + 1, device_ids.end(), [&](uint32_t device_id) {
-                return phys_device_to_thread_id_.at(device_id) == first_thread_id;
-            })) {
+        if (executors.size() == 1) {
             run_on_caller(device_ids.size(), fn);
             return;
         }
-        auto owned = std::make_unique<ParallelJob>(fn, device_ids.size());
-        for (size_t call = 0; call < device_ids.size(); call++) {
-            owned->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
-        }
+        auto owned = std::make_unique<ParallelJob>(fn, std::move(executors), std::move(participant_of_call));
         // Nothing below throws: once offered, workers hold the job and the job refers to fn.
         auto* job = owned.release();
         job->start();
