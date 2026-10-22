@@ -104,15 +104,14 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
-        return mesh_device->impl().get_context_id();
+    // A Device has its mesh's context. Asking the mesh would lock a weak_ptr that every dispatch thread shares.
+    if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
+        return device_concrete->get_context_id();
     }
-    // Must be a Device if not MeshDevice
-    const auto* device_concrete = dynamic_cast<const Device*>(device);
-    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
-    return device_concrete->get_context_id();
+    // get_mesh_device is not const
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
+    TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
+    return mesh_device->impl().get_context_id();
 }
 
 ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
