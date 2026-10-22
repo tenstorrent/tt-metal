@@ -189,6 +189,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
@@ -247,10 +248,11 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
-  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D).
-  # Both tests in one pytest invocation so a failure in one doesn't stop the other one from running.
+  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D), and the
+  # sharded 1D decode config models run. One pytest invocation so a failure in one doesn't stop the others.
   pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
-    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision \
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_sharded_decode
 
   # Record the end time
   end_time=$(date +%s)
