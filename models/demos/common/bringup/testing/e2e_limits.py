@@ -45,12 +45,20 @@ def err_limit(drift: dict, key: str) -> float:
     e = _entry(drift, key)
     if "overlap" in e:
         return CALIB * max(1.0 - e["overlap"], 1.0 - e["overlap_res"])
-    return CALIB * max(e["rel"], e["rel_res"])
+    return CALIB * max(e["rel"], _res(e))
+
+
+def _res(e: dict) -> float:
+    """F159: one rounding moves a value at most to 0, so its rel is <= 1; above 1 the target was exactly zero (an
+    all-zero state: DeepSeek-V4.1 compress_partial gave 9e255 and a 1.8e256 limit): no rounding error, limit calib x rel.
+    """
+    return 0.0 if e.get("zero_target") or e["rel_res"] > 1.0 else e["rel_res"]
 
 
 def pcc_limit(drift: dict, key: str) -> float:
     e = _entry(drift, key)
-    return 1.0 - CALIB * CALIB * max(1.0 - e["pcc"], 1.0 - e["pcc_res"])
+    res = 1.0 if e.get("zero_target") or e.get("rel_res", 0.0) > 1.0 else e["pcc_res"]  # F159: an all-zero target
+    return 1.0 - CALIB * CALIB * max(1.0 - e["pcc"], 1.0 - res)
 
 
 def overlap_limit(drift: dict, key: str) -> float:
