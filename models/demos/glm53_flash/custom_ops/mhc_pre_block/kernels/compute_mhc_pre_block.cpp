@@ -92,12 +92,15 @@ constexpr uint32_t SS_GROUP = 2, SS_LANE = 4;  // column 24 of the partial tile 
 
 FORCE_INLINE void release_keep_dest() { PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false>())); }
 
-// the packer's output format follows the CB it packs into (bf16 and fp32 CBs alternate in this kernel)
+// the packer's output format follows the CB it packs into (bf16 and fp32 CBs alternate in this kernel). The
+// "last packed CB" cache is reset at every kernel_main entry (not a function-local static): a static would
+// survive a launch whose binary stays resident in L1 and could then skip the reconfig after another program
+// changed the packer's format (silent wrong-format output on a cache-warm launch).
+uint32_t g_pack_last;
 FORCE_INLINE void pack_to(uint32_t cb) {
-    static uint32_t last = 0xFFFFFFFFu;
-    if (cb != last) {
+    if (cb != g_pack_last) {
         pack_reconfig_data_format(cb);
-        last = cb;
+        g_pack_last = cb;
     }
 }
 
@@ -579,6 +582,7 @@ FORCE_INLINE void finish(uint32_t count) {
 }  // namespace
 
 void kernel_main() {
+    g_pack_last = 0xFFFFFFFFu;  // per launch: the first pack_to always reconfigures the packer
     compute_kernel_hw_startup(CB_X, CB_OUT);
     const uint32_t count = get_arg_val<uint32_t>(0);  // column tiles of this core (0: idle)
     const bool leader = get_arg_val<uint32_t>(1) != 0;

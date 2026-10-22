@@ -10,10 +10,17 @@ One program on the whole compute grid does what the composite's 20-odd ops do pe
     h = sum_i pre_i x_i                                   exact fp32 (SFPU FMAs)
     hn = h * rsqrt(mean_c h^2 + norm_eps) * w             -> bf16, the sublayer input
 
-Core k < C/32 owns column tile k of the C-wide streams; the two reductions over C (the projection and the sum
-of squares, then the sum of h^2) run up a two-level tree of exact SFPU adds (column leaders, coordinator), the
-coordinator finishes mixes, runs the Sinkhorn, writes post / comb in the post-block kernel's lane layout and
+Core k owns column tile(s) of the C-wide streams (``plan_work``); the two reductions over C (the projection and
+the sum of squares, then the sum of h^2) run up a two-level tree of exact SFPU adds (column leaders, coordinator),
+the coordinator finishes mixes, runs the Sinkhorn, writes post / comb in the post-block kernel's lane layout and
 fans the pre tile (then the rsqrt tile) back out. Every core is independent per row (pad rows stay garbage).
+
+Mesh notes (audit 2026-10-22, _agents/mhc_a1_audit/AUDIT.md): every NoC target of the kernels comes from the
+coordinate tables built here (``worker_core_from_logical_core`` = Blackhole translated coordinates, identical on
+every chip of a mesh and validated equal across the mesh's devices by ``MeshDevice``), every remote address is a
+circular-buffer or semaphore L1 address of the same program (one address on every core), and every op-held tensor
+is a mesh-replicated ``from_torch`` upload (one address on every device). The grid and the tables belong to the
+device object the op was built for (``__call__`` checks the device id).
 """
 
 from __future__ import annotations
@@ -79,9 +86,49 @@ class MhcPreBlock:
         DBG=28,
         MASK=29,
     )
+    # the compute kernel reads the CB ids in this order (compile-time args 0..26), then the parameters
+    COMPUTE_CB_ORDER = (
+        "X",
+        "FN",
+        "HI",
+        "LO",
+        "LO2",
+        "ZERO",
+        "PART",
+        "GATHER1",
+        "GATHER2",
+        "PRE",
+        "RS2",
+        "W",
+        "CONSTS",
+        "MIXES",
+        "SPRE",
+        "SPOST",
+        "SCOMB",
+        "MA",
+        "MB",
+        "RS",
+        "RECIP",
+        "TMP",
+        "COEF_OUT",
+        "H",
+        "HSQ",
+        "RS2OUT",
+        "OUT",
+    )
     FREP = 3  # row-replicated fn tiles per stream tile (exact SFPU projection)
-    MAX_COLS = 2  # column tiles per core (128 tiles over a 120-core grid)
+    MAX_COLS = (
+        2  # column tiles per core (C/32 = 128 column tiles need >= 64 cores; a 12x10 grid gives 8 two-column cores)
+    )
     SEM_ARRIVE1, SEM_ARRIVE2, SEM_PRE, SEM_RS2 = 0, 1, 2, 3
+    # kernel ABI (checked against the kernel sources by tests/custom_ops/test_mhc_pre_block_host.py):
+    # reader compile-time args: 9 CB ids + n, gy, gx, Ct + 4 semaphore ids = 17, then the NoC y table (gy entries),
+    # then frep, the mask CB id, then the five TensorAccessorArgs; writer: 10 CB ids + 4 + 4 = 18, then the NoC x
+    # table (gx entries), the NoC y of row 0, then three TensorAccessorArgs; compute: 27 CB ids, 8 parameters,
+    # PARTS, DBG, debug, exact, MASK.
+    READER_NOC_Y_BASE = 17
+    WRITER_NOC_X_BASE = 18
+    COMPUTE_PARAM_BASE = 27
 
     def __init__(
         self,
@@ -101,8 +148,10 @@ class MhcPreBlock:
     ):
         """``fn [(2+n)*n, n*C]`` (bf16-exact values), ``consts`` the Sinkhorn constants ``[8,32,32]`` fp32 on
         device (``build_consts``), ``norm_weight [C]`` the sublayer's RMSNorm weight; ``norm_eps`` is the
-        hyper-connection's projection eps, ``rms_eps`` the sublayer norm's."""
+        hyper-connection's projection eps, ``rms_eps`` the sublayer norm's. Builds device uploads: never call
+        inside a trace capture (the model builds the op in its eager warm-up step)."""
         self.device, self.n, self.C = device, n, C
+        self.device_id = int(device.id())
         self.nC = n * C
         self.Ct = C // TILE
         self.iters, self.eps, self.norm_eps, self.rms_eps = sinkhorn_iters, eps, norm_eps, rms_eps
@@ -143,7 +192,10 @@ class MhcPreBlock:
             )
         self.frep = self.FREP if exact else 1
         self.consts = consts
-        w_rows = norm_weight.float().reshape(1, C).repeat(TILE, 1)
+        # the norm weight: kept on the host for the golden (a device read-back of a mesh tensor needs a composer)
+        self.w_host = norm_weight.float().reshape(-1).clone()
+        assert self.w_host.numel() == C, (self.w_host.shape, C)
+        w_rows = self.w_host.reshape(1, C).repeat(TILE, 1)
         self.w = ttnn.from_torch(
             w_rows.reshape(1, 1, TILE, C), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
@@ -151,18 +203,164 @@ class MhcPreBlock:
         self.gx, self.gy = self.grid.x, self.grid.y
         ncores = self.gx * self.gy
         assert ncores * self.MAX_COLS >= self.Ct, f"grid {self.gx}x{self.gy} < {self.Ct} column tiles / {self.MAX_COLS}"
-        # column tiles per core: the first `extra` cores take two (128 tiles over 120 cores -> 8 cores with two)
-        extra = max(0, self.Ct - ncores)
-        self.work = []  # (count, first column tile) per core k = x*gy + y
-        c = 0
-        for k in range(ncores):
-            cnt = 2 if k < extra else (1 if c < self.Ct else 0)
-            self.work.append((cnt, c))
-            c += cnt
-        assert c == self.Ct, (c, self.Ct)
+        self.work = self.plan_work(ncores, self.Ct, self.MAX_COLS)  # (count, first column tile) per core k = x*gy + y
+        # NoC coordinates of the logical grid rows / columns (translated coordinates: the same on every chip)
         self.noc_x = [device.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x for x in range(self.gx)]
         self.noc_y = [device.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y for y in range(self.gy)]
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.gx - 1, self.gy - 1))])
+
+    # ------------------------------------------------------------------ host-side plan (device-free, testable)
+    @staticmethod
+    def plan_work(ncores: int, Ct: int, max_cols: int) -> list[tuple[int, int]]:
+        """``(count, first column tile)`` per core ``k`` (column-major ``k = x*gy + y``): the first ``Ct - ncores``
+        cores take two column tiles, the next take one, the rest (``k >= Ct``) are idle and contribute zero tiles
+        to the gather tree. ``max_cols`` bounds the per-core count (the CB plan)."""
+        assert ncores * max_cols >= Ct, (ncores, Ct, max_cols)
+        extra = max(0, Ct - ncores)
+        work, c = [], 0
+        for k in range(ncores):
+            cnt = 2 if k < extra else (1 if c < Ct else 0)
+            assert cnt <= max_cols
+            work.append((cnt, c))
+            c += cnt
+        assert c == Ct, (c, Ct)
+        return work
+
+    @classmethod
+    def cb_plan(cls, n: int, gx: int, gy: int, frep: int) -> dict[str, tuple[int, object]]:
+        """CB name -> (tiles, dtype): the per-core circular buffers (every core allocates the whole plan)."""
+        mc = cls.MAX_COLS
+        return {
+            "X": (n * mc, ttnn.float32),
+            "FN": (n * mc * frep, ttnn.bfloat16),
+            "MASK": (1, ttnn.float32),
+            "HI": (n, ttnn.bfloat16),
+            "LO": (n, ttnn.bfloat16),
+            "LO2": (n, ttnn.bfloat16),
+            "ZERO": (1, ttnn.float32),
+            "PART": (2, ttnn.float32),
+            "GATHER1": (gy, ttnn.float32),
+            "GATHER2": (gx, ttnn.float32),
+            "PRE": (1, ttnn.float32),
+            "RS2": (1, ttnn.float32),
+            "W": (mc, ttnn.bfloat16),
+            "CONSTS": (8, ttnn.float32),
+            "MIXES": (1, ttnn.float32),
+            "SPRE": (1, ttnn.float32),
+            "SPOST": (1, ttnn.float32),
+            "SCOMB": (1, ttnn.float32),
+            "MA": (2, ttnn.float32),
+            "MB": (2, ttnn.float32),
+            "RS": (2, ttnn.float32),
+            "RECIP": (2, ttnn.float32),
+            "TMP": (2, ttnn.float32),
+            "COEF_OUT": (n + 2, ttnn.float32),
+            "H": (mc, ttnn.float32),
+            "HSQ": (2, ttnn.float32),
+            "RS2OUT": (1, ttnn.float32),
+            "OUT": (2, ttnn.bfloat16),
+            "PARTS": (mc, ttnn.float32),
+            "DBG": (3, ttnn.float32),
+        }
+
+    @classmethod
+    def compile_time_args(
+        cls,
+        *,
+        n: int,
+        gx: int,
+        gy: int,
+        Ct: int,
+        noc_x: list[int],
+        noc_y: list[int],
+        frep: int,
+        iters: int,
+        eps: float,
+        norm_eps: float,
+        C: int,
+        rms_eps: float,
+        debug: bool,
+        exact: bool,
+        reader_accessors: list[int],
+        writer_accessors: list[int],
+    ) -> tuple[list[int], list[int], list[int]]:
+        """The three kernels' compile-time arg vectors (without the device: the TensorAccessorArgs are passed in)."""
+        CB = cls.CB
+        sems = [cls.SEM_ARRIVE1, cls.SEM_ARRIVE2, cls.SEM_PRE, cls.SEM_RS2]
+        reader_ct = (
+            [CB[k] for k in ("X", "FN", "ZERO", "GATHER1", "GATHER2", "PRE", "RS2", "W", "CONSTS")]
+            + [n, gy, gx, Ct]
+            + sems
+        )
+        assert len(reader_ct) == cls.READER_NOC_Y_BASE
+        reader_ct = reader_ct + list(noc_y) + [frep, CB["MASK"]] + list(reader_accessors)
+        writer_ct = (
+            [CB[k] for k in ("PART", "ZERO", "COEF_OUT", "HSQ", "RS2OUT", "OUT", "PRE", "RS2", "GATHER1", "GATHER2")]
+            + [n, gy, gx, Ct]
+            + sems
+        )
+        assert len(writer_ct) == cls.WRITER_NOC_X_BASE
+        writer_ct = writer_ct + list(noc_x) + [noc_y[0]] + list(writer_accessors)
+        compute_ct = [CB[k] for k in cls.COMPUTE_CB_ORDER]
+        assert len(compute_ct) == cls.COMPUTE_PARAM_BASE
+        compute_ct += [
+            n,
+            gy,
+            gx,
+            iters,
+            f32_bits(eps),
+            f32_bits(norm_eps * n * C),
+            f32_bits(1.0 / C),
+            f32_bits(rms_eps),
+            CB["PARTS"],
+            CB["DBG"],
+            int(debug),
+            int(exact),
+            CB["MASK"],
+        ]
+        return reader_ct, writer_ct, compute_ct
+
+    @staticmethod
+    def runtime_args_for_core(
+        *,
+        xi: int,
+        yi: int,
+        count: int,
+        c0: int,
+        noc_x: list[int],
+        noc_y: list[int],
+        x_addr: int,
+        fn_addr: int,
+        consts_addr: int,
+        w_addr: int,
+        mask_addr: int,
+        post_addr: int,
+        comb_addr: int,
+        hn_addr: int,
+    ) -> tuple[list[int], list[int], list[int]]:
+        """(reader, writer, compute) runtime args of logical core ``(xi, yi)``: buffer addresses, the work item, the
+        leader / coordinator flags, the NoC coordinates of this column's leader (row 0) and of the coordinator
+        (0, 0), and this core's slot in their gather buffers (its logical row / column)."""
+        leader = int(yi == 0)
+        coord = int(xi == 0 and yi == 0)
+        reader = [x_addr, fn_addr, consts_addr, w_addr, count, c0, leader, coord, noc_x[xi], mask_addr]
+        writer = [
+            post_addr,
+            comb_addr,
+            hn_addr,
+            count,
+            c0,
+            leader,
+            coord,
+            noc_x[xi],
+            noc_y[0],
+            yi,
+            noc_x[0],
+            noc_y[0],
+            xi,
+        ]
+        compute = [count, leader, coord]
+        return reader, writer, compute
 
     # ------------------------------------------------------------------ reference
     def golden(self, x: torch.Tensor, fn: torch.Tensor, base: torch.Tensor, scale: torch.Tensor):
@@ -178,7 +376,7 @@ class MhcPreBlock:
             (mixes[:, 2 * n :] * float(scale[2]) + b[2 * n :]).reshape(-1, n, n), self.iters, self.eps
         )
         h = (pre[:, :, None] * xd.reshape(-1, n, C)).sum(1)
-        w = ttnn.to_torch(self.w)[0, 0, 0].double()
+        w = self.w_host.to(torch.bfloat16).double()  # the device holds the bf16 rows of the same values
         hn = h * torch.rsqrt(h.square().mean(-1, keepdim=True) + self.rms_eps) * w
         return mixes, pre, post, comb.reshape(-1, n * n), h, hn
 
@@ -197,187 +395,75 @@ class MhcPreBlock:
         return hn, post, comb
 
     def __call__(self, x: ttnn.Tensor, hn: ttnn.Tensor, post: ttnn.Tensor, comb: ttnn.Tensor) -> ttnn.Tensor:
-        n, Ct, gx, gy = self.n, self.Ct, self.gx, self.gy
+        n, gx, gy = self.n, self.gx, self.gy
         assert x.dtype == ttnn.float32 and x.layout == ttnn.TILE_LAYOUT and not x.memory_config().is_sharded()
         assert list(x.padded_shape)[-2:] == [TILE, self.nC], x.padded_shape
         assert hn.dtype == ttnn.bfloat16 and list(hn.padded_shape)[-2:] == [TILE, self.C], hn.padded_shape
         assert post.dtype == ttnn.float32 and list(post.padded_shape)[-2:] == [TILE, TILE], post.padded_shape
         assert comb.dtype == ttnn.float32 and list(comb.padded_shape)[-2:] == [TILE, n * TILE], comb.padded_shape
+        # the grid, the NoC tables and the op's uploads belong to the device the op was built for
+        assert int(x.device().id()) == self.device_id, (x.device().id(), self.device_id)
         CB = self.CB
 
-        def cb(index, tiles, dtype=ttnn.float32):
+        def cb(name):
+            tiles, dtype = plan[name]
             page = FP32_TILE if dtype == ttnn.float32 else BF16_TILE
             return ttnn.CBDescriptor(
                 total_size=tiles * page,
                 core_ranges=self.cores,
-                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB[name], data_format=dtype, page_size=page)],
             )
 
-        mc = self.MAX_COLS
-        cbs = [
-            cb(CB["X"], n * mc),
-            cb(CB["FN"], n * mc * self.frep, ttnn.bfloat16),
-            cb(CB["MASK"], 1),
-            cb(CB["HI"], n, ttnn.bfloat16),
-            cb(CB["LO"], n, ttnn.bfloat16),
-            cb(CB["LO2"], n, ttnn.bfloat16),
-            cb(CB["ZERO"], 1),
-            cb(CB["PART"], 2),
-            cb(CB["GATHER1"], gy),
-            cb(CB["GATHER2"], gx),
-            cb(CB["PRE"], 1),
-            cb(CB["RS2"], 1),
-            cb(CB["W"], mc, ttnn.bfloat16),
-            cb(CB["CONSTS"], 8),
-            cb(CB["MIXES"], 1),
-            cb(CB["SPRE"], 1),
-            cb(CB["SPOST"], 1),
-            cb(CB["SCOMB"], 1),
-            cb(CB["MA"], 2),
-            cb(CB["MB"], 2),
-            cb(CB["RS"], 2),
-            cb(CB["RECIP"], 2),
-            cb(CB["TMP"], 2),
-            cb(CB["COEF_OUT"], n + 2),
-            cb(CB["H"], mc),
-            cb(CB["HSQ"], 2),
-            cb(CB["RS2OUT"], 1),
-            cb(CB["OUT"], 2, ttnn.bfloat16),
-            cb(CB["PARTS"], mc),
-            cb(CB["DBG"], 3),
-        ]
+        plan = self.cb_plan(n, gx, gy, self.frep)
+        cbs = [cb(name) for name in plan]
         sems = [
             ttnn.SemaphoreDescriptor(s, ttnn.CoreType.WORKER, self.cores, 0)
             for s in (self.SEM_ARRIVE1, self.SEM_ARRIVE2, self.SEM_PRE, self.SEM_RS2)
         ]
-
-        reader_ct = [
-            CB["X"],
-            CB["FN"],
-            CB["ZERO"],
-            CB["GATHER1"],
-            CB["GATHER2"],
-            CB["PRE"],
-            CB["RS2"],
-            CB["W"],
-            CB["CONSTS"],
-            n,
-            gy,
-            gx,
-            Ct,
-            self.SEM_ARRIVE1,
-            self.SEM_ARRIVE2,
-            self.SEM_PRE,
-            self.SEM_RS2,
-        ] + self.noc_y
-        reader_ct += [self.frep, CB["MASK"]]
+        reader_acc, writer_acc = [], []
         for t in (x, self.fn, self.consts, self.w, self.mask):
-            reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        writer_ct = (
-            [
-                CB["PART"],
-                CB["ZERO"],
-                CB["COEF_OUT"],
-                CB["HSQ"],
-                CB["RS2OUT"],
-                CB["OUT"],
-                CB["PRE"],
-                CB["RS2"],
-                CB["GATHER1"],
-                CB["GATHER2"],
-                n,
-                gy,
-                gx,
-                Ct,
-                self.SEM_ARRIVE1,
-                self.SEM_ARRIVE2,
-                self.SEM_PRE,
-                self.SEM_RS2,
-            ]
-            + self.noc_x
-            + [self.noc_y[0]]
-        )
+            reader_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         for t in (post, comb, hn):
-            writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        order = [
-            "X",
-            "FN",
-            "HI",
-            "LO",
-            "LO2",
-            "ZERO",
-            "PART",
-            "GATHER1",
-            "GATHER2",
-            "PRE",
-            "RS2",
-            "W",
-            "CONSTS",
-            "MIXES",
-            "SPRE",
-            "SPOST",
-            "SCOMB",
-            "MA",
-            "MB",
-            "RS",
-            "RECIP",
-            "TMP",
-            "COEF_OUT",
-            "H",
-            "HSQ",
-            "RS2OUT",
-            "OUT",
-        ]
-        compute_ct = [CB[k] for k in order] + [
-            n,
-            gy,
-            gx,
-            self.iters,
-            f32_bits(self.eps),
-            f32_bits(self.norm_eps * self.nC),
-            f32_bits(1.0 / self.C),
-            f32_bits(self.rms_eps),
-            CB["PARTS"],
-            CB["DBG"],
-            int(self.debug),
-            int(self.exact),
-            CB["MASK"],
-        ]
+            writer_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        reader_ct, writer_ct, compute_ct = self.compile_time_args(
+            n=n,
+            gx=gx,
+            gy=gy,
+            Ct=self.Ct,
+            noc_x=self.noc_x,
+            noc_y=self.noc_y,
+            frep=self.frep,
+            iters=self.iters,
+            eps=self.eps,
+            norm_eps=self.norm_eps,
+            C=self.C,
+            rms_eps=self.rms_eps,
+            debug=self.debug,
+            exact=self.exact,
+            reader_accessors=reader_acc,
+            writer_accessors=writer_acc,
+        )
 
+        addrs = dict(
+            x_addr=x.buffer_address(),
+            fn_addr=self.fn.buffer_address(),
+            consts_addr=self.consts.buffer_address(),
+            w_addr=self.w.buffer_address(),
+            mask_addr=self.mask.buffer_address(),
+            post_addr=post.buffer_address(),
+            comb_addr=comb.buffer_address(),
+            hn_addr=hn.buffer_address(),
+        )
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for xi in range(gx):
             for yi in range(gy):
                 count, c0 = self.work[xi * gy + yi]
-                leader = int(yi == 0)
-                coord = int(xi == 0 and yi == 0)
-                reader_rt[xi][yi] = [
-                    x.buffer_address(),
-                    self.fn.buffer_address(),
-                    self.consts.buffer_address(),
-                    self.w.buffer_address(),
-                    count,
-                    c0,
-                    leader,
-                    coord,
-                    self.noc_x[xi],
-                    self.mask.buffer_address(),
-                ]
-                writer_rt[xi][yi] = [
-                    post.buffer_address(),
-                    comb.buffer_address(),
-                    hn.buffer_address(),
-                    count,
-                    c0,
-                    leader,
-                    coord,
-                    self.noc_x[xi],
-                    self.noc_y[0],
-                    yi,
-                    self.noc_x[0],
-                    self.noc_y[0],
-                    xi,
-                ]
-                compute_rt[xi][yi] = [count, leader, coord]
+                r, w, c = self.runtime_args_for_core(
+                    xi=xi, yi=yi, count=count, c0=c0, noc_x=self.noc_x, noc_y=self.noc_y, **addrs
+                )
+                reader_rt[xi][yi] = r
+                writer_rt[xi][yi] = w
+                compute_rt[xi][yi] = c
 
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True

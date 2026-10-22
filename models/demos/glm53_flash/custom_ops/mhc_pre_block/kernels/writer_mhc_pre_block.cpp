@@ -130,6 +130,16 @@ void kernel_main() {
         cbcoef.pop_front(n + 2);
     }
     // ---- round 2: rows' sums of h^2
+    if (!worker) {
+        // An idle core (a grid with more cores than column tiles, e.g. 13x10 for 128 tiles) contributes the zero
+        // tile to both rounds, but has no data dependency that orders its round-2 send after round 1: unordered,
+        // its second increment counts towards the leader's round-1 wait, the leader sums before the slowest
+        // workers' partials landed (stale slots -> wrong mixes on every launch) and the late increments race the
+        // leader's reset (a lost one deadlocks round 2). The pre tile reaches this core only after the leader
+        // finished round 1 (the coordinator fans it out after every leader's sum arrived), so wait for it like
+        // the workers do (their round-2 tile is computed from it).
+        CircularBuffer(cb_pre).wait_front(1);
+    }
     send_to_leader(cb_hsq);
     if (leader) {
         send_to_coordinator();
