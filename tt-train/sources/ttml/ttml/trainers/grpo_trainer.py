@@ -876,9 +876,9 @@ class GRPOTrainer:
         # ``train()``, read by ``_publish_step_metrics``.
         self._step_start_time: float = 0.0
 
-        # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
-        # full trainer lifecycle is visible in one place; populated by
-        # ``_setup()`` on the first ``train()`` call.
+        # Resolved-at-setup state, populated by ``_setup()`` on the first ``train()``
+        # call. The topology fields default to single-device values (1 device, no
+        # FSDP), so a helper that runs before ``_setup()`` sees a single device.
         self._tokenizer: Any = None
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
