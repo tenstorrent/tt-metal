@@ -2258,6 +2258,13 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 1
+  frozen:
+    at: '2026-10-22T02:42:34'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py: 106ba7c7179be268bb98802894efea7a6ab268a33d433e99561422e7ccdae638
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: C.enc_source.attn_hc
   title: enc_source attn_hc (op) on device, layer 2
   step: implement
