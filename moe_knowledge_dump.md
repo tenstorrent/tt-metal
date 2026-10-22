@@ -114,7 +114,9 @@ Facts about main's dispatch ops:
 
 ### 4.1 Collectives on one axis (TP = 4)
 - All-gather or reduce-scatter of a `[rows, w]` bf16 tensor: busiest link carries **1.5 of 4
-  shards on a ring**, **2 on the middle link of a line**: `sh × rows × w × 2 B / 4 ÷ 50 GB/s`.
+  shards on a ring**, **3 (G − 1) on a line's end links** (the end chip's only neighbour brings it every
+  other shard; the middle link carries 2 each way): `sh × rows × w × 2 B / 4 ÷ 50 GB/s`. (Corrected
+  2026-10-22: earlier pages used 2 for a line, which undercounts the LoudBox's TP line by 1.5x.)
   For K2.7 on 8 × 4, an x-sized collective (`[640, 7168]`) is about **69 µs**; on 4 × 4 (1,280 rows)
   about 138 µs.
 - All-reduce = reduce-scatter + all-gather (2×). Router logits are fp32 (the selection bias sits
@@ -429,6 +431,17 @@ overlapped**, so for K3 on a small stage the overlap work is worth ~13% and can 
   `dispatch_fabric2d` ~17 GB/s per stream; combine v2 = 0.54–0.58× combine v1 per launch.
 - Some LoudBoxes run 200G Ethernet firmware (see memory `loudbox-eth-200g-firmware.md`), matching
   the Galaxy's 25 GB/s.
+- **Link rate at 200G, measured 2026-10-22** (bh-lb-09 2 x 4, `models/demos/deepseek_v3_d_p/tests/perf/
+  scratch_fabric_link_rate.py`: one worker per link direction, one hop, every link and direction of mesh row 0 busy at
+  once): **23.6-24.1 GB/s per link per direction (94-96% of 25)** at every model payload, FABRIC_2D = FABRIC_1D
+  (1D 8256 B: 23.9). Worker channel slots the 2D router resolves: payload 7232 -> 9, 8256 -> 11, 10304 -> 15,
+  12352 -> 9, 14400 -> 5 (1D 8256: 8); the senders wait for a slot 53-74% of the time (link-bound, not slot-bound).
+  DRAM source (4 reads a batch, 8-deep CB) and DRAM destination: still 23.6. Under-pipelined sender (1 read in flight,
+  2-deep CB): 13.4 GB/s - the sender side is the only thing seen to pull a link below the ceiling. The fused head's
+  "15.6 GB/s" (tp_gather 336 / 585 us, ttnn all_gather 354 / 602 us for GLM-Flash / K3 x) was the line accounting:
+  the TP line's end links carry 3 shards, 3 x 5.24 MB / (2 x 23.6 GB/s) = 333 us; the gather and the fabric
+  reduce-scatter (347 / 594 us) already run at the link ceiling. On the LoudBox only fewer bytes or hiding under
+  compute make them faster; a Galaxy TP ring carries 1.5 shards a link.
 
 ---
 
