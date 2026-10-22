@@ -633,9 +633,15 @@ class RouterStream:
         df = (b - p) % G
         return "fwd" if df < G - df or (df == G - df and p % 2 == 0) else "bwd"
 
+    def _hops(self, p, b):
+        G = self.G
+        return min((b - p) % G, (p - b) % G) if self.xg.ring else abs(b - p)
+
     def _dests(self, p, d):
-        """Owner blocks chip p sends in direction d, in order."""
-        return [b for b in range(self.G) if b != p and self._dir(p, b) == d]
+        """Owner blocks chip p sends in direction d, the farthest first - the router cores' hand-off order too (the
+        port sends unit u once a core's word counts u + 1 hand-offs: both orders must agree)."""
+        bs = [b for b in range(self.G) if b != p and self._dir(p, b) == d]
+        return sorted(bs, key=lambda b: -self._hops(p, b))
 
     def port_block(self, coord, d, v):
         """The port sender's logits args (LSTREAM): its destinations (chip | slot there << 16, mesh), its link's router
@@ -739,7 +745,7 @@ class RouterStream:
             self.scale_bits,
         ]
         hand = [b for d in ("fwd", "bwd") for b in self._dests(p, d)]  # (my partials of the other owners)
-        hand.sort(key=lambda b: -abs(b - p))  # (the farthest first: their way is longest)
+        hand.sort(key=lambda b: -self._hops(p, b))  # (the farthest first: their way is longest)
         for j, core in enumerate(self.cores):
             # entries = blocks (HOLD slot b: token tile b of my rows); the hand-offs, then my own block's fin
             n_rt[core.x][core.y] = (
