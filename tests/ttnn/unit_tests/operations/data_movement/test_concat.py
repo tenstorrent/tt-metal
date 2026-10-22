@@ -1169,11 +1169,6 @@ def test_sharded_concat_height_leading_dims_block_sharded(
     _run_height_concat(device, layout, dtype, shapes, ttnn.ShardStrategy.BLOCK, grid_cols, grid_rows, orientation)
 
 
-# The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
-# instead of just reporting a mismatch; uint32 so the values are exact at any size. Checks the full
-# tensor, and separately the first column of each flattened row, which is the view in the issue:
-#   got      [0,16,32,48,  64,  80,  96, 112, 1000,...]   <- all of a, then all of b
-#   expected [0,16,32,48,1000,1016,1032,1048,   64,...]   <- interleaved per leading index
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("widths", [(32, 32), (32, 64), (96, 32), (32, 32, 32)])
 def test_concat_last_dim_block_float_32_wide_is_exact(device, dtype, widths):
@@ -1186,6 +1181,11 @@ def test_concat_last_dim_block_float_32_wide_is_exact(device, dtype, widths):
     assert torch.equal(output, expected)
 
 
+# The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
+# instead of just reporting a mismatch; uint32 so the values are exact at any size. Checks the full
+# tensor, and separately the first column of each flattened row, which is the view in the issue:
+#   got      [0,16,32,48,  64,  80,  96, 112, 1000,...]   <- all of a, then all of b
+#   expected [0,16,32,48,1000,1016,1032,1048,   64,...]   <- interleaved per leading index
 @pytest.mark.parametrize(
     "strategy, shape, grid_cols, grid_rows",
     [
