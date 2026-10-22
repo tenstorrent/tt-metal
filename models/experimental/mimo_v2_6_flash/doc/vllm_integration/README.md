@@ -237,7 +237,42 @@ vllm serve ... --no-async-scheduling \
   kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
   ~128 decode tokens draft from less context); async scheduling; more than one speculating request per lane (16 / 32
-  verify rows exceed the 4-user kernels); the 3-layer MTP chain; the trace region size with both extra traces.
+  verify rows exceed the 4-user kernels); drafting with all 3 MTP layers (planned, below); the trace region size with
+  both extra traces.
+
+### Planned: one MTP layer per draft
+
+The checkpoint has 3 MTP layers (`num_nextn_predict_layers`); the device drafts all 3 tokens with layer 0, as
+upstream vLLM does for MiMo. The GPU references come from vLLM 0.31.0 patched to expose all 3 layers, which selects
+`MultiModuleMTPSpeculator`: draft i + 1 from layer i. The layers are not chained: each takes the target's hidden
+(SGLang's multi-layer EAGLE runs MiMoV2 the same way, `chain_mtp_hidden_states` off). The host reference implements
+it (`reference/spec_decode.py` `plan_mtp_layers`, `reference/mtp.py` `ReferenceMTPDrafter` with 3 layers; one layer
+stays selectable), and `tests/test_spec_decode_host.py` checks it against a recomputation of every layer over the
+whole sequence after steps of every accepted count (equal to 2e-6; without the re-prefill below, 1.4 and 3.6).
+
+- **Equations.** Committed tokens x (the last at B), drafts d, x~ = x then d_1, d_2. Layer i at position q takes the
+  target's final normed hidden h_q and the embedding of x~[q + i + 1], RoPE at q, K / V at q in its own cache; draft
+  i + 1 is its greedy token at row B - 1. Every layer's cache holds, at each q <= B - 1, the entry of
+  (h_q, x~[q + i + 1]).
+- **Rows.** Each draft runs the 3 layers over the same rows: the committed rows A .. B - 1 (A the verify's column-0
+  position) and, before them, max(0, 3 - m) re-prefill rows from a stash of the last draft's last 2 rows (target
+  hidden, layer-0 token, position): layer i's rows A - i .. A - 1 took the last draft's d_1 .. d_i, stale once
+  rejected. 3 rows, 4 when all 3 drafts were accepted: one 4-slot pass per layer, right-aligned, the anchor in slot
+  3. Layer i's tokens are the layer-0 tokens shifted by i, the drafts so far appended.
+- **Cost.** Today: a fill pass (<= 4 slots) and 2 one-slot passes, all on layer 0, ~2.7 ms on device. Planned: 3
+  passes of <= 4 slots on layers 0, 1, 2: the same op graph and weight bytes per pass (each layer ~46 MB per chip
+  at bfloat8_b), plus the serial K / V writes of up to 4 slots in passes 2 and 3 and a few small input ops: about
+  2.8-3.0 ms. Memory per replica: 2 more layers, ~0.74 GB (92 MB per chip; eh_proj 8192 x 4096, SWA q / k / v / o,
+  dense MLP 4096 -> 16384 -> 4096), 2 more ring caches (~0.2 MB per chip each), the stash (2 hidden rows, 2 tokens, 2
+  positions per lane).
+- **Device program** (stage B style, inputs derived on device from the accepted count m and the verify's column-0
+  position A): slot j at position B - 4 + j with B = A + m; its hidden row and layer-0 token at index j + m - 2 of
+  [stash row 0, stash row 1, verify slots 0-3] (one gather each); slot j used when j >= 1 or m = 4, and, for a stash
+  index, when the stash row's position equals the slot's; layer i's tokens are slots j + i of [layer-0 tokens,
+  d_1, d_2], d_k at slot 3 of draft head k - 1. After the passes, slots 2-3 (hidden, token, position) become the
+  stash. A prompt resets the rings and the stash positions (-1). A draft after a plain step (one slot, not slot 0)
+  keeps host-planned sources.
+- **Plugin.** No change: still 3 drafts per step.
 
 ## Not done
 
