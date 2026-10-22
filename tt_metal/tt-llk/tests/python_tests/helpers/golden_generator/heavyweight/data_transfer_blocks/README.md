@@ -217,6 +217,7 @@ multiplying two src registers is not one of them.
 | Call | What it is for |
 |---|---|
 | `fpu.elementwise(operation, srcA, srcB)` | One element-wise op — `Elwadd`, `Elwsub`, `Elwmul` — computed in a type exact for the operands it was handed. |
+| `fpu.sum_of_products(srcB_rows, srcA_cols)` | One matrix multiply, accumulated in `float64` — wider than its operands, as the hardware's network is. Which rows and columns is the operation's business. |
 | `fpu.models_fidelity(in_format)` | Whether a multiply on these datums decomposes into phases here. Takes the **format**, because an operation asks while it is building its pipeline, before any register holds a value. |
 | `fpu.phases(math_fidelity)` | The phase indices to run: `LoFi` is one phase, `HiFi4` four. |
 | `fpu.operand_halves(srcA, srcB, phase)` | The mantissa window each operand contributes on one phase, with non-finite lanes already resolved. |
