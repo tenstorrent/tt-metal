@@ -53,18 +53,12 @@ namespace
 
 using ckernel::dest_dvalid_client;
 
-constexpr std::uint32_t BITS_PER_SECTION  = 4;
 constexpr std::uint32_t STEP_BITS         = 3;
 constexpr std::uint32_t STEPS_PER_SECTION = 5;
 
 inline float fill_value(const std::uint32_t i)
 {
     return static_cast<float>(i + 1) / 8.0f;
-}
-
-inline std::uint32_t nibble(const std::uint32_t word, const std::uint32_t section)
-{
-    return (word >> (BITS_PER_SECTION * section)) & 0xF;
 }
 
 inline std::uint32_t step_bit(const std::uint32_t order_half, const std::uint32_t k)
@@ -83,6 +77,7 @@ struct UnpackToDestOp
 
     static void init()
     {
+        ckernel::_llk_dest_chain_join_<UNIT>();
         UNPACK((_llk_unpack_unary_operand_to_dest_init_(bfd_a)));
     }
 
@@ -97,8 +92,11 @@ struct DatacopyOp
 {
     static constexpr dest_dvalid_client UNIT = dest_dvalid_client::FPU;
 
+    // The datacopy reprograms the unpack MOP, so unpack to dest drops out of the chain until its init runs again.
     static void init()
     {
+        ckernel::_llk_dest_chain_leave_<dest_dvalid_client::UNPACK>();
+        ckernel::_llk_dest_chain_join_<UNIT>();
         UNPACK((
             _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(bfd_a, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/)));
         MATH((_llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(datacopy_rows, 1 /*num_matrices*/)));
@@ -118,6 +116,7 @@ struct SquareOp
 
     static void init()
     {
+        ckernel::_llk_dest_chain_join_<UNIT>();
         SFPU((sfpu::init_square()));
     }
 
@@ -141,6 +140,7 @@ struct PackOp
 
     static void init()
     {
+        ckernel::_llk_dest_chain_join_<UNIT>();
         PACK((_llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/)));
     }
 
@@ -172,21 +172,6 @@ inline void run_op(const std::uint32_t step, const bool produced, const std::uin
     Op::exec(i, produced);
 }
 
-template <typename Op>
-inline void init_op(const std::uint32_t members, std::uint32_t& inited)
-{
-    const std::uint32_t bit = ckernel::dest_dvalid::bit_of(Op::UNIT);
-    if (members & bit)
-    {
-        ckernel::_llk_dest_chain_join_<Op::UNIT>();
-    }
-    else
-    {
-        ckernel::_llk_dest_chain_leave_<Op::UNIT>();
-        inited &= ~bit;
-    }
-}
-
 inline void run_section(const std::uint32_t order_half, const std::uint32_t i, std::uint32_t& inited, dest_dvalid_client& configured_unpacker)
 {
     bool produced = false;
@@ -206,19 +191,14 @@ inline void run_section(const std::uint32_t order_half, const std::uint32_t i, s
     }
 }
 
-inline void run_schedule(const std::uint32_t tile_cnt, const std::uint32_t* orders, const std::uint32_t members_word)
+inline void run_schedule(const std::uint32_t tile_cnt, const std::uint32_t* orders)
 {
-    ckernel::_llk_dest_chain_join_<dest_dvalid_client::FPU>();
-    ckernel::_llk_dest_chain_join_<dest_dvalid_client::PACK>();
     std::uint32_t inited = 0;
     // Both producer operations program the same unpack MOP bank.
     dest_dvalid_client configured_unpacker = ckernel::dest_dvalid::NONE;
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
-        const std::uint32_t members    = nibble(members_word, i);
         const std::uint32_t order_half = (orders[i / 2] >> (16 * (i % 2))) & 0xFFFF;
-        init_op<UnpackToDestOp>(members, inited);
-        init_op<SquareOp>(members, inited);
         run_section(order_half, i, inited, configured_unpacker);
     }
 }
@@ -227,18 +207,13 @@ inline void run_schedule(const std::uint32_t tile_cnt, const std::uint32_t* orde
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    [[maybe_unused]] const FormatConfig& formats = params.formats;
-#endif
-#ifndef SPEED_OF_LIGHT
+    [[maybe_unused]] const FormatConfig& formats         = params.formats;
     [[maybe_unused]] const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     [[maybe_unused]] const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TILE_CNT                         = params.TILE_CNT;
     const std::uint32_t ORDERS[4]                        = {params.ORDER0, params.ORDER1, params.ORDER2, params.ORDER3};
-    const std::uint32_t MEMBERS                          = params.MEMBERS;
     UNPACK(const Operand& buffer_A = params.buffer_A;)
     PACK(const Operand& buffer_Res = params.buffer_Res;)
-#endif
     using namespace ckernel;
 
     UNPACK(
@@ -260,5 +235,5 @@ void run_kernel(RUNTIME_PARAMETERS params)
     PACK((_llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ReluConfig::none())));
     PACK((_llk_pack_dest_init_<p_pacr::PACK0, dest_sync>()));
 
-    run_schedule(TILE_CNT, ORDERS, MEMBERS);
+    run_schedule(TILE_CNT, ORDERS);
 }

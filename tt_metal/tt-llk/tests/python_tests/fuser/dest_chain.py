@@ -70,7 +70,7 @@ def clear_dest(config: "GlobalConfig", operation: "L1Operation", node) -> str:
         return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
-    return f"_llk_math_dest_clear_<{dest_sync}, {dest_acc}>(_llk_dest_chain_bank_());\n"
+    return f"_llk_math_dest_clear_<{dest_sync}, {dest_acc}>(dest_chain::state.bank);\n"
 
 
 class Section:
