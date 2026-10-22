@@ -18,6 +18,7 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
+#include "program_allocation_support.hpp"  // L1RegionAllocator
 #include "impl/buffers/semaphore.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
@@ -680,30 +681,6 @@ private:
     // This way we can cache it agnostic of the device
     std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-    struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
-
-        // Circular buffers are created and allocated at core range granularity
-        CoreRange core_range;
-
-        // Holds vector of addresses where circular buffers are allocated [start, end)
-        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
-        // multiple cores must share the same address To enable this, circular buffer address is the maximum address
-        // amongst all of its target cores This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
-
-        // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the
-        // last L1 region
-        uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
-
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
-
-        // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions.clear(); }
-    };
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
@@ -721,8 +698,8 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
-    std::vector<CircularBufferAllocator> cb_allocators_;
+    // Used to generate circular buffer addresses. There is one L1RegionAllocator per unique CoreRange
+    std::vector<L1RegionAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
 
@@ -748,7 +725,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
-    std::vector<CircularBufferAllocator> dfb_allocators_;
+    std::vector<L1RegionAllocator> dfb_allocators_;
     std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
