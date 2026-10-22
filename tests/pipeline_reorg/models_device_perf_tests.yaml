@@ -61,24 +61,17 @@
 # generated bf16 op: leaky_relu_bw
 # generated bf16 op: lgamma
 # generated bf16 op: log
-- name: "ttnn eltwise generated bf16 log"
-  cmd: >-
-    pytest --timeout 120 -s -v
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_accurate[log10]
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_nonpositive_domain[accurate-log10]
-  skus:
-    wh_n300_civ2:
-      timeout: 2
-    bh_p150b_civ2:
-      timeout: 2
-  team: ttnn
-  budget_type: device_perf
-  owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log10
 - name: "ttnn eltwise generated bf16 log10"
   cmd: >-
     pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_log10_bf16_fast_and_approximate_exhaustive.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_bfloat8_b
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_exhaustive_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_nonfinite_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_unflushed_zero_and_subnormal_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_accurate[log10]
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_nonpositive_domain[accurate-log10]
   skus:
     wh_n300_civ2:
       timeout: 2
@@ -112,8 +105,10 @@
 # generated bf16 op: selu
 # generated bf16 op: selu_bw
 # generated bf16 op: sigmoid
+# generated bf16 op: sigmoid_bw
 # generated bf16 op: silu_bw
 # generated bf16 op: sinh_bw
+# generated bf16 op: situ_glu
 # generated bf16 op: softplus
 # generated bf16 op: softplus_bw
 # generated bf16 op: softshrink
@@ -124,6 +119,7 @@
 # generated bf16 op: sqrt_bw
 # generated bf16 op: square_bw
 # generated bf16 op: tanh
+# generated bf16 op: tanh_bw
 # generated bf16 op: tanhshrink
 # generated bf16 op: xielu
 # generated bf16 ops end

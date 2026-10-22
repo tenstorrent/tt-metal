@@ -184,13 +184,6 @@ public:
         return get_shard_noc_addr(shard_id, offset, noc);
     }
 
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    // Not noted, unlike get_noc_addr: it must stay constexpr, and C++17 allows no asm there. A kernel that uses it for
-    // direct access to its local shard should hold a LocalTensorAccessor, which is noted.
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
-
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -524,11 +517,6 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         return false;
     }
 
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
-
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
         uint32_t shard_id,
@@ -747,7 +735,19 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        }) {
+        }),
+        generated_noc_addr_fn(
+            [](const void* accessor, bool write, bool may_push, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+                using tensor_accessor::detail::generated_noc_addr;
+                using tensor_accessor::detail::TransferDir;
+                const auto& a = *static_cast<const Accessor*>(accessor);
+                if (write) {
+                    return may_push ? generated_noc_addr<TransferDir::Write, true>(a, page_idx, offset, noc)
+                                    : generated_noc_addr<TransferDir::Write>(a, page_idx, offset, noc);
+                }
+                return may_push ? generated_noc_addr<TransferDir::Read, true>(a, page_idx, offset, noc)
+                                : generated_noc_addr<TransferDir::Read>(a, page_idx, offset, noc);
+            }) {
         // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
         // can't name its tensor, and the wrapper can't tell which the kernel will do.
         tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
@@ -758,10 +758,17 @@ public:
     }
 
 private:
+    // The NoC traits' generated address for the wrapped accessor (tensor_accessor::detail::generated_noc_addr).
+    template <tensor_accessor::detail::TransferDir Dir, bool MayPush>
+    friend uint64_t tensor_accessor::detail::generated_noc_addr(
+        const AbstractTensorAccessorWrapper& wrapper, uint32_t page_id, uint32_t offset, uint8_t noc);
+
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+    using GeneratedNocAddrFn = uint64_t (*)(const void*, bool, bool, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
+    GeneratedNocAddrFn generated_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {
@@ -804,5 +811,14 @@ struct ShardView {
     uint64_t get_noc_addr(uint32_t shard_id, uint32_t offset, uint8_t noc) const {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
+};
+
+// Addresses the tensor by allocator bank: `{.bank_id, .offset_bytes}` names offset_bytes into the tensor's region of
+// bank bank_id (an L1 bank's worker core, or a DRAM bank; the tensor's memory type picks which). Use it where the
+// kernel already works in banks (e.g. a host-computed bank id per transfer) rather than pages or shards.
+template <typename Accessor>
+struct BankView {
+    const Accessor& accessor;
+    explicit BankView(const Accessor& acc) : accessor(acc) {}
 };
 // NOLINTEND(misc-unused-parameters)
