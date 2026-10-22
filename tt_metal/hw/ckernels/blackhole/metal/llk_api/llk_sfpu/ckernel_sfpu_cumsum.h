@@ -13,8 +13,10 @@ namespace ckernel {
 namespace sfpu {
 
 // Scans each column of the tile top to bottom: loads 4+4 rows into LREG0-7, transposes them,
-// replays slots 0-15 (the step cumsum_init or cumprod_init recorded) and stores them back.
-// LREG4-7 carry the running column values between calls; cumsum and cumprod set them on `first`.
+// replays the step cumsum_init or cumprod_init recorded (STEP instructions per 4 rows, from slot 0)
+// and stores them back. LREG4-7 carry the running column values between calls; cumsum and cumprod
+// set them on `first`. cumsum_init puts an SFPNOP after each SFPADD (STEP 8); cumprod_init does not.
+template <std::uint32_t STEP = 8>
 inline void scan_tile_columns() {
     // F0,1 R0
     TTI_SFPLOAD(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
@@ -23,7 +25,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(0, 8);
+    lltt::replay(0, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
@@ -38,7 +40,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(7, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 6 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(8, 8);
+    lltt::replay(STEP, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 4);
@@ -53,7 +55,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 10 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(0, 8);
+    lltt::replay(0, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 8);
@@ -68,7 +70,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(7, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 14 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(8, 8);
+    lltt::replay(STEP, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 12);
@@ -83,7 +85,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(0, 8);
+    lltt::replay(0, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0 + 32);
@@ -98,7 +100,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(7, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 6 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(8, 8);
+    lltt::replay(STEP, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 4 + 32);
@@ -113,7 +115,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 10 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(0, 8);
+    lltt::replay(0, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 8 + 32);
@@ -128,7 +130,7 @@ inline void scan_tile_columns() {
     TTI_SFPLOAD(7, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 14 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    lltt::replay(8, 8);
+    lltt::replay(STEP, STEP);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 12 + 32);
