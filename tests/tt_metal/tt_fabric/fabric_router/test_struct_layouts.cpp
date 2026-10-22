@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -196,13 +197,19 @@ TEST(StructLayout, GoMsgLayoutFromHal) {
         SCOPED_TRACE(tt::arch_to_str(arch));
         const tt::tt_metal::Hal hal(arch, false, false, 0, false);
         const auto members = go_msg_layout(hal);
-        const auto size = hal.get_dev_msgs_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH)
-                              .size_of<tt::tt_metal::dev_msgs::go_msg_t>();
+        const auto& factory = hal.get_dev_msgs_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        const auto size = factory.size_of<tt::tt_metal::dev_msgs::go_msg_t>();
         EXPECT_TRUE(validate_members(members, size));
 
-        // Each member's offset is where make_go_msg_u32, which packs the message into one word, puts its value.
+        // Each member's offset is where the HAL's go_msg_t accessors put its value in the message's one word.
         ASSERT_EQ(size, sizeof(uint32_t));
-        const auto bytes = std::bit_cast<std::array<uint8_t, 4>>(hal.make_go_msg_u32(0xAB, 0x01, 0x02, 0x03));
+        uint32_t word = 0;
+        auto go_msg = factory.create_view<tt::tt_metal::dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&word));
+        go_msg.signal() = 0xAB;
+        go_msg.master_x() = 0x01;
+        go_msg.master_y() = 0x02;
+        go_msg.dispatch_message_offset() = 0x03;
+        const auto bytes = std::bit_cast<std::array<uint8_t, 4>>(word);
         const auto byte_at = [&](std::string_view name) {
             const auto it = std::find_if(members.begin(), members.end(), [&](const auto& m) { return m.name == name; });
             EXPECT_NE(it, members.end()) << name;
