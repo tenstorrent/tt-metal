@@ -264,39 +264,63 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
     out.deallocate(True)
     compile_s = time.time() - t0
 
+    # LOCAL EXPERIMENT (#60913): GEMMA4_PREFILL_TRACE=0 runs each chunk eagerly instead of replaying a trace.
+    use_trace = os.environ.get("GEMMA4_PREFILL_TRACE", "1") != "0"
+    n_passes = int(os.environ.get("GEMMA4_PREFILL_PASSES", "1"))
+    mode = "traced" if use_trace else "untraced"
+
     # ── Capture ───────────────────────────────────────────────────────────────
-    t0 = time.time()
-    cap_start = _stage(0)
-    tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
-    ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    capture_s = time.time() - t0
-    logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
+    tid_ring = None
+    if use_trace:
+        t0 = time.time()
+        cap_start = _stage(0)
+        tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
+        ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        capture_s = time.time() - t0
+        logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
+    else:
+        logger.info(f"[untraced] compile={compile_s:.1f}s, no trace capture")
 
     try:
-        per_chunk_ms = []
-        cumulative_wall_ms = []
-        stage_ms = 0.0
-        t_run = time.time()
-        for chunk_idx in range(n_chunks):
-            t_stage = time.time()
-            chunk_start = _stage(chunk_idx)
-            stage_ms += (time.time() - t_stage) * 1000
-            t_c = time.time()
-            ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            per_chunk_ms.append((time.time() - t_c) * 1000)
-            cumulative_wall_ms.append((time.time() - t_run) * 1000)
-            # Report per-chunk latency and cumulative device and wall time.
-            logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk_ms[-1]:.1f}ms ({chunk_size * 1000 / per_chunk_ms[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms"
+        for pass_idx in range(n_passes):
+            stage_breakdown_ms.update(tokens=0.0, metadata=0.0, rope=0.0)
+            per_chunk_ms = []
+            cumulative_wall_ms = []
+            stage_ms = 0.0
+            t_run = time.time()
+            for chunk_idx in range(n_chunks):
+                t_stage = time.time()
+                chunk_start = _stage(chunk_idx)
+                stage_ms += (time.time() - t_stage) * 1000
+                t_c = time.time()
+                if use_trace:
+                    ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    per_chunk_ms.append((time.time() - t_c) * 1000)
+                else:
+                    out = _forward(chunk_start)
+                    ttnn.synchronize_device(mesh_device)
+                    per_chunk_ms.append((time.time() - t_c) * 1000)
+                    out.deallocate(True)
+                cumulative_wall_ms.append((time.time() - t_run) * 1000)
+                # Report per-chunk latency and cumulative device and wall time.
+                print(
+                    f"[{mode}_perf] pass {pass_idx} chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
+                    f"device={per_chunk_ms[-1]:.1f}ms ({chunk_size * 1000 / per_chunk_ms[-1]:.0f} tok/s) | "
+                    f"total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms",
+                    flush=True,
+                )
+            total_ms = (time.time() - t_run) * 1000
+            print(
+                f"[{mode}_perf] pass {pass_idx} SUMMARY device={sum(per_chunk_ms):.1f}ms staging={stage_ms:.1f}ms "
+                f"wall={total_ms:.1f}ms per_chunk_ms=" + ",".join(f"{x:.2f}" for x in per_chunk_ms),
+                flush=True,
             )
-        total_ms = (time.time() - t_run) * 1000
     finally:
-        ttnn.release_trace(mesh_device, tid_ring)
+        if use_trace:
+            ttnn.release_trace(mesh_device, tid_ring)
 
     device_ms = sum(per_chunk_ms)
     # Separate device execution from host-side staging in the wall time.
