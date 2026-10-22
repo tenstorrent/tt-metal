@@ -177,6 +177,9 @@ def run_demo_inference(
         logger.info(
             f"Combined generation for batch {iter + 1} completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
         )
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("sdxl", profiler.times["end_to_end_generation"][-1], batch_size)
 
         for idx, img in enumerate(imgs):
             if iter * batch_size + idx >= len(prompts):

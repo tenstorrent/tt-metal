@@ -197,6 +197,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_serialization_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/allocator_state.cpp
 )
 
 if(TT_METAL_USE_EMULE)

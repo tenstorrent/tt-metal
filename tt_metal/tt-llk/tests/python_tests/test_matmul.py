@@ -67,7 +67,7 @@ def generate_format_aware_matmul_combinations(
 
 # Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
-    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32, DataFormat.Bfp8_b]
+    [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
 )
 
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]

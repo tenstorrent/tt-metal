@@ -211,9 +211,9 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false, typename AccumDFB>
 ALWI void reload_accumulator_if_needed(
-    DataflowBuffer& accum_dfb,
+    AccumDFB& accum_dfb,
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
     const AccumulateT& accumulate,
