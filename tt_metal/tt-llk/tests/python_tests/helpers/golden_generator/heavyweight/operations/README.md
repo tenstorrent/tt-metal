@@ -27,7 +27,6 @@ that runs them.
 |---|---|
 | `chain.py` | `Chain`, `Step`, `Registers`, `StageRecord` — the execution engine. No hardware. |
 | `golden.py` | `Golden`, `OpConfig` — turns blocks into chainable steps, and runs them. |
-| `fidelity.py` | Phase tables, `split_mantissa`, the pre-carry flush — shared by eltwise and matmul |
 | `arch.py` | `ArchProfile`, the three architectures, and the per-architecture factories |
 | `pipelines/datacopy.py` | `DataCopyGolden` |
 | `pipelines/matmul.py` | `MatmulGolden` |
@@ -224,10 +223,10 @@ the chain is *built* from, fixed before it runs. Data flows through `Registers`.
 
 | Member | Notes |
 |---|---|
-| `arch` | The `ArchProfile` this golden runs on: its blocks and the FPU's mantissa split. Supplied by the factories in `arch.py`. |
+| `arch` | The `ArchProfile` this golden runs on: which blocks to use. Supplied by the factories in `arch.py`. |
 | `op_name` | Used as the math step's trace name. |
 | `Golden(arch=None, blocks=None)` | `blocks` overrides the profile's blocks, for a test driving one architecture's op through another's. Raises a pointed `TypeError` if neither is given, so using an arch-independent class by accident fails loudly. |
-| `mantissa_split` | Read off `arch`, not restated per op — it is a property of the FPU, and three ops used to carry identical copies. |
+| `fpu` | `self.blocks.fpu` — the unit that performs what the op selects. Ask it for the fidelity phases, the mantissa windows and the flush; none of that is restated per op, and three ops used to carry identical copies of the split. |
 | `build_chain(cfg)` | **Abstract.** Every op declares its own pipeline. |
 | `source(operand, tile=0)` | Slot name for one operand's buffer in one tile: `in0`, `in1`, then `in0_t1`, `in0_t2`. Tile 0 keeps the plain name so a non-folding op's trace stays uncluttered. |
 
@@ -312,74 +311,20 @@ actually ran.
 
 ---
 
-# `fidelity.py`
+# The fidelity decomposition
 
-The phase machinery, shared because eltwise and matmul decompose identically.
+It is not here. The phase tables, `split_mantissa`, the operand windows and the
+pre-carry flush describe the **FPU** — how many phases a fidelity runs, how wide
+the multiplier is, when a product is flushed — so they live with the FPU, in
+[`data_transfer_blocks/units/fidelity.py`](../data_transfer_blocks/units/fidelity.py).
+An operation reaches them through `self.fpu`; see
+[The FPU computes](../data_transfer_blocks/README.md#the-fpu-computes) for the full account, including the
+proof that the mantissa split is equivalent to the lightweight golden's
+mask-and-reassemble.
 
-| Member | Notes |
-|---|---|
-| `split_mantissa(values, keep_bits)` | `(high, low)` where `low = value - high`. |
-| `operand_halves(srcA, srcB, split, phase)` | The slice of each operand a phase multiplies. |
-| `min_normal_exponent(dest_format)` | Lowest exponent Dest holds as a normal; `None` for integer. |
-| `ieee_exponent(values)` | `frexp`'s exponent minus one — the field an IEEE float stores. |
-| `flush_pre_carry_denormals(product, srcA, srcB, min_exponent)` | The FPU's flush rule. Eltwise only; see the matmul section for why. |
-
-### `split_mantissa` — why subtract rather than mask
-
-The low half is `value - high`, not a masked mantissa re-read as a float: the
-implicit leading 1 belongs to the high half, so masking in place does not give
-the remainder.
-
-**This is provably equivalent to the lightweight golden's mask-and-reassemble.**
-Its Quasar masks are
-
-```python
-(0b11111111000, 0b11111111000)    # phase 0 — top 8 of an 11-bit {implicit, mantissa}
-(0b00000000111, 0b11111111000)    # phase 1 — mant[2:0], implicit position cleared
-```
-
-and `reassemble_float_after_fidelity` runs the masked field through
-`calculate_fractional_part` on an 11-bit string, so the low half's implicit bit
-is *not* restored: `0b00000000111` → `0.0000000111 × 2^e` = `mant[2:0] × 2^(e-10)`,
-exactly this remainder. Verified bit-identical across 10,000 values at four
-widths.
-
-Two corollaries worth keeping, because both have been chased as leads and are
-dead:
-
-- The Quasar masks are **symmetric** — 7 explicit bits from each operand,
-  matching `QUASAR.mantissa_split == (7, 7)`. The asymmetric 4/6 split in that module's
-  comment is its `else` branch, i.e. **Wormhole/Blackhole**, where SrcA also
-  drops its least significant bit.
-- Mask-and-reassemble versus subtract is **not** a source of divergence between
-  the two goldens.
-
-### `flush_pre_carry_denormals` — the pre-carry rule
-
-The FP lane forms the exponent by adding the two *stored src* exponents and
-rebiasing into Dest's range, then flushes the whole term — mantissa included —
-when that lands below the lowest normal. The decision is taken **before** the
-mantissa product's carry into the next binade, so the rule is one binade coarser
-than testing the finished magnitude: when the mantissas multiply to ≥ 2.0 a
-product anywhere in `[tiny, 2·tiny)` is a legitimate Dest normal that hardware
-still returns as zero.
-
-```
-fp16 src, 16-bit Dest (bias 15):
-  0.025390625 (2^-6 × 1.625)  ×  0.0024414062 (2^-9 × 1.25)
-  exponents sum to -15  → lane flushes
-  product is 6.199e-05, above fp16 tiny 6.104e-05 → a magnitude rule keeps it
-```
-
-Only bites for a five-bit-exponent Dest (fp16 src into 16-bit Dest); every other
-combination accumulates with an eight-bit exponent and never reaches the
-threshold. Only *visible* through an MX output, where one zeroed element shifts
-the block scale enough to fail the block-aware compare.
-
-> Use the **datum's** exponent, not a split half's. One exponent field serves
-> every phase — a phase selects a mantissa window, not an exponent — so the sum
-> is identical on all four. Using a half's exponent flushes almost everything,
-> and scores worse than no flush at all.
+What stays here is the *shape* of each pipeline — eltwise runs one accumulate
+per phase, matmul nests a K-face loop inside each phase — because that is the
+operation's business and the two genuinely differ.
 
 ---
 
@@ -412,10 +357,9 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 
 | Member | Notes |
 |---|---|
-| `mantissa_split` | `(srcA_bits, srcB_bits)`, read off the golden's `ArchProfile`. Quasar `(7, 7)`. `None` → the product is computed exactly and fidelity is ignored. |
 | `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
-| `models_fidelity` | True when the architecture's `mantissa_split` is set. |
-| `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. |
+| `models_fidelity(cfg)` | The FPU's answer for this input format: its split has to be modelled, and the datums have to be floats. `False` → the product is exact at every fidelity, and it warns. |
+| `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. Arranges the two registers into matrices and hands them to `fpu.sum_of_products`. |
 | `K_FACES` | How many MVMULs cover one tile's inner dimension — 2, since SrcA's face is 16×16. One Dest write each. |
 
 `TILE_DIM` (32) is a module constant in `pipelines/matmul.py`, not a class member — it
@@ -432,8 +376,8 @@ Two things the RTL rules out, both of which would be natural to assume:
   each product *is* a lane result and the flush applies.
 - **No per-MAC rounding.** `SOP_PREC = SOP_IN_MAN_PREC + SOP_GUARD_BITS` and
   `MAN_PREC_ACC = 23` — a wide fixed-point adder tree with guard bits, which
-  rounds once. `_product` therefore sums in float64, so the model does not
-  introduce a float32 accumulation error the hardware does not have.
+  rounds once. `fpu.sum_of_products` therefore sums in float64, so the model
+  does not introduce a float32 accumulation error the hardware does not have.
 
 But a single MVMUL is only `D[8,16] += B[8,16] * A[16,16]`, so a 32-wide inner
 dimension takes **two** of them, and the second accumulates onto a Dest the
@@ -521,8 +465,7 @@ four of them.
 
 | Member | Notes |
 |---|---|
-| `mantissa_split` | `(srcA_bits, srcB_bits)` the multiplier takes per phase, from the `ArchProfile`. Quasar `(7, 7)` — symmetric. `None` means the split is not modelled and the multiply is exact. |
-| `models_fidelity` | True only for `Elwmul` with the architecture's `mantissa_split` set. |
+| `models_fidelity(cfg)` | `Elwmul` **and** the FPU says these datums decompose. Add and subtract are the op's own answer; the rest is the FPU's. |
 
 A consequence worth stating: a **bf16 operand carries only 7 explicit bits, so its
 low half is always zero** and every phase after AH_BH contributes nothing.
@@ -531,19 +474,22 @@ Float32 sources.
 
 ### Fidelity details
 
-`split_mantissa`, the phase tables and the pre-carry flush all live in
-[`fidelity.py`](#fidelitypy) — see that section. `EltwiseBinaryGolden` has no
-`split_mantissa` member of its own; `partial_product` reaches the split through
-`fidelity.operand_halves`.
+The phase tables, the mantissa split and the pre-carry flush are the FPU's and
+live with it — see
+[The FPU computes](../data_transfer_blocks/README.md#the-fpu-computes).
+`EltwiseBinaryGolden` carries none of them: `partial_product` asks
+`fpu.operand_halves` for the windows and `fpu.flush_pre_carry` for the flush.
 
-`partial_product(regs, *, phase, dest_format=None)` takes the phase's operand
-halves, multiplies them element-wise, and applies the pre-carry flush when
-`dest_format` is given. Every phase reads the **original** `srcA`/`srcB` —
-feeding a phase the previous phase's sliced operands zeroes every phase after
-the first and turns fidelity into a silent no-op.
+`partial_product(regs, *, phase, dest_format=None)` multiplies the phase's
+operand halves element-wise and applies the flush when `dest_format` is given.
+Every phase reads the **original** `srcA`/`srcB` — feeding a phase the previous
+phase's sliced operands zeroes every phase after the first and turns fidelity
+into a silent no-op.
 
-Unlike matmul, each product here **is** an FP lane result written to Dest, so
-the flush applies.
+Unlike matmul, each product here **is** a lane result written to Dest, which is
+why the flush applies at all. `apply` is the other half: where the split is not
+modelled, and for add and subtract always, the whole operation is one
+`fpu.elementwise` step.
 
 ## `EltwiseBinaryReuseDestGolden` — `pipelines/reuse_dest.py`
 
@@ -598,9 +544,7 @@ There is no subclass. An architecture states its facts once in `arch.py`, and
 every operation takes one as an argument:
 
 ```python
-QUASAR = ArchProfile(
-    name="Quasar", blocks=QuasarDataTransferBlocks, mantissa_split=(7, 7)
-)
+QUASAR = ArchProfile(name="Quasar", blocks=QuasarDataTransferBlocks)
 
 QuasarEltwiseBinaryGolden = _factory(EltwiseBinaryGolden, QUASAR)
 ```
@@ -626,7 +570,7 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
    with `chain.dry_run([...pre-loaded slots...])`.
 2. If the maths is not one of the existing `apply` implementations, pass your own
    `fn` to `src_to_dest`, and make `reads` match what it touches.
-3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op models fidelity, read the split from `self.mantissa_split`.
+3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op multiplies, ask `self.fpu` for the phases and the operand windows rather than carrying them.
 4. Validate against silicon at **full Dest width first** — run with a `Float16`
    output so the packed result *is* Dest, and compare in ULPs. Only then move to
    an MX output, where a lattice step is hundreds of ULPs wide and will hide a
@@ -645,9 +589,9 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
   the device measures 71); a fitted `2^-15` magnitude flush (fit the numbers
   well, no mechanism); per-operand mantissa asymmetry (WH/BH only, Quasar is
   symmetric); and mask-versus-subtract in the split (provably equivalent).
-- **The WH/BH per-phase mantissa split.** `mantissa_split` is set for Quasar
-  only, so a Wormhole or Blackhole multiply — matmul and Elwmul alike — runs as
-  a single exact product and `math_fidelity` is ignored. That is wrong at
+- **The WH/BH per-phase mantissa split.** The `Fpu` unit carries one for
+  Quasar only, so a Wormhole or Blackhole multiply — matmul and Elwmul alike —
+  runs as a single exact product and `math_fidelity` is ignored. That is wrong at
   *every* fidelity, HiFi4 included, since their per-phase masks never cover
   SrcA's least significant bit. Constructing one of those goldens warns. The
   lightweight golden does model these masks, so this is a gap here, not a gap
