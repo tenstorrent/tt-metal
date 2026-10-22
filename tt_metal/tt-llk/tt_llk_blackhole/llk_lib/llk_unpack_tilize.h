@@ -701,7 +701,7 @@ inline void _llk_unpack_tilizeA_B_block_init_(
 }
 
 // face selects the tile's column half (Y) and row half (W).
-template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce>
+template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, std::uint32_t tile_y = 0>
 inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
 {
     if constexpr (neginf_srcA)
@@ -714,7 +714,7 @@ inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
     }
 
     // SrcA row 0; L1 row 0 of the face's column half (Y) and row half (W)
-    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, face & 1, 0, 0b1010);
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, tile_y + (face & 1), 0, 0b1010);
     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, face >> 1, 0, 0b0011);
 
     // If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
@@ -723,9 +723,24 @@ inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
     TT_MOP(0, face_r_dim - 1, 1u << (face_r_dim - 1));
 }
 
+// One tile of a block walked by the Y counter; tile_y is the tile's first face column inside its group of four tiles (the immediate holds 0 to 7).
+template <std::uint32_t tile_y, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce>
+inline void _llk_unpack_tilizeA_B_walk_tile_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+    _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+    if (num_faces > 2)
+    {
+        _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+        _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+    }
+}
+
 // One configuration context acquire covers the block: the RISC programs the first tile's address, the instruction stream advances it
 // one tile column (CFGSHIFTMASK) per further tile. Call the block init with matching template args first and the block uninit after.
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false, std::uint32_t block_tiles = 0>
 inline void _llk_unpack_tilizeA_B_block_(
     const std::uint32_t unpA_src_format,
     const std::uint32_t face_r_dim,
@@ -738,6 +753,7 @@ inline void _llk_unpack_tilizeA_B_block_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(face_r_dim >= 1 && face_r_dim <= FACE_R_DIM, "face_r_dim must be 1 to 16");
     LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
+    LLK_ASSERT(block_tiles == 0 || block_tiles == num_tiles, "block_tiles is the compile time num_tiles");
     const std::uint32_t address_a = base_address_a + (SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1);
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -754,33 +770,107 @@ inline void _llk_unpack_tilizeA_B_block_(
     // Stall unpacker and the CFGSHIFTMASKs below until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
 
-    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    if constexpr (block_tiles >= 4)
     {
-        if (tile > 0)
+        // The Y counter walks the face columns of four tiles; every fourth tile moves the base four tile columns (scratch rotated left by 2).
+        // One-face tiles and one-row faces keep the per-tile base step: their unpack is not the bound and a faster one only adds L1 contention.
+        if (num_faces == 1 || face_r_dim == 1)
         {
-            // Base address += SCRATCH_SEC0 (one tile column); CFGSHIFTMASK's target is an immediate
-            if (0 == unp_cfg_context)
+            for (std::uint32_t tile = 0; tile < num_tiles; tile++)
             {
-                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                if (tile > 0)
+                {
+                    // Base address += SCRATCH_SEC0 (one tile column); CFGSHIFTMASK's target is an immediate
+                    if (0 == unp_cfg_context)
+                    {
+                        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                    }
+                    else
+                    {
+                        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    }
+                    TTI_NOP;
+                }
+
+                TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+                _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                if (num_faces > 1)
+                {
+                    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                }
+                if (num_faces > 2)
+                {
+                    _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                    _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                }
             }
-            else
+        }
+        else
+        {
+#pragma GCC unroll 8
+            for (std::uint32_t tile = 0; tile < block_tiles; tile++)
             {
-                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                if (tile > 0 && (tile & 3) == 0)
+                {
+                    if (0 == unp_cfg_context)
+                    {
+                        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 30, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                    }
+                    else
+                    {
+                        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 30, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                    }
+                }
+
+                switch (tile & 3)
+                {
+                    case 0:
+                        _llk_unpack_tilizeA_B_walk_tile_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        break;
+                    case 1:
+                        _llk_unpack_tilizeA_B_walk_tile_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        break;
+                    case 2:
+                        _llk_unpack_tilizeA_B_walk_tile_<4, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        break;
+                    default:
+                        _llk_unpack_tilizeA_B_walk_tile_<6, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        break;
+                }
             }
-            TTI_NOP;
         }
-
-        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
-
-        _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
-        if (num_faces > 1)
+    }
+    else
+    {
+        for (std::uint32_t tile = 0; tile < num_tiles; tile++)
         {
-            _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
-        }
-        if (num_faces > 2)
-        {
-            _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
-            _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+            if (tile > 0)
+            {
+                // Base address += SCRATCH_SEC0 (one tile column); CFGSHIFTMASK's target is an immediate
+                if (0 == unp_cfg_context)
+                {
+                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+                }
+                else
+                {
+                    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                }
+                TTI_NOP;
+            }
+
+            TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+            _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+            if (num_faces > 1)
+            {
+                _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+            }
+            if (num_faces > 2)
+            {
+                _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+            }
         }
     }
 

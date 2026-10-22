@@ -43,7 +43,12 @@ inline void reduce_h_fused(DataflowBuffer in_dfb, DataflowBuffer scalar_dfb, Dat
     constexpr uint32_t scalar_tile_idx = 0;  // Tile index for scalar CB (only 1 tile of weights loaded)
     constexpr uint32_t num_faces = 2;  // Unpack 2 faces (top faces contain 4 rows needed for bilinear interpolation)
 
-    unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+    unpack_tilizeA_B_block<
+        use_neginf_srcA,
+        reload_srcB,
+        zero_srcA,
+        zero_srcA_reduce,
+        (tiles_per_reduction >= 4 ? tiles_per_reduction : 0)>(
         in_cb_id, in_scalar_cb_id, tiles_per_reduction, scalar_tile_idx);
     for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
         reduce_tile_math<REDUCE_OP, REDUCE_DIM>(

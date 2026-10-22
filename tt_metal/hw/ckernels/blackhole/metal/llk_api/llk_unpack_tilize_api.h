@@ -271,12 +271,18 @@ inline void llk_unpack_tilizeA_B(
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
  * @tparam zero_srcA        Zero out srcA.
  * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
+ * @tparam block_tiles      block_c_tiles_a when the caller knows it at compile time and it is 4 or more, else 0.
  * @param  operandA        Input operand index for tilize source A.
  * @param  operandB        Input operand index for unpack source B.
  * @param  block_c_tiles_a Number of column tiles in operand A's block.
  * @param  tile_idx_b      Tile index within operand B.
  */
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+template <
+    bool neginf_srcA = false,
+    std::uint32_t reload_srcB = false,
+    bool zero_srcA = false,
+    bool zero_srcA_reduce = false,
+    std::uint32_t block_tiles = 0>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -308,7 +314,7 @@ inline void llk_unpack_tilizeA_B_block(
 
     WAYPOINT("UPTW");
 
-    _llk_unpack_tilizeA_B_block_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+    _llk_unpack_tilizeA_B_block_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles>(
         unpack_src_format[operandA_id], face_r_dim, base_address_a, address_b, 0, block_c_tiles_a, num_faces);
 
     WAYPOINT("UPTD");

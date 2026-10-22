@@ -203,6 +203,7 @@ ALWI void tilize_block(
  * | Template   | reload_srcB      | Reload source B flag                     | std::uint32_t| true/false  | False    |
  * | Template   | zero_srcA        | Zero source A flag                       | bool         | true/false  | False    |
  * | Template   | zero_srcA_reduce | Zero source A for reduce flag            | bool         | true/false  | False    |
+ * | Template   | block_tiles      | block when a compile time 4 or more      | uint32_t     | 0, >= 4     | False    |
  * | Function   | icb0             | Input circular buffer A identifier       | uint32_t     | 0 to 31     | True     |
  * | Function   | icb1             | Input circular buffer B identifier       | uint32_t     | 0 to 31     | True     |
  * | Function   | block            | Size of tile block to work on            | uint32_t     | > 0         | True     |
@@ -215,10 +216,16 @@ template <
     bool neginf_srcA = true,
     std::uint32_t reload_srcB = true,
     bool zero_srcA = false,
-    bool zero_srcA_reduce = false>
+    bool zero_srcA_reduce = false,
+    std::uint32_t block_tiles = 0>
 ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b) {
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles>(
+        icb0, icb1, block, tile_idx_b)));
+#else
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         icb0, icb1, block, tile_idx_b)));
+#endif
 }
 
 // clang-format off

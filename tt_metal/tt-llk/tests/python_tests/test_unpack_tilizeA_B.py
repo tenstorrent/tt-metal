@@ -3,6 +3,8 @@
 
 """Functional test of the reduce with a tilized operand A (pool2d configuration): row 0 of faces 0 and 1 of every output tile against the column max or scaled column sum."""
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -24,12 +26,23 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.utils import passed_test
 
 BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+
+
+@dataclass
+class BlockTiles(TemplateParameter):
+    """The compile time tiles per block block_tiles of _llk_unpack_tilizeA_B_block_ (0 below four tiles)."""
+
+    tiles: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define TILES_PER_BLOCK_CT {self.tiles}"
 
 
 @skip_for_wormhole
@@ -42,7 +55,7 @@ FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     ],
     pool_type=[ReducePool.Max, ReducePool.Average],
     face_r_dim_num_faces=[(1, 2), (2, 2), (4, 2), (9, 2), (16, 2), (16, 4)],
-    ct_dim_num_blocks=[(1, 1), (3, 1), (8, 1), (8, 2), (8, 8)],
+    ct_dim_num_blocks=[(1, 1), (3, 1), (5, 1), (7, 1), (8, 1), (8, 2), (8, 8), (12, 1), (12, 3)],
 )
 def test_unpack_tilizeA_B(
     formats_dest_acc, pool_type, face_r_dim_num_faces, ct_dim_num_blocks
@@ -51,7 +64,7 @@ def test_unpack_tilizeA_B(
     face_r_dim, num_faces = face_r_dim_num_faces
     ct_dim, num_blocks = ct_dim_num_blocks
     assert ct_dim % num_blocks == 0, "every block call takes the same number of tiles"
-    if formats == FP32 and (ct_dim, num_blocks) not in ((3, 1), (8, 2)):
+    if formats == FP32 and (ct_dim, num_blocks) not in ((3, 1), (5, 1), (8, 2), (12, 3)):
         pytest.skip("Float32 input: two block shapes are enough")
 
     torch_format = format_dict[formats.input_format]
@@ -77,6 +90,7 @@ def test_unpack_tilizeA_B(
         templates=[
             MATH_OP(mathop=MathOperation.ReduceColumn, pool_type=pool_type),
             MATH_FIDELITY(MathFidelity.HiFi4),
+            BlockTiles(ct_dim // num_blocks if ct_dim // num_blocks >= 4 else 0),
         ],
         runtimes=[
             generate_input_dim((32, cols), (32, cols)),
