@@ -17,6 +17,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
+from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPref
 _ATTENTION = {
     "sliding_attention": TtSWA,
     "heavily_compressed_attention": TtHCA,
+    "compressed_sparse_attention": TtCSA,
 }
 
 # The only gate modes that read the hash table; the rest route by top-k and ignore it, which on a
@@ -53,7 +55,7 @@ class TtV4Block(LightweightModule):
     ``[1, 1, seq/sp, hidden/tp]``. Hidden is never gathered across the block. Within a chip the columns
     hold its own hidden slice of every stream, which is what ``mhc_expand`` and this block's own
     output already produce -- chaining layers needs no repacking. Only a host upload has to permute
-    into that order, since a mesh mapper splits the last dim globally (``_pack_streams`` in the test).
+    into that order, since a mesh mapper splits the last dim globally (``pack_streams`` in tests/v4/helpers.py).
 
     The MoE comes from ``TtPrefillBlock._build_moe``: the same TtMoe off the same model config,
     reading ``state_dict["hash_table"]`` for V4's hash-routed layers.
@@ -149,6 +151,7 @@ class TtV4Block(LightweightModule):
         # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
         # advance itself, so the position has to come in with the chunk.
         self.attn_state = self.attn.alloc_state(max_seq_len or seq_len, chunk_tokens=seq_len)
+        self._state_shape = (max_seq_len or seq_len, seq_len)
 
         self.ffn = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
@@ -190,6 +193,11 @@ class TtV4Block(LightweightModule):
         self.ffn_res = TtMHCWrap(
             mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
         )
+
+    def reset_state(self) -> None:
+        """Start a new request: the attention state goes back to an empty cache at position 0."""
+        max_seq_len, chunk_tokens = self._state_shape
+        self.attn_state = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
 
     def forward(
         self,

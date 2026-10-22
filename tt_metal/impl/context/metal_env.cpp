@@ -16,7 +16,6 @@
 #include "metal_env_impl.hpp"
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
-#include "distributed/mesh_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
 #include "profiler_state_manager.hpp"
@@ -103,7 +102,9 @@ bool MetalEnvImpl::check_use_count_zero() const {
 
 llrt::RunTimeOptions& MetalEnvImpl::get_rtoptions() { return *rtoptions_; }
 const Hal& MetalEnvImpl::get_hal() { return *hal_; }
+const Hal& MetalEnvImpl::get_hal() const { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
+const Cluster& MetalEnvImpl::get_cluster() const { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
 namespace {
@@ -733,128 +734,34 @@ const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
     return impl_->get_fabric_config_descriptor();
 }
 
-tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
-std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
-uint32_t MetalEnv::get_l1_size() const {
+
+MetalDeviceProperties MetalEnv::get_device_properties() const { return MetalDeviceProperties(*impl_); }
+
+tt::ARCH MetalDeviceProperties::arch() const { return impl_->get_cluster().arch(); }
+std::string MetalDeviceProperties::arch_name() const { return tt::get_string_lowercase(arch()); }
+uint32_t MetalDeviceProperties::node_local_mem_size() const {
     return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
-uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
-uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
-uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
-    size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                    impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    return l1_end - impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+uint32_t MetalDeviceProperties::dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
+uint32_t MetalDeviceProperties::node_local_mem_alignment() const {
+    return impl_->get_hal().get_alignment(HalMemType::L1);
 }
-float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
-float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
-float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
+uint32_t MetalDeviceProperties::num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
+uint32_t MetalDeviceProperties::max_worker_node_local_mem_unreserved_size() const {
+    const Hal& hal = impl_->get_hal();
+    size_t node_local_mem_end = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return node_local_mem_end - hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+}
+float MetalDeviceProperties::sfpu_eps() const { return impl_->get_hal().get_eps(); }
+float MetalDeviceProperties::sfpu_nan() const { return impl_->get_hal().get_nan(); }
+float MetalDeviceProperties::sfpu_inf() const { return impl_->get_hal().get_inf(); }
 
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();
-}
-
-namespace {
-
-// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
-// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
-class TransitContextGuard {
-public:
-    TransitContextGuard(ContextId context_id, bool env_owns_context) {
-        if (!env_owns_context) {
-            context_id_ = context_id;
-        }
-    }
-    TransitContextGuard(const TransitContextGuard&) = delete;
-    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
-    ~TransitContextGuard() {
-        if (context_id_.has_value()) {
-            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
-        }
-    }
-    bool holds_context() const { return context_id_.has_value(); }
-    void release() { context_id_.reset(); }
-
-private:
-    std::optional<ContextId> context_id_;
-};
-
-}  // namespace
-
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
-    const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
-    // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
-    // TODO: Remove this and directly pass in the MetalEnv reference
-    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
-    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
-    // close, preserving the legacy create_mesh_device-only behavior.
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto mesh_device = distributed::MeshDeviceImpl::create(
-        context_id,
-        config,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context()) {
-        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return mesh_device;
-}
-
-std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
-    ChipId device_id, const CreateMeshDeviceOptions& options) {
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
-        context_id,
-        device_id,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context()) {
-        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return mesh_device;
-}
-
-std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
-    ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
-    const bool env_owns_context = impl_->has_registered_context();
-    ContextId context_id =
-        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
-    TransitContextGuard context_guard(context_id, env_owns_context);
-    auto result = distributed::MeshDeviceImpl::create_unit_meshes(
-        context_id,
-        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
-    if (context_guard.holds_context() && !result.empty()) {
-        const auto& parent = result.begin()->second->get_parent_mesh();
-        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
-        parent->impl().set_destroy_metal_context_instance_on_close(true);
-        context_guard.release();
-    }
-    return result;
 }
 
 }  // namespace tt::tt_metal

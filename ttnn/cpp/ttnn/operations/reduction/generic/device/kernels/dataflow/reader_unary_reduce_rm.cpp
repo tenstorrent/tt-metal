@@ -169,6 +169,10 @@ void reduce_rm_reader() {
             }
         }
     }
+
+    // Identity template — this reader is its only producer and consumer; release it so the buffer is balanced.
+    dfb_clear_value.wait_front(onepage);
+    dfb_clear_value.pop_front(onepage);
 }
 
 void kernel_main() { reduce_rm_reader<REDUCE_DIM>(); }
