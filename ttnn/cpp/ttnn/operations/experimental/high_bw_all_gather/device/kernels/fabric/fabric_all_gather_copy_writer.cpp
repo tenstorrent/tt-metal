@@ -32,35 +32,33 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<10>();
     constexpr auto valid_prefix_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
-    constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
     constexpr uint32_t conversion_block_pages =
         pages_per_fabric_chunk * chunks_per_cb_batch * kCbBatchesPerConversionBlock;  // as in the reader
 
-    // Common args: the reader's ([0] input [1] output ... [3..7] cache slot, then the chip shard geometry), so both
-    // compute the same chunks and runs. Per-core args: [0] first owned chunk / local copy core index [1] owned chunk
-    // stride / number of local copy cores [2] rank [3] number of fabric link workers, then their NoC x, y.
+    // Common args: the reader's ([0] input [1] output ... [3..7] cache slot, then the chip shard geometry at 8), so
+    // both compute the same chunks and runs. Per-core args: [0] first owned chunk / local copy core index [1] owned
+    // chunk stride / number of local copy cores [2] rank [3] number of fabric link workers, then their NoC x, y.
+    constexpr uint32_t kGeometryCommonArgs = 8;
     Noc noc;
     CircularBuffer chunk_cb(chunk_cb_id);
     const uint32_t landing_l1 = CircularBuffer(metadata_cb_id).get_write_ptr();
     const ChipShardGeometry geometry =
-        read_chip_shard_geometry<kValidPrefixFromMetadata>(noc, landing_l1, valid_prefix_args);
+        read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(noc, landing_l1, valid_prefix_args);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
     const uint32_t first_owned_chunk = get_arg_val<uint32_t>(0);
     const uint32_t owned_chunk_stride = get_arg_val<uint32_t>(1);
     const uint32_t rank = get_arg_val<uint32_t>(2);
 
-    uint32_t chunks_in_batch = 0, cb_chunk_offset = 0;
+    ChunkCbCursor<chunks_per_cb_batch> cb_cursor;
+    uint32_t chunks_in_batch = 0;
     auto pop_batch = [&]() {
         noc.async_write_barrier();
         chunk_cb.pop_front(pages_per_fabric_chunk * chunks_in_batch);
-        cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+        cb_cursor.advance(chunks_in_batch);
         chunks_in_batch = 0;
     };
     auto chunk_written = [&]() {
-        const uint32_t batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
-                                            ? chunks_per_cb_batch
-                                            : chunk_slots_in_cb - cb_chunk_offset;
-        if (++chunks_in_batch == batch_capacity) {
+        if (++chunks_in_batch == cb_cursor.capacity()) {
             pop_batch();
         }
     };
@@ -89,15 +87,15 @@ void kernel_main() {
         const uint32_t num_fabric_link_workers = get_arg_val<uint32_t>(3);
         Semaphore<> blocks_converted(blocks_converted_semaphore_id + local_copy_core_index);
         CircularBuffer input_run_cb(input_run_cb_id);
-        const uint32_t valid_pages_in_shard = geometry.num_outer_slices * geometry.valid_pages_per_outer_slice;
-        uint32_t pages_to_convert = 0;
-        for (uint32_t conversion_block = local_copy_core_index;
-             conversion_block * conversion_block_pages < valid_pages_in_shard;
-             conversion_block += num_converting_cores) {
-            pages_to_convert += (conversion_block + 1) * conversion_block_pages < valid_pages_in_shard
-                                    ? conversion_block_pages
-                                    : valid_pages_in_shard - conversion_block * conversion_block_pages;
-        }
+        uint32_t pages_to_convert = 0;  // the pages of this core's conversion blocks, as the reader walks them
+        for_each_conversion_block(
+            geometry,
+            conversion_block_pages,
+            local_copy_core_index,
+            num_converting_cores,
+            [&](uint32_t block_first_page, uint32_t block_end_page) {
+                pages_to_convert += block_end_page - block_first_page;
+            });
         // The output is interleaved: page p is at row p / num_dram_banks of physical bank p % num_dram_banks. So
         // compute each bank's base once instead of an accessor lookup per page.
         uint64_t dram_bank_base[num_dram_banks];
@@ -130,16 +128,13 @@ void kernel_main() {
                     {.noc_addr = dst_noc_addr});
             }
             pages_converted += num_pages;
-            const uint32_t batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
-                                                ? chunks_per_cb_batch
-                                                : chunk_slots_in_cb - cb_chunk_offset;
             if (last_run_of_block) {
                 ++chunks_in_batch;
                 pop_batch();  // write barrier: the conversion block has landed before it is signalled
-            } else if (++chunks_in_batch == batch_capacity) {
+            } else if (++chunks_in_batch == cb_cursor.capacity()) {
                 noc.async_writes_flushed();  // the CB batch has left L1; it only has to land by the block's end
                 chunk_cb.pop_front(pages_per_fabric_chunk * chunks_in_batch);
-                cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+                cb_cursor.advance(chunks_in_batch);
                 chunks_in_batch = 0;
             }
             if (last_run_of_block) {

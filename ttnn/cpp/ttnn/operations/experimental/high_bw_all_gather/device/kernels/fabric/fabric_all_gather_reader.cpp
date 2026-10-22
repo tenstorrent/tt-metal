@@ -37,7 +37,6 @@ void kernel_main() {
     constexpr auto cache_slot_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto valid_prefix_args = TensorAccessorArgs<cache_slot_args.next_compile_time_args_offset()>();
     constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
-    constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
     constexpr uint32_t conversion_block_pages =
         pages_per_fabric_chunk * chunks_per_cb_batch * kCbBatchesPerConversionBlock;
 
@@ -46,9 +45,10 @@ void kernel_main() {
 
     // Common args: [0] input [1] output [2] shards-arrived counter [3] cache slot tensor [4] layers per user [5] layer
     // [6] cache slot first page (host) [7] pages per cache slot, then the chip shard geometry (common.hpp).
+    constexpr uint32_t kGeometryCommonArgs = 8;
     const uint32_t landing_l1 = CircularBuffer(metadata_cb_id).get_write_ptr();
     const ChipShardGeometry geometry =
-        read_chip_shard_geometry<kValidPrefixFromMetadata>(noc, landing_l1, valid_prefix_args);
+        read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(noc, landing_l1, valid_prefix_args);
     const uint32_t cache_slot_first_page =
         read_cache_slot_first_page<kCacheSlotFromMetadata>(noc, landing_l1, cache_slot_args);
     const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(0), page_bytes);
@@ -66,18 +66,17 @@ void kernel_main() {
 
     // A CB batch is pushed when it is full, when it reaches the end of the CB (so it stays contiguous in L1) and at the
     // end of every outgoing shard (so nothing is held while waiting for the next forwarded shard).
-    uint32_t cb_chunk_offset = 0, chunks_in_batch = 0, batch_capacity = 0, write_ptr = 0;
+    ChunkCbCursor<chunks_per_cb_batch> cb_cursor;
+    uint32_t chunks_in_batch = 0, batch_capacity = 0, write_ptr = 0;
     auto push_batch = [&]() {
         noc.async_read_barrier();
         chunk_cb.push_back(pages_per_fabric_chunk * chunks_in_batch);
-        cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+        cb_cursor.advance(chunks_in_batch);
         chunks_in_batch = 0;
     };
     auto next_chunk_slot = [&]() {  // L1 address of the next chunk slot, reserving a CB batch when one starts
         if (chunks_in_batch == 0) {
-            batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
-                                 ? chunks_per_cb_batch
-                                 : chunk_slots_in_cb - cb_chunk_offset;
+            batch_capacity = cb_cursor.capacity();
             chunk_cb.reserve_back(pages_per_fabric_chunk * batch_capacity);
             write_ptr = chunk_cb.get_write_ptr();
         }
@@ -107,7 +106,7 @@ void kernel_main() {
                     input,
                     CoreLocalMem<uint32_t>(next_chunk_slot()),
                     num_pages * page_bytes,
-                    {.page_id = cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice},
+                    {.page_id = input_page_index(geometry, cache_slot_first_page, outer_slice, page_in_slice)},
                     {});
                 // the input run entry (chunk_walk.hpp): where the run goes and whether it ends a conversion block
                 input_run_cb.reserve_back(1);
@@ -184,8 +183,7 @@ void kernel_main() {
                         input,
                         CoreLocalMem<uint32_t>(chunk_slot),
                         num_pages * page_bytes,
-                        {.page_id =
-                             cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice},
+                        {.page_id = input_page_index(geometry, cache_slot_first_page, outer_slice, page_in_slice)},
                         {});
                 }
                 chunk_slot_filled();
