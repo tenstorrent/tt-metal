@@ -403,6 +403,7 @@ def test_se_engine3(mesh_device, device_params):
         )
         assert min(ps) > 0.999, ps
         ttnn.deallocate(y)
+        ttnn.deallocate(eng.arena)
 
 
 @pytest.mark.parametrize(
@@ -450,3 +451,4 @@ def test_head_se3(mesh_device, device_params):
         assert min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
+        ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1)

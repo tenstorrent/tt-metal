@@ -219,6 +219,33 @@ def _incs(n):
     return n // INC_EVERY + (1 if n % INC_EVERY else 0)
 
 
+def chunk_packets(CR, nv, v, part, sps, kb, rp):
+    """Packets of one chunk's shard entry on link v (the kernels' walk: chunk-local row lr over link (lr / 2) % nv,
+    part 1 / 2 its even / odd rows; a row tile's K steps in pieces of rp tiles)."""
+    rows = sum(1 for lr in range(CR) if (lr // 2) % nv == v and (part == 0 or (lr & 1) == part - 1))
+    return rows * sps * -(-kb // rp)
+
+
+def port_plan(chips, coord, d, v, *, CR, nv, sps, kb, rp, nch):
+    """One port's stream (pure: the device build and the CPU protocol model share it). Returns dict(peer, up,
+    mine=[(shard, part, upstream base within a chunk, packets a chunk)], up_ipc (the upstream's increments a chunk),
+    expect_in (a call), has_up)."""
+    rg = chips[coord]["rings"][0]
+    peer = rg["next"] if d == "fwd" else rg["prev"]
+    up = rg["prev"] if d == "fwd" else rg["next"]
+    mine = rg[d] if peer is not None else []
+    ups = chips[up]["rings"][0][d] if up is not None else []
+    up_base, acc = [], 0
+    for _, part in ups:
+        up_base.append(acc)
+        acc += _incs(chunk_packets(CR, nv, v, part, sps, kb, rp))
+    ent = [
+        (q, part, up_base[k - 1] if k > 0 else 0, chunk_packets(CR, nv, v, part, sps, kb, rp))
+        for k, (q, part) in enumerate(mine)
+    ]
+    return dict(peer=peer, up=up, mine=ent, up_ipc=acc, expect_in=nch * acc if ups else 0, has_up=bool(ups))
+
+
 class XGather3:
     """The row-chunk-major x all-gather into an SeEngine3's x-own (module docstring); movers on sub_core_grid."""
 
@@ -305,23 +332,14 @@ class XGather3:
         rd_rt, sd_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         streams_in = []
         for (d, v), core in ports.items():
-            peer = rg["next"] if d == "fwd" else rg["prev"]
-            up = rg["prev"] if d == "fwd" else rg["next"]
-            mine = rg[d] if peer is not None else []
-            ups = chips[up]["rings"][0][d] if up is not None else []
-            if ups:
+            pl = port_plan(chips, coord, d, v, CR=e.CR, nv=self.nv, sps=self.sps, kb=e.KB, rp=self.rp, nch=e.NCH)
+            peer, mine, acc = pl["peer"], pl["mine"], pl["up_ipc"]
+            if pl["has_up"]:
                 streams_in.append(self.watch[(d, v)])
-            up_base, acc = [], 0
-            for _, part in ups:
-                up_base.append(acc)
-                acc += _incs(self._pk(v, part))
-            ent_r, ent_s = [], []
-            for k, (q, part) in enumerate(mine):
-                npk = self._pk(v, part)
-                ent_r += [q, part, up_base[k - 1] if k > 0 else 0, npk]
-                ent_s += [q, part, npk]
+            ent_r = [x_ for q, part, ub, npk in mine for x_ in (q, part, ub, npk)]
+            ent_s = [x_ for q, part, ub, npk in mine for x_ in (q, part, npk)]
             rd_rt[core.x][core.y] = [int(x.buffer_address()), xown, v, self.arrival, len(mine), acc] + ent_r + T
-            args = [xown, v, self.arrival, e.NCH * acc if ups else 0, self.ready, int(bool(mine))]
+            args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
             if peer is not None and rg.get(f"{d}_links"):
                 pp = {(dd, ll): cc for (_, dd, ll), cc in chips[peer]["ports"].items()}
                 rc, pc, wc = virt(pp[(_OPP[d], v)]), virt(pp[(d, v)]), virt(self.watcher_core(peer))
