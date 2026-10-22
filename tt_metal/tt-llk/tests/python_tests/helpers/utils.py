@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import os
 import shlex
 import subprocess
@@ -616,58 +615,49 @@ def _consume_ulp_query() -> None:
         budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
-def _record_ulp_measurement(distance, *, mask, nonfinite: int = 0) -> None:
-    """Append the worst measurable lane of one comparison, tagged with its variant.
-
-    ``ulp_stats`` rather than a bare ``max()``, so the number is the one the log
-    reports: unmeasurable lanes excluded and the caller's ``mask`` respected. The
-    variant is ``accuracy_contract``'s last query, consumed here so a comparison that
-    never went through the registry cannot inherit it. No row is written when the query
-    is missing, ambiguous, from another test, or names a ``dest_acc`` TestConfig did not
-    run (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under
-    the wrong variant is not.
+def _record_ulp_measurement(
+    distance, *, mask, nonfinite: int = 0, bins=None, readings=()
+) -> None:
+    """Append the worst measurable lane of one comparison as a
+    :class:`~helpers.ulp_table.Measurement`, filed under ``accuracy_contract``'s last
+    query, which is consumed here. Nothing is written when the query is missing,
+    ambiguous, from another test, or names a ``dest_acc`` TestConfig did not run
+    (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under the
+    wrong variant is not.
 
     *nonfinite* is how many lanes the hardware and the golden disagree about being
-    finite (``ulp_sweep.nonfinite_failures``), written as the row's ``nonfinite``; the
-    headroom report fails a cell with more of them than its table row accounts for.
-
-    A failed write warns once and is otherwise ignored: a full disk must not turn into a
-    failing test, or hide a failing comparison's summary.
+    finite; *bins* the sweep's per-binade profile (``ulp_sweep.binade_maxima``);
+    *readings* its readings over each entry of the table's list. A failed write warns
+    once and is otherwise ignored.
     """
     global _ULP_MEASURE_WARNED
     if not _ULP_MEASURE_PATH:
         return
     from . import sfpu_accuracy_budget as budget
+    from .ulp_table import Measurement
 
     query, budget.LAST_QUERY = budget.LAST_QUERY, None
     ambiguous, budget.PENDING_AMBIGUOUS = budget.PENDING_AMBIGUOUS, False
-    if query is None or ambiguous or query[0] != budget._current_test():
+    if query is None or ambiguous or query.test != budget._current_test():
         return
-    test_id, op, in_fmt, out_fmt, approx, dest, arch = query
-    if _promoted(in_fmt, out_fmt, dest, arch):
+    key = query.key
+    if _promoted(key.input_format, key.output_format, key.dest_acc, key.arch):
         return
     stats = ulp_stats(distance, mask)
-    row = {
-        "test": test_id,
-        "op": op,
-        "in": getattr(in_fmt, "name", None),
-        "out": out_fmt.name,
-        "approx": getattr(approx, "name", None),
-        "dest": getattr(dest, "name", None),
-        # The architecture whose contract this reading belongs to, spelled as the
-        # table's `arch:` rows spell it.
-        "arch": arch.name,
-        # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
-        **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
-        # Lanes where the hardware and the golden disagree about being finite: inf/NaN
-        # against a finite golden, a finite answer to an infinite one, or opposite
-        # infinities. A step count cannot describe them, so they ride alongside it for
-        # the headroom report.
-        "nonfinite": int(nonfinite),
-    }
+    measurement = Measurement(
+        op=query.op,
+        key=key,
+        worst=int(stats["max"]),
+        lanes=int(stats["lanes"]),
+        unmeasurable=int(stats["unmeasurable"]),
+        nonfinite=int(nonfinite),
+        test=query.test,
+        bins=tuple((int(b), *counts) for b, counts in sorted((bins or {}).items())),
+        readings=tuple(readings),
+    )
     try:
         with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row) + "\n")
+            handle.write(measurement.to_json() + "\n")
     except OSError as exc:
         if not _ULP_MEASURE_WARNED:
             _ULP_MEASURE_WARNED = True

@@ -230,9 +230,15 @@ def _enumerate_representable(
     *,
     stride: int = 1,
     offset: int = 0,
+    normal_only: bool = False,
 ) -> torch.Tensor:
     """Return the numbers a float format can represent in [low, high] — sorted,
     duplicates removed, capped at max_elements, skipping the first `offset`.
+
+    `normal_only` leaves out the subnormals (zero stays): the ULP sweep feeds none,
+    because the unpack path flushes them and a golden that does not is then measuring
+    the flush rather than the op. Off by default, so a caller that wants every bit
+    pattern (the specials sweeps) still gets them.
 
     The 16-bit formats are small, so we list all 2^16 possible values and keep
     the ones in range. float32 has far too many for that, so we walk only the
@@ -267,6 +273,9 @@ def _enumerate_representable(
         )
 
     mask = torch.isfinite(all_vals) & (all_vals >= low) & (all_vals <= high)
+    if normal_only:
+        tiny = torch.finfo(dtype).tiny
+        mask &= (all_vals == 0) | (all_vals.abs() >= tiny)
     vals = all_vals[mask]
 
     vals, _ = torch.sort(vals)
@@ -348,6 +357,7 @@ class UlpSweepStrategy:
             num_elements,
             stride=spec.stride,
             offset=spec.offset,
+            normal_only=spec.normal_only,
         )
         n = vals.numel()
         if n >= num_elements:

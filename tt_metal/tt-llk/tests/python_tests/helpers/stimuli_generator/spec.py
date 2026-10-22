@@ -219,6 +219,11 @@ class StimuliSpec:
         each sample at a different place in its run, so the low bits vary too.
         *offset* is applied first, in values, not samples.  Must be positive;
         defaults to 1 (consecutive).
+    normal_only: bool
+        For "ulp_sweep" only: leave the subnormals out (zero stays). The exhaustive
+        ULP sweep sets it, because the unpack path flushes a subnormal input and a
+        golden that does not would measure the flush rather than the op. Defaults to
+        False, so a sweep of the special values still sees every bit pattern.
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -234,6 +239,7 @@ class StimuliSpec:
     intervals: Optional[List[Tuple[float, float]]] = None
     offset: int = 0
     stride: int = 1
+    normal_only: bool = False
 
     def __post_init__(self) -> None:
         if not (
