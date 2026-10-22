@@ -104,9 +104,8 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // A Device has its mesh's context. Asking the mesh would lock a weak_ptr that every dispatch thread shares.
     if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
-        return device_concrete->get_context_id();
+        return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
     // get_mesh_device is not const
     const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
