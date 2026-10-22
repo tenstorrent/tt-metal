@@ -3,10 +3,12 @@
 
 """One eager Llama-3.1 decoder layer for fixed SP4/TP8 chunked prefill."""
 
+import os
 from collections.abc import Mapping
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt import gemma_levers
 from models.demos.llama_3p1_8b_d_p.tt.attention import (
     AttentionOutputProjection,
     FullCausalAttention,
@@ -93,11 +95,18 @@ class DecoderLayer:
     def __call__(self, x, kv_cache, *, slot_idx, actual_start, actual_end):
         # Reject invalid input/cache/metadata before any K or V write. This is argument atomicity;
         # device execution failures are not transactional and must be handled by the caller.
+        sp = os.getenv("LOCAL_LLAMA_SP") == "1"
+        sp_row = gemma_levers.sp_row()
         _validate_device_tensor(
             x,
             self.mesh_device,
             name="decoder input",
-            shape=(1, 1, layout.local_sequence, Model.EMB_SIZE),
+            shape=(
+                1,
+                1,
+                layout.local_sequence // layout.tp if sp_row else layout.local_sequence,
+                Model.EMB_SIZE // layout.tp if sp else Model.EMB_SIZE,
+            ),
             dtype=ttnn.bfloat16,
         )
         self.attention.validate_request(
@@ -123,7 +132,10 @@ class DecoderLayer:
             owned.pop(id(tensor)).deallocate(True)
 
         try:
-            normalized = keep(self.input_norm(x))
+            if sp_row:
+                normalized = keep(gemma_levers.all_gather_rows(self.input_norm(x), layout.tp_axis))
+            else:
+                normalized = keep(self.input_norm.sp_full(x) if sp else self.input_norm(x))
             q, k, v = self.qkv(normalized)
             for tensor in (q, k, v):
                 keep(tensor)
@@ -172,16 +184,23 @@ class DecoderLayer:
             release(q_rotated)
             projected = keep(self.output_projection(attended))
             release(attended)
+            # Gemma4 keeps the mid-layer residual in L1; only the hidden-dim SP norm accepts it.
+            residual_mc = ttnn.L1_MEMORY_CONFIG if gemma_levers.on("GL1A") and sp and not sp_row else None
             residual = keep(
                 ttnn.add(
                     x,
                     projected,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=residual_mc or ttnn.DRAM_MEMORY_CONFIG,
                     fast_and_approximate_mode=False,
                 )
             )
             release(projected)
-            normalized = keep(self.post_attention_norm(residual))
+            if sp_row:
+                normalized = keep(gemma_levers.all_gather_rows(self.post_attention_norm(residual), layout.tp_axis))
+            else:
+                normalized = keep(
+                    self.post_attention_norm.sp_full(residual) if sp else self.post_attention_norm(residual)
+                )
             mlp_output = keep(self.mlp(normalized))
             release(normalized)
             return ttnn.add(

@@ -3,10 +3,13 @@
 
 """Eager Llama-3.1-8B prefill stack, with a device-only numerical forward."""
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt import gemma_levers
 from models.demos.llama_3p1_8b_d_p.tt.attention import FullCausalAttention, _validate_device_tensor
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.decoder import DecoderLayer
@@ -53,7 +56,11 @@ class TokenEmbedding:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, 3))
+                if os.getenv("LOCAL_LLAMA_SP") == "1"
+                else ttnn.ReplicateTensorToMesh(mesh_device)
+            ),
         )
 
     def __call__(self, token_ids):
@@ -69,7 +76,12 @@ class TokenEmbedding:
         )
         # The public embedding operation returns [batch,sequence,hidden], even for 4-D IDs.
         # Unsqueeze is a view; do not forcibly deallocate the shared embedding storage here.
-        return ttnn.unsqueeze_to_4D(embedded)
+        embedded = ttnn.unsqueeze_to_4D(embedded)
+        if gemma_levers.sp_row():
+            rows = ttnn.mesh_partition(embedded, dim=2, cluster_axis=layout.tp_axis)
+            embedded.deallocate(True)
+            return rows
+        return embedded
 
     def close(self):
         if self.weight is not None:
@@ -258,6 +270,21 @@ class PrefillModel:
                 hidden = output
                 if layer_observer is not None:
                     layer_observer(layer.layer_idx, hidden)
+            if gemma_levers.sp_row():
+                gathered = gemma_levers.all_gather_rows(hidden, layout.tp_axis)
+                hidden.deallocate(True)
+                hidden = gathered
+            elif os.getenv("LOCAL_LLAMA_SP") == "1":
+                gathered = ttnn.all_gather(
+                    hidden,
+                    dim=3,
+                    cluster_axis=layout.tp_axis,
+                    num_links=2,
+                    topology=ttnn.Topology.Ring,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                hidden.deallocate(True)
+                hidden = gathered
             if skip_lm_head:
                 result, hidden = hidden, None
                 return result

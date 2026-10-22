@@ -4,12 +4,14 @@
 
 """Dense tensor-parallel Llama-3.1 SwiGLU MLP for Galaxy prefill."""
 
+import os
 from collections.abc import Mapping
 
 import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt import gemma_levers
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
 
@@ -32,9 +34,9 @@ class MLP:
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, os.getenv("LOCAL_LLAMA_MM_FID", "HiFi4")),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=os.getenv("LOCAL_LLAMA_MM_FP32", "1") == "1",
             packer_l1_acc=False,
         )
         self.gate_up_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -59,6 +61,40 @@ class MLP:
             fused_activation=None,
             fuse_batch=False,
         )
+
+        if os.getenv("LOCAL_LLAMA_MMCFG") == "1":
+            # Swept at M=256 on one chip (runs/llama/mm_bench.py).
+            self.gate_up_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
+                in0_block_w=16,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=5,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+            self.down_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+                in0_block_w=7,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            self.down_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=getattr(ttnn.MathFidelity, os.getenv("LOCAL_LLAMA_MM_FID", "HiFi4")),
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        else:
+            self.down_compute_kernel_config = self.compute_kernel_config
 
         self.gate_weight = self._upload_weight(
             host_weights["gate_proj.weight"], mesh_config.column_parallel(mesh_device)
@@ -136,49 +172,76 @@ class MLP:
         if topology != ttnn.Topology.Ring:
             raise RuntimeError(f"MLP requires a live TP ring, but TTNN selected {topology}")
 
+    def _config(self, x, weight, name, default_program, default_kernel):
+        if gemma_levers.gmm():
+            program_config, kernel_config = gemma_levers.projection_configs(x, weight, self.mesh_device, name)
+            if program_config is not None:
+                return program_config, kernel_config
+        return default_program, default_kernel
+
     def __call__(self, x):
         self._validate_input(x)
+        gate_up_pc, gate_up_kc = self._config(
+            x, self.gate_weight, "gate_up", self.gate_up_program_config, self.compute_kernel_config
+        )
+        # Gemma4 keeps the short-lived MLP intermediates in L1 (none feeds a collective or SDPA).
+        act_mc = ttnn.L1_MEMORY_CONFIG if gemma_levers.on("GL1") else ttnn.DRAM_MEMORY_CONFIG
         gate = ttnn.matmul(
             x,
             self.gate_weight,
-            program_config=self.gate_up_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=gate_up_pc,
+            memory_config=act_mc,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=gate_up_kc,
         )
         up = ttnn.matmul(
             x,
             self.up_weight,
-            program_config=self.gate_up_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=gate_up_pc,
+            memory_config=act_mc,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=gate_up_kc,
         )
         product = ttnn.mul(
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mc,
             dtype=ttnn.bfloat16,
         )
         gate.deallocate(True)
         up.deallocate(True)
 
+        down_pc, down_kc = self._config(
+            product, self.down_weight, "down", self.down_program_config, self.down_compute_kernel_config
+        )
         partial = ttnn.matmul(
             product,
             self.down_weight,
-            program_config=self.down_program_config,
+            program_config=down_pc,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=down_kc,
         )
         product.deallocate(True)
-        output = ttnn.all_reduce(
-            partial,
-            cluster_axis=self.mesh_config.tp_axis,
-            num_links=2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-        )
+        if gemma_levers.sp_row():
+            output = gemma_levers.reduce_scatter_rows(partial, self.mesh_config.tp_axis)
+        elif os.getenv("LOCAL_LLAMA_SP") == "1":
+            output = ttnn.reduce_scatter(
+                partial,
+                dim=3,
+                cluster_axis=self.mesh_config.tp_axis,
+                num_links=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
+        else:
+            output = ttnn.all_reduce(
+                partial,
+                cluster_axis=self.mesh_config.tp_axis,
+                num_links=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
         partial.deallocate(True)
         return output

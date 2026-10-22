@@ -3,6 +3,7 @@
 
 """Full-causal GQA and attention output projection for Llama-3.1 Galaxy prefill."""
 
+import os
 import math
 from collections.abc import Mapping
 
@@ -10,6 +11,7 @@ import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt import gemma_levers
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     SUPPORTED_CACHE_DTYPES,
     LlamaKVCache,
@@ -117,15 +119,15 @@ class FullCausalAttention:
             raise ValueError(f"attention requires a compute grid at least 9x2, got {grid}")
         self.program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
-            q_chunk_size=128,
-            k_chunk_size=512,
-            exp_approx_mode=False,
+            q_chunk_size=int(os.getenv("LOCAL_LLAMA_SDPA_Q", "128")),
+            k_chunk_size=int(os.getenv("LOCAL_LLAMA_SDPA_K", "512")),
+            exp_approx_mode=os.getenv("LOCAL_LLAMA_SDPA_EXP") == "1",
         )
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, os.getenv("LOCAL_LLAMA_SDPA_FID", "HiFi4")),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=os.getenv("LOCAL_LLAMA_SDPA_FP32", "1") == "1",
             packer_l1_acc=False,
         )
 
@@ -399,6 +401,89 @@ class FullCausalAttention:
                 tensor.deallocate(True)
                 setattr(self, name, None)
 
+    def _ring_state(self, kv_cache):
+        """Semaphores, gather scratch and program config for ring_joint SDPA (LOCAL_LLAMA_RING=1)."""
+        state = getattr(self, "_ring", None)
+        if state is not None and state["device"] is self.mesh_device:
+            return state
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
+        semaphores = [ttnn.create_global_semaphore(self.mesh_device, cores, 0) for _ in range(2)]
+        ttnn.synchronize_device(self.mesh_device)
+        # Pure scratch the op fills and masks by kv_actual_isl; dtype must match the cache.
+        buffers = [
+            ttnn.zeros(
+                [1, layout.local_kv_heads, self.max_seq_len, Model.HEAD_DIM],
+                dtype=kv_cache.k.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for _ in range(2)
+        ]
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
+            q_chunk_size=int(os.getenv("LOCAL_LLAMA_RING_Q", "128")),
+            k_chunk_size=int(os.getenv("LOCAL_LLAMA_RING_K", "512")),
+            exp_approx_mode=False,
+            max_k_splits=int(os.getenv("LOCAL_LLAMA_RING_KSPLIT", "1")),
+            segmented_accumulation=os.getenv("LOCAL_LLAMA_RING_SEG") == "1",
+            matmul_math_fidelity=getattr(ttnn.MathFidelity, os.environ["LOCAL_LLAMA_RING_FID"])
+            if "LOCAL_LLAMA_RING_FID" in os.environ
+            else None,
+        )
+        # Gemma4's ring SDPA compute config; kv_actual_isl needs the streaming path, so no fp32 dest.
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        self._ring = {
+            "compute_kernel_config": compute_kernel_config,
+            "device": self.mesh_device,
+            "semaphores": semaphores,
+            "buffers": buffers,
+            "program_config": program_config,
+            "ccl_offset": ttnn.CoreCoord(grid.x - 1, 0),
+        }
+        return self._ring
+
+    def _ring_attention(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
+        """Gemma4/MiniMax ring_joint SDPA reading the SP-sharded cache directly: no prefix gather, reorder or mask."""
+        ring = self._ring_state(kv_cache)
+        out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            kv_cache.k,
+            kv_cache.v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=ring["buffers"][0],
+            persistent_output_buffer_v=ring["buffers"][1],
+            joint_strategy="rear",
+            logical_n=math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE,
+            program_config=ring["program_config"],
+            compute_kernel_config=ring["compute_kernel_config"],
+            dim=2,
+            multi_device_global_semaphore=ring["semaphores"],
+            num_links=2,
+            cluster_axis=layout.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Linear,
+            ccl_core_grid_offset=ring["ccl_offset"],
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=Model.HEAD_DIM**-0.5,
+            is_balanced=False,
+            kv_cache_batch_idx=slot_idx,
+            kv_actual_isl=actual_start,
+            kv_cache_num_layers=Model.NUM_LAYERS,
+            kv_cache_layer_idx=layer_idx,
+        )
+        return out
+
     def __call__(self, q, kv_cache, *, slot_idx, layer_idx, actual_start, actual_end):
         self._validate_call(
             q,
@@ -408,6 +493,10 @@ class FullCausalAttention:
             actual_start=actual_start,
             actual_end=actual_end,
         )
+        if os.getenv("LOCAL_LLAMA_RING") == "1":
+            return self._ring_attention(
+                q, kv_cache, slot_idx=slot_idx, layer_idx=layer_idx, actual_start=actual_start, actual_end=actual_end
+            )
         logical_n = math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         batch_index = slot_idx * Model.NUM_LAYERS + layer_idx
         natural_k = self._gather_and_reorder(
@@ -462,9 +551,9 @@ class AttentionOutputProjection:
         )
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, os.getenv("LOCAL_LLAMA_MM_FID", "HiFi4")),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=os.getenv("LOCAL_LLAMA_MM_FP32", "1") == "1",
             packer_l1_acc=False,
         )
         self.program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -478,6 +567,19 @@ class AttentionOutputProjection:
             fused_activation=None,
             fuse_batch=False,
         )
+        if os.getenv("LOCAL_LLAMA_MMCFG") == "1":
+            # 1D in0-multicast: every one of 64 cores reads its own two weight columns (runs/llama/mm_bench.py).
+            self.program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+                in0_block_w=16,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
         self.o_weight = ttnn.from_torch(
             weight.to(torch.bfloat16).transpose(-2, -1).contiguous(),
             device=mesh_device,
@@ -518,22 +620,41 @@ class AttentionOutputProjection:
 
     def __call__(self, heads):
         self._validate_input(heads)
-        concatenated = ttnn.experimental.nlp_concat_heads(heads, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        concatenated = ttnn.experimental.nlp_concat_heads(
+            heads, memory_config=ttnn.L1_MEMORY_CONFIG if gemma_levers.on("GL1A") else ttnn.DRAM_MEMORY_CONFIG
+        )
+        program_config, compute_kernel_config = self.program_config, self.compute_kernel_config
+        if gemma_levers.gmm():
+            gemma_pc, gemma_kc = gemma_levers.projection_configs(concatenated, self.o_weight, self.mesh_device, "o")
+            if gemma_pc is not None:
+                program_config, compute_kernel_config = gemma_pc, gemma_kc
         partial = ttnn.matmul(
             concatenated,
             self.o_weight,
-            program_config=self.program_config,
+            program_config=program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=compute_kernel_config,
         )
         concatenated.deallocate(True)
-        output = ttnn.all_reduce(
-            partial,
-            cluster_axis=layout.tp_axis,
-            num_links=2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-        )
+        if gemma_levers.sp_row():
+            output = gemma_levers.reduce_scatter_rows(partial, layout.tp_axis)
+        elif os.getenv("LOCAL_LLAMA_SP") == "1":
+            output = ttnn.reduce_scatter(
+                partial,
+                dim=3,
+                cluster_axis=layout.tp_axis,
+                num_links=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
+        else:
+            output = ttnn.all_reduce(
+                partial,
+                cluster_axis=layout.tp_axis,
+                num_links=2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+            )
         partial.deallocate(True)
         return output

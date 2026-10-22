@@ -3,12 +3,14 @@
 
 """Tensor-parallel Llama-3.1 Q/K/V projection for Galaxy prefill."""
 
+import os
 from collections.abc import Mapping
 
 import torch
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
+from models.demos.llama_3p1_8b_d_p.tt import gemma_levers
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import validate_mesh
 from models.demos.llama_3p1_8b_d_p.tt.rope import hf_to_meta
@@ -35,9 +37,9 @@ class QKVProjection:
         self.mesh_config = mesh_config
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=getattr(ttnn.MathFidelity, os.getenv("LOCAL_LLAMA_MM_FID", "HiFi4")),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=os.getenv("LOCAL_LLAMA_MM_FP32", "1") == "1",
             packer_l1_acc=False,
         )
         self.program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -51,6 +53,19 @@ class QKVProjection:
             fused_activation=None,
             fuse_batch=False,
         )
+        if os.getenv("LOCAL_LLAMA_MMCFG") == "1":
+            # Swept at M=256 on one chip (runs/llama/mm_bench.py): 12 columns x 8 rows, K read in 16-tile blocks.
+            self.program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
+                in0_block_w=16,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=1,
+                per_core_N=2,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
         packed = self._pack_raw_hf_weights(host_weights)
         self.qkv_weight = ttnn.from_torch(
             packed,
@@ -123,13 +138,18 @@ class QKVProjection:
 
     def __call__(self, x):
         self._validate_input(x)
+        program_config, compute_kernel_config = self.program_config, self.compute_kernel_config
+        if gemma_levers.gmm():
+            gemma_pc, gemma_kc = gemma_levers.projection_configs(x, self.qkv_weight, self.mesh_device, "qkv")
+            if gemma_pc is not None:
+                program_config, compute_kernel_config = gemma_pc, gemma_kc
         fused = ttnn.matmul(
             x,
             self.qkv_weight,
-            program_config=self.program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG if gemma_levers.on("GL1A") else ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=compute_kernel_config,
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             fused,
