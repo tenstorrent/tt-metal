@@ -8310,7 +8310,7 @@ if MESH_CONFIG.is_galaxy:
         # Three-run medians: 5.576 / 8.489 ms. kimi50k runs ~1.6% hotter on the CI host
         # (71.77% vs a 70.49-70.85% local span), so center it on the span and widen to +/-1.5%.
         ("kimi50k", 32, 640, 8, 71.2, 0.015),
-        ("kimi_k3", 32, 640, 8, 69.59, DEFAULT_PERF_MARGIN),
+        ("kimi_k3", 32, 640, 8, 69.84, DEFAULT_PERF_MARGIN),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [

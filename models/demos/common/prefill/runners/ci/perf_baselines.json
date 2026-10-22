@@ -60,9 +60,9 @@
           "chunk_time_ms": 8663
         },
         "14kw": {
-          "throughput_tok_s": 3475,
-          "ttft_s": 179.0,
-          "chunk_time_ms": 7247
+          "throughput_tok_s": 3560,
+          "ttft_s": 167.62,
+          "chunk_time_ms": 6852
         }
       },
       "sc1": {
