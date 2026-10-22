@@ -1,0 +1,13 @@
+# job 3: block 1 M H T1 T2 T3 H2, block 2 reversed
+b1 M ids/job3_m.txt all
+b1 H ids/job3_h.txt all
+b1 T1 ids/job3_h.txt all
+b1 T2 ids/job3_h.txt all
+b1 T3 ids/job3_h.txt all
+b1 H2 ids/job3_h.txt all
+b2 H2 ids/job3_h.txt all
+b2 T3 ids/job3_h.txt all
+b2 T2 ids/job3_h.txt all
+b2 T1 ids/job3_h.txt all
+b2 H ids/job3_h.txt all
+b2 M ids/job3_m.txt all
