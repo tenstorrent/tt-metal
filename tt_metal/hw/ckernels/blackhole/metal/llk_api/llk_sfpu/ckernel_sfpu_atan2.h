@@ -20,6 +20,8 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     sfpi::vFloat r;
     sfpi::vFloat q;
     sfpi::vFloat s;
+    sfpi::vFloat y_abs;
+    sfpi::vFloat x_abs;
 
     // Note: if x or y is ±NaN, the use of setsgn, ensures that
     // max=NaN, which abs does not.  This is important for special
@@ -28,8 +30,8 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 
     sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vUInt>(max)), 0);
     sfpi::vFloat m = sfpi::setexp(max, 128);
-    sfpi::vFloat recip = sfpi::approx_recip(m);
     sfpi::vFloat scaled_min = min * scale;
+    sfpi::vFloat recip = sfpi::approx_recip(m);
     if constexpr (!is_bf16) {
         sfpi::vFloat e = m * recip - 2.0f;
         recip = recip * -e - 0.0f;
@@ -53,8 +55,12 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c2 = -0x1.24p-3f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        if constexpr (!is_bf16) {
+            y_abs = sfpi::setsgn(y, 0);
+        }
         sfpi::vFloat c1 = sfpi::vConstFloatPrgm1;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x_abs = sfpi::setsgn(x, 0);
         sfpi::vFloat c0 = sfpi::vConstFloatPrgm2;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     } else {
@@ -64,18 +70,32 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c0 = -0x1.54p-2f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x_abs = sfpi::setsgn(x, 0);
     }
     sfpi::vFloat neg_half_pi = sfpi::vConstFloatPrgm0;
     sfpi::vFloat t = q * s;
-    sfpi::vFloat x_abs = sfpi::setsgn(x, 0);
     r = t * a + a;
 
-    // Special cases:
+    // Special cases (the fp32 Newton path compares |y| and |x| directly so that min need not stay live):
+    auto min_or_y_abs = [&] {
+        if constexpr (is_bf16) {
+            return min;
+        } else {
+            return y_abs;
+        }
+    };
+    auto min_or_x_abs = [&] {
+        if constexpr (is_bf16) {
+            return min;
+        } else {
+            return x_abs;
+        }
+    };
 
-    v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(x_abs)) {
+    v_if(sfpi::as<sfpi::vInt>(min_or_y_abs()) >= sfpi::as<sfpi::vInt>(x_abs)) {
         // if |y| ≥ |x| then r = π/2 - r
         r = neg_half_pi - r;
-        v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(max)) {
+        v_if(sfpi::as<sfpi::vInt>(min_or_x_abs()) >= sfpi::as<sfpi::vInt>(max)) {
             // if |x| = |y| (including both infinite), then r = π/4
             r = sfpi::addexp(neg_half_pi, -1);
             v_if(max == 0.0f) {
