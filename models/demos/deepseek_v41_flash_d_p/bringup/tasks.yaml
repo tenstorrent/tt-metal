@@ -1995,6 +1995,13 @@ tasks:
     kind: moe
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-22T02:11:51'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py: c9bfee327746f67f68b8f24b607957bba324064c427cf0383ac4cde181a770df
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa_engram.15
   title: 'swa_engram block with steps 1-15 on device (last: experts)'
   step: implement
