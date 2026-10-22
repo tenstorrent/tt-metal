@@ -1,0 +1,6 @@
+ci_ab/test_bc_ab.py::test_wlf[w_s1-def]
+ci_ab/test_bc_ab.py::test_wlf[w_s1-lofi]
+ci_ab/test_bc_ab.py::test_wlf[w_s1-hifi2]
+ci_ab/test_bc_ab.py::test_wlf[w_s2-lofi]
+ci_ab/test_bc_ab.py::test_wlf[w_s4-lofi]
+ci_ab/test_bc_ab.py::test_wlf[w_s8-lofi]
