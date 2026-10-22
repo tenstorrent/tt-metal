@@ -788,8 +788,17 @@ public:
     // ======================================================================================
     uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
 
+    // Fabric type of THIS process's own mesh (MGD-resolved), not the process-wide yaml config.
+    // In a heterogeneous run the local mesh may be e.g. TORUS_Y while the yaml config is TORUS_XY;
+    // geometry/wrap decisions must match get_full_mcast_hops (which keys off the per-mesh config)
+    // or the hop generator and path walker disagree and throw "Boundary exceeded".
+    tt::tt_fabric::FabricType get_local_mesh_fabric_type() const {
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return tt::tt_fabric::get_fabric_type(mesh_graph.get_fabric_config(local_mesh_id_), is_ubb_galaxy());
+    }
+
     bool is_degenerate_torus_axis(uint32_t dim) const override {
-        const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        const auto fabric_type = get_local_mesh_fabric_type();
         return tt::tt_fabric::has_flag(fabric_type, tt::tt_fabric::torus_flag_for_axis(dim)) &&
                !tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, dim);
     }
@@ -955,10 +964,8 @@ public:
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto src_coord = get_device_coord(src_node_id);
         const auto mesh_shape = control_plane.get_physical_mesh_shape(src_node_id.mesh_id, MeshScope::GLOBAL);
-        // Per-mesh resolved config, not the process-wide test config: a heterogeneous system may be globally
-        // TORUS_XY while this mesh is TORUS_Y, which would emit wrap hops the mesh has no eth channels for.
-        const auto per_mesh_fabric_config = control_plane.get_mesh_graph().get_fabric_config(src_node_id.mesh_id);
-        auto fabric_type = tt::tt_fabric::get_fabric_type(per_mesh_fabric_config, is_ubb_galaxy());
+        // Per-mesh config via the same helper the path walker uses, so generator and walker never disagree.
+        auto fabric_type = get_local_mesh_fabric_type();
 
         if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, EW_DIM)) {
             // EW dimension: need to cover (mesh_shape[EW_DIM] - 1) total hops
@@ -2206,7 +2213,7 @@ private:
 
         // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
         // over the wraparound link is faster
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        auto fabric_type = get_local_mesh_fabric_type();
         // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
         if (fabric_type == tt::tt_fabric::FabricType::MESH) {
             return hops;
@@ -2458,16 +2465,16 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim, const MeshShape& mesh_shape) const {
-        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            if (dim != NS_DIM && dim != EW_DIM) {
-                return MeshCoordinate::BoundaryMode::NONE;
-            }
-            const auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
-            return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, static_cast<uint32_t>(dim))
-                       ? MeshCoordinate::BoundaryMode::WRAP
-                       : MeshCoordinate::BoundaryMode::NONE;
+        if (dim != NS_DIM && dim != EW_DIM) {
+            return MeshCoordinate::BoundaryMode::NONE;
         }
-        return MeshCoordinate::BoundaryMode::NONE;
+        // Wrap is a property of the actual per-mesh fabric config (torus links physically exist), not the
+        // yaml topology: a topology:Mesh sync case on a TORUS_X mesh must still wrap, to match
+        // get_full_mcast_hops which keys off the per-mesh config.
+        const auto fabric_type = get_local_mesh_fabric_type();
+        return tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, static_cast<uint32_t>(dim))
+                   ? MeshCoordinate::BoundaryMode::WRAP
+                   : MeshCoordinate::BoundaryMode::NONE;
     }
 
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
