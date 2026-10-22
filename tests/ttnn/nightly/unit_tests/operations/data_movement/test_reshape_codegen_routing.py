@@ -30,6 +30,7 @@ from tests.ttnn.unit_tests.operations.data_movement.test_reshape_codegen import 
     _l1_hog_leaving,
     _make,
     _rm_aligned_pair,
+    _to_device,
 )
 from tests.ttnn.utils_for_testing import assert_equal
 from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
@@ -47,10 +48,6 @@ def _make_input(shape, dtype, seed=0):
     if dtype in (ttnn.int32, ttnn.uint32):
         return torch.randint(0, 100, shape, dtype=torch.int32)
     return torch.rand(shape, dtype=torch.bfloat16)
-
-
-def _to_device(device, source, dtype, layout, mem=_DRAM):
-    return ttnn.from_torch(source, dtype=dtype, layout=layout, device=device, memory_config=mem)
 
 
 _CALL_CONTRACT_CASE = ([12, 100], {"shape": [12, 10, 10]}, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG)
