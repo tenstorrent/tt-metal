@@ -32,7 +32,8 @@ overrides a transfer — see [Where an architecture plugs in](#where-an-architec
 | `l1_codec.py` | `pack_to_l1` / `unpack_from_l1` — the bytes boundary |
 | `pack_effects.py` | ReLU, edge masking, and what stochastic rounding costs us |
 | `units/unpack.py` | `Unpack` — L1 → SrcA/SrcB/SrcS/Dest, both legality tables, and the Dest-format derivation |
-| `units/fpu.py` | `Fpu` — src → Dest, and Dest back to a src register |
+| `units/fpu.py` | `Fpu` — the arithmetic, the multiplier's mantissa split, the write to Dest, and Dest back to a src register |
+| `units/fidelity.py` | The multiplier's fidelity decomposition: phase tables, the mantissa split, the pre-carry denormal flush. Applied by `Fpu`, touched by no other unit. |
 | `units/pack.py` | `Pack` — Dest → L1, the pack legality table and the edge-mask polarity |
 
 There is no `units/sfpu.py`: nothing here models the SFPU, so the class would be
@@ -56,9 +57,11 @@ on the same lattice by construction.
 
 What is left is the loss each boundary takes — unpack into a src register, the
 FPU's write to Dest, Dest fed back into a src register, and the packer's ReLU,
-edge mask and requantization. Exactly one of those varies by architecture: **the
-unpacker lands every L1 format in one of a small number of src-register storage
-families, and the family — not the L1 format — is what the FPU reads.**
+edge mask and requantization. Two of those vary by architecture. The first and
+larger one: **the unpacker lands every L1 format in one of a small number of
+src-register storage families, and the family — not the L1 format — is what the
+FPU reads.** The second is how wide the FPU's multiplier is per fidelity phase,
+which only Quasar models here.
 
 ---
 
@@ -78,6 +81,7 @@ families, and the family — not the L1 format — is what the FPU reads.**
 | `dest_to_l1(dest_values, l1_format, dest_format, *, relu_type, relu_threshold, edge_mask, stoch_rnd, **geometry)` | The T2 pack, mirroring `l1_to_srcA`. |
 | `pack_to_l1` / `unpack_from_l1` | L1 access, format-checked against the architecture. |
 | `supports(l1_format)` · `supported_dest_formats` | What this architecture can read, and hold in Dest. |
+| `fpu` | Not a transfer — the FPU itself, for an operation that needs it to **compute**. See [The FPU computes](#the-fpu-computes). |
 
 `src_format` on the unpack blocks overrides the storage format the unpacker
 lands the buffer in; `None` lets the architecture choose. The override is a real
@@ -141,9 +145,9 @@ down the chain.
 
 ### `src_to_dest(values, dest_format, current=None)`
 
-The maths belongs to the operation; what belongs here is **where it lands**. A
-Dest slot holds only what `dest_format` can represent, and the value is rounded
-on the way **in**, not on the way out to L1.
+Which instruction ran belongs to the operation; what belongs here is **where its
+result lands**. A Dest slot holds only what `dest_format` can represent, and the
+value is rounded on the way **in**, not on the way out to L1.
 
 `current` is Dest's existing contents, which a multi-pass op passes to
 accumulate rather than replace — the FPU has an accumulate-enable bit, not a
@@ -199,6 +203,58 @@ folded in.
 | `Int32` | **Saturates to INT8**, clamped to ±127. A wide integer Dest cannot survive the trip, and the clamp is silent. |
 | `Float32` · `Tf32` | 10 mantissa bits and the 8-bit exponent — unless the src register is `Float16`, in which case the exponent is rebiased and values below the fp16 normal range flush to zero. |
 
+## The FPU computes
+
+Every other unit here only moves and converts. The FPU also *computes*, so the
+arithmetic is its, and so is everything about how this device performs it. An
+operation says **which** instruction runs and in what order; the FPU says what
+that instruction does.
+
+Reached as the unit rather than through forwarded façade methods — the methods
+in [The blocks](#the-blocks) are each named for a hardware path, and
+multiplying two src registers is not one of them.
+
+| Call | What it is for |
+|---|---|
+| `fpu.elementwise(operation, srcA, srcB)` | One element-wise op — `Elwadd`, `Elwsub`, `Elwmul` — computed in a type exact for the operands it was handed. |
+| `fpu.models_fidelity(in_format)` | Whether a multiply on these datums decomposes into phases here. Takes the **format**, because an operation asks while it is building its pipeline, before any register holds a value. |
+| `fpu.phases(math_fidelity)` | The phase indices to run: `LoFi` is one phase, `HiFi4` four. |
+| `fpu.operand_halves(srcA, srcB, phase)` | The mantissa window each operand contributes on one phase, with non-finite lanes already resolved. |
+| `fpu.flush_pre_carry(product, srcA, srcB, dest_format)` | The pre-carry denormal flush, for a product that *is* a lane result. Pass `None` to skip it — a matmul does, since its products never become lane results. |
+| `fpu.warn_split_unmodelled(op_name)` | Say so when a multiply falls back to the exact product. |
+
+### Integer arithmetic is integer
+
+The unpacker lands an integer input as an integer tensor, so an integer op here
+really does integer arithmetic. Two rules follow, and both have already caught
+a wrong answer:
+
+* **`int64`, not the operand's own width.** torch integers *wrap*: `int8`
+  `100 + 100` is `-56`, and the saturation in `storage.to_dest_storage` would
+  then clamp the wrong number. `int64` is exact for every product reachable
+  through SrcA/SrcB, since `Int32` never lands in one.
+* **No fidelity split on an integer.** The decomposition slices a mantissa and
+  an integer datum has none to slice. Applied anyway it truncates the operand's
+  low bits — an `Int16` `3 * 10922` came back `32640` instead of `32766`.
+  `models_fidelity` is what keeps that from happening.
+
+Dest accumulation picks its own width the same way: both-integer adds in
+`int64`, a float result into an integer Dest in `float64` — `float32` holds
+integers exactly only to 2²⁴ and an `Int32` Dest reaches 2³¹ — and a float Dest
+in `float32`.
+
+### `units/fidelity.py` — one invariant worth repeating
+
+**Every phase reads the original srcA/srcB**, not the previous phase's sliced
+operands. Feeding a phase its predecessor's output zeroes every phase after the
+first, which turns fidelity into a silent no-op: the result still looks
+plausible, just more accurate than the device.
+
+The flush rule has a matching trap. The exponent belongs to the src **datum** —
+one field shared by all four phases, since a phase selects a mantissa window
+and not an exponent — so the pre-carry sum is identical on every phase. Using a
+split half's exponent instead flushes almost everything.
+
 ## Where an architecture plugs in
 
 An architecture is **assembled, not subclassed**. `ArchGolden` holds one unit
@@ -211,7 +267,7 @@ with. See [arch.py](arch.py).
 |---|---|
 | `L1Support(name, formats)` | The architecture's L1 format set, the support checks, and the L1 read/write path. Shared by the unpacker and the packer, so it belongs to neither. `name` appears in refusals, so they say `Quasar cannot read Bfp8_b` rather than naming the shared class. |
 | `Unpack(l1, to_src_formats, to_dest_formats, has_srcs)` | The `L1 -> src` mapping, both legality tables, and whether this architecture has a SrcS register at all. Also the Dest-format derivation — Dest takes the format the *unpacker* landed in the src register, so that question is the unpacker's. |
-| `Fpu(l1)` | `src_to_dest` and the Dest→src feedback. Stateless today; every architecture constructs it the same way. |
+| `Fpu(l1, mantissa_split)` | The arithmetic, the write to Dest and the Dest→src feedback. `mantissa_split` is the explicit mantissa bits the multiplier takes from each operand per fidelity phase — `(7, 7)` on Quasar, `None` (unmodelled, and it says so) on Wormhole and Blackhole. |
 | `Pack(l1, to_l1_formats, edge_mask_masked_when_set, promotes_outlier_to_32_bit_dest)` | The `Dest -> L1` legality table, the edge-mask polarity, and the harness's outlier promotion. |
 
 An empty table means **unmodelled at that level of detail**, and a weaker check
@@ -233,7 +289,7 @@ _NEWARCH_L1 = L1Support(name="NewArch", formats=frozenset({...}))
 class NewArch(ArchGolden):
     l1 = _NEWARCH_L1
     unpack = Unpack(_NEWARCH_L1, to_src_formats={...}, has_srcs=False)
-    fpu = Fpu(_NEWARCH_L1)
+    fpu = Fpu(_NEWARCH_L1)         # add mantissa_split=(a, b) to model fidelity
     pack = Pack(_NEWARCH_L1)
 ```
 
@@ -421,13 +477,18 @@ which is what `dest_to_l1` puts in its warning.
 3. **Validate bit-exactly, at LoFi.** A tolerance that passes tells you the
    tolerance is wide enough. Bit-exactness on every datum tells you the model is
    right — and then a later disagreement is a finding rather than noise.
-4. **Check the other architectures still construct.** The base class is shared
-   and the format sets differ; a change to the shared machinery can break
+4. **Check the other architectures still construct.** The units are shared and
+   only the data they are built with differs; a change to a unit can break
    Wormhole or Blackhole without touching a Quasar test.
 
 ## What this package does not model
 
 - **Stochastic rounding** — see above.
+- **Wormhole's and Blackhole's mantissa split.** Their `Fpu` carries no
+  `mantissa_split`, so a multiply there is the exact product and
+  `math_fidelity` is ignored — at *every* fidelity, HiFi4 included, since their
+  per-phase masks never reach SrcA's least significant bit. It warns rather
+  than passing quietly.
 - **A bit-for-bit model of the unpacker's conversion hardware.** The L1 → SrcA
   path is *composed* out of `pack_to_l1` plus the storage-precision rules,
   which agrees with silicon on everything measured here. Where a conversion

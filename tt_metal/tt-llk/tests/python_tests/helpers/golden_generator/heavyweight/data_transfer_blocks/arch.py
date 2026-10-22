@@ -16,10 +16,10 @@ consequences, both deliberate:
   eventually does change, it gets a second implementation of that unit only --
   not a subclass carrying every other transfer along with it.
 
-The three architectures differ in two things today: which L1 formats they hold,
-and the unpacker's legality tables. They are listed side by side here on
-purpose, so "how does Blackhole differ from Wormhole" is a diff rather than a
-walk through two files.
+The architectures differ in three things today: which L1 formats they hold, the
+unpacker's legality tables, and how wide the FPU's multiplier is per fidelity
+phase. They are listed side by side here on purpose, so "how does Blackhole
+differ from Wormhole" is a diff rather than a walk through two files.
 """
 
 from abc import ABC, abstractmethod
@@ -146,7 +146,9 @@ class QuasarArch(ArchGolden):
         },
         has_srcs=True,
     )
-    fpu = Fpu(_QUASAR_L1)
+    #: 7x7 bits per fidelity phase, so a src datum's 10 explicit mantissa bits
+    #: split 7 high / 3 low on **both** operands -- see :class:`.units.Fpu`.
+    fpu = Fpu(_QUASAR_L1, mantissa_split=(7, 7))
 
     #: Quasar's packer inverts the edge-mask register before the gasket applies
     #: it, so a set bit masks the datum: 0xFFFF masks a whole row and 0x0000
@@ -206,7 +208,9 @@ class WormholeArch(ArchGolden):
 
     The unpacker's pair table is empty, so the weaker "is it a src storage
     format at all" check applies -- unmodelled at that level of detail, not a
-    claim that every pair is legal.
+    claim that every pair is legal. The FPU is given no ``mantissa_split`` for
+    the same reason: a multiply here is the exact product and warns, rather
+    than quietly claiming a fidelity behaviour this golden has not modelled.
     """
 
     l1 = _WORMHOLE_L1
