@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 _t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
 

@@ -12,7 +12,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <string>
 #include <unordered_map>
 #include <utility>

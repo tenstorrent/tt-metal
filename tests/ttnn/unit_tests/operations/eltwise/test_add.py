@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 
 @pytest.mark.parametrize(

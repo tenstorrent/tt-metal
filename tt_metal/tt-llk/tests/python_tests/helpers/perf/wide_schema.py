@@ -94,6 +94,7 @@ DB_SCHEMA = [
     Column("ct_dim", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
+    Column("dst_rounding", "string", True, "configuration"),
     Column("face_c_dim", "int64", True, "configuration"),
     Column("face_r_dim", "int64", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
@@ -136,6 +137,7 @@ DB_SCHEMA = [
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
     Column("sfpu_bcast_dim", "string", True, "configuration"),
+    Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
@@ -145,6 +147,7 @@ DB_SCHEMA = [
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
+    Column("zero_point_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──

@@ -39,7 +39,7 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
 
             const bool is_final_tap = tap + 1 == tap_count;
             const uint32_t destination_dfb = is_final_tap ? dfb::output : dfb::partial;
-            DataflowBuffer& destination = is_final_tap ? output : partial;
+            auto& destination = is_final_tap ? output : partial;
             if (tap != 0) {
                 partial.wait_front(block_ct);
             }

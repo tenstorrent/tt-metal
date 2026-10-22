@@ -13,9 +13,9 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
 // Read Kt rows of Vt tiles starting at row_page, rows row_stride pages apart, into the buffer in row-major order.
-template <uint32_t Kt, uint32_t Vt, typename Accessor>
+template <uint32_t Kt, uint32_t Vt, typename Accessor, typename DFB>
 FORCE_INLINE void issue_value_slice_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t row_page, uint32_t row_stride) {
+    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t row_page, uint32_t row_stride) {
     const uint32_t tile_bytes = buffer.get_entry_size();
     for (uint32_t row = 0; row < Kt; ++row) {
         for (uint32_t column = 0; column < Vt; ++column) {
@@ -72,7 +72,7 @@ TT_KERNEL void dataflow(
         }
     }
 
-    const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
+    const auto write_state = [&](auto& source, const auto& destination) {
         const uint32_t tile_bytes = source.get_entry_size();
         for (uint32_t row = 0; row < Kt; ++row) {
             for (uint32_t column = 0; column < Vt; ++column) {
@@ -130,7 +130,7 @@ TT_KERNEL void dataflow(
             noc.async_read_barrier();
             a.push_back(a_tiles);
         } else {
-            kda::SharedInput inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
+            kda::SharedInput<decltype(a)> inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
             if (value_block == 0) {
                 kda::multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
             } else {

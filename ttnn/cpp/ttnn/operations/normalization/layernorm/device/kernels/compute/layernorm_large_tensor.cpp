@@ -172,13 +172,13 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
 #else
-    DataflowBuffer& dfb_inb = dfb_in;
+    auto& dfb_inb = dfb_in;
 #endif
     DataflowBuffer dfb_out(dfb_out_id);
 #ifndef RMSNORM
     DataflowBuffer dfb_ex(dfb_ex_id);
 #else
-    DataflowBuffer& dfb_ex = dfb_in;
+    auto& dfb_ex = dfb_in;
 #endif
     DataflowBuffer dfb_xmm2(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
@@ -188,19 +188,19 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
 #else
-    DataflowBuffer& dfb_gamma = dfb_out;
+    auto& dfb_gamma = dfb_out;
 #endif
 #ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb_beta_id);
 #else
-    DataflowBuffer& dfb_beta = dfb_out;
+    auto& dfb_beta = dfb_out;
 #endif
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     DataflowBuffer dfb_fusion(dfb_fusion_id);
-    DataflowBuffer& dfb_im_or_out = dfb_fusion;
+    auto& dfb_im_or_out = dfb_fusion;
 #else
-    DataflowBuffer& dfb_fusion = dfb_out;
-    DataflowBuffer& dfb_im_or_out = dfb_out;
+    auto& dfb_fusion = dfb_out;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
 #ifdef FUSE_PRE_ADD
@@ -349,7 +349,7 @@ void kernel_main() {
 
             const auto final_iter = block.last() == Wt;
             const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
-            DataflowBuffer& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
+            auto& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
@@ -448,7 +448,7 @@ void kernel_main() {
 
             if constexpr (do_gamma == 1) {
                 constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
-                DataflowBuffer& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
+                auto& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{dfb_fusion, dfb_gamma},

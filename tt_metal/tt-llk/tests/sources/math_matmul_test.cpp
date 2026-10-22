@@ -52,6 +52,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
+#define MATMUL_UNPACK_TEMPLATE_ARGS \
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#endif
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -65,17 +80,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A, // in0
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
-        _llk_unpack_AB_matmul_init_<>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM,
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // in1
-            num_faces_A,     // in0
-            PARTIAL_FACE_B,  // in1
-            PARTIAL_FACE_A); // in0
+            num_faces_B,    // in1
+            num_faces_A,    // in0
+            PARTIAL_FACE_B, // in1
+            PARTIAL_FACE_A);
         PROFILER_SYNC();
     }
     {
@@ -97,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_unpack_AB_matmul_<>(
+                        _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
                             L1_ADDRESS(buffer_A[0]),
                             L1_ADDRESS(buffer_B[0]),
                             j,

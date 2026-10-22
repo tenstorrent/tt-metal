@@ -674,3 +674,103 @@ inline void _llk_pack_block_closed_(
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
+
+template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>
+TT_ALWAYS_INLINE void pack_block_fast_pacr_()
+{
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    TTI_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        addr_mod,
+        p_pacr::ADDR_CNT_CTXT_0,
+        ZERO_OUTPUT_FLAG,
+        p_pacr::ALL_INTF_ACTIVE,
+        0,
+        0,
+        0,
+        0,
+        last);
+}
+
+/**
+ * Opt-in setup of the fast block packs for kernels whose pack output is four faces of 16 rows, known at compile time.
+ * Call it after the default pack init, and again after any program that replaces the pack MOP or the replay buffer.
+ * Sets bit 31 of the destination register once and records one closed tile (16 PACRs, the last one closing the tile, then the W step).
+ */
+template <bool zero_output = false>
+inline void _llk_pack_block_fast_init_()
+{
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    load_replay_buf(
+        0,
+        17,
+        []
+        {
+            for (int face = 0; face < 3; face++)
+            {
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+                pack_block_fast_pacr_<zero_output, ADDR_MOD_2, 0>();
+            }
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_0, 0>();
+            pack_block_fast_pacr_<zero_output, ADDR_MOD_1, 1>();
+            TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+        });
+}
+
+/**
+ * Same as _llk_pack_block_ with the destination written by bytes (needs _llk_pack_block_fast_init_).
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_fast_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination<false>(address);
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+    // No Z reset: the last PACR's ADDR_MOD clears the source Z and nothing in this program moves the L1 side counters.
+}
+
+/**
+ * Same as _llk_pack_block_closed_ for four-face tiles of 16 rows, each tile replayed from the buffer (needs _llk_pack_block_fast_init_).
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_fast_(
+    const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination<false>(address);
+
+    if (tile_stride != pack_ch1_w_stride)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride = tile_stride;
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        lltt::replay(0, 17);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}

@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
@@ -17,9 +18,9 @@
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
-template <typename Accessor>
+template <typename Accessor, typename DFB>
 FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
+    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t page, uint32_t tiles) {
     for (uint32_t tile = 0; tile < tiles; tile++) {
         noc.async_read(
             accessor,
@@ -30,9 +31,9 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
-template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor>
+template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor, typename DFB>
 FORCE_INLINE void issue_packed_affine_read(
-    Noc& noc, const AAccessor& a_accessor, const BAccessor& b_accessor, DataflowBuffer& buffer, uint32_t worker_index) {
+    Noc& noc, const AAccessor& a_accessor, const BAccessor& b_accessor, DFB& buffer, uint32_t worker_index) {
     const uint32_t tile_bytes = buffer.get_entry_size();
     for (uint32_t row = 0; row < Kt; ++row) {
         for (uint32_t column = 0; column < Kt; ++column) {
@@ -54,13 +55,9 @@ FORCE_INLINE void issue_packed_affine_read(
     }
 }
 
-template <uint32_t Kt, uint32_t Vt>
+template <uint32_t Kt, uint32_t Vt, typename SendA, typename SendB, typename RemoteAffine>
 FORCE_INLINE void issue_affine_pair_send(
-    Noc& noc,
-    uint32_t destination_worker,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& remote_affine) {
+    Noc& noc, uint32_t destination_worker, SendA& send_a, SendB& send_b, RemoteAffine& remote_affine) {
     const uint32_t target_x = worker_x(destination_worker);
     const uint32_t target_y = worker_y(destination_worker);
     const uint32_t tile_bytes = remote_affine.get_entry_size();
@@ -87,13 +84,14 @@ FORCE_INLINE void complete_affine_pair_send(Noc& noc, ReadySem& ready, uint32_t 
     ready.up(noc, worker_x(destination_worker), worker_y(destination_worker), 1);
 }
 
+template <typename SendA, typename SendB, typename LocalA, typename LocalB>
 FORCE_INLINE void issue_affine_pair_loopback(
     Noc& noc,
     uint32_t worker_index,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& local_a,
-    DataflowBuffer& local_b,
+    SendA& send_a,
+    SendB& send_b,
+    LocalA& local_a,
+    LocalB& local_b,
     uint32_t a_tiles,
     uint32_t b_tiles) {
     local_a.reserve_back(a_tiles);
