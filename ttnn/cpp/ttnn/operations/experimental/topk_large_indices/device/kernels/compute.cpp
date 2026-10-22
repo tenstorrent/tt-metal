@@ -281,6 +281,9 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 #ifdef ARCH_BLACKHOLE
 // A row of two or more chunks split across MATH and PACK (topk_large_indices_split.hpp); it ends with the -inf indices
 // marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order leave a row.
+// A tree leaf (a segment of a row of at most 32 chunks, starting at element index leaf_offset) ends as reduce_fused_row
+// does: the survivor unfused with row-global indices, ascending if mirror, and the merge or send that follows is the
+// caller's.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_row(
     CircularBuffer& input,
@@ -288,7 +291,10 @@ FORCE_INLINE void reduce_split_row(
     uint32_t num_chunks,
     uint32_t tail_elements,
     bool first_prefetched,
-    bool prefetch_next) {
+    bool prefetch_next,
+    bool leaf = false,
+    [[maybe_unused]] uint32_t leaf_offset = 0,
+    [[maybe_unused]] bool mirror = false) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb = input.get_cb_id();
 #ifdef TRISC_UNPACK
@@ -340,17 +346,27 @@ FORCE_INLINE void reduce_split_row(
     topk_large_indices_split::pack_row<K, false>(
         num_chunks,
         [] {},
-        [] {
+        [leaf, leaf_offset] {
             ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
             ckernel::sfpu::_topk_xl_split_begin_(0);
-            ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>();
+            if (leaf) {
+                ckernel::sfpu::_topk_xl_separate_indices_row_major_global_offset_<K>(leaf_offset);
+            } else {
+                ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>();
+            }
             TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
-            ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_();
-            ckernel::sfpu::_topk_xl_split_begin_(0);
-            ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>();
-            TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
-        });
+            if (!leaf) {
+                ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_();
+                ckernel::sfpu::_topk_xl_split_begin_(0);
+                ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>();
+                TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
+            }
+        },
+        mirror);
 #endif
+    if (leaf) {
+        return;
+    }
     transpose_dest_init<true, false>(indices_cb);
     for (uint32_t tile = 0; tile < tiles_per_sequence; ++tile) {
         transpose_dest<true, false>(tiles_per_sequence + tile);
@@ -449,7 +465,7 @@ FORCE_INLINE void reduce_split_segmented_row(
                 }
             };
             if (later) {
-                topk_large_indices_split::pack_row<K, false, true>(seg_chunks, [] {}, epilogue);
+                topk_large_indices_split::pack_row<K, false>(seg_chunks, [] {}, epilogue, true);
             } else {
                 topk_large_indices_split::pack_row<K, false>(seg_chunks, [] {}, epilogue);
             }
@@ -569,16 +585,24 @@ void kernel_main() {
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
 #ifdef ARCH_BLACKHOLE
+    // A tree core's split row (a segment of a row) of 2 to 32 chunks splits across MATH and PACK too.
+    constexpr bool split_leaf = tree && multi_chunk_rows;
+    constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
+    bool split_started = false;
+    bool leaf_split = false;
+    if constexpr (split_leaf && !columns) {
+        leaf_split = has_split && split_num_chunks >= min_split_chunks && split_num_chunks <= max_fused_chunks;
+    }
     // Whole rows of 2 to 32 chunks (3 at K 1024, and at K 512 without a split row in the program), and K = 2048 rows
     // longer than 32 with the accumulator buffer, split across MATH and PACK; a core's split row then runs on one
     // thread.
     if constexpr (split_whole_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
-        constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
         if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
             (num_chunks <= max_fused_chunks || split_segments)) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
+            split_started = true;
             const bool prefetch =
                 num_chunks <= max_fused_chunks && topk_large_indices_split::can_prefetch<K>(num_chunks);
             for (uint32_t row = 0; row < num_whole_rows; ++row) {
@@ -629,9 +653,24 @@ void kernel_main() {
         // A survivor that leaves this core is merge operand one of its parent and must end ascending.
         const bool body_final_ascending = row_sends && row_recv_rounds == 0;
 
+#ifdef ARCH_BLACKHOLE
+        const bool leaf_row = leaf_split && split_row;
+        if (leaf_row && !split_started) {
+            MATH((topk_large_indices_split::start()));
+            PACK((topk_large_indices_split::wait_start()));
+            split_started = true;
+        }
+#else
+        constexpr bool leaf_row = false;
+#endif
         tile_regs_acquire();
 
-        if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
+        if (leaf_row) {
+#ifdef ARCH_BLACKHOLE
+            reduce_split_row<K>(
+                input, indices_cb, row_chunks, row_tail, false, false, true, first_chunk * K, body_final_ascending);
+#endif
+        } else if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
             // The rebuild assembles its instructions from the direction, so each direction gets its own body.
             if (body_final_ascending) {
                 reduce_fused_row<K, true>(input, first_chunk, row_chunks, row_tail);
@@ -653,6 +692,10 @@ void kernel_main() {
             // Raw tile pack so the parent can unpack the survivor straight back into DST.
             send.reserve_back(survivor_tiles);
             pack_untilize_uninit(send_cb);
+            if (leaf_row) {
+                // The pack thread's SFPU work reprogrammed its ADDR_MODs and MOP.
+                pack_init(send_cb);
+            }
             pack_reconfig_data_format(send_cb);
             for (uint32_t tile = 0; tile < survivor_tiles; ++tile) {
                 pack_tile(final_survivor + tile, send_cb);
@@ -665,6 +708,9 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
+            if (leaf_row) {
+                pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+            }
             indices.reserve_back(1);
             pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(
                 indices_cb, 1, 0, final_survivor + tiles_per_sequence);

@@ -3691,6 +3691,43 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
     }
 }
 
+// Offset variant of the global split for a segment of a row: the chunk stamps are segment-local (0 to 31) and the
+// segment's first element index, any multiple of K, is added to the decoded index.
+template <std::uint32_t K>
+inline void _topk_xl_separate_indices_row_major_global_offset_(std::uint32_t seg_offset)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
+    constexpr int indices_offset         = num_tiles_per_sequence * 64;
+    constexpr int chunk_field_shift      = K == 2048 ? 0 : K == 1024 ? -1 : -2;
+
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, (seg_offset >> 16) & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, seg_offset & 0xFFFF);
+
+    for (int i = 0; i < row_scale_factor * 16; i++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
+
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        _topk_xl_decode_row_major_index_<K>();
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+        if constexpr (chunk_field_shift != 0)
+        {
+            TTI_SFPSHFT(chunk_field_shift & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
+        }
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+    }
+}
+
 // ============================================================================
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split support
 // ============================================================================
