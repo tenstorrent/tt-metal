@@ -117,8 +117,8 @@ def test_layernorm_inference(
     logger.info(f"PCC: {pcc_message}")
 
     if passing:
-        logger.info("layernorm Passed!")
+        logger.info(f"{norm_types} Passed!")
     else:
-        logger.warning("layernorm Failed!")
+        logger.warning(f"{norm_types} Failed!")
 
-    assert passing, f"layernorm output does not meet PCC requirement {0.99}."
+    assert passing, f"{norm_types} output does not meet PCC requirement {0.99}."
