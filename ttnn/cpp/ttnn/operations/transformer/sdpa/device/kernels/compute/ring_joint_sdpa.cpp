@@ -625,6 +625,7 @@ void kernel_main() {
                 cb_qk_im,
                 cb_identity_scale_in,
                 cb_exp_max_diff,
+                cb_max_A,  // new-max scratch of the in-place slot step (one tile row per resident chunk)
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_mask_in,

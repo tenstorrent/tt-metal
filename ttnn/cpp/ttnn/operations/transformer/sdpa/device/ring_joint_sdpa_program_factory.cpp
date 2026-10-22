@@ -2146,14 +2146,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    // Resident mode (M3, block-major steps): one step covers one 64-key block for every resident chunk that keeps
+    // it, so the score scratch holds (chunks x Sq_chunk_t) rows of kSolBlockTiles columns (a pooled entry still
+    // steps one chunk at full width: at least qk_tiles), and the new-max / alpha scratches hold one tile row per
+    // resident chunk.
+    const uint32_t qk_im_cb_tiles =
+        sol_resident ? std::max(qk_tiles, max_q_per_core * Sq_chunk_t * kSolBlockTiles) : qk_tiles;
+    const uint32_t res_stats_tiles = statistics_tiles * (sol_resident ? max_q_per_core : 1u);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -2161,9 +2168,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
     const bool needs_accumulator_staging_cbs = !has_sliding_window || ksplit_count > 1;
-    // Resident mode: the staging CBs (max, out, sum) are an L1 FIFO of one accumulator set per resident Q chunk,
-    // one entry deeper than the chunk count so a step can push the updated state before its old entry is popped.
-    const uint32_t fifo_entries = sol_resident ? max_q_per_core + 1 : 1;
+    // Resident mode: the staging CBs (max, out, sum) hold one accumulator set per resident Q chunk, addressed by
+    // chunk slot and updated in place (M3): exactly max_q_per_core entries, filled once on the first active ring
+    // iteration and neither pushed nor popped until the final normalization, so the unpacker's read index and the
+    // packer's write index name the same tile (the buffer is exactly full, the write pointer wrapped to its base).
+    // (M1/M2 used a FIFO one entry deeper, rotated by copies.)
+    const uint32_t fifo_entries = sol_resident ? max_q_per_core : 1;
     const uint32_t cb_stats_in = needs_accumulator_staging_cbs
                                      ? allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df)
                                      : cb_max_A;
@@ -3394,6 +3404,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (sol_pack && std::getenv("TT_SOL_PACK_DEBUG") && std::string(std::getenv("TT_SOL_PACK_DEBUG")) == "1") {
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
+    }
+    // Resident-mode (M3) bisection switch: TT_SOL_RES_CHUNK_MAJOR=1 runs one step per resident chunk in chunk order
+    // (that chunk's run table) instead of one step per kept block over the chunks keeping it. Same in-place slot
+    // state, so a difference between the two isolates the block-major grouping from the state handling. Not in the
+    // program hash: set it for the whole process.
+    if (sol_resident && std::getenv("TT_SOL_RES_CHUNK_MAJOR") &&
+        std::string(std::getenv("TT_SOL_RES_CHUNK_MAJOR")) == "1") {
+        compute_kernel.defines.emplace_back("SOL_RES_CHUNK_MAJOR", "1");
     }
     // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
     // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
