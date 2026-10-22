@@ -1298,8 +1298,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             cdef["SE_GU_L1ACC"] = "1";
         }
         TT_FATAL(
-            !p.hg || cfg.activation == 0 || cfg.activation == 2 || cfg.activation == 3,
-            "flat_routed_expert: half-width gate / up tiles take SiLU / SiTU / clamped SiLU GLU only");
+            !p.hg || cfg.activation <= 3,
+            "flat_routed_expert: half-width gate / up tiles take SiLU / SwiGLU-OAI / SiTU / clamped SiLU GLU only");
         if (p.hg) {  // half-width gate / up tiles: the face-wise activation
             cdef["SE_HG"] = "1";
         }

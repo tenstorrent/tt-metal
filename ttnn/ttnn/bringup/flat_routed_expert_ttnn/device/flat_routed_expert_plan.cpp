@@ -341,13 +341,47 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         min_rect = std::min(min_rect, (x1 - x0 + 1) * (y1 - y0 + 1));
     }
+    bool found = false;
+    // even split (layout.even_split, full grid, one subgrid): the 2 It weight tiles a K row ([gate | up] 16-column
+    // units) over at most 64 gate/up cores, the fewest tiles a core that divide them evenly over a multiple of the 16
+    // weight slots; whole gate / up tile pairs (NP = tiles / 2) where they give the same tiles a core, else 16-column
+    // units. GLM-5.3 / -Flash, K2.7: 64 cores x 2 (pairs); K3, M3 (I 3072): 64 x 3 units; V4.1-Flash (I 2304): 48 x 3
+    // units (64 cores would leave the slowest with 3 as well)
+    const bool even_gu = lo.even_split && p.nsg == 1 && !rows_cap && lo.hg_units < 0 && !lo.half_width &&
+                         cstr(pr.gu_split) == nullptr && p.x_tile == BF8_TILE;
+    if (even_gu) {
+        const uint32_t tiles = 2 * p.It;
+        for (uint32_t per = (tiles + 63) / 64; per <= 8 && !found; ++per) {
+            if (tiles % per != 0 || (tiles / per) % 16 != 0) {
+                continue;
+            }
+            const uint32_t np = per / 2;
+            const bool pairs = per % 2 == 0 && p.It % np == 0 && (p.It / np) % 16 == 0;
+            for (uint32_t xs : {24u, 16u, 12u}) {
+                const uint32_t dst = pairs ? gu_dst(np, p.Ht, xs, p.gu_fp32).first
+                                           : gu_dst((per + 1) / 2, p.Ht, xs, p.gu_fp32, true).first;
+                const uint32_t mt_ = std::min(dst / per, MT_MAX);
+                if (mt_ >= 1 && 2 * p.Ht * per * p.w_tile + xs * mt_ * KBLK * p.x_tile <= GU_L1_BUDGET) {
+                    p.np = pairs ? np : 0;
+                    p.nu = pairs ? 0 : per;
+                    p.hg = !pairs;
+                    p.g = 1;
+                    p.x_slots = xs;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
     // the x ring shrinks (24 -> 16 -> 12 slots) before the gate/up split gives up
     // bfp8 x: the first ring size with a split. bf16 x: the split with the most gate/up cores over all ring sizes
     // (ties: the larger ring); the first-fit choice halved the gate/up cores (NP 2 at 24 slots instead of NP 1 at 16:
     // +57% expert time at large M)
-    bool found = false;
     uint32_t best_cores = 0;
     for (uint32_t xs : {24u, 16u, 12u}) {
+        if (found && even_gu) {
+            break;
+        }
         const uint32_t gu_cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : 64;  // 64 on the full grid
         const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, gu_cells, p.gu_fp32, p.x_tile)
                                       : gu_split(p.It, p.Ht, p.w_tile, xs, p.n_rd_sg, min_rect, p.gu_fp32, p.x_tile);
@@ -512,6 +546,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     if (p.nu && !cstr(pr.rdown)) {                // (units leave enough down cores: tails slow the readers' streams,
         p.rdown = false;                          // V4.1 E24 M 1024 242 -> 226.5 us / expert without them)
+    }
+    if (lo.even_split && p.nsg == 1 && !cstr(pr.rdown)) {  // (even splits: the down work on the down cores only)
+        p.rdown = false;
     }
     if (p.uneven) {  // reader tails use semaphores 5 (HARR) and 12: their credits must stay in 0..4 (<= 5 receivers)
         const uint32_t ps = p.ngrp, rpb = 16 / p.banks;
@@ -928,7 +965,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.pcd_r = static_cast<uint32_t>(std::atoi(pcr));
     }
     p.rem_cols = p.Ht - p.n_rdn * p.pcd_r;
-    if (auto_shape && lo.max_down < 0) {
+    // even split (layout.even_split, one subgrid): the output tile columns over at most 32 down cores, the fewest
+    // cores with the fewest columns a core (GLM-5.3 / M3 32 x 6, K2.7 32 x 7, GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5,
+    // K3 28 x 4); the rest of the cells are left to the combine
+    const bool even_dn = lo.even_split && p.nsg == 1 && lo.max_down < 0;
+    if ((auto_shape || even_dn) && lo.max_down < 0) {
         // down cores under the east rectangle (its columns, below it) are slow (far from the h relays, in the east
         // gate/up's traffic): drop them, then keep the fewest cores with the same most tile columns per core (K3 at
         // M 2048, us per expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400, 34 / 42 into columns 8+ 443
@@ -936,7 +977,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         const uint32_t east_x0 = b_x0 - (east0 - 6);
         std::vector<Core> kept;
         for (const auto& c : p.down) {
-            if (c.x < east_x0) {
+            if (!auto_shape || c.x < east_x0) {
                 kept.push_back(c);
             }
         }
@@ -945,7 +986,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             // (192 B writes; a Galaxy-like 12 x 10 gives K3 38 down cores) cost the y writes far more than their bytes
             // (K3 E56 us / expert, 38 -> 28 down cores, M 128 / 192 / 256: 47.8 / 52.0 / 57.0 -> 45.8 / 49.7 / 53.6;
             // E12 49.3 / 55.1 / 60.4 -> 49.0 / 53.6 / 57.9; 23 / 19 down cores are slower: the down matmul)
-            const uint32_t per = std::max<uint32_t>(4u, (p.rem_cols + kept.size() - 1) / kept.size());
+            const uint32_t per =
+                even_dn ? (p.rem_cols + std::min<uint32_t>(32u, kept.size()) - 1) / std::min<uint32_t>(32u, kept.size())
+                        : std::max<uint32_t>(4u, (p.rem_cols + kept.size() - 1) / kept.size());
             kept.resize(std::min<size_t>(kept.size(), (p.rem_cols + per - 1) / per));
             p.down = kept;
             ND = p.down.size();
@@ -1156,6 +1199,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // (MIMO_FL_DRISC_X: the relays' x words and the launcher's x info staging, 16 slots x 1 KB, from ti_off)
     const uint32_t x_words_bytes = on(pr.drisc_x) ? p.ti_off + 256 + 16 * 1024 : 0;
     p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off, x_words_bytes}) + 2047) / 2048;
+    p.gu_bytes = gu_bytes;
+    p.dn_bytes = dn_bytes;
+    p.relay_bytes = std::max(relay_bytes, x_words_bytes);
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;
     p.wd_region = p.E * p.It * pcd * p.w_tile;

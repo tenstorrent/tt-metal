@@ -1731,3 +1731,30 @@ First fused call exact (worst per-token rel err 0) at both. Flat alone at S 320:
 floor 1328 us at 512 GB/s: 80%. Next for S 640 (LoudBox only; a Galaxy chip at chunk 5120 holds 160 tokens, ~270 KB
 of sums per accumulator): bf16 sums or flushing finished tokens, so the rings get the L1; and the combine sizing its
 accumulators / rings from the shape instead of harness knobs (consolidation).
+
+### Close-out planner: the combine sized from the cells and the arena (2026-10-22, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G)
+`combine_auto` / `combine_l1_layout` (combine_rf/sparse_combine_rf.py, pure host functions mirroring
+sparse_combine_rf_prepare's arena layout): from the free cells the flat plan leaves, the port cells (union over the
+chips) and the arena, pick ports on their own cells with A = cells - ports accumulators (<= 16), or accumulators on the
+ports' cells (acc_on_ports, A = cells, <= 16), whichever leaves the deeper landing pool (ties: separate ports); then
+shallower injection rings (64 -> 8 slots) and a 2-slot local ring kept instead of 8 (new `local_keep` argument of
+sparse_combine_rf_prepare) only when nothing else fits. Ring depth capped at 8 (the prepare default). The harness
+(scratch_flat_combine_rf.py) now takes a typed `FC` config: `_env_cfg()` keeps the FC_* / SPC_* recipes (FC_NACC unset
+with the device planner: combine_auto), `closeout_cfg(model, chunk)` is the close-out case. The arena is sized before
+the device planner runs and allocated after it; the planner and the combine get the same A (the old "combine has N
+accumulators, the planner M: set FC_NACC" mismatch cannot happen); the combine's pool is asserted equal to the plan's.
+Fabric payload = row + 32 B rounded to 64 (one piece a row), piece_max = the row.
+
+test_flat_combine_closeout (correctness, real weights - one expert on every chip): Galaxy 8x4 per-chip load (experts
+and 160 / 512 home tokens a chip) on the 2 x 4, GLM-5.3, GLM-5.3-Flash, K3, K2.7, M3 x chunks 5120 / 16384, uniform and
+zipf spread / packed 1.2: all pass, flat y PCC >= 0.998 against the reference expert on every chip, combine worst
+per-token rel err <= 2.4e-3. Plans picked (arena 1376 KB a core): ports apart, 7 port cells, A 12 (A 16 for K3's 23
+cells), ring depth 8 except GLM-5.3 / M3 at 16384 (fp32 sums 1032 KB: depth 2) and K2.7 at 16384 (896 KB sums: A 16 on
+the ports, injection ring 8, depth 1). Legacy recipe (K3 env defaults, FC_DEVPLAN=1 FC_L1=1, combine_auto) still runs.
+
+Host table (tests/unit/test_closeout_plans.py, ports estimated: 8 cells on the 8x4 / 4x4 tori): the Galaxy 8x4 fits
+everything but K2.7 at 16384; at 16384 the 4x4 does not fit GLM-5.3, K2.7, M3, V4.1-Flash, and the 2x4 (the LoudBox
+model stage: 2048 tokens a chip) nothing; K2.7 2x4 5120 neither. Cause in every case: fp32 sums of S tokens x H over at
+most 16 accumulators (K2.7 8x4 16384: 896 KB each) leave less than one landing slot per source chip. Levers: bf16 sums,
+more than 16 accumulators (the state layout and the device planner cap A at 16), or the combine's cells' leftover L1
+on the flat roles' cores.

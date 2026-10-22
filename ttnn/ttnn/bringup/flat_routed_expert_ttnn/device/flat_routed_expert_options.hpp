@@ -16,12 +16,20 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 // every program hash, passed from Python (FlatRoutedExpert(layout=...), presets in flat_layouts.py). Every default is
 // the plan's own choice - what an unset environment gave before these were options (ENV_CLEANUP.md). -1: unset.
 struct FlatLayoutOptions {
-    bool drisc = true;              // DRAM-core (DRISC) gate/up weight readers where the device runs DRISC firmware
-    bool drisc_dual = true;         // DRISC slots may also be served by their Tensix readers (dual, chosen per call)
-    bool drisc_in_overlap = false;  // DRISC inside the combine overlaps (the programs' plans have cmb_rt set)
+    // Defaults (EXPERTS_COMBINE_CLOSEOUT.md): DRISC only - every gate/up weight from the DRAM cores, no Tensix weight
+    // readers and no per-call Tensix fallback, inside the combine overlaps too - and even splits. Preset LEGACY in
+    // flat_layouts.py: the defaults before 2026-10-22 (dual / hybrid DRISC, the first fitting split, reader tails)
+    bool drisc = true;             // DRAM-core (DRISC) gate/up weight readers where the device runs DRISC firmware
+    bool drisc_dual = false;       // DRISC slots may also be served by their Tensix readers (dual, chosen per call)
+    bool drisc_in_overlap = true;  // DRISC inside the combine overlaps (the programs' plans have cmb_rt set)
     // pure DRISC: every slot's gate/up from the DRAM cores, no Tensix weight reads (tiles in switch mode); -1: pure
-    // for plans without reader down columns, dual / hybrid for the others; 0 / 1 force it (preset DRISC_ONLY)
-    int32_t drisc_pure = -1;
+    // for plans without reader down columns, dual / hybrid for the others; 0 / 1 force it
+    int32_t drisc_pure = 1;
+    // even splits: gate/up over 2 I (16-column units, or whole gate / up tile pairs where they give the same tiles a
+    // core) on at most 64 cores, down over H on at most 32, each a split that lowers the slowest core's tiles (a
+    // count that does not divide the tiles evenly only adds cores); no reader down columns. false: the older rules
+    // (the first split that fits, reader tails for H > 4992, every free cell a down core)
+    bool even_split = true;
     int32_t max_down = -1;         // down cores at most (set at all: no automatic down-core trim; 0 or more: no cap)
     int32_t x_helpers = -1;        // x helper relays per rectangle, 1..4 (-1: 2 with M-groups, else 1)
     bool half_width = false;       // 16-column gate/up units (half-width gate / up tiles), with hg_units a core

@@ -37,11 +37,19 @@ FIELDS = (
     "dw_batch",
     "pin_ratio",
     "single_subgrid",
+    "even_split",
 )
 
 # DRAM-core (DRISC) gate/up weight readers only: no Tensix weight readers, no per-call Tensix fallback, inside the
-# combine overlaps too (pure DRISC: every slot from the DRAM cores, tiles in switch mode)
+# combine overlaps too (pure DRISC: every slot from the DRAM cores, tiles in switch mode). The default since 2026-10-22
+# (FlatLayoutOptions); kept for callers that name it
 DRISC_ONLY = dict(drisc_in_overlap=True, drisc_dual=False, drisc_pure=1)
+
+# the plan's defaults before 2026-10-22 (EXPERTS_COMBINE_CLOSEOUT.md): DRISC pure only without reader down columns
+# (dual / hybrid slots with them, a Tensix fallback above 96 tokens per expert), not inside the combine overlaps, the
+# first gate/up split that fits, reader tails for H > 4992 and every free cell a down core. The research builder
+# (FlatExpert) plans this way
+LEGACY = dict(drisc_dual=True, drisc_in_overlap=False, drisc_pure=-1, even_split=False)
 
 # GLM-5.3-Flash on the K3 token-split block (models/demos/glm53_flash_d_p/tt/experts_ts.py): DRISC-only weight readers
 # (pure by the plan's default: no reader down columns), 32 down cores (128 output tile columns, 4 a core), one x helper

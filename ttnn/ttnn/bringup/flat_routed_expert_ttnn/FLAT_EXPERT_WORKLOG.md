@@ -1327,3 +1327,26 @@ reads at all 1612 / 1742; half + UB 2 1574 / 1851. So x's cost is bytes as well 
 halves the dispatch's fabric bytes and its x write to DRAM. Open: fp8 x needs the dispatch to send fp8 rows and the
 relays' tilizer to read fp8 (to the bfp8 tiles the gate/up cores take) - the accuracy of fp8 then bfp8 x needs the
 golden check.
+
+### Close-out defaults: DRISC only and even splits (2026-10-22, bh-lb-09 12 x 10; EXPERTS_COMBINE_CLOSEOUT.md)
+The plan's defaults are now the close-out layout (FlatLayoutOptions): DRISC only (drisc_dual false, drisc_pure 1,
+drisc_in_overlap true: every gate/up weight from the DRAM cores, no Tensix readers, no per-call fallback, inside the
+combine overlaps too) and `even_split` (new, default true):
+- **Gate/up** over the 2 I weight tiles a K row ([gate | up] 16-column units) on at most 64 cores: the fewest tiles a
+  core that divide evenly over a multiple of the 16 weight slots; whole gate / up tile pairs (the older NP split) where
+  they give the same tiles a core, 16-column units otherwise. GLM-5.3 / -Flash / K2.7 64 x 2 (pairs, NP 1), K3 / M3
+  (I 3072) 64 x 3 units (the old first-fit picked NP 2: 48 cores x 4 tiles), V4.1-Flash (I 2304) 48 x 3 units.
+- **Down** over H on at most 32 cores, the fewest cores at the fewest columns a core: GLM-5.3 / M3 32 x 6, K2.7 32 x 7,
+  GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5, K3 (Hr 3584) 28 x 4. No reader down columns (K2.7 / GLM-5.3 used them).
+- Preset `LEGACY` (flat_layouts.py) restores the old defaults; the research builder's plan-equality test uses it.
+- The 16-column units' face-wise GLU gained SwiGLU-OAI (MiniMax M3: (clamp(u, 7) + 1) g sigmoid(1.702 g), g =
+  min(gate, 7)); the factory had refused units for it.
+- `role_bytes` in the plan dict: the arena each role uses (gate/up, down, relay, reader), for the free-L1 report.
+
+Checked (correctness only, no perf): tests/unit/test_closeout_flat.py - GLM-5.3, GLM-5.3-Flash, K3, K2.7, M3 at the
+Galaxy 8x4 per-chip experts (8 / 9 / 28 / 12 / 4) and uniform counts for chunks 5120 / 16384 (M 91 - 512), two
+launches: every expert's PCC >= 0.998 against the bfp4 reference. V4.1-Flash is planned only (test_closeout_plans.py).
+Existing unit tests with the new defaults: uneven split (V4.1 E12 / E24 / bf16 h / pin 0, glm / k3 E12), y row-major
+(mimo, k2) and indexed shapes / determinism (mimo, k2) pass. Not runnable on bh-lb-09's 12 x 10 grid whatever the
+defaults: test_flat_routed_expert_op (the Python builder asserts an 11 x 10 grid) and the tp4 / tp2 cases (2-3
+subgrids, which the overlap-era factory no longer builds).

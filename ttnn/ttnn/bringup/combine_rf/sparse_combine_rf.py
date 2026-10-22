@@ -1201,6 +1201,113 @@ def first_hop(src, dst, R, C, wrap_x, wrap_y):
     return h[0][1] if h else None
 
 
+A_MAX = 16  # accumulators at most (the state layout, the device planner)
+
+
+def combine_l1_layout(
+    N,
+    S,
+    W,
+    A,
+    *,
+    arena_bytes,
+    l1=True,
+    acc_on_ports=False,
+    inj_slots=64,
+    depth=8,
+    piece_max=None,
+    ring_depth=None,
+    pool_slots=None,
+    det_k=0,
+    det_pg=0,
+    shared_rows=False,
+    local_keep=8,
+):
+    """What the combine puts in each core's arena (bytes), as sparse_combine_rf_prepare lays it out: N chips, S home
+    tokens a chip, rows W wide (bf16), A accumulators. Pure (no device): the planner's sizing and its reports use it.
+    Returns dict(slot, PSL (landing pool slots per accumulator), D (= PSL / (N - 1)), QP (a port's injection ring),
+    QL (an accumulator's local ring), acc_used / port_used (bytes of the arena), fits, why)."""
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    row_bytes = W * 2
+    NT = (row_bytes + TILE - 1) // TILE
+    PIECE_MAX_ = piece_max or PIECE_MAX
+    NP = (row_bytes + PIECE_MAX_ - 1) // PIECE_MAX_
+    PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
+    SLOT = ISLOT = NP * ((PD + 32 + 63) // 64) * 64
+    FUSED = bool(acc_on_ports)
+    RINGS = state_layout(N, A)[6]
+    MAXT = (S + A - 1) // A
+    tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det_k else 256 * 8 + 128
+    acc_cb_list = [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
+    acc_cbs = sum(al(v) for v in acc_cb_list)
+    out = dict(slot=SLOT, acc_fp32=MAXT * NT * 4096, acc_cbs=acc_cbs, rings=RINGS, fits=True, why="")
+    QP = inj_slots
+    keep = (local_keep + min(32, QP)) * ISLOT if FUSED else (local_keep * ISLOT if l1 else 0)
+    fit = (arena_bytes - RINGS - acc_cbs - keep) // SLOT
+    PSL = min(depth * (N - 1), fit)
+    PSL = PSL if ring_depth is None else int(ring_depth) * (N - 1)
+    PSL = PSL if pool_slots is None else int(pool_slots)
+    NSE = 8 if shared_rows else 0
+    out.update(PSL=PSL, D=PSL // (N - 1) if N > 1 else 0)
+    if PSL < N - 1:
+        return {**out, "fits": False, "why": f"landing pool {PSL} < {N - 1} slots (one per source chip)"}
+    if PSL >= 4096:
+        return {**out, "fits": False, "why": "landing pool >= 4096 slots (12-bit ring fields)"}
+    acc_area = RINGS + PSL * SLOT
+    a_end = al(acc_area) + acc_cbs
+    if FUSED:
+        QL = min(16, (arena_bytes - a_end - min(32, QP) * ISLOT) // ISLOT)
+        QP = min(QP, (arena_bytes - a_end - QL * ISLOT) // ISLOT - NSE)
+        if QL < 2 or QP < 8:
+            return {**out, "fits": False, "why": f"acc_on_ports: local ring {QL} / injection ring {QP} slots"}
+        acc_used = a_end + QL * ISLOT + (QP + NSE) * ISLOT
+        port_used = acc_used
+    else:
+        QL = min(16, (arena_bytes - a_end) // ISLOT) if l1 else 0
+        if l1 and QL < 2:
+            return {**out, "fits": False, "why": f"no room for the accumulators' local ring ({QL} slots)"}
+        acc_used = a_end + QL * ISLOT
+        port_used = al(RINGS + ((QP + NSE) * ISLOT if l1 else 0)) + tab_cb
+        if port_used > arena_bytes:
+            return {**out, "fits": False, "why": f"port: {port_used >> 10} KB > the arena's {arena_bytes >> 10} KB"}
+    return {**out, "QP": QP, "QL": QL, "acc_used": acc_used, "port_used": port_used}
+
+
+def combine_auto(N, S, W, n_cells, port_cells, *, arena_bytes, l1=True, depth=8, piece_max=None, a_max=A_MAX):
+    """The combine's configuration from what the flat plan leaves (n_cells free cells per chip, port_cells of them
+    the ports' - the union over the chips) and the arena: ports on their own cells with A = n_cells - port_cells
+    accumulators (at most a_max), or the accumulators on the ports' cells (acc_on_ports: A = n_cells, at most a_max) -
+    whichever leaves the deeper landing pool (ties: separate ports). Shallower injection rings (64 -> 8 slots), then a
+    2-slot local ring kept instead of 8, only when nothing else fits. Returns dict(acc_on_ports, n_acc, inj_slots,
+    depth, local_keep, layout = combine_l1_layout's) or, when nothing fits, dict(fits=False, why=...)."""
+    best, why = None, []
+    for fused in (False, True):
+        A = min(a_max, n_cells if fused else n_cells - port_cells)
+        mode = "acc_on_ports" if fused else "ports apart"
+        if A < 1 or (fused and port_cells > A):
+            why.append(f"{mode}: {A} accumulator cells")
+            continue
+        last = None
+        for keep in (8, 2):
+            for qp in (64, 32, 16, 8):
+                lay = combine_l1_layout(
+                    N, S, W, A, arena_bytes=arena_bytes, l1=l1, acc_on_ports=fused, inj_slots=qp, depth=depth,
+                    piece_max=piece_max, local_keep=keep,
+                )  # fmt: skip
+                if lay["fits"]:
+                    cand = dict(acc_on_ports=fused, n_acc=A, inj_slots=qp, depth=depth, local_keep=keep, layout=lay)
+                    if best is None or lay["D"] > best["layout"]["D"]:
+                        best = cand
+                    break
+                last = lay
+            else:
+                continue
+            break
+        else:
+            why.append(f"{mode} A {A}: {last['why']} at the shallowest rings")
+    return {**best, "fits": True} if best else dict(fits=False, why="; ".join(why))
+
+
 def sparse_combine_rf_prepare(
     mesh_device,
     S,
@@ -1228,6 +1335,7 @@ def sparse_combine_rf_prepare(
     barrier=None,
     piggyback_credits=True,
     pool_slots=None,
+    local_keep=8,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1263,7 +1371,8 @@ def sparse_combine_rf_prepare(
     packets only when no row goes that way); on by default where it applies (a port per link, two links, A <= 16):
     GLM-Flash S640 combine alone -3.5% uniform / -4.3% spread. pool_slots: the landing pool's slots
     exactly (e.g. another build's run.pool, when two builds share the arena: equal pools, so neither's CBs sit on the
-    other's ring slots - whose trailer flags mark landed rows)."""
+    other's ring slots - whose trailer flags mark landed rows). local_keep: the accumulators' local ring slots kept
+    free before the landing pool takes the rest of the arena (>= 2; fewer leave a deeper pool)."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -1394,7 +1503,7 @@ def sparse_combine_rf_prepare(
         QP0 = inj_slots
         # (fused: room kept for an 8-slot local ring and a 32-slot injection ring; what is left after the rings
         # grows them, below)
-        keep = (8 + min(32, QP0)) * ISLOT if FUSED else (8 * ISLOT if l1 else 0)
+        keep = (local_keep + min(32, QP0)) * ISLOT if FUSED else (local_keep * ISLOT if l1 else 0)
         fit = (arena_bytes - RINGS - acc_cbs - keep) // SLOT
         PSL = min(depth * (N - 1), fit)
     else:

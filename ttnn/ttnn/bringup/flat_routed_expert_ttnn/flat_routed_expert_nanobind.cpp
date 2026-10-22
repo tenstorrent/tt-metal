@@ -104,6 +104,8 @@ nb::dict plan_dict(
         {"h_off", p->h_off},
         {"o_off", p->o_off},
         {"ti_off", p->ti_off}};
+    d["role_bytes"] = std::map<std::string, uint32_t>{
+        {"gu", p->gu_bytes}, {"down", p->dn_bytes}, {"relay", p->relay_bytes}, {"reader", p->rd_off}};
     d["coords"] = cores(p->coords);
     d["readers"] = cores(p->readers);
     d["gu"] = cores(p->gu);
@@ -192,6 +194,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def_rw("half_width", &fre::FlatLayoutOptions::half_width)
         .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
         .def_rw("single_subgrid", &fre::FlatLayoutOptions::single_subgrid)
+        .def_rw("even_split", &fre::FlatLayoutOptions::even_split)
         .def_rw("row0", &fre::FlatLayoutOptions::row0)
         .def_rw("row1", &fre::FlatLayoutOptions::row1)
         .def_rw("x_path", &fre::FlatLayoutOptions::x_path)

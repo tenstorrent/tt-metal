@@ -186,6 +186,8 @@ struct FlatRoutedExpertPlan {
     uint32_t x_off = 0, p_off = 0, hl_off = 0, rd_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0,
              arena_tiles = 0;
     uint32_t rd_slots = 2;
+    // arena bytes each role uses (the arena is max of them: the rest of a role core's arena is free)
+    uint32_t gu_bytes = 0, dn_bytes = 0, relay_bytes = 0;
     // weight regions (bytes per core region)
     uint32_t region_bytes = 0, wd_region = 0, wr_region = 0;
     // the down cores' weight blocks rotate over the banks (default; MIMO_FL_DW_ROT=0: one bank per core): block k of
