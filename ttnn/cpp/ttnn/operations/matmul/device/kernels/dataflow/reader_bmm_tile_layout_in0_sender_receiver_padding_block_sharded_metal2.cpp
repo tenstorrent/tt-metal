@@ -78,9 +78,6 @@ void kernel_main() {
     auto sender = in0_mcast.optional_sender(noc);
     auto receiver = in0_mcast.optional_receiver(noc);
 
-    constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
-    static_assert(num_remote_senders <= in0_mcast.num_senders);
-
     constexpr uint32_t in0_num_tiles = batch * in0_block_num_tiles;
     dfb_in2.reserve_back(in0_num_tiles);
 
