@@ -10,6 +10,7 @@ building and output scatter, sampling fallbacks, block accounting, bundle metada
 import importlib
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1242,7 +1243,7 @@ def test_sampled_spec_verify_without_the_in_trace_sampler_fails_loudly(expect_er
 
 
 def test_prefix_caching_capability_is_behind_dsv41_apc(monkeypatch):
-    """APC plan M3: supports_prefix_caching follows DSV41_APC=1 (default off) and needs the interleaved prefill."""
+    """APC plan M3: supports_prefix_caching follows DSV41_APC=1 (code default off; the shipped specs set it) and needs the interleaved prefill."""
     import models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm as GV
 
     monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
@@ -1254,4 +1255,24 @@ def test_prefix_caching_capability_is_behind_dsv41_apc(monkeypatch):
     assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is False
     monkeypatch.delenv("DSV41_APC")
     monkeypatch.delenv("DSV41_VLLM_INTERLEAVE")
+    importlib.reload(GV)
+
+
+def test_no_enable_prefix_caching_flag_turns_apc_off(monkeypatch):
+    """the shipped specs carry DSV41_APC=1 + enable-prefix-caching: ``--no-enable-prefix-caching`` must switch the model's APC off cleanly (capability False, no snapshot store)."""
+    import models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm as GV
+
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
+    monkeypatch.setenv("DSV41_APC", "1")
+    for argv, off in (
+        (["x", "--enable-prefix-caching"], False),
+        (["x", "--no-enable-prefix-caching"], True),
+        (["x", "--enable-prefix-caching=false"], True),
+        (["x", "--no-enable-prefix-caching", "--enable-prefix-caching"], False),
+        (["x"], False),
+    ):
+        monkeypatch.setattr(sys, "argv", argv)
+        assert GV._cli_prefix_caching_off() is off
+        assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is (not off)
+    monkeypatch.undo()
     importlib.reload(GV)

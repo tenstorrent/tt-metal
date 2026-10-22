@@ -25,6 +25,8 @@ Logs: `/mnt/tt-data/ssinghal/dsv4-logs/samplercdf` (`before_cdf.log`, `after_cdf
 
 ## Serving: batched throughput of the 0.24.0-9bf06a9-84b529b defaults (APC on, 4096 token budget)
 
+(APC is on again in the current default specs, together with paged prefill; budget and cost with this combination: to be measured. The numbers below are of the earlier image.)
+
 Measured 2026-10-19 (`/mnt/tt-data/ssinghal/dsv4-logs/serving_bisect/README.md`, table in RELEASE_NOTES.md Known issues). Against the previous image at 16 concurrent requests, distinct prompts: ISL 1024 TTFT +14 % / TPOT +21 % / tok/s -16 %, ISL 8192 TTFT +100 % / TPOT +71 % / tok/s -44 %. APC explains the ISL 1024 rows (V3: APC off = within 5 %), the 4096 token budget explains most of the ISL 8192 rows (V4: 67584 = TPOT +7 %); both set back (V5, V6) = within 5 % of the previous image, the demo (no scheduler) is identical on both code versions: the code is not slower, the defaults trade batched speed for the features. Budgets 16384 / 32768 only recover part (16 x 8192 TPOT +39 % / +22 %).
 
 To do (all need a code change and a rebuild unless noted):

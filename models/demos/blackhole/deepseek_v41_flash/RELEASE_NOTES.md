@@ -21,8 +21,9 @@ Release `0.24.0-0655530-4743e01` (vLLM 0.31.0), previous release `0.24.0-c9cfb00
 Serving features:
 - OpenAI-compatible API (chat, completions, streaming); requests beyond the user count queue.
 - On-device sampling: temperature, top-k (clamped to 32), top-p, per-request seed.
-- Chunked prefill (token budget 67,584 by default, 4,096 in the opt-in specs).
-- Prefix caching (APC): off by default, opt-in with the `*_apc.json` specs.
+- Chunked prefill: token budget `max_num_batched_tokens` in the spec (67,584 in the default specs, 4,096 in the `*_apc.json` specs; the budget with APC on is to be decided after the device measurements).
+- Prefix caching (APC): on by default (`DSV41_APC=1` and `enable-prefix-caching` in the specs and the catalog); `--no-enable-prefix-caching` turns it off. Images bypass it.
+- Paged prefill: on by default (`DSV41_PF_PAGED=read`, fp8 KV pool kept via `DSV41_PF_PAGED_FP8=1`); `DSV41_PF_PAGED=0` restores the previous dense-table prefill.
 - Not supported with speculation (HTTP 400): `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `min_p`.
 
 ## Performance change against the previous release
@@ -52,7 +53,7 @@ The previous-release numbers at the model maximum come from an earlier image wit
 - A prefill context of 16,384 tokens for short prompts on the 1M build (faster short-prompt TTFT).
 - Shared tt_transformers sampler by default (`DSV41_SHARED_SAMPLER=0` restores the previous one).
 - Index-key hand-off fixed for the column-sharded prefill key FIFO.
-- APC off and token budget 67,584 by default, in the runtime specs and in the catalog (the previous release's settings; APC on with budget 4,096 made batched serving up to 2x slower).
+- APC and paged prefill on by default in the runtime specs and the catalog. The B=4 / 1M specs raise `trace_region_size` to 780,000,000 (paged prefill with the fp8 pool needs at least about 766 MB; 650 MB does not boot). The B=16 / 262,144 trace region is unchanged and not yet measured with paged prefill. Throughput with APC on at budget 67,584 and at 4,096: to be measured (budget 4,096 made batched serving up to 2x slower in the previous measurement).
 
 ## Known issues
 
@@ -60,6 +61,6 @@ The previous-release numbers at the model maximum come from an earlier image wit
 - With the default token budget a long prompt stalls the other users' decoding while it prefills (32k prompt: 32.9 s; 9.1 s with budget 4,096).
 - Concurrent long prompts are prefilled one after another (16 prompts of 250,000 tokens: 5,035 s in total).
 - Requests that cannot speculate (frequency / presence / repetition penalty) lose accuracy on the B=4 1M spec (GSM8K about 52 %, against 97 % with speculation); send them to B=16.
-- APC must not be enabled with the 131,072-token specs.
+- APC must not be enabled with the 131,072-token specs (they keep `DSV41_APC=0`, `DSV41_PF_PAGED=0`).
 
 Next release: cheaper APC, host-tiered prefix cache on paged prefill (`PAGED_PREFILL_APC_DESIGN.md`), more in `FUTURE_WORK.md`.

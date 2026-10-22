@@ -87,10 +87,28 @@ def _interleave_on():
 
 
 def _apc_on():
-    """Automatic prefix caching (APC_CHUNKED_PREFILL_PLAN.md M3, DEFAULT OFF): ``DSV41_APC=1`` flips ``model_capabilities['supports_prefix_caching']`` (vLLM then keeps its block-level prefix cache and reports
+    """Automatic prefix caching (APC_CHUNKED_PREFILL_PLAN.md M3): ``DSV41_APC=1`` (code default OFF; every shipped 262,144 / 524,288 / 1M runtime spec and catalog entry sets it, together with ``enable-prefix-caching``) flips ``model_capabilities['supports_prefix_caching']`` (vLLM then keeps its block-level prefix cache and reports
     hits as ``start_pos`` of new requests) and builds the model's snapshot store (tt/prefix_cache.py); needs the interleaved prefill. Read at import time like ``_interleave_on``.
     """
-    return os.environ.get("DSV41_APC", "0") == "1" and _interleave_on()
+    return os.environ.get("DSV41_APC", "0") == "1" and _interleave_on() and not _cli_prefix_caching_off()
+
+
+def _cli_prefix_caching_off():
+    """True when the server's command line turns vLLM's prefix caching off (``--no-enable-prefix-caching``, ``--enable-prefix-caching=false``): the shipped runtime specs carry DSV41_APC=1 AND
+    ``enable-prefix-caching``, so an operator who passes ``--no-enable-prefix-caching`` gets APC off cleanly (no capability, no snapshot store, no host budget, no snapshot cost) instead of snapshots that
+    nothing could hit. Same source as ``configured_spec_k``: the loader hands the model no vLLM config, sys.argv survives the engine-core spawn. Later flags win.
+    """
+    off = False
+    argv = list(sys.argv)
+    for i, a in enumerate(argv):
+        flag, eq, val = a.partition("=")
+        flag = flag.replace("_", "-")
+        if flag == "--no-enable-prefix-caching":
+            off = True
+        elif flag == "--enable-prefix-caching":
+            nxt = val if eq else (argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("--") else "true")
+            off = nxt.strip().lower() in ("false", "0", "no", "off")
+    return off
 
 
 def _chunked_prefill_capabilities():

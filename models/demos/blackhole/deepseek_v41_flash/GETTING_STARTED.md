@@ -19,7 +19,7 @@ ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-06
 | **B=16** | 16 | 262,144 | `runtime_spec_b16_k5_262144_vision.json` |
 | **B=4** | 4 | 1,048,576 | `runtime_spec_b4_k5_1048576_vision.json` |
 
-Both: speculative decoding k = 5, image input, prefix caching off, token budget 67,584. The `assets/` folder has more specs (no images, 131,072 tokens, prefix caching + chunked prefill `*_apc.json`).
+Both: speculative decoding k = 5, image input, prefix caching on, paged prefill on, token budget `max_num_batched_tokens` (67,584; the value with prefix caching on is to be decided after measurement). To run without prefix caching pass `--no-enable-prefix-caching` (or `DSV41_APC=0`); `DSV41_PF_PAGED=0` selects the previous prefill. The `assets/` folder has more specs (no images, 131,072 tokens with APC and paged prefill off, `*_apc.json` with budget 4,096).
 
 ## Start
 

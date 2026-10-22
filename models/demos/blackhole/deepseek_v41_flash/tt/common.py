@@ -34,11 +34,11 @@ def _env_setup(kv_dtype, batch=None, max_seq_len=None, mesh_rows=4):
         spec_policy.resolve_apply(batch, mesh_rows, max_seq_len)
     if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
         kv_dtype = ttnn.fp8_e4m3
-        if os.environ.get("DSV41_PF_PAGED", "0") == "read" and os.environ.get("DSV41_PF_PAGED_FP8") != "1":
+        if os.environ.get("DSV41_PF_PAGED", "read") == "read" and os.environ.get("DSV41_PF_PAGED_FP8", "1") != "1":
             # paged prefill reads the pool: the pool dtype is the prefill's KV precision. fp8 (P2a) costs the prefill logits PCC 0.93-0.96 at 32k / 40 layers; a bf16 pool costs +0.8 % decode step
-            # at 262,144 (110.6 vs 109.7 ms) and +46 MiB per bank (PAGED_PREFILL_APC_DESIGN.md 3.5). DSV41_PF_PAGED_FP8=1 keeps the fp8 pool.
+            # at 262,144 (110.6 vs 109.7 ms) and +46 MiB per bank (PAGED_PREFILL_APC_DESIGN.md 3.5). DSV41_PF_PAGED_FP8 defaults to 1 (fp8 pool kept, shipped default); DSV41_PF_PAGED_FP8=0 forces this bf16 pool.
             print(
-                "DSV41_PF_PAGED=read: using a bf16 KV pool instead of DSV41_POOL_DTYPE=fp8 (DSV41_PF_PAGED_FP8=1 to keep fp8)",
+                "DSV41_PF_PAGED=read: using a bf16 KV pool instead of DSV41_POOL_DTYPE=fp8 (DSV41_PF_PAGED_FP8=0)",
                 flush=True,
             )
             kv_dtype = ttnn.bfloat16

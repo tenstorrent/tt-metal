@@ -27,22 +27,22 @@
                 "max_num_batched_tokens": "67584",
                 "max-log-len": "32",
                 "seed": "9472",
-                "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 650000000, \"sample_on_device_mode\": \"all\"}}",
+                "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 780000000, \"sample_on_device_mode\": \"all\"}}",
                 "hf_config_path": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config",
                 "tokenizer": "/ckpt",
                 "chat_template": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config/chat_template.jinja",
-                "no-enable-prefix-caching": true,
                 "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
                 "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
                 "port": "8000",
                 "limit-mm-per-prompt": "{\"image\": 16}",
                 "mm-processor-cache-gb": 0,
-                "chat-template-content-format": "openai"
+                "chat-template-content-format": "openai",
+                "enable-prefix-caching": true
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
                 "l1_small_size": 16384,
-                "trace_region_size": 650000000,
+                "trace_region_size": 780000000,
                 "sample_on_device_mode": "all"
             },
             "env_vars": {
@@ -52,7 +52,7 @@
                 "DSV41_LAYERS": "0-39",
                 "DSV41_ENGRAM_RAM": "1",
                 "DSV41_POOL_DTYPE": "fp8",
-                "DSV41_TRACE_REGION": "650000000",
+                "DSV41_TRACE_REGION": "780000000",
                 "DSV41_CKPT": "/ckpt",
                 "DSV41_WEIGHT_CACHE": "/cache/weights",
                 "DSV41_UNIFIED_CACHE": "/cache/unified",
@@ -60,7 +60,10 @@
                 "EXTRA_MODELS_DIR": "../../tt-metal/models/demos/blackhole",
                 "DSV41_BUILD_SLOTS": "0",
                 "DSV41_VISION": "1",
-                "DSV41_VLLM_CHUNK": "512"
+                "DSV41_VLLM_CHUNK": "512",
+                "DSV41_APC": "1",
+                "DSV41_PF_PAGED": "read",
+                "DSV41_PF_PAGED_FP8": "1"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,
@@ -80,7 +83,7 @@
             "DSV41_LAYERS": "0-39",
             "DSV41_ENGRAM_RAM": "1",
             "DSV41_POOL_DTYPE": "fp8",
-            "DSV41_TRACE_REGION": "650000000",
+            "DSV41_TRACE_REGION": "780000000",
             "DSV41_CKPT": "/ckpt",
             "DSV41_WEIGHT_CACHE": "/cache/weights",
             "DSV41_UNIFIED_CACHE": "/cache/unified",
@@ -91,7 +94,10 @@
             "DSV41_VLLM_STATS_EVERY": "16",
             "DSV41_BUILD_SLOTS": "0",
             "DSV41_VISION": "1",
-            "DSV41_VLLM_CHUNK": "512"
+            "DSV41_VLLM_CHUNK": "512",
+            "DSV41_APC": "1",
+            "DSV41_PF_PAGED": "read",
+            "DSV41_PF_PAGED_FP8": "1"
         },
         "tt_metal_commit": null,
         "vllm_commit": null,
@@ -108,7 +114,7 @@
         "override_tt_config": {
             "fabric_config": "FABRIC_1D_RING",
             "l1_small_size": 16384,
-            "trace_region_size": 650000000,
+            "trace_region_size": 780000000,
             "sample_on_device_mode": "all"
         },
         "supported_modalities": [
