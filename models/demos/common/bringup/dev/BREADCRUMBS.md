@@ -1746,3 +1746,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   tests with pytest.raises); F154 committed them without a re-run, but the overseer had to fix 11 lines by hand.
 - agents/bringup-engineer.md rule 12: run `pre-commit run --files <changed and new files>` and fix every failure before
   finishing; use the expect_error fixture with the real message text.
+  told the owner about) no longer blocks every turn.
+
+## F158: a waived step covers the block out of its swap test (2026-10-22, owner)
+- DeepSeek-V4.1 test_swap_swa_12_experts: the owner waived the bfp4 experts step, but the swap test's block out
+  (err_swap_out) carries the same gap and read no waiver, so no spec entry could express "the waiver extends to the
+  blocks containing the experts" (owner 2026-10-22).
+- testing/component.py run_swap_test: when err_swap_out misses its noise floor and a swapped step has an owner waiver,
+  the block out goes through NF.waive under that step (printed, err_swap_out_waived recorded; the structural bound
+  still fails a wrong module). Selftest test_a_waived_step_covers_the_block_out_of_its_swap_test.

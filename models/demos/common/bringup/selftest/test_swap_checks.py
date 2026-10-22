@@ -337,3 +337,22 @@ def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_wo
     with mock.patch.object(component, "_check_step", wrapper):
         assert run_swap_test(s, "blk", SWAPPED, checks="steps")
     assert seen == list(SWAPPED) and 0 < got()["swap_attention_vs_golden_err_limit"] < 0.05
+
+
+def test_a_waived_step_covers_the_block_out_of_its_swap_test(gspec, noise, monkeypatch):
+    """F158: DeepSeek-V4.1 swap_swa_12_experts: the owner waived the bfp4 experts step, but the swap test's block out
+    (err_swap_out) carried the same gap and read no waiver. A waiver of a swapped step now covers the block out
+    (recorded err_swap_out_waived); a waiver of a step outside the block does not, and a zero stub still fails."""
+    s = gspec()
+    noise(0.03)  # a precision-sized gap in the device steps: the block out misses its noise floor, not structural
+    assert not run_swap_test(s, "blk", SWAPPED)
+    s.data.setdefault("tests", {})["waivers"] = {"mlp": "not in this block's swapped steps"}
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED)
+    s.data["tests"]["waivers"] = {"attention": "device format gap; judged end to end (owner)"}
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED)
+    assert got()["err_swap_out_waived"] == 1
+    monkeypatch.setenv(IMPL_ENV, "stub")
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED)

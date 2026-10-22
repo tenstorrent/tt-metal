@@ -700,7 +700,15 @@ def run_swap_test(
     metrics.record("err_swap_out", e)
     metrics.record("err_swap_out_limit", elim)
     print(f"{'ok  ' if e <= elim else 'FAIL'} err_swap_out: rel={e:.6f} (<= {elim:.6f}, {how})")
-    ok = e <= elim and ok
+    out_ok = e <= elim
+    if not out_ok:  # F158: an owner waiver of a swapped step covers the block it is in (its gap flows to the block out)
+        from models.demos.common.bringup.testing import noise_floor as NF
+
+        waived = [n for n in swapped if NF.waiver(s, block_type, n)]
+        if waived:
+            print(f"  err_swap_out: the block contains the waived step {waived[0]}")
+            out_ok = NF.waive(s, block_type, waived[0], False, seen["out"], "err_swap_out", gout)
+    ok = out_ok and ok
     if checks == "steps":
         _STEP_CTX.clear()
         for name in swapped:
