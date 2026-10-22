@@ -201,17 +201,45 @@ def _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, 
     return torch.cat(refs, dim=2)
 
 
-def _assert_remote_gather_slots(k_local, k_gathered, ring_size, valid_local_rows=None, cache_batch_idx=None):
-    """Every remote transport shard must land in its canonical row-major tensor slot."""
+def _device_tensor_ranks(mesh_shape, full_mesh_outer_axis):
+    """Tensor rank of each row-major device: itself, or c*rows + r when mesh axis 1 is outermost."""
+    rows, cols = mesh_shape
+    if full_mesh_outer_axis == 0:
+        return list(range(rows * cols))
+    return [(i % cols) * rows + i // cols for i in range(rows * cols)]
+
+
+def _to_device_order(t, ranks):
+    """Reorder a dim-2 tensor from tensor-rank order into row-major device order for ShardTensorToMesh."""
+    parts = torch.chunk(t, len(ranks), dim=2)
+    return torch.cat([parts[r] for r in ranks], dim=2)
+
+
+def _to_tensor_order(t, ranks):
+    """Inverse of _to_device_order, for outputs composed in row-major device order."""
+    parts = torch.chunk(t, len(ranks), dim=2)
+    ordered = [None] * len(ranks)
+    for device, rank in enumerate(ranks):
+        ordered[rank] = parts[device]
+    return torch.cat(ordered, dim=2)
+
+
+def _assert_remote_gather_slots(
+    k_local, k_gathered, ring_size, valid_local_rows=None, cache_batch_idx=None, tensor_ranks=None
+):
+    """Every remote transport shard must land in its canonical tensor slot (row-major unless tensor_ranks)."""
     local_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(k_local)]
     gathered_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(k_gathered)]
     assert len(local_shards) == len(gathered_shards) == ring_size
     local_rows = local_shards[0].shape[2]
     valid_rows = local_rows if valid_local_rows is None else valid_local_rows
-    for destination_rank, gathered in enumerate(gathered_shards):
-        for tensor_rank, local in enumerate(local_shards):
-            if tensor_rank == destination_rank:
+    ranks = tensor_ranks if tensor_ranks is not None else list(range(ring_size))
+    for destination, gathered in enumerate(gathered_shards):
+        for device, local in enumerate(local_shards):
+            if device == destination:
                 continue  # the fused reader may direct-source its optimized local slot
+            tensor_rank = ranks[device]
+            destination_rank = ranks[destination]
             start = tensor_rank * local_rows
             expected = local if cache_batch_idx is None else local[cache_batch_idx : cache_batch_idx + 1]
             assert torch.equal(
@@ -809,9 +837,18 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
         _close_ring4_ccl(parent, submesh, stall_group)
 
 
-def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY):
-    """Exercise a non-identity snake permutation while retaining row-major causal and K-slot semantics."""
+def _run_full_mesh_accuracy_case(
+    mesh_shape, *, block_cyclic, fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY, full_mesh_outer_axis=0
+):
+    """Exercise a non-identity snake permutation while retaining row-major causal and K-slot semantics.
+
+    full_mesh_outer_axis=1 makes the tensor ranks column-major (device (r, c) is rank c*rows + r, the SP-major
+    order with SP on mesh axis 1). Inputs and references stay in tensor-rank order; only the placement onto
+    devices and the composed output are permuted, and the logical (SP, TP) shape is the transposed mesh."""
     ring_size = mesh_shape[0] * mesh_shape[1]
+    ranks = _device_tensor_ranks(mesh_shape, full_mesh_outer_axis)
+    logical_shape = tuple(mesh_shape) if full_mesh_outer_axis == 0 else (mesh_shape[1], mesh_shape[0])
+    outer_kwargs = {"full_mesh_outer_axis": full_mesh_outer_axis} if full_mesh_outer_axis else {}
     local_sq = 64
     chunk_global = ring_size * local_sq
     if block_cyclic:
@@ -829,8 +866,11 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
         heads = 8
         q_g, k_nat, w_g = _global_inputs(heads, chunk_global, t_len, seed=2026)
         k_host = _to_slab(k_nat, ring_size, chunk_global) if block_cyclic else k_nat
-        q_dev, w_dev, k_local, k_gathered = _full_mesh_inputs(mesh, q_g, w_g, k_host)
+        q_dev, w_dev, k_local, k_gathered = _full_mesh_inputs(
+            mesh, _to_device_order(q_g, ranks), _to_device_order(w_g, ranks), _to_device_order(k_host, ranks)
+        )
         kwargs = {"block_cyclic_chunk_local": local_sq} if block_cyclic else {}
+        kwargs.update(outer_kwargs)
 
         mesh.enable_program_cache()
         mesh.clear_program_cache()
@@ -852,18 +892,20 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
                 **kwargs,
             )
             ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
-            outputs.append(ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2)))
+            outputs.append(
+                _to_tensor_order(ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2)), ranks)
+            )
             entries = mesh.num_program_cache_entries()
             if entries_after_first is None:
                 assert entries > 0
                 entries_after_first = entries
-                _assert_remote_gather_slots(k_local, k_gathered, ring_size)
+                _assert_remote_gather_slots(k_local, k_gathered, ring_size, tensor_ranks=ranks)
             else:
                 assert entries == entries_after_first, "full-mesh replay added program-cache entries"
 
         assert torch.equal(outputs[0], outputs[1]), "full-mesh indexer replay is not bit-exact"
         if block_cyclic:
-            ref = _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, t_len)
+            ref = _sptp_full_mesh_ref(q_g, k_nat, w_g, logical_shape, chunk_global, chunk_start, t_len)
         else:
             ref = _linear_full_mesh_ref(q_g, k_nat, w_g, ring_size, local_sq, chunk_start)
         assert_indexer_match(outputs[0], ref, chunk_global, t_len, check_neg=True)
@@ -886,7 +928,9 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
                 **kwargs,
             )
             ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
-            meta_host = ttnn.to_torch(meta_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+            meta_host = _to_tensor_order(
+                ttnn.to_torch(meta_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2)), ranks
+            )
             kv_len = chunk_start + chunk_global
             assert_indexer_match(meta_host[..., :kv_len], ref[..., :kv_len], chunk_global, kv_len, check_neg=True)
         logger.info(
@@ -1209,14 +1253,17 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
     ids=["torus_xy", "fabric_2d"],
 )
 @pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic_rotated"])
-def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config, block_cyclic):
+@pytest.mark.parametrize("full_mesh_outer_axis", [0, 1], ids=["row_major", "column_major"])
+def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config, block_cyclic, full_mesh_outer_axis):
     """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit.
 
     A torus closes the 8x4 snake; a plain 2D fabric has no closing edge and resolves the same
     walk as an open path, and the gathered result must match either way."""
     if ttnn.get_num_devices() != 32:
         pytest.skip("8x4 full-mesh indexer coverage requires exactly 32 available devices")
-    _run_full_mesh_accuracy_case((8, 4), block_cyclic=block_cyclic, fabric_config=fabric_config)
+    _run_full_mesh_accuracy_case(
+        (8, 4), block_cyclic=block_cyclic, fabric_config=fabric_config, full_mesh_outer_axis=full_mesh_outer_axis
+    )
 
 
 def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinism():

@@ -73,7 +73,8 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
+// 0 = axis ring, 1 = full mesh with row-major tensor ranks, 2 = full mesh with column-major tensor ranks.
+constexpr uint32_t full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5);
 constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);

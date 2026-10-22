@@ -67,7 +67,7 @@ constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
 // The parent fused op owns this protocol decision and passes the same flag to both
 // all-gather directions and its receiver, keeping producer and consumer in sync.
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(kFullMeshRankMapping);
+constexpr uint32_t full_mesh_rank_mapping = get_compile_time_arg_val(kFullMeshRankMapping);  // 0 / 1 / 2
 constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(kSnakeOrientation));
 constexpr uint32_t mesh_rows = get_compile_time_arg_val(kMeshRows);
