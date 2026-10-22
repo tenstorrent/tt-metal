@@ -897,3 +897,14 @@ first token == HF (0.900901) with the router fix. README rows updated. MTP step 
 level-1 draft acceptance 0.55 on an off-policy paragraph, 0.91 on an answer-like region, 0.66 over 393 rows, half of
 the misses main-head near-ties (gap < 1 logit); TT block `tt/mtp.py` + `tests/test_mtp.py` committed untested
 (03990ef08f4), first chip-0 run queued (`sched_mtp_test.sh`).
+
+**Envelope point 1: 8 users per row x 512 K (00:03, `long_8x4_N524288_B8_envelope.log`):** first run with 2 slots per
+chip in the heads2users layout; 64-slot model built in 602 s, per-prompt TTFT 240.2 / 225.0 / 225.6 / 225.0 / 225.3
+/ 225.0 / 223.1 / 223.1 s (2187-2354 tok/s), 1.95 GiB free after the 8 prefills (planner: fits), decode 178.2 ms =
+5.6 tok/s per user (64 slots, 359 aggregate). Needles 27/64 with gen 32: the chains are reasoning text ("We need
+answer passphrase only ... There is sentence: \"The secret passphrase f" / "The user is asking for the secret
+passphrase ... Looking through the text, I ca") cut before the answer, i.e. the GLM53_LONG_GEN >= 128 rule at >= 512 K
+was not applied in the envelope scripts; openers split 'The' (users 0, 1, 7) / 'We' (users 2-6) across slots and rows
+(a near-tie, not per column or per order). Gen-160 rerun queued after the MTP test (`sched_envelope512_g160.sh`).
+EP32 at 32 users with distinct ids: 71.2 ms (14.1 tok/s per user), traced TTFT 172 ms, first token 39030 (EP32
+prefill, open).
