@@ -87,3 +87,5 @@ ttnn/cpp/ttnn/kernel_lib/tilize_helpers.inl
 ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp
 ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp
 ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp
+ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp
