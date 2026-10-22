@@ -126,7 +126,7 @@ bool chip_to_chip_dram_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto sender_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(sender_eth_config);
@@ -153,7 +153,7 @@ bool chip_to_chip_dram_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto receiver_eth_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .processor = processor};
     eth_test_common::set_arch_specific_eth_config(receiver_eth_config);
@@ -240,7 +240,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
@@ -297,7 +297,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto output_buffer =
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());

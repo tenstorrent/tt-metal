@@ -81,7 +81,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on

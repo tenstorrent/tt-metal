@@ -281,7 +281,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
 
             risc_count_per_iter = static_cast<int>(topology.user_dm_threads + topology.compute_processors());
         } else {
-            Program program = Program();
+            Program program = CreateProgram(*mesh_device);
             workload.add_program(device_range, std::move(program));
             auto& program_ = workload.get_programs().at(device_range);
 
@@ -358,7 +358,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 

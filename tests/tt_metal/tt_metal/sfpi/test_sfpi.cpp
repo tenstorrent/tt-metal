@@ -36,7 +36,7 @@ bool runTest(
 
     std::vector<uint32_t> compile_args{args_addr};
 
-    auto program(tt::tt_metal::CreateProgram());
+    auto program(tt::tt_metal::CreateProgram(*mesh_device));
     distributed::MeshWorkload workload;
     CreateKernel(
         program,

@@ -84,7 +84,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);

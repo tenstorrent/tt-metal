@@ -653,7 +653,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto dummy_receiver_noc_xy_encoding =
         static_cast<uint32_t>(hal.noc_xy_encoding(drainer_virtual_core.x, drainer_virtual_core.y));
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     const auto mux_downstream_rt_args =
         build_mux_downstream_sender_rt_args(device, program, mux_logical_core, drainer_virtual_core, drainer_layout);
     tt::tt_fabric::add_fabric_mux_v2_to_program(

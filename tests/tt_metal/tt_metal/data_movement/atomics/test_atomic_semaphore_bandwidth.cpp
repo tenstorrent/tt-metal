@@ -41,7 +41,7 @@ bool run_atomic_semaphore_test(distributed::MeshDevice& mesh_device, const Atomi
     /* ================ SETUP ================ */
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     // Buffer Parameters
     const size_t total_data_size = test_config.semaphore_addr_offset + sizeof(uint32_t);

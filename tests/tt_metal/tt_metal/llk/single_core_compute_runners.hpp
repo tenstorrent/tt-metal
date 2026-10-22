@@ -38,7 +38,7 @@ inline vector<std::uint32_t> run_unary(
     bool fp32_dest_acc_en,
     const std::string& compute_kernel,
     std::uint32_t cb_depth_tiles = 1) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     std::uint32_t input_tile_size = tt::tile_size(input_fmt);
@@ -108,7 +108,7 @@ inline vector<std::uint32_t> run_unary_tiled(
     bool fp32_dest_acc_en,
     const std::string& compute_kernel,
     std::uint32_t cb_depth_tiles) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     const std::uint32_t input_tile_size = tile.get_tile_size(input_fmt);
@@ -184,7 +184,7 @@ inline vector<std::uint32_t> run_binary(
     if (out_tiles == 0) {
         out_tiles = num_tiles;
     }
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     const tt::DataFormat fmt = tt::DataFormat::Float16_b;
@@ -252,7 +252,7 @@ inline vector<std::uint32_t> run_matmul_single(
     const vector<std::uint32_t>& src0_vec,
     const vector<std::uint32_t>& src1_vec,
     const std::string& compute_kernel) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     const tt::DataFormat fmt = tt::DataFormat::Float16_b;
@@ -316,7 +316,7 @@ inline vector<std::uint32_t> run_matmul_block(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim,
     const std::string& compute_kernel) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     const tt::DataFormat fmt = tt::DataFormat::Float16_b;

@@ -47,8 +47,8 @@ static bool run_test(
     uint32_t recv_l1_address = 0;
 
     map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
-        {send_mesh_device, make_shared<Program>()},
-        {recv_mesh_device, make_shared<Program>()},
+        {send_mesh_device, make_shared<Program>(CreateProgram(*send_mesh_device))},
+        {recv_mesh_device, make_shared<Program>(CreateProgram(*recv_mesh_device))},
     };
 
     prepare_receiver(

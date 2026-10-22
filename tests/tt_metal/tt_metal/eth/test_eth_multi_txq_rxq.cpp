@@ -40,7 +40,7 @@ static void eth_direct_send_multi_txq_rxq(
     distributed::MeshWorkload sender_workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram(*sender_mesh_device);
 
     constexpr size_t PAYLOAD_SIZE = 32;
     const size_t unreserved_l1_start = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
@@ -74,7 +74,7 @@ static void eth_direct_send_multi_txq_rxq(
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram(*receiver_mesh_device);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
