@@ -823,7 +823,9 @@ class TtMHCFast(LightweightModule):
         return narrow(pre, n), narrow(post, n), narrow(comb, n * n)
 
     def _fused_pre_block(self, norm):
-        """The fused pre-block op for this wrap's norm weight (built once; the weight is read back to the host)."""
+        """The fused pre-block op for this wrap's norm weight (built once; the weight is read back to the host).
+        The build uploads device tensors and reads one back, so the first fused call must be an eager one (the
+        decoder's warm-up step before ``capture_decode_trace``), never a call inside a trace capture."""
         weight, eps = norm
         if self.pre_block is None or self._pre_block_norm is not weight:
             # the norm weight is replicated over the mesh: read shard 0 (a plain to_torch of a mesh tensor needs a composer)

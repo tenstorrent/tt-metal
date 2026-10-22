@@ -19,8 +19,21 @@ One program on the whole compute grid for the pre-block of a hyper-connection wr
 | `post` (out) | `[32,32]` | fp32 | `post` in the post-block kernel's lane layout (`MhcPostMix` v2 input) |
 | `comb` (out) | `[32,n*32]` | fp32 | `comb` lane tiles, one per output stream |
 
-`n = 4`, `C % 32 == 0`, `C/32` column tiles must fit the grid (128 on a 13x10 grid). Rows are independent. Outputs
-pre-allocated by the caller (`allocate_outputs`). Trace-safe (semaphores are reset by their waiters).
+`n = 4`, `C % 32 == 0`, `C/32` column tiles over the compute grid at up to two per core (128 tiles: the first 8
+cores of a 12x10 grid take two, every core of a 13x10 grid takes one and the last two cores idle, contributing zero
+tiles to the tree; `MhcPreBlock.plan_work`). Rows are independent. Outputs pre-allocated by the caller
+(`allocate_outputs`). Trace-safe (semaphores are reset by their waiters and re-initialised by the dispatcher at every
+launch; the op's construction uploads device tensors, so build it in the eager warm-up, never inside a capture).
+
+Mesh (audit 2026-10-22, `_agents/mhc_a1_audit/AUDIT.md`): the program is identical on every chip. Every NoC target
+is a translated worker coordinate from the device's own tables (`worker_core_from_logical_core`; `MeshDevice`
+validates them equal across its chips, Blackhole translated coordinates do not depend on harvesting), every remote
+address is a circular-buffer or semaphore address of the same program (one address on every core of the range),
+the op-held tensors (`fn`, `w`, `mask`, `consts`) are mesh-replicated uploads (one address on every chip), and
+the per-launch runtime args (buffer addresses) are re-derived by the generic-op framework on every program-cache
+hit (the hash excludes their values; every `MhcPreBlock` instance shares one cached program per accessor
+configuration). The grid and the tables are bound to the device object the op was built for (`__call__` asserts
+the device id).
 
 ## Precision
 
@@ -41,7 +54,7 @@ column `8q + r` over the tile's 32 features) and a constant lane-mask tile (band
 output m it forms the four slot products lane-wise, reduces the 8 lanes with a rotate-add tree and adds the kept
 lane into column m of the partial (exact fp32 FMAs/adds; ~28 instructions per band and output).
 
-## Program (one token tile; per core k = x*gy + y, column tile c = k < C/32)
+## Program (one token tile; per core k = x*gy + y, column tiles per `plan_work`)
 
 | CB | tiles | content |
 |---|---|---|
