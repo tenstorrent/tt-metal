@@ -208,13 +208,6 @@ namespace {
 constexpr uint32_t kMaxSticksForWidthNwayFixedCost = 32;
 constexpr size_t kMinNwayInputs = 3;
 
-bool has_equal_widths(const std::vector<Tensor>& input_tensors) {
-    const uint32_t width = input_tensors.front().logical_shape()[kLastAxis];
-    return std::all_of(input_tensors.begin(), input_tensors.end(), [width](const Tensor& input) {
-        return input.logical_shape()[kLastAxis] == width;
-    });
-}
-
 }  // namespace
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
@@ -229,14 +222,8 @@ bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::Conc
     if (out_shape.volume() / out_shape[kLastAxis] > kMaxSticksForWidthNwayFixedCost) {
         return false;
     }
-    // Equal-width 32-bit inputs stay on codegen; bfloat16 and unequal-width 32-bit inputs do not amortize the fixed
-    // cost.
-    switch (input_tensors.front().dtype()) {
-        case DataType::BFLOAT16: return true;
-        case DataType::INT32:
-        case DataType::UINT32: return !has_equal_widths(input_tensors);
-        default: return false;
-    }
+    // The fixed cost is per page and independent of dtype and of input widths.
+    return true;
 }
 
 bool supported_execution_controls(
