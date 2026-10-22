@@ -306,7 +306,7 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
     return {
         .key = key,
         .category = field.category.value,
-        .content = std::move(content),
+        .content = content,
     };
 }
 
@@ -613,9 +613,9 @@ uint32_t fabric_position_start(const ManifestRouterInputs& inputs, uint32_t vc) 
 
 // Every sender and receiver channel in the router's shape, each indexed [vc][channel]. Compact indices run over the
 // shape's counts, VC by VC.
-manifest::Channels collect_channels(const ChannelContext& ctx) {
+manifest::RouterChannels collect_channels(const ChannelContext& ctx) {
     const auto& shape = ctx.shape;
-    manifest::Channels channels;
+    manifest::RouterChannels channels;
     channels.senders.resize(builder_config::MAX_NUM_VCS);
     channels.receivers.resize(builder_config::MAX_NUM_VCS);
     uint32_t sender_compact = 0;
@@ -707,6 +707,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
 
 std::vector<std::vector<manifest::DownstreamEdge>> collect_router_edges(const ChannelContext& ctx) {
     std::vector<std::vector<manifest::DownstreamEdge>> edges;
+    edges.reserve(builder_config::MAX_NUM_VCS);
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         edges.push_back(collect_downstream_edges(ctx, vc));
     }
