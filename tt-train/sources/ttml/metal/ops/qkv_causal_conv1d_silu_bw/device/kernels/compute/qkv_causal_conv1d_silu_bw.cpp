@@ -235,12 +235,18 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             rainbow_window.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);
 
-            if (step > 0) {
-                grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);
+            // grad_input of tile row r needs the dc rainbow of r, which the writer builds once dc of row r + 1
+            // exists, i.e. during step r + 1. Running it at step r + 2 gives the writer a whole step to build it,
+            // instead of compute idling on the 4 shifted copies at the end of every step.
+            if (step > 1) {
+                grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row first_tile_row + step - 2
             }
         }
+        if (step_count > 1) {
+            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row first_tile_row + step_count - 2
+        }
         if (!has_halo) {
-            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);
+            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row end_tile_row - 1, zero tail
         }
     }
     if (current_block != no_block) {

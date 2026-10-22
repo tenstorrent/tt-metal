@@ -90,8 +90,9 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             noc.async_read(self, window, view_bytes, {.noc_x = self_x, .noc_y = self_y, .addr = dc_addr}, {});
             noc.async_read_barrier();
             dc_rm.pop_front(channel_tiles_per_block);
-            if (step > 0) {
-                write_output(first_tile_row + step - 1, first_tile_column);
+            // Compute runs grad_input one step behind the rainbow (see the compute kernel), so row step - 2.
+            if (step > 1) {
+                write_output(first_tile_row + step - 2, first_tile_column);
             }
         }
         if (!has_halo) {
@@ -99,7 +100,12 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             for (uint32_t i = 0; i < halo_rows * row_bytes / sizeof(uint32_t); ++i) {
                 tail[i] = 0;
             }
-            push_dc_rainbow();
+            push_dc_rainbow();  // the last row's rainbow goes out before draining so compute never waits for it
+        }
+        if (step_count > 1) {
+            write_output(first_tile_row + step_count - 2, first_tile_column);
+        }
+        if (!has_halo) {
             write_output(end_tile_row - 1, first_tile_column);
         }
 
