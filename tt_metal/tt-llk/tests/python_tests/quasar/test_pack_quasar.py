@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import List
 
 import pytest
@@ -21,6 +22,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
+    DestSync,
     PackerReluType,
     PerfRunType,
 )
@@ -54,6 +56,7 @@ from helpers.test_variant_parameters import (
     RELU_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.tile_constants import (
@@ -216,6 +219,12 @@ PACK_DEST_DEPTH_COMBINATIONS = [
 ]
 
 
+@dataclass
+class PackBlockTest(TemplateParameter):
+    def convert_to_cpp(self):
+        return "#define TEST_PACK_BLOCK 1"
+
+
 @pytest.mark.quasar
 @parametrize(
     **flat_axes(PACK_FLAT_NAMES, ALL_PACK_COMBINATIONS),
@@ -235,6 +244,7 @@ def test_pack_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    pack_block=False,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -256,7 +266,6 @@ def test_pack_quasar(
         tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
-
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     data_formats = infer_data_formats(
@@ -336,6 +345,7 @@ def test_pack_quasar(
         "templates": [
             DEST_SYNC(dest_sync),
             RELU_TYPE(relu_type),
+            *([PackBlockTest()] if pack_block else []),
         ],
         "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),
@@ -445,4 +455,37 @@ def test_pack_dest_depth_quasar(
         tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    output_format=[DataFormat.Float16_b, DataFormat.Float32, DataFormat.MxFp8R],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    tile_dimensions=runtime([(32, 32), (16, 32), (4, 32), (1, 32)]),
+)
+def test_pack_block_quasar(output_format, dest_acc, dest_sync, tile_dimensions):
+    if output_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("FP32 output requires FP32 DEST")
+    if output_format.is_mx_format() and tile_dimensions not in MX_SUPPORTED_TILE_SIZES:
+        pytest.skip("Unsupported MX tile shape")
+
+    # Two DEST sections exercise back-to-back blocks without reinitialization.
+    shape = construct_tile_shape(tile_dimensions)
+    dest_rows = (512 if dest_sync == DestSync.Half else 1024) >> (
+        dest_acc == DestAccumulation.Yes
+    )
+    rows_per_tile = shape.total_num_faces() * max(8, shape.face_r_dim)
+    tile_count = 2 * (dest_rows // rows_per_tile)
+    test_pack_quasar(
+        InputOutputFormat(DataFormat.Float16_b, output_format),
+        dest_acc,
+        dest_sync,
+        [tile_count * tile_dimensions[0], tile_dimensions[1]],
+        PackerReluType.NoRelu,
+        tile_dimensions,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+        pack_block=True,
     )
