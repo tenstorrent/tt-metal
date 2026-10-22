@@ -87,6 +87,11 @@ std::uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw,
 // The candidates, heuristic choice first, deduplicated as program configs. Empty when unsupported_reason is not.
 std::vector<Candidate> enumerate_candidates(const MatmulDesc& p, const HardwareDesc& hw);
 
+// The candidates on the device grid followed by those on the grid one column narrower. A dimension that splits into
+// awkward per-core tile counts on the full grid often splits well on one column less (#62076: N = 448 tiles over 11
+// columns is 41 per core, a prime, which forces 1x41 output blocks), and the model scores both.
+std::vector<Candidate> enumerate_candidates_with_narrower_grid(const MatmulDesc& p, const HardwareDesc& hw);
+
 // The candidate as the model's input.
 MatmulCandidate to_model_candidate(const Candidate& c);
 

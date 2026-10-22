@@ -438,7 +438,7 @@ std::optional<MatmulProgramConfig> choose(
         return use(*cached);
     }
 
-    auto candidates = enumerate_candidates(call->desc, call->hw);
+    auto candidates = enumerate_candidates_with_narrower_grid(call->desc, call->hw);
     const bool none_fit = candidates.empty();
     std::string none_left = "no candidate fits L1";
     if (bias.has_value()) {

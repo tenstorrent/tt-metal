@@ -150,6 +150,18 @@ TEST(MatmulModelCandidates, HugeKNeverWrapsIntoTheBudget) {  // 32x33554432 @ 33
     }
 }
 
+TEST(MatmulModelCandidates, NarrowerGridFollowsTheDeviceGrid) {  // #62076: 2048x4096 @ 4096x14336 on 11x10
+    const MatmulDesc p = desc(64, 128, 448);
+    const auto hw = HardwareDesc::blackhole(11, 10, kBudget);
+    const auto full = enumerate_candidates(p, hw);
+    const auto both = enumerate_candidates_with_narrower_grid(p, hw);
+    ASSERT_GT(both.size(), full.size());
+    for (std::size_t i = 0; i < both.size(); ++i) {
+        EXPECT_EQ(both[i].grid_x, i < full.size() ? 11u : 10u) << "candidate " << i;
+        EXPECT_EQ(both[i].grid_y, 10u) << "candidate " << i;
+    }
+}
+
 TEST(MatmulModelCandidates, Unsupported) {
     MatmulDesc p = desc(4, 4, 4);
     p.a.sharded = true;

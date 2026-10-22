@@ -55,8 +55,10 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 
 1. **Candidates.** `matmul_candidates.{hpp,cpp}` ports the `EnumeratingSource` of Ryan Miller's #57884 selector
    (tt-metal `4b385bbeace`) for interleaved tensors.
-   - It covers 2D, 1D (in0 and in1 multicast) and Reuse layouts on the device grid, with several K depths, output
-     blocks and subblocks per layout.
+   - It covers 2D, 1D (in0 and in1 multicast) and Reuse layouts on the device grid and on the grid one column
+     narrower, with several K depths, output blocks and subblocks per layout. The narrower grid helps when a
+     dimension splits into awkward per-core tile counts on the full grid (#62076: N = 448 tiles over 11 columns is 41
+     per core, a prime).
    - Each candidate fits the L1 left for circular buffers. That budget is `get_max_l1_space`, less an interleaved L1
      output and 16 KiB.
 2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and 57 features per candidate.

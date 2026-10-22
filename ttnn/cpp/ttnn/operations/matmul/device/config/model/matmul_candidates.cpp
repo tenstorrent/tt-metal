@@ -814,6 +814,17 @@ std::string unsupported_reason(const MatmulDesc& p) {
     return "";
 }
 
+std::vector<Candidate> enumerate_candidates_with_narrower_grid(const MatmulDesc& p, const HardwareDesc& hw) {
+    std::vector<Candidate> candidates = enumerate_candidates(p, hw);
+    if (hw.grid_x > 1) {
+        HardwareDesc narrower = hw;
+        narrower.grid_x -= 1;
+        const std::vector<Candidate> more = enumerate_candidates(p, narrower);
+        candidates.insert(candidates.end(), more.begin(), more.end());
+    }
+    return candidates;
+}
+
 std::uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
     Blocking b = c.blocking;
     if (c.family == Family::kReuse) {
