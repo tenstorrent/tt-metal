@@ -13,29 +13,21 @@
 //      the shards-arrived counter for the next call.
 
 #include <cstdint>
-#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "fabric_all_gather_common.hpp"
 
 using namespace tt::tt_fabric;
 
-// One hop: a 2D fabric's mesh header routes by destination chip, a 1D fabric's header by hop count. Keyed on the
-// header type, as in ccl/all_gather's unicast_common.hpp.
-FORCE_INLINE void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t chip_id, uint16_t mesh_id) {
-    if constexpr (std::is_base_of_v<HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
-        (void)fabric_set_unicast_route(
-            reinterpret_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(header), chip_id, mesh_id);
-    } else {
-        (void)chip_id;
-        (void)mesh_id;
-        (void)fabric_set_unicast_route<false>(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(header), static_cast<uint16_t>(1));
-    }
+// Wait until a counter in this core's L1 (a global semaphore) reaches count, then take count off it.
+FORCE_INLINE void wait_and_consume(const Noc& noc, uint32_t counter_addr, uint32_t count) {
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_addr), count);
+    noc_semaphore_inc(get_noc_addr(counter_addr), 0u - count);
+    noc.async_atomic_barrier();
 }
 
 void kernel_main() {
@@ -50,7 +42,6 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<8>();
     constexpr auto valid_prefix_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
-    constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
 
     Noc noc;
     CircularBuffer chunk_cb(chunk_cb_id);
@@ -58,7 +49,8 @@ void kernel_main() {
     // Common args: [0] output [1] shards-arrived counter [2] downstream-started counter, then the chip shard geometry.
     // Both counters are global semaphores (L1 addresses; the Device 2.0 Semaphore is built from a program semaphore id
     // only).
-    const ChipShardGeometry geometry = read_chip_shard_geometry<kValidPrefixFromMetadata>(
+    constexpr uint32_t kGeometryCommonArgs = 3;
+    const ChipShardGeometry geometry = read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(
         noc, CircularBuffer(metadata_cb_id).get_write_ptr(), valid_prefix_args);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0), page_bytes);
     const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
@@ -66,9 +58,9 @@ void kernel_main() {
 
     // Per-core args: [0] first owned chunk [1] owned chunk stride [2] signal started to downstream? [3, 4] the core
     // that gets that signal (downstream's link worker of the opposite direction) [5, 6] downstream link worker core
-    // (same direction: gets our data and shards-arrived increments) [7] downstream mesh id [8] downstream chip id [9]
-    // shards expected from upstream [10] number of outgoing shards, then the outgoing shards, then the fabric
-    // connection.
+    // (same direction: gets our data and shards-arrived increments) [7] downstream mesh id [8] downstream chip id (2D
+    // fabric) or hop count 1 (1D fabric) [9] shards expected from upstream [10] number of outgoing shards, then the
+    // outgoing shards, then the fabric connection.
     size_t arg = 0;
     const uint32_t first_owned_chunk = get_arg_val<uint32_t>(arg++);
     const uint32_t owned_chunk_stride = get_arg_val<uint32_t>(arg++);
@@ -77,8 +69,9 @@ void kernel_main() {
     const uint32_t started_signal_y = get_arg_val<uint32_t>(arg++);
     const uint32_t downstream_worker_x = get_arg_val<uint32_t>(arg++);
     const uint32_t downstream_worker_y = get_arg_val<uint32_t>(arg++);
-    const uint16_t mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint16_t chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
+    const ccl_routing_utils::line_unicast_route_info_t one_hop{
+        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++)),
+        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++))};
     const uint32_t shards_expected_from_upstream = get_arg_val<uint32_t>(arg++);
     const uint32_t num_outgoing_shards = get_arg_val<uint32_t>(arg++);
     const uint32_t outgoing_shards_arg = arg;
@@ -90,28 +83,30 @@ void kernel_main() {
         volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[chunks_per_cb_batch];
         for (uint32_t i = 0; i < chunks_per_cb_batch; ++i) {
             headers[i] = PacketHeaderPool::allocate_header();
-            route_one_hop(headers[i], chip_id, mesh_id);
+            ccl_routing_utils::fabric_set_line_unicast_route(headers[i], one_hop);
         }
         connection.open();
+        auto send_header_only = [&](volatile tt_l1_ptr PACKET_HEADER_TYPE* header) {
+            connection.wait_for_empty_write_slot();
+            connection.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+        };
 
         // 1. fence (one round trip per call)
         if (signal_started_to_downstream) {
             headers[0]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
                 get_noc_addr(started_signal_x, started_signal_y, downstream_started_addr), 1, true});
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(headers[0]), sizeof(PACKET_HEADER_TYPE));
+            send_header_only(headers[0]);
         }
         if (num_outgoing_shards > 0) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(downstream_started_addr), 1);
-            noc_semaphore_inc(get_noc_addr(downstream_started_addr), 0u - 1u);
-            noc.async_atomic_barrier();
+            wait_and_consume(noc, downstream_started_addr, 1);
         }
 
         // 2. send, in CB batches (full, at the end of the CB, at the end of an outgoing shard)
         const uint64_t downstream_shards_arrived =
             get_noc_addr(downstream_worker_x, downstream_worker_y, shards_arrived_addr);
-        uint32_t cb_chunk_offset = 0, next_header = 0, unflushed_headers = 0;
+        ChunkCbCursor<chunks_per_cb_batch> cb_cursor;
+        uint32_t next_header = 0, unflushed_headers = 0;
         auto next_free_header = [&]() {  // flush before a header is reused
             if (unflushed_headers == chunks_per_cb_batch) {
                 noc.async_writes_flushed();
@@ -136,7 +131,7 @@ void kernel_main() {
                 noc.async_writes_flushed();  // the CB batch's chunks and headers have left L1
                 unflushed_headers = 0;
                 chunk_cb.pop_front(pages_per_fabric_chunk * chunks_in_batch);
-                cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
+                cb_cursor.advance(chunks_in_batch);
                 chunks_in_batch = 0;
             };
             for_each_fabric_chunk(
@@ -172,10 +167,7 @@ void kernel_main() {
                         connection.send_current_slot_non_blocking(
                             chunk_slot + offset, packet_bytes, reinterpret_cast<uint32_t>(header));
                     }
-                    const uint32_t batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
-                                                        ? chunks_per_cb_batch
-                                                        : chunk_slots_in_cb - cb_chunk_offset;
-                    if (++chunks_in_batch == batch_capacity) {
+                    if (++chunks_in_batch == cb_cursor.capacity()) {
                         pop_batch();
                     }
                 });
@@ -185,9 +177,7 @@ void kernel_main() {
             if (shard_fabric_chunks == 0) {  // none of this shard's chunks is ours: still count it downstream
                 auto* header = next_free_header();
                 header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{downstream_shards_arrived, 1, true});
-                connection.wait_for_empty_write_slot();
-                connection.send_payload_flush_blocking_from_address(
-                    reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+                send_header_only(header);
             }
         }
         connection.close();
@@ -195,9 +185,6 @@ void kernel_main() {
 
     // 3. everything from upstream has landed; reset the shards-arrived counter
     if (shards_expected_from_upstream > 0) {
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shards_arrived_addr), shards_expected_from_upstream);
-        noc_semaphore_inc(get_noc_addr(shards_arrived_addr), 0u - shards_expected_from_upstream);
-        noc.async_atomic_barrier();
+        wait_and_consume(noc, shards_arrived_addr, shards_expected_from_upstream);
     }
 }

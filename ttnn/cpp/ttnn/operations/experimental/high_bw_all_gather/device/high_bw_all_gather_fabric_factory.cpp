@@ -88,9 +88,9 @@ struct GatherPlan {
     std::vector<std::vector<ChipOnRing>> chip_on_ring;                   // [linear chip index][ring]
     std::vector<std::vector<FabricLinkWorker>> fabric_link_workers;      // [linear chip index][link_worker_index(...)]
     std::vector<std::vector<tt::tt_metal::CoreCoord>> local_copy_cores;  // [linear chip index][link]
-};
 
-uint32_t linear_chip_index(const Coord& chip, uint32_t mesh_cols) { return chip[0] * mesh_cols + chip[1]; }
+    uint32_t linear_chip_index(const Coord& chip) const { return chip[0] * mesh_cols + chip[1]; }
+};
 
 uint32_t fabric_link_worker_index(uint32_t ring, uint32_t direction, uint32_t link, uint32_t num_links) {
     return (ring * 2 + direction) * num_links + link;
@@ -136,8 +136,9 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> outgoing_shards_at_ring_
     return {forward, backward};
 }
 
-// Two edge-disjoint Hamiltonian cycles covering every edge of a rows x cols torus (both >= 3): randomized Warnsdorff
-// search for cycle A, accepted when the complementary edges form one cycle B. Deterministic (fixed seed).
+// Two edge-disjoint Hamiltonian cycles covering every edge of a rows x cols torus (both >= 3, so a chip's four
+// neighbours are distinct): randomized Warnsdorff search for cycle A, accepted when the complementary edges form one
+// cycle B. Deterministic (fixed seed).
 std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint32_t rows, uint32_t cols) {
     const uint32_t num_chips = rows * cols;
     auto torus_neighbours = [&](uint32_t chip) {
@@ -168,7 +169,7 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
             }
             std::vector<uint32_t> candidates;
             for (uint32_t next : torus_neighbours(cycle_a.back())) {
-                if (!visited[next] && std::find(candidates.begin(), candidates.end(), next) == candidates.end()) {
+                if (!visited[next]) {
                     candidates.push_back(next);
                 }
             }
@@ -206,9 +207,7 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
         bool two_left_each = true;
         for (uint32_t chip = 0; chip < num_chips && two_left_each; ++chip) {
             for (uint32_t n : torus_neighbours(chip)) {
-                if (!cycle_a_edges.contains(edge_key(chip, n)) &&
-                    std::find(leftover_neighbours[chip].begin(), leftover_neighbours[chip].end(), n) ==
-                        leftover_neighbours[chip].end()) {
+                if (!cycle_a_edges.contains(edge_key(chip, n))) {
                     leftover_neighbours[chip].push_back(n);
                 }
             }
@@ -266,20 +265,12 @@ const std::pair<std::vector<Coord>, std::vector<Coord>>& cached_hamiltonian_deco
 // link worker signals it that this chip has started the call.
 bool signals_started_to_downstream(const GatherPlan& plan, uint32_t chip_index, uint32_t ring, uint32_t direction) {
     const auto downstream = plan.chip_on_ring[chip_index][ring].neighbour(direction);
-    const uint32_t mesh_cols = plan.mesh_cols;
     return downstream.has_value() &&
-           !plan.chip_on_ring[linear_chip_index(*downstream, mesh_cols)][ring].outgoing_shards(1 - direction).empty();
+           !plan.chip_on_ring[plan.linear_chip_index(*downstream)][ring].outgoing_shards(1 - direction).empty();
 }
 
 std::vector<tt::tt_metal::CoreCoord> cores_in_row_major_order(const CoreRangeSet& core_ranges) {
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    for (const auto& range : core_ranges.ranges()) {
-        for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
-            for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
-                cores.emplace_back(x, y);
-            }
-        }
-    }
+    auto cores = tt::tt_metal::corerange_to_cores(core_ranges, std::nullopt, /*row_wise=*/true);
     std::sort(
         cores.begin(), cores.end(), [](const auto& a, const auto& b) { return a.y != b.y ? a.y < b.y : a.x < b.x; });
     return cores;
@@ -289,7 +280,8 @@ GatherPlan build_gather_plan(
     const HighBwAllGatherParams& args,
     const Tensor& input_tensor,
     MeshDevice* mesh_device,
-    const CoreRangeSet& allowed_core_ranges) {
+    const CoreRangeSet& allowed_core_ranges,
+    bool input_interleaved) {
     const auto mesh_shape = mesh_device->shape();
     const uint32_t mesh_rows = mesh_shape[0], mesh_cols = mesh_shape[1];
     const uint32_t num_chips = mesh_rows * mesh_cols;
@@ -299,8 +291,6 @@ GatherPlan build_gather_plan(
     plan.chip_on_ring.assign(num_chips, {});
     plan.fabric_link_workers.assign(num_chips, {});
     plan.local_copy_cores.assign(num_chips, {});
-    auto fabric_node = [&](const Coord& chip) { return mesh_device->get_fabric_node_id(chip); };
-    auto index_of = [&](const Coord& chip) { return linear_chip_index(chip, mesh_cols); };
     const bool is_2d = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
@@ -366,14 +356,15 @@ GatherPlan build_gather_plan(
 
     for (size_t group = 0; group < groups.size(); ++group) {
         for (uint32_t i = 0; i < G; ++i) {
-            plan.rank_of_chip[index_of(groups[group][i])] = i;
+            plan.rank_of_chip[plan.linear_chip_index(groups[group][i])] = i;
         }
         for (const auto& ring : rings_of_group[group]) {
             // outgoing shards of a ring position name the chip at that position by its rank
             auto positions_to_ranks = [&](std::vector<uint32_t> outgoing_shards) {
                 for (auto& outgoing_shard : outgoing_shards) {
                     outgoing_shard = chunk_walk::make_outgoing_shard(
-                        plan.rank_of_chip[index_of(ring[chunk_walk::outgoing_shard_rank(outgoing_shard)])],
+                        plan.rank_of_chip[plan.linear_chip_index(
+                            ring[chunk_walk::outgoing_shard_rank(outgoing_shard)])],
                         chunk_walk::outgoing_shard_chunk_half(outgoing_shard));
                 }
                 return outgoing_shards;
@@ -393,13 +384,16 @@ GatherPlan build_gather_plan(
                 if (on_ring.previous_chip) {
                     on_ring.backward_outgoing_shards = positions_to_ranks(backward);
                 }
-                plan.chip_on_ring[index_of(ring[position])].push_back(on_ring);
+                plan.chip_on_ring[plan.linear_chip_index(ring[position])].push_back(on_ring);
             }
         }
     }
 
-    // Links: the requested number, else the fewest any used hop offers.
+    // Links: the requested number, else the fewest any used hop offers. forwarding_links[chip][ring * 2 + direction]:
+    // the hop's usable links (empty without a downstream).
     uint32_t num_links = args.num_links.value_or(UINT32_MAX);
+    std::vector<std::vector<std::vector<uint32_t>>> forwarding_links(
+        num_chips, std::vector<std::vector<uint32_t>>(plan.num_rings * 2));
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
         for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
@@ -408,8 +402,9 @@ GatherPlan build_gather_plan(
                 if (!downstream) {
                     continue;
                 }
-                const auto links =
-                    tt::tt_fabric::get_forwarding_link_indices(fabric_node(chip), fabric_node(*downstream));
+                auto& links = forwarding_links[chip_index][ring * 2 + direction];
+                links = tt::tt_fabric::get_forwarding_link_indices(
+                    mesh_device->get_fabric_node_id(chip), mesh_device->get_fabric_node_id(*downstream));
                 TT_FATAL(
                     !links.empty(),
                     "high_bw_all_gather: {} -> {} is not a direct fabric neighbour (fabric config {})",
@@ -436,6 +431,15 @@ GatherPlan build_gather_plan(
     // Placement: every link worker with a fabric connection as close as the grid allows (NoC1 hops, the sender's NoC)
     // to its link's Ethernet core, then the receive-only link workers and the local copy cores on free cores.
     const auto allowed_cores = cores_in_row_major_order(allowed_core_ranges);
+    // local copy cores: from the middle row of the grid downward (away from the Ethernet row), then upward
+    std::vector<tt::tt_metal::CoreCoord> local_copy_core_order(allowed_cores.begin(), allowed_cores.end());
+    const auto middle_y = local_copy_core_order[local_copy_core_order.size() / 2].y;
+    std::stable_partition(local_copy_core_order.begin(), local_copy_core_order.end(), [&](const auto& core) {
+        return core.y >= middle_y;
+    });
+    // one per link; a non-interleaved input takes two per link, since they also convert the own shard page by page for
+    // the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
+    const uint32_t num_local_copy_cores = input_interleaved ? L : 2 * L;
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
         auto* device = mesh_device->get_device(chip);
@@ -454,11 +458,13 @@ GatherPlan build_gather_plan(
                 if (!has_fabric_connection) {
                     continue;
                 }
-                const auto links =
-                    tt::tt_fabric::get_forwarding_link_indices(fabric_node(chip), fabric_node(*downstream));
+                const auto& links = forwarding_links[chip_index][ring * 2 + direction];
                 for (uint32_t link = 0; link < L; ++link) {
                     const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(
-                        *mesh_device, fabric_node(chip), fabric_node(*downstream), links[link]);
+                        *mesh_device,
+                        mesh_device->get_fabric_node_id(chip),
+                        mesh_device->get_fabric_node_id(*downstream),
+                        links[link]);
                     const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
                                              *device, eth_core, tt::tt_metal::NOC::NOC_1)
                                              .logical_coord;
@@ -508,16 +514,6 @@ GatherPlan build_gather_plan(
             take(*it);
             fabric_link_worker.core = *it;
         }
-        // local copy cores: from the middle row of the grid downward (away from the Ethernet row), then upward
-        std::vector<tt::tt_metal::CoreCoord> local_copy_core_order(allowed_cores.begin(), allowed_cores.end());
-        const auto middle_y = local_copy_core_order[local_copy_core_order.size() / 2].y;
-        std::stable_partition(local_copy_core_order.begin(), local_copy_core_order.end(), [&](const auto& core) {
-            return core.y >= middle_y;
-        });
-        // one per link; a non-interleaved input takes two per link, since they also convert the own shard page by
-        // page for the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
-        const bool input_interleaved = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
-        const uint32_t num_local_copy_cores = input_interleaved ? L : 2 * L;
         for (uint32_t link = 0; link < num_local_copy_cores; ++link) {
             auto it = std::find_if(local_copy_core_order.begin(), local_copy_core_order.end(), is_free);
             TT_FATAL(
@@ -541,9 +537,6 @@ ChipShardPageGeometry derive_shard_page_geometry(
     const int32_t dim = args.dim;
     const bool tile = input.layout() == Layout::TILE;
     const auto tile_spec = tile ? input.tensor_spec().tile() : tt::tt_metal::Tile();
-    TT_FATAL(
-        tile || dim < tensor_rank - 1,
-        "high_bw_all_gather: a ROW_MAJOR gather along the innermost dim (partial pages) is not supported");
     // the length of dim i, counted in pages
     auto length_in_pages = [&](int32_t i) -> uint32_t {
         const uint32_t dim_length = (i == 0 && selected_batch) ? 1u : shape[i];
@@ -630,29 +623,20 @@ uint32_t host_cache_slot_first_page(const HighBwAllGatherParams& args, const Chi
     return args.input_batch_index.value_or(0) * geometry.pages_per_cache_slot;
 }
 
-// Common args 8..15 of every kernel (read by read_shard_geometry in kernels/fabric/fabric_all_gather_common.hpp).
-std::vector<uint32_t> geometry_args(
-    const HighBwAllGatherParams& args,
-    const HighBwAllGatherInputs& tensor_args,
-    const ChipShardPageGeometry& geometry) {
-    return {
-        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
-        host_valid_pages_per_outer_slice(args, geometry),
-        geometry.num_outer_slices,
-        geometry.pages_per_outer_slice,
-        geometry.num_ranks,
-        args.gathered_slab_global,
-        tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
-        geometry.pages_per_kv_slab};
-}
-
-std::vector<uint32_t> reader_common_args(
+// Common args of the readers and local copy writers (first) and of the senders (second); the same for every program
+// of the mesh workload. Each kernel's own args come first, then the chip shard geometry block (read by
+// read_chip_shard_geometry in kernels/fabric/fabric_all_gather_common.hpp): reader [0] input [1] output [2]
+// shards-arrived counter [3] cache slot tensor [4] layers per user [5] layer [6] cache slot first page (host) [7] pages
+// per cache slot, geometry at 8; sender [0] output [1] shards-arrived counter [2] downstream-started counter, geometry
+// at 3.
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
     const HighBwAllGatherParams& args,
     const HighBwAllGatherInputs& tensor_args,
     const Tensor& output,
     const ChipShardPageGeometry& geometry,
-    uint32_t shards_arrived_counter_address) {
-    std::vector<uint32_t> common_args{
+    uint32_t shards_arrived_counter_address,
+    uint32_t downstream_started_counter_address) {
+    std::vector<uint32_t> reader{
         tensor_args.input_tensor.buffer()->address(),
         output.buffer()->address(),
         shards_arrived_counter_address,
@@ -661,23 +645,22 @@ std::vector<uint32_t> reader_common_args(
         args.batch_slot_layer_idx,
         host_cache_slot_first_page(args, geometry),
         geometry.pages_per_cache_slot};
-    const auto geometry_block = geometry_args(args, tensor_args, geometry);
-    common_args.insert(common_args.end(), geometry_block.begin(), geometry_block.end());
-    return common_args;
-}
-
-std::vector<uint32_t> writer_common_args(
-    const HighBwAllGatherParams& args,
-    const HighBwAllGatherInputs& tensor_args,
-    const Tensor& output,
-    const ChipShardPageGeometry& geometry,
-    uint32_t shards_arrived_counter_address,
-    uint32_t downstream_started_counter_address) {
-    std::vector<uint32_t> common_args{
-        output.buffer()->address(), shards_arrived_counter_address, downstream_started_counter_address, 0, 0, 0, 0, 0};
-    const auto geometry_block = geometry_args(args, tensor_args, geometry);
-    common_args.insert(common_args.end(), geometry_block.begin(), geometry_block.end());
-    return common_args;
+    std::vector<uint32_t> sender{
+        output.buffer()->address(), shards_arrived_counter_address, downstream_started_counter_address};
+    // the chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
+    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab
+    const std::array<uint32_t, 8> geometry_block{
+        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
+        host_valid_pages_per_outer_slice(args, geometry),
+        geometry.num_outer_slices,
+        geometry.pages_per_outer_slice,
+        geometry.num_ranks,
+        args.gathered_slab_global,
+        tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
+        geometry.pages_per_kv_slab};
+    reader.insert(reader.end(), geometry_block.begin(), geometry_block.end());
+    sender.insert(sender.end(), geometry_block.begin(), geometry_block.end());
+    return {std::move(reader), std::move(sender)};
 }
 
 CoreRangeSet resolve_fabric_worker_cores(MeshDevice* mesh_device, const HighBwAllGatherParams& args) {
@@ -709,14 +692,6 @@ void validate_semaphore_core_coverage(
         required_cores);
 }
 
-CoreRangeSet to_range_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
-    std::set<CoreRange> ranges;
-    for (const auto& core : cores) {
-        ranges.insert(CoreRange(core, core));
-    }
-    return CoreRangeSet(ranges);
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -728,11 +703,11 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto* mesh_device = input.device();
-    const uint32_t mesh_cols = mesh_device->shape()[1];
     const auto subdevice_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = resolve_fabric_worker_cores(mesh_device, args);
 
-    const GatherPlan plan = build_gather_plan(args, input, mesh_device, available_cores);
+    const bool input_interleaved = input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    const GatherPlan plan = build_gather_plan(args, input, mesh_device, available_cores, input_interleaved);
     const bool selected_batch = args.input_batch_index.has_value() || tensor_args.has_batch_index_metadata();
     const auto chip_shard_geometry = derive_shard_page_geometry(args, tensor_args, selected_batch);
 
@@ -756,8 +731,9 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             for (const auto& fabric_link_worker : chip_fabric_link_workers) {
                 cores.push_back(fabric_link_worker.core);
             }
-            validate_semaphore_core_coverage(downstream_started_counter, to_range_set(cores), "ready_semaphore");
-            validate_semaphore_core_coverage(shards_arrived_counter, to_range_set(cores), "data_valid_semaphore");
+            const CoreRangeSet core_set(cores);
+            validate_semaphore_core_coverage(downstream_started_counter, core_set, "ready_semaphore");
+            validate_semaphore_core_coverage(shards_arrived_counter, core_set, "data_valid_semaphore");
         }
     } else {
         // every chip's counters must be zero before any chip's first call can increment a neighbour's
@@ -779,7 +755,6 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const bool cache_slot_from_metadata = tensor_args.has_batch_index_metadata();
     const bool valid_prefix_from_metadata = tensor_args.has_gathered_prefix_metadata();
-    const bool input_interleaved = input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
 
     // Compile-time args, see the kernels. Absent metadata tensors pass the output's accessor as a placeholder.
     const Tensor& batch_index_tensor = cache_slot_from_metadata ? *tensor_args.input_batch_index_tensor : output_tensor;
@@ -849,13 +824,21 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             .compile_args = compile_args};
     };
 
-    auto fabric_node = [&](const Coord& chip) { return mesh_device->get_fabric_node_id(chip); };
-    auto index_of = [&](const Coord& chip) { return linear_chip_index(chip, mesh_cols); };
+    // the same for every program: one geometry and one pair of counters (global semaphores) for the whole mesh
+    const auto [reader_common, writer_common] = common_args(
+        args,
+        tensor_args,
+        output_tensor,
+        chip_shard_geometry,
+        shards_arrived_counter.address(),
+        downstream_started_counter.address());
+    // 1D fabric routes by hop count (always one), 2D by destination chip
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& chip : tensor_coords.coords()) {
-        const uint32_t chip_index = index_of(chip);
+        const uint32_t chip_index = plan.linear_chip_index(chip);
         tt::tt_metal::Program program{};
         const auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
         const auto& local_copy_cores = plan.local_copy_cores[chip_index];
@@ -866,9 +849,9 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         }
         std::vector<tt::tt_metal::CoreCoord> all_cores = fabric_link_worker_cores;
         all_cores.insert(all_cores.end(), local_copy_cores.begin(), local_copy_cores.end());
-        const auto fabric_link_worker_core_set = to_range_set(fabric_link_worker_cores);
-        const auto local_copy_core_set = to_range_set(local_copy_cores);
-        const auto all_core_set = to_range_set(all_cores);
+        const auto fabric_link_worker_core_set = CoreRangeSet(fabric_link_worker_cores);
+        const auto local_copy_core_set = CoreRangeSet(local_copy_cores);
+        const auto all_core_set = CoreRangeSet(all_cores);
 
         tt::tt_metal::CreateCircularBuffer(
             program,
@@ -921,15 +904,6 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             local_copy_core_set,
             local_copy_writer_config(blocks_converted_semaphore));
 
-        const auto reader_common =
-            reader_common_args(args, tensor_args, output_tensor, chip_shard_geometry, shards_arrived_counter.address());
-        const auto writer_common = writer_common_args(
-            args,
-            tensor_args,
-            output_tensor,
-            chip_shard_geometry,
-            shards_arrived_counter.address(),
-            downstream_started_counter.address());
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_reader_id, reader_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_sender_id, writer_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_reader_id, reader_common);
@@ -942,7 +916,9 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                 const auto upstream = on_ring.upstream(direction);
                 const auto& outgoing_shards = on_ring.outgoing_shards(direction);
                 const uint32_t shards_expected_from_upstream =
-                    upstream ? plan.chip_on_ring[index_of(*upstream)][ring].outgoing_shards(direction).size() : 0;
+                    upstream
+                        ? plan.chip_on_ring[plan.linear_chip_index(*upstream)][ring].outgoing_shards(direction).size()
+                        : 0;
                 const bool signal_started_to_downstream =
                     signals_started_to_downstream(plan, chip_index, ring, direction);
                 for (uint32_t link = 0; link < L; ++link) {
@@ -959,15 +935,15 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     // the started signal goes to the downstream's link worker that sends back into this chip; data and
                     // shards-arrived increments go to the downstream's link worker of the same direction
                     tt::tt_metal::CoreCoord started_signal_target{0, 0}, downstream_worker{0, 0};
-                    tt::tt_fabric::FabricNodeId downstream_node = fabric_node(chip);
+                    tt::tt_fabric::FabricNodeId downstream_node = mesh_device->get_fabric_node_id(chip);
                     if (downstream) {
                         auto* downstream_device = mesh_device->get_device(*downstream);
-                        const auto& downstream_workers = plan.fabric_link_workers[index_of(*downstream)];
+                        const auto& downstream_workers = plan.fabric_link_workers[plan.linear_chip_index(*downstream)];
                         started_signal_target = downstream_device->worker_core_from_logical_core(
                             downstream_workers[fabric_link_worker_index(ring, 1 - direction, link, L)].core);
                         downstream_worker = downstream_device->worker_core_from_logical_core(
                             downstream_workers[fabric_link_worker_index(ring, direction, link, L)].core);
-                        downstream_node = fabric_node(*downstream);
+                        downstream_node = mesh_device->get_fabric_node_id(*downstream);
                     }
                     std::vector<uint32_t> sender_args{
                         first_owned_chunk,
@@ -978,14 +954,14 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                         static_cast<uint32_t>(downstream_worker.x),
                         static_cast<uint32_t>(downstream_worker.y),
                         static_cast<uint32_t>(*downstream_node.mesh_id),
-                        downstream_node.chip_id,
+                        is_2d ? downstream_node.chip_id : 1u,
                         shards_expected_from_upstream,
                         static_cast<uint32_t>(outgoing_shards.size())};
                     sender_args.insert(sender_args.end(), outgoing_shards.begin(), outgoing_shards.end());
                     if (fabric_link_worker.has_fabric_connection) {
                         tt::tt_fabric::append_fabric_connection_rt_args(
-                            fabric_node(chip),
-                            fabric_node(*downstream),
+                            mesh_device->get_fabric_node_id(chip),
+                            mesh_device->get_fabric_node_id(*downstream),
                             fabric_link_worker.fabric_link_index,
                             program,
                             fabric_link_worker.core,
@@ -1041,27 +1017,28 @@ void HighBwAllGatherFabricFactory::override_runtime_arguments(
     const HighBwAllGatherParams& args,
     const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
+    // Only the common args change between calls (addresses, cache slot, valid length), and they are the same for every
+    // program: every program's shared state holds the same geometry and counters (the call's external semaphores, if
+    // any, replace them below in every program alike). So they are built once.
+    const auto& any_shared = cached_workload.shared_variables.begin()->second;
+    const bool external_counters = args.ready_semaphore.has_value();
+    const auto [reader_common, writer_common] = common_args(
+        args,
+        tensor_args,
+        output_tensor,
+        any_shared.chip_shard_geometry,
+        external_counters ? args.data_valid_semaphore->address() : any_shared.shards_arrived_counter.address(),
+        external_counters ? args.ready_semaphore->address() : any_shared.downstream_started_counter.address());
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
-        if (args.ready_semaphore.has_value() &&
-            (shared.downstream_started_counter.address() != args.ready_semaphore->address() ||
-             shared.shards_arrived_counter.address() != args.data_valid_semaphore->address())) {
+        if (external_counters && (shared.downstream_started_counter.address() != args.ready_semaphore->address() ||
+                                  shared.shards_arrived_counter.address() != args.data_valid_semaphore->address())) {
             validate_semaphore_core_coverage(*args.ready_semaphore, shared.fabric_link_worker_cores, "ready_semaphore");
             validate_semaphore_core_coverage(
                 *args.data_valid_semaphore, shared.fabric_link_worker_cores, "data_valid_semaphore");
             shared.downstream_started_counter = *args.ready_semaphore;
             shared.shards_arrived_counter = *args.data_valid_semaphore;
         }
-        const auto reader_common = reader_common_args(
-            args, tensor_args, output_tensor, shared.chip_shard_geometry, shared.shards_arrived_counter.address());
-        const auto writer_common = writer_common_args(
-            args,
-            tensor_args,
-            output_tensor,
-            shared.chip_shard_geometry,
-            shared.shards_arrived_counter.address(),
-            shared.downstream_started_counter.address());
-        // only the common args change between calls (addresses, cache slot, valid length)
         auto patch_common_args = [&](tt::tt_metal::KernelHandle kernel, const std::vector<uint32_t>& values) {
             auto& common = GetCommonRuntimeArgs(program, kernel);
             for (size_t i = 0; i < values.size(); ++i) {
