@@ -1095,7 +1095,7 @@ const PRS: Pr[] = [
 +message PipelineEdge {
 +    string src = 1;
 +    string dst = 2;
-+    EdgePolicy policy = 3;   // stage 0's outgoing edge and router -> branch edges stay on fabric
++    EdgePolicy policy = 3;   // default STRICT; RELAXED allowed on any edge
 +}`,
       },
       {
@@ -1148,7 +1148,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     ],
     tests: [
       "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with a RELAXED return, mixed4 with s3 -> s0 RELAXED, two pipelines in one MGD.",
-      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, two pipelines with one name). A dead-end branch parses; so do RELAXED on s0 -> s1 and on router -> branch (treated as STRICT).",
+      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, two pipelines with one name). A dead-end branch parses; so does RELAXED on any edge.",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
     behaviour: "No behaviour change without the new section.",
@@ -1249,7 +1249,7 @@ public:
     // Tier B facts that hold for every surviving projection (Plan 1 reads only these).
     std::size_t min_crossings(MeshId a, MeshId b) const;            // k_AB over STRICT edges only
     const std::set<SliceKey>& boundary_slices(MeshId mesh) const;  // union over projections
-    bool has_relaxed_edge() const;   // after forcing s0's outgoing and router -> branch edges to STRICT
+    bool has_relaxed_edge() const;
 
     // Tier C exact check, filled in by P8.
     PipelineCheck check(const AssignedMeshes& seating, const TopologyMappingResult& full,
@@ -1506,7 +1506,7 @@ std::expected<AnnotatedIntermeshConnections, BindFailure> bind_intermesh_connect
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions).",
       "failure_stage pipeline_carve / pipeline_layout; cap rejections per run and report the last reason.",
       "Several pipelines: place each on the slices the earlier ones left free, trying every order of the pipelines; resolve each as its own graph; accept only if all fit.",
-      "A pipeline with a RELAXED edge (after forcing stage 0's outgoing and router -> branch edges to STRICT): accept without checking until P11.",
+      "A pipeline with a RELAXED edge: accept without checking until P11.",
     ],
     code: [
       {
@@ -1719,7 +1719,7 @@ if (pipeline != nullptr) {
         language: "cpp",
         src: `
 case CarvePath::HostCuts: {
-    const auto cuttable = pipeline_->relaxed_edges();   // never s0's outgoing or router -> branch edges
+    const auto cuttable = pipeline_->relaxed_edges();   // the planners still skip s0's outgoing and router -> branch edges
     auto plan = pipeline_->is_fork() ? detail::plan_fork_placement(slices, adjacency, cuttable, ...)
                                       : detail::plan_ring_placement(slices, adjacency, stage_shapes, cuttable);
     if (plan.fork_shape_unsupported) { return try_strict_paths(slices, links); }   // blaze resolves as declared
@@ -2406,8 +2406,8 @@ function DescriptorExamples() {
           ["a branch stage with out-degree 2", "reject", "only the router may split; each branch is a chain"],
           ["two stages with in-degree 0", "reject", "two routers; a fork has exactly one"],
           ["mixed4 with s3 > s0 RELAXED", "pass", "any edge may be RELAXED"],
-          ["mixed4 with s0 > s1 RELAXED", "pass", "treated as STRICT: the builder cannot carry stage 0's outgoing edge over host"],
-          ["dflash with router > draft0 RELAXED", "pass", "treated as STRICT: the router sends to a branch over fabric only"],
+          ["mixed4 with s0 > s1 RELAXED", "pass", "allowed; Tier C's planner still never cuts stage 0's outgoing edge"],
+          ["dflash with router > draft0 RELAXED", "pass", "allowed; Tier C still needs a fabric link from the router to a branch head"],
           ["mixed4 plus a copy named mixed4_b", "pass here", "each is checked on its own; Tier B checks them together"],
           ["mixed4 plus a copy also named mixed4", "reject", "pipeline names must be unique"],
           ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
@@ -3327,11 +3327,17 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
             ]}
           />
         </Grid>
-        <Callout tone="neutral" title="Two edges always stay on fabric">
-          Stage 0's outgoing edge in a ring: the host-cut planner never cuts it (_group_walk skips any alignment with 0 in
-          cuts). The router's edge into each branch: the router sends to a branch through its d2d_exchange, and _find_branches
-          asserts the branch head is a fabric neighbour of the router. Both may be declared RELAXED; every tier treats them as
-          STRICT. A branch's return to the router may be RELAXED.
+        <Callout tone="neutral" title="RELAXED is allowed on every edge">
+          An MGD stage does not have to map onto a blaze stage yet, so the MGD does not restrict where RELAXED goes. Tier B and
+          Plan 1 leave every RELAXED crossing out. Tier C mirrors blaze's host-cut planner, which never cuts two edges, so a
+          RELAXED one still needs a fabric link: stage 0's outgoing edge (_group_walk skips 0 in cuts; stage 0's rank drives
+          inference and cannot pump), and the router's edge into each branch (_find_branches asserts a fabric neighbour; the
+          router sends through its d2d_exchange). A branch's return to the router may go over host.
+        </Callout>
+        <Callout tone="info" title="Note: rules that might be good to add">
+          Once MGD stages map onto blaze stages, Tier A could reject RELAXED where blaze can never carry the edge over host:
+          stage 0's outgoing edge, a router's edge into a branch, and any edge of an open chain (graph.py raises "host edges are
+          only supported on a looped-back ring"). Tier B and Plan 1 would then count those edges as STRICT, which prunes more.
         </Callout>
       </Stack>
 
@@ -3352,8 +3358,7 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
         />
         <Text size="small" tone="tertiary">
           Repeating an edge declares a second channel on that hop. The ring needs no loopback marker: s3 to s0 is the loopback.
-          Any edge may be RELAXED; stage 0's outgoing edge and a router's edges into its branches are then treated as STRICT,
-          because the builder cannot carry them over host.
+          Any edge may be RELAXED; Tier A does not restrict where (see the note above).
         </Text>
         <Callout tone="warning" title="TODO: more than two branches">
           Branches are supported for dflash: a router feeds a target branch and a draft branch, and both return to it. The

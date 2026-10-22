@@ -349,14 +349,23 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # the loopback may go over host
   host-cut planner may cut only RELAXED edges. `--pipeline-builder flexible` stays as a
   shortcut that marks every edge RELAXED. The MGD and the runtime graph then agree on which
   edges may go over host, so Tier C checks what the builder will build.
-- **Two edges the builder always keeps on fabric.** They may be declared RELAXED, and every
-  tier then treats them as STRICT:
-  - *stage 0's outgoing edge* in a ring. Blaze's host-cut planner never cuts it
-    (`_group_walk` in `host_edge_planner.py` skips any alignment with `0 in cuts`);
+- **RELAXED is allowed on every edge.** An MGD stage does not have to map onto a blaze stage
+  yet, so the MGD does not restrict where RELAXED goes. Tier B and Plan 1 leave every RELAXED
+  crossing out. Tier C mirrors blaze's host-cut planner, which never cuts these edges, so a
+  RELAXED one still needs a fabric link there:
+  - *stage 0's outgoing edge* in a ring. `_group_walk` (`host_edge_planner.py`) skips any
+    alignment with `0 in cuts`: stage 0's rank drives inference and cannot run a host-hop pump
+    (`test_pipeline_builder_flexible_mode.py`);
   - *the router's edge into each branch* of a fork. The router sends to a branch through its
     `d2d_exchange`, and a host hop out of the router has no wiring: `_find_branches`
     (`pipeline_builder/fork.py`) asserts "a branch head must be a fabric neighbour of the
-    router". A branch's *return* to the router may be RELAXED.
+    router". A branch's *return* to the router may go over host.
+
+  > **Note: rules that might be good to add.** Once MGD stages map onto blaze stages, Tier A
+  > could reject RELAXED where blaze can never carry the edge over host: stage 0's outgoing
+  > edge, a router's edge into a branch, and any edge of an open chain (blaze raises
+  > `NotImplementedError("host edges are only supported on a looped-back ring")`,
+  > `graph.py`). Tier B and Plan 1 would then count those edges as STRICT, which prunes more.
 
 What each step does with the policy:
 
@@ -604,9 +613,8 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   > chain branches", which is what `fork_structure` already accepts. Tier B's router degree
   > check (2 neighbours per STRICT return plus 1 per RELAXED return or dead end) needs no
   > change.
-- **Any edge may be RELAXED** (1.4). Stage 0's outgoing edge and a router's edges into its
-  branches are accepted as RELAXED but treated as STRICT, because the builder cannot carry
-  them over host.
+- **Any edge may be RELAXED** (1.4). Tier A does not restrict where RELAXED goes; see the
+  note in 1.4 for rules that might be good to add.
 
 #### Examples
 
@@ -622,8 +630,8 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | a branch stage with out-degree 2 (a fork inside a branch) | reject | only the router may split; each branch must be a chain |
 | two stages with in-degree 0 | reject | two routers; a fork has exactly one |
 | `mixed4` with `s3 -> s0` RELAXED | pass | any edge may be RELAXED |
-| `mixed4` with `s0 -> s1` RELAXED | pass | accepted, and treated as STRICT: the builder cannot carry stage 0's outgoing edge over host |
-| dflash with `router -> draft0` RELAXED | pass | accepted, and treated as STRICT: the router sends to a branch over fabric only |
+| `mixed4` with `s0 -> s1` RELAXED | pass | allowed; Tier C's planner still never cuts stage 0's outgoing edge (1.4) |
+| dflash with `router -> draft0` RELAXED | pass | allowed; Tier C still needs a fabric link from the router to a branch head (1.4) |
 | `mixed4` plus a copy named `mixed4_b` | pass here | each is checked on its own; Tier B checks them together and rejects on capacity (1.5) |
 | `mixed4` plus a copy also named `mixed4` | reject | pipeline names must be unique (1.5) |
 | a stage declared `[2, 4]` where every mesh has 4x2 slices | pass here | shapes are logical and never transposed, so Tier B finds no mesh it binds to |
