@@ -83,12 +83,11 @@ class TTConv2D:
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
 
-    ``output_layout`` is the layout conv2d emits, None for its TILE default. conv2d's DRAM path
-    runs every slice through its L1 conv with a TILE output and, with a single slice, returns
-    that tensor as it is, whatever layout was asked for. A ROW_MAJOR conv therefore runs
-    unsliced on the L1 path, so its activation and output must fit in L1, and cannot take
-    ``dram_activation``.
-
+    ``output_layout`` is the layout conv2d emits, None for its TILE default; a 1x1 conv run as
+    ``ttnn.linear`` emits TILE. conv2d's DRAM path runs every slice through its L1 conv with a TILE
+    output and, with a single slice, returns that tensor as it is, whatever layout was asked for.
+    Without ``dram_activation``, a ROW_MAJOR conv runs unsliced on the L1 path, so its activation
+    and output must fit in L1.
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
     conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
     in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
@@ -115,9 +114,6 @@ class TTConv2D:
         output_dtype=None,
         output_layout=None,
     ):
-        assert not (
-            dram_activation and output_layout == ttnn.ROW_MAJOR_LAYOUT
-        ), "a ROW_MAJOR output needs conv2d's unsliced L1 path, which dram_activation leaves"
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
