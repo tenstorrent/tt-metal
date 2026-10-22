@@ -38,6 +38,9 @@ Realistic (use by default):
 - `dim=2` (opt-in fork addition, 3): column blocks; Wb a multiple of 32.
 - `cache_descriptors=False` (opt-in fork addition): LRU (512) of mesh program descriptors keyed by group config, dim,
   exact_fp32_add, counters, dtype, page size, padded shapes and buffer addresses.
+- `program_hash=False` (opt-in fork addition, CHANGELOG "program_hash"; needs `cache_descriptors`): the cached
+  descriptors' programs carry a `custom_program_hash` (everything but the buffer addresses), so generic_op does not
+  hash the inline kernel sources per call; the plan lookup memoized. Same programs and results. Realistic (host only).
 - `prepare(mesh_device, *, cluster_axis=0, topology=Linear, num_links=1, scheme="ring", placement="auto")` (opt-in fork
   addition): builds and caches the plan and global semaphores (incl. the one-time `synchronize_device`); call at load
   time.
@@ -54,6 +57,8 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   with `cache_descriptors` (`CHANGELOG.md`); 0.17-0.23 ms host (`models/demos/deepseek_v41_flash_d_p/bringup/
   known_issues.md`, DS41-66). bf16 input: RS 0.080 ms at [1024, 5120] (DS41-67). Per call stock -> fabric (BREADCRUMBS.md
   P.5 / P.6): q_a tp_sum [1024, 1792] 0.321 -> 0.106 ms, compressor [1024, 1024] 0.165 -> 0.065.
+- `program_hash`, 2x2 p150, [1024, 10240] bf16 dim 3, host per call (steady state, 300 calls): 0.179 -> 0.134 ms
+  (generic_op alone 0.106 -> 0.083); in the DeepSeek-V4.1 model 0.305 -> 0.271 ms a call (P.19, CHANGELOG).
 - GLM-5.3, LoudBox 2x4 p150b, per chip [5120, 4096] bf16, 2 links, 8192 B payload: one full-mesh ring 427.7 us vs axis 0
   then 1 548.6 us (`models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md`, "Full-mesh reduce-scatter as one ring";
   `tests/unit/test_fabric_rs_model_shapes.py`). ag MoE block's RS 0.35 ms (same file, "Whole model on the LoudBox").
@@ -87,7 +92,7 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
 (`models/demos/deepseek_v41_flash_d_p/tt/ccl.py:sum_cols`). Tests: `tests/test_fabric_reduce_scatter_ttnn.py` +
 `tests/cases.py` (model cases); `tests/unit/test_fabric_reduce_scatter.py` (vs ttnn.reduce_scatter),
 `test_fabric_reduce_scatter_topologies.py`, `test_fabric_rs_exact_fp32.py`, `test_fabric_rs_model_shapes.py`,
-`test_fabric_rs_vs_ag.py`.
+`test_fabric_rs_vs_ag.py`, `test_fabric_rs_program_hash.py`.
 
 ## Used by
 - glm53_flash_d_p: `tt/common.py:scatter_rows` (GLM_SCATTER_OP=fabric_ring default: one full-mesh Ring call;
@@ -95,7 +100,8 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
   `tt/experts_ag.py` (GLM_EXPERTS_MODE=ag, GLM_AG_RS_OP=fabric); bf16 inputs; task O.1 model cases. Whole model on the
   LoudBox via glm53_flash_d_p_lb.
 - deepseek_v41_flash_d_p: `tt/ccl.py` (CCL_IMPL=fabric, P.5: sum_cols dim 3 + exact, tp_sum dim 2 + exact +
-  fabric_all_gather, cache_descriptors, `prepare` at load; CCL_IMPL=fabric_bf16, P.6: default FPU add on bf16).
+  fabric_all_gather, cache_descriptors, `prepare` at load; CCL_IMPL=fabric_bf16, P.6: default FPU add on bf16;
+  `program_hash=True` under GLUE_FOLD=on, P.19).
 
 ## History
 CHANGELOG.md

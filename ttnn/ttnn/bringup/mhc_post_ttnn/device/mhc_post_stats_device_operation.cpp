@@ -22,7 +22,7 @@ constexpr uint32_t MAX_PARTIALS = 64;       // partials per row (the root's CB h
 
 MhcPostStatsPlan mhc_post_stats_plan(const MhcPostStatsInputs& in) {
     MhcPostStatsPlan p;
-    p.n = in.post.logical_shape()[-1];
+    p.n = in.residual.logical_shape()[-1] / in.input.logical_shape()[-1];  // = post's last dim without offsets
     p.col_tiles = in.input.logical_shape()[-1] / TILE_HW;
     const auto& padded = in.input.padded_shape();
     uint32_t lead = 1;
@@ -99,6 +99,20 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& cc = attrs.compute_config;
+    if (attrs.post_col != 0 || attrs.comb_col != 0) {  // P.19: column offsets, a separate program; off: below
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
+            static_cast<uint32_t>(cc.math_fidelity),
+            cc.fp32_dest_acc_en,
+            cc.math_approx_mode,
+            attrs.comb_transposed,
+            t.input.tensor_spec(),
+            t.residual.tensor_spec(),
+            t.post.tensor_spec(),
+            t.comb.tensor_spec(),
+            t.weight.tensor_spec(),
+            attrs.post_col,
+            attrs.comb_col);
+    }
     return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(
         static_cast<uint32_t>(cc.math_fidelity),
         cc.fp32_dest_acc_en,
@@ -122,10 +136,15 @@ std::vector<ttnn::Tensor> mhc_post_stats(
     const ttnn::Tensor& comb,
     const ttnn::Tensor& weight,
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
-    bool comb_transposed) {
+    bool comb_transposed,
+    uint32_t post_col,
+    uint32_t comb_col) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostStatsDeviceOperation;
-    auto attrs =
-        OperationType::operation_attributes_t{.compute_config = compute_config, .comb_transposed = comb_transposed};
+    auto attrs = OperationType::operation_attributes_t{
+        .compute_config = compute_config,
+        .comb_transposed = comb_transposed,
+        .post_col = post_col,
+        .comb_col = comb_col};
     auto args = OperationType::tensor_args_t{
         .input = input, .residual = residual, .post = post, .comb = comb, .weight = weight};
     return ttnn::device_operation::launch<OperationType>(attrs, args);

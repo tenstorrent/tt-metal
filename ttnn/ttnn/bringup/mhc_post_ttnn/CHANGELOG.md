@@ -85,3 +85,29 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
    - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `sources.cmake`,
      `device/mhc_post_stats_device_operation.{hpp,cpp}`, `device/mhc_post_stats_program_factory.cpp`,
      `kernels/mhc_post_stats_{common.hpp,reader.cpp,writer.cpp,compute.cpp}`, `tests/unit/test_mhc_post_stats.py`.
+
+8. `post_col` / `comb_col` (post / comb at column offsets, e.g. the packed mixes) and a bf16 F with `stats_weight`
+   (deepseek_v41_flash_d_p P.19).
+   - What: keyword options `post_col=0`, `comb_col=0`: post_k is post's column post_col + k, comb[i*n + j] comb's
+     column comb_col + i*n + j; nonzero, n is the residual's stream count (residual last dim / C) and post / comb may
+     be one wider tensor (post=comb=mixes [pre | post | comb], post_col=n, comb_col=2n). Both programs: the plain one
+     (DM defines MHC_POST_POST_COL / MHC_POST_COMB_COL in the coefficient expander) and the stats one (the same
+     defines in its writer's coefficient build); the hash gets the offsets only when nonzero. With `stats_weight` the
+     input F may now be bfloat16: its own CB (c_7, bf16 pages, UnpackToDestFp32: bf16 -> fp32 DEST exact; reader and
+     compute define MHC_POST_STATS_F16, two CT args appended; the F slots of c_0 stay unused); fp32 F builds the
+     program it always did. Offsets 0 / fp32 F: every program, CT / RT arg, define and hash unchanged.
+   - Why: deepseek_v41_flash_d_p sliced post and comb out of the [R, 24] mixes before every residual (2 slices, 3
+     programs a chip each) and typecast the bf16 attention / MoE sums to fp32 for the stats pass (16 typecasts a
+     chunk). 2x2 p150, [1024, 4 x 2560] fp32 streams, HiFi2 (30 synced calls): stats with fp32 F 0.328 ms, with bf16 F
+     + offsets 0.314 ms (and no typecast 0.046 ms / no 2 slices); plain 0.269 / 0.268 ms. Model (GLUE_FOLD=on, plain
+     profile, chunk 53248-55296): attn_residual 3.31 -> 2.52 ms, ffn_residual 3.29 -> 2.88 ms, moe_add 1.58 -> 1.22 ms
+     a chunk.
+   - Tests: `tests/unit/test_mhc_post_mixes.py` (DS41 2x2 / 4x4 shapes and a small ragged one, comb^T and as stored,
+     bf16 and fp32 F: X' and stats bit-identical to the sliced / typecast calls; negative controls one column off;
+     refusals). Regression, options off (2026-10-22, 2x2): unit 191 (= 172 recorded + 19 new) + golden 208 + model
+     cases 2 = 401 passed.
+   - Needed by: deepseek_v41_flash_d_p P.19 (tt/residual.py, tt/model.py moe_add, setting GLUE_FOLD).
+   - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_ttnn_device_operation*.{hpp,cpp}`,
+     `device/mhc_post_ttnn_program_factory.{hpp,cpp}`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+     `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_coef_expand.hpp`,
+     `kernels/mhc_post_stats_{reader,writer,compute}.cpp`, `tests/unit/test_mhc_post_mixes.py`.

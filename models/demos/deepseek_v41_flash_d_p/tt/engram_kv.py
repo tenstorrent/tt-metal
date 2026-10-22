@@ -24,6 +24,7 @@ import torch
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, compute_config, dense_dtype
 from .layout import streams_cols_to_chip_major
 
@@ -62,7 +63,7 @@ class TtEngramKv:
         xq = cast(rows, ttnn.bfloat16)
         out = ttnn.linear(xq, self.weight, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not rows:
-            ttnn.deallocate(xq)
+            dealloc(xq)
         return out
 
 

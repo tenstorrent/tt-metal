@@ -20,6 +20,10 @@ struct MhcPostParams {
     // true (default): X'_j = post_j F + sum_i comb[i*n + j] X_i (comb^T, the op's original math).
     // false: X'_j = post_j F + sum_i comb[j*n + i] X_i (comb as stored; kernel define MHC_POST_COMB_DIRECT).
     bool comb_transposed = true;
+    // post_k at post's column post_col + k, comb[i*n + j] at comb's column comb_col + i*n + j (fork option, P.19;
+    // DM defines MHC_POST_POST_COL / MHC_POST_COMB_COL; 0 / 0 = the program it always was)
+    uint32_t post_col = 0;
+    uint32_t comb_col = 0;
 };
 
 struct MhcPostInputs {

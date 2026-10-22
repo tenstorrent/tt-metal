@@ -36,6 +36,7 @@ import torch
 
 import ttnn
 
+from .ccl import dealloc
 from .common import cast
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
@@ -76,30 +77,30 @@ class TtWindowKv:
         cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
         if self.stock:  # ROPE_IMPL=on (P.17): one stock rotary op on the bf16 norm output
             out = rope_stock(kn, cos, sin, self.rope.trans)
-            ttnn.deallocate(kn)
+            dealloc(kn)
             self.rope.free(cos, sin)
             return out
         if self.rope.pairs is not None:
             # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul
             out = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
-            ttnn.deallocate(kn)
+            dealloc(kn)
             self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
             return out
         kr = rope_deinterleaved(kn, cos, sin)
-        ttnn.deallocate(kn)
+        dealloc(kn)
         self.rope.free(cos, sin)
         out = cast(kr, ttnn.bfloat16)
         if out is not kr:
-            ttnn.deallocate(kr)
+            dealloc(kr)
         return out
 
     def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
         xq = cast(x, ttnn.bfloat16)
         p = self.proj(xq)
         if xq is not x:
-            ttnn.deallocate(xq)
+            dealloc(xq)
         out = self.from_proj(p, start)
-        ttnn.deallocate(p)
+        dealloc(p)
         return out
 
 

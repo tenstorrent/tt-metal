@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM
 from .layout import HC
 from .settings import settings
@@ -43,6 +44,9 @@ class TtHcResidual:
         self.n = n
         self.mode = mode or settings.get("RESIDUAL_MIX")
         assert self.mode in MIX_MODES, (self.mode, MIX_MODES)
+        # GLUE_FOLD=on (P.19): mhc_post reads post / comb from the packed mixes (post_col=n, comb_col=2n: no slices)
+        # and its stats pass takes a bf16 y as is (no typecast to fp32)
+        self.fold = settings.get("GLUE_FOLD") == "on"
 
     def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
         n = self.n
@@ -57,7 +61,7 @@ class TtHcResidual:
         yf = _fp32(y)
         out = self._addcmul(x, mix, yf, rows, w)
         if yf is not y:
-            ttnn.deallocate(yf)
+            dealloc(yf)
         return out
 
     def fused(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor, hc=None):
@@ -68,23 +72,36 @@ class TtHcResidual:
             return TtHcResidual.__call__(self, x, mix, y), None
         rows = x.shape[-2]
         n = self.n
+        if self.fold:  # GLUE_FOLD=on (P.19): the packed mixes and a bf16 y as they are
+            return ttnn.bringup.mhc_post(
+                y,
+                x,
+                mix,
+                mix,
+                stats_weight=hc.fn_t,
+                compute_kernel_config=hc.post_cfg,
+                post_col=n,
+                comb_col=2 * n,
+            )
         post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
         comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
         yf = _fp32(y)  # stats_weight takes fp32 F only (mhc_post_ttnn README "Limits")
         out, row = ttnn.bringup.mhc_post(yf, x, post, comb, stats_weight=hc.fn_t, compute_kernel_config=hc.post_cfg)
         if yf is not y:
-            ttnn.deallocate(yf)
-        ttnn.deallocate(post)
-        ttnn.deallocate(comb)
+            dealloc(yf)
+        dealloc(post)
+        dealloc(comb)
         return out, row
 
     def _fused(self, x, mix, y, rows):
         n = self.n
+        if self.fold:  # GLUE_FOLD=on (P.19): post / comb read from the packed mixes
+            return ttnn.bringup.mhc_post(y, x, mix, mix, post_col=n, comb_col=2 * n)
         post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
         comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
         out = ttnn.bringup.mhc_post(y, x, post, comb)  # comb_transposed=True (default): output k reads comb[j n + k]
-        ttnn.deallocate(post)
-        ttnn.deallocate(comb)
+        dealloc(post)
+        dealloc(comb)
         return out
 
     def _addcmul(self, x, mix, y, rows, w):
@@ -95,19 +112,19 @@ class TtHcResidual:
         for k in range(n):
             p = col(n + k)
             o = ttnn.multiply(y, p, dtype=ttnn.float32, memory_config=DRAM)
-            ttnn.deallocate(p)
+            dealloc(p)
             for j in range(n):
                 c = col(2 * n + j * n + k)
                 o2 = ttnn.addcmul(o, xs[j], c, memory_config=DRAM)
-                ttnn.deallocate(o)
-                ttnn.deallocate(c)
+                dealloc(o)
+                dealloc(c)
                 o = o2
             outs.append(o)
         for t in xs:
-            ttnn.deallocate(t)
+            dealloc(t)
         z = ttnn.concat(outs, dim=-1, memory_config=DRAM)
         for t in outs:
-            ttnn.deallocate(t)
+            dealloc(t)
         return z
 
 

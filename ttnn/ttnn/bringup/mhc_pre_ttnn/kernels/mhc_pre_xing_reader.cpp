@@ -63,10 +63,20 @@ void kernel_main() {
     mhc_xing::SegmentWalker walker(start, count, has_streams ? ct : 1);
     while (!walker.done()) {
         const mhc_xing::Segment seg = walker.next();
+#ifdef MHC_XING_PARTIALS
+        // partials: row tile r of each of the P stacked partial rows (input page p * row_tiles + r), in dim-1 order
+        cb_reserve_back(cb_row, MHC_XING_PARTIALS);
+        for (uint32_t q = 0; q < MHC_XING_PARTIALS; ++q) {
+            noc_async_read_page(q * MHC_XING_ROW_TILES + seg.row, row_acc, get_write_ptr(cb_row) + q * row_page);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_row, MHC_XING_PARTIALS);
+#else
         cb_reserve_back(cb_row, 1);
         noc_async_read_page(seg.row, row_acc, get_write_ptr(cb_row));
         noc_async_read_barrier();
         cb_push_back(cb_row, 1);
+#endif
 #ifdef MHC_XING_GIVEN_PRE
         cb_reserve_back(cb_gpre, 1);
         noc_async_read_page(seg.row, gpre_acc, get_write_ptr(cb_gpre));

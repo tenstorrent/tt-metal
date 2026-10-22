@@ -142,14 +142,21 @@ void kernel_main() {
     mhc_xing::SegmentWalker walker(start, count, has_streams ? ct : 1);
     while (!walker.done()) {
         const mhc_xing::Segment seg = walker.next();
-        cb_wait_front(cb_row, 1);
+#ifdef MHC_XING_PARTIALS
+        constexpr uint32_t np = MHC_XING_PARTIALS;  // each partial row tile -> its own coefficient-major tile
+#else
+        constexpr uint32_t np = 1;
+#endif
+        cb_wait_front(cb_row, np);
         ptr_t row = reinterpret_cast<ptr_t>(get_read_ptr(cb_row));
         ptr_t pre_src = row;
         if constexpr (compute_coef) {
-            cb_reserve_back(cb_soa, 1);
-            cols_to_soa<mix_slots>(row, reinterpret_cast<ptr_t>(get_write_ptr(cb_soa)));
-            cb_push_back(cb_soa, 1);
-            cb_pop_front(cb_row, 1);
+            cb_reserve_back(cb_soa, np);
+            for (uint32_t q = 0; q < np; ++q) {
+                cols_to_soa<mix_slots>(row + q * 1024u, reinterpret_cast<ptr_t>(get_write_ptr(cb_soa)) + q * 1024u);
+            }
+            cb_push_back(cb_soa, np);
+            cb_pop_front(cb_row, np);
             cb_wait_front(cb_soa_out, 1);
             noc_async_write_barrier();  // the previous row's hc write has left the stage
             soa_to_cols<coef_cols>(reinterpret_cast<ptr_t>(get_read_ptr(cb_soa_out)), stage);

@@ -263,6 +263,14 @@ void sumsq_chunk() {
 }
 
 // DEST 0 slot 0 <- sum of slots 0..31 (column order), lane-wise.
+// DEST tile 0 += DEST tile 1, lane-wise fp32 (MHC_XING_PARTIALS: one IEEE rounding per add).
+void add_tile_1() {
+#pragma GCC unroll 8
+    for (int v = 0; v < TILE_SLOTS; ++v) {
+        dst_reg[v] = vFloat(dst_reg[v]) + vFloat(dst_reg[TILE_SLOTS + v]);
+    }
+}
+
 void slot_total() {
     vFloat s = dst_reg[0];
 #pragma GCC unroll 31
@@ -336,12 +344,24 @@ void kernel_main() {
     while (!walker.done()) {
         const mhc_xing::Segment seg = walker.next();
         if constexpr (compute_coef) {
-            cb_wait_front(cb_soa, 1);
+#ifdef MHC_XING_PARTIALS
+            constexpr uint32_t np = MHC_XING_PARTIALS;
+#else
+            constexpr uint32_t np = 1;
+#endif
+            cb_wait_front(cb_soa, np);
             cb_reserve_back(cb_soa_out, 1);
             pack_reconfig_data_format(cb_soa_out);
             tile_regs_acquire();
             copy_tile_to_dst_init_short(cb_soa);
             copy_tile(cb_soa, 0, 0);
+#ifdef MHC_XING_PARTIALS
+            for (uint32_t q = 1; q < np; ++q) {  // the partials summed in dim-1 order: ((p0 + p1) + p2) + ...
+                copy_tile(cb_soa, q, 1);
+                custom_sfpu_init();
+                MATH((_llk_math_eltwise_unary_sfpu_params_(xing_sfpu::add_tile_1, 0, VectorMode::None)));
+            }
+#endif
             custom_sfpu_init();
             MATH((_llk_math_eltwise_unary_sfpu_params_(xing_sfpu::coefficients, 0, VectorMode::None)));
             MATH((_llk_math_eltwise_unary_sfpu_params_(xing_sfpu::sinkhorn, 0, VectorMode::None)));
@@ -350,7 +370,7 @@ void kernel_main() {
             pack_tile(0, cb_soa_out);
             tile_regs_release();
             cb_push_back(cb_soa_out, 1);
-            cb_pop_front(cb_soa, 1);
+            cb_pop_front(cb_soa, np);
         }
         if constexpr (has_streams) {
             cb_wait_front(cb_pb, 1);

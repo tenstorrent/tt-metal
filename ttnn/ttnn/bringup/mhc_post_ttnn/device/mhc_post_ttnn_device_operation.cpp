@@ -42,6 +42,19 @@ ttsl::hash::hash_t MhcPostDeviceOperation::compute_program_hash(
     // Everything create_program_descriptor reads except buffer addresses: the four tensors' specs and the compute
     // config fields it copies. The device (grid) is fixed per program cache.
     const auto& cc = attrs.compute_config;
+    if (attrs.post_col != 0 || attrs.comb_col != 0) {  // a separate program (DM defines); off: the hash below
+        return tt::tt_metal::operation::hash_operation<MhcPostDeviceOperation>(
+            static_cast<uint32_t>(cc.math_fidelity),
+            cc.fp32_dest_acc_en,
+            cc.math_approx_mode,
+            attrs.comb_transposed,
+            tensor_args.input.tensor_spec(),
+            tensor_args.residual.tensor_spec(),
+            tensor_args.post.tensor_spec(),
+            tensor_args.comb.tensor_spec(),
+            attrs.post_col,
+            attrs.comb_col);
+    }
     return tt::tt_metal::operation::hash_operation<MhcPostDeviceOperation>(
         static_cast<uint32_t>(cc.math_fidelity),
         cc.fp32_dest_acc_en,
@@ -63,10 +76,15 @@ ttnn::Tensor mhc_post_ttnn(
     const ttnn::Tensor& post,
     const ttnn::Tensor& comb,
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
-    bool comb_transposed) {
+    bool comb_transposed,
+    uint32_t post_col,
+    uint32_t comb_col) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostDeviceOperation;
-    auto attrs =
-        OperationType::operation_attributes_t{.compute_config = compute_config, .comb_transposed = comb_transposed};
+    auto attrs = OperationType::operation_attributes_t{
+        .compute_config = compute_config,
+        .comb_transposed = comb_transposed,
+        .post_col = post_col,
+        .comb_col = comb_col};
     auto args = OperationType::tensor_args_t{.input = input, .residual = residual, .post = post, .comb = comb};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

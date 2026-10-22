@@ -41,6 +41,7 @@ from loguru import logger
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, fp32_acc, sum_cols
 from .settings import settings
 
@@ -151,7 +152,7 @@ class TtSharedExpert:
         lay = dict(self.fe.plan)
         key = (id(mesh), tuple(map(tuple, lay["coords"])))
         if key in _DONE:  # (zero words the down coordinators leave zeroed: one tensor for every layer)
-            ttnn.deallocate(self.fe.done)
+            dealloc(self.fe.done)
             self.fe.done = _DONE[key]
         else:
             _DONE[key] = self.fe.done
@@ -198,31 +199,31 @@ class TtSharedExpert:
             xq = cast(x, ttnn.bfloat16) if own else xq
             xr = ttnn.to_layout(xq, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
             if own and xq is not x:
-                ttnn.deallocate(xq)
+                dealloc(xq)
             xr2 = ttnn.reshape(xr, [S, H])
             if P == 1:
                 y = self.fe(xr2, self.counts, self.regions, **kw)
             else:
                 y = self.fe(xr2, self.counts, self.regions, token_index=self.tidx_own, **kw)
-            ttnn.deallocate(xr)
+            dealloc(xr)
         if rows is not None:
-            ttnn.deallocate(rows)
+            dealloc(rows)
         if P > 1:  # (the parts' outputs: disjoint intermediate slices of one MLP, summed in fp32)
             acc = ttnn.slice(y, [0, 0], [S, H], memory_config=DRAM)
             acc = ttnn.typecast(acc, ttnn.float32, memory_config=DRAM)
             for p in range(1, P):
                 part = ttnn.slice(y, [p * S, 0], [(p + 1) * S, H], memory_config=DRAM)
                 nxt = ttnn.add(acc, part, dtype=ttnn.float32, memory_config=DRAM)
-                ttnn.deallocate(acc)
-                ttnn.deallocate(part)
+                dealloc(acc)
+                dealloc(part)
                 acc = nxt
-            ttnn.deallocate(y)
+            dealloc(y)
             y = acc
         out = ttnn.reshape(y, [1, 1, S, H])
         want = ccl.partial_dtype(self.mesh) if self.sum_mode == "gather_add" else ttnn.float32
         if out.dtype != want:  # (bf16 y; fp32 only off the shipped CCL_IMPL=fabric_bf16 path)
             o2 = ttnn.typecast(out, want, memory_config=DRAM)
-            ttnn.deallocate(out)
+            dealloc(out)
             out = o2
         return out
 
@@ -239,7 +240,7 @@ class TtSharedExpert:
         if part.dtype != ttnn.float32 and not (self.sum_mode == "gather_add" and ccl.bf16_sums()):
             pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM)
             out = self.reduce(pf)
-            ttnn.deallocate(pf)
+            dealloc(pf)
             return out
         if self.sum_mode == "reduce_scatter":
             return ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
@@ -249,7 +250,7 @@ class TtSharedExpert:
         """shared_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""
         part = self.partial(x, xq)
         out = self.reduce(part)
-        ttnn.deallocate(part)
+        dealloc(part)
         return out
 
 

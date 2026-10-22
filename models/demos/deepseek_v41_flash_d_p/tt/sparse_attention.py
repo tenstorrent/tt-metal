@@ -45,6 +45,7 @@ import ttnn
 
 from . import ccl
 from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .rope import RopeTable
 
@@ -88,7 +89,7 @@ class ChunkMemo:
         v = hit[1]
         for t in v if isinstance(v, tuple) else (v,):
             if isinstance(t, ttnn.Tensor) and t.is_allocated():
-                ttnn.deallocate(t)
+                dealloc(t)
 
     def clear(self) -> None:
         for slot in list(self._d):
@@ -137,7 +138,7 @@ class TtSparseAttention(TtWindowAttention):
         if g.sp > 1:
             nxt = ccl.all_gather(out, 2, SP_AXIS)
             if out is not t:
-                ttnn.deallocate(out)
+                dealloc(out)
             out = nxt
         return out
 
@@ -152,12 +153,12 @@ class TtSparseAttention(TtWindowAttention):
         assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
         sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
         tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(sl)
+        dealloc(sl)
         gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
         if gat is not tl:
-            ttnn.deallocate(tl)
+            dealloc(tl)
         rm = ttnn.to_layout(gat, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(gat)
+        dealloc(gat)
         return rm, nb
 
     def _topk_rows(self, topk: ttnn.Tensor, ckv_cache, nb: int, offset: int) -> ttnn.Tensor:
@@ -173,20 +174,20 @@ class TtSparseAttention(TtWindowAttention):
             out = fn(*args, **f32)
             for t in args:
                 if isinstance(t, ttnn.Tensor) and t is not x:
-                    ttnn.deallocate(t)
+                    dealloc(t)
             return out
 
         def floor_div(v, d):  # floor((v + 1/2) / d): exact for integers v >= 0 and any divisor d
             y = op(ttnn.multiply, ttnn.add(v, 0.5, **f32), 1.0 / d)
             out = ttnn.floor(y, memory_config=DRAM)
-            ttnn.deallocate(y)
+            dealloc(y)
             return out
 
         tiled = topk.layout != ttnn.TILE_LAYOUT  # K-1: to_layout to the same layout returns its input (not ours)
         tl = ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM) if tiled else topk
         x = ttnn.typecast(ttnn.bitcast(tl, ttnn.int32), ttnn.float32, memory_config=DRAM)  # none -> -1.0
         if tiled:
-            ttnn.deallocate(tl)
+            dealloc(tl)
         s = floor_div(x, hs)
         u = op(ttnn.subtract, x, op(ttnn.multiply, ttnn.clone(s, memory_config=DRAM), float(hs)))  # j mod hs
         b = floor_div(s, n_own)
@@ -196,14 +197,14 @@ class TtSparseAttention(TtWindowAttention):
         valid = ttnn.ge(x, 0.0, dtype=ttnn.float32)
         out = ttnn.where(valid, row, -1.0)
         for t in (x, row, valid):
-            ttnn.deallocate(t)
+            dealloc(t)
         i32 = ttnn.typecast(out, ttnn.int32, memory_config=DRAM)  # -1 stays -1 (K-18)
-        ttnn.deallocate(out)
+        dealloc(out)
         u32 = ttnn.bitcast(i32, ttnn.uint32)
         rm = ttnn.to_layout(u32, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         if u32 is not i32:
-            ttnn.deallocate(u32)
-        ttnn.deallocate(i32)
+            dealloc(u32)
+        dealloc(i32)
         return rm
 
     def _index(self, topk: ttnn.Tensor, ckv_cache, nb: int, start: int) -> ttnn.Tensor:
@@ -213,14 +214,14 @@ class TtSparseAttention(TtWindowAttention):
         mine = topk if g.tp == 1 else ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
         rows = self._topk_rows(mine, ckv_cache, nb, WINDOW + g.chunk)
         if mine is not topk:
-            ttnn.deallocate(mine)
+            dealloc(mine)
         cls = g.start_class(start)
         src = ttnn.concat([self.tables.index[cls], rows], dim=-1, memory_config=DRAM)
-        ttnn.deallocate(rows)
+        dealloc(rows)
         if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
             return src
         out = ttnn.gather(src, -1, self.sparse.perm[cls])
-        ttnn.deallocate(src)
+        dealloc(src)
         return out
 
     def __call__(
@@ -254,9 +255,9 @@ class TtSparseAttention(TtWindowAttention):
         else:
             comp, nb = hit
         table = ttnn.concat([window, comp], dim=2, memory_config=DRAM)
-        ttnn.deallocate(window)
+        dealloc(window)
         if not shared:
-            ttnn.deallocate(comp)
+            dealloc(comp)
         index = memo.get(("index", sources[1]), ckey) if shared else None
         if index is None:
             index = self._index(topk, ckv_cache, nb, start)
@@ -265,9 +266,9 @@ class TtSparseAttention(TtWindowAttention):
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, index)
         for t in (q_rm, table) + (() if shared else (index,)):
-            ttnn.deallocate(t)
+            dealloc(t)
         out = self._out(o, cos, sin)
-        ttnn.deallocate(o)
+        dealloc(o)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return out
 
