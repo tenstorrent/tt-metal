@@ -1,0 +1,2322 @@
+[
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 2x4 (shipped)",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.848622690886259
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 4x2",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.8567085266113281
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 8x1",
+    "config": [
+      16,
+      12,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.8901417963206768
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 1x4",
+    "config": [
+      16,
+      12,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.8446598201990128
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 2x2",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.8654998857527971
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,4] sb 4x1",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.8894410226494074
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 2x4",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.8996468745172024
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 4x2",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.8844555132091045
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 8x1",
+    "config": [
+      16,
+      8,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.905624521896243
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 1x4",
+    "config": [
+      16,
+      8,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.8814888782799244
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 2x2",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.9278532825410366
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,8,4] sb 4x1",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.999963685784964,
+    "ms": 1.8944807350635529
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 2x4",
+    "config": [
+      8,
+      12,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.9841606728732584
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 4x2",
+    "config": [
+      8,
+      12,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.9676961936056616
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 8x1",
+    "config": [
+      8,
+      12,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.9881273154169323
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 1x4",
+    "config": [
+      8,
+      12,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.9655018113553524
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 2x2",
+    "config": [
+      8,
+      12,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 2.000675955787301
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[8,12,4] sb 4x1",
+    "config": [
+      8,
+      12,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999479472505414,
+    "ms": 1.9727504346519709
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 4x2",
+    "config": [
+      16,
+      12,
+      6,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 8x1",
+    "config": [
+      16,
+      12,
+      6,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 1x6",
+    "config": [
+      16,
+      12,
+      6,
+      1,
+      6
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 2x3",
+    "config": [
+      16,
+      12,
+      6,
+      2,
+      3
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 2x2",
+    "config": [
+      16,
+      12,
+      6,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,6] sb 4x1",
+    "config": [
+      16,
+      12,
+      6,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 1x8",
+    "config": [
+      16,
+      12,
+      8,
+      1,
+      8
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 2x4",
+    "config": [
+      16,
+      12,
+      8,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 4x2",
+    "config": [
+      16,
+      12,
+      8,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 8x1",
+    "config": [
+      16,
+      12,
+      8,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 1x4",
+    "config": [
+      16,
+      12,
+      8,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 2x2",
+    "config": [
+      16,
+      12,
+      8,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "qkv_split",
+    "candidate": "[16,12,8] sb 4x1",
+    "config": [
+      16,
+      12,
+      8,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 8x1 (shipped)",
+    "config": [
+      16,
+      4,
+      6,
+      8,
+      1
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.244532410055399
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 4x2",
+    "config": [
+      16,
+      4,
+      6,
+      4,
+      2
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.3168342877179384
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 1x6",
+    "config": [
+      16,
+      4,
+      6,
+      1,
+      6
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.2490133289247751
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 2x3",
+    "config": [
+      16,
+      4,
+      6,
+      2,
+      3
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.3281501829624176
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 2x2",
+    "config": [
+      16,
+      4,
+      6,
+      2,
+      2
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.3397652190178633
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,4,6] sb 4x1",
+    "config": [
+      16,
+      4,
+      6,
+      4,
+      1
+    ],
+    "pcc": 0.9999760113545815,
+    "ms": 1.2423339299857616
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 4x2",
+    "config": [
+      16,
+      8,
+      6,
+      4,
+      2
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.3020765967667103
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 8x1",
+    "config": [
+      16,
+      8,
+      6,
+      8,
+      1
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.2662398628890514
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 1x6",
+    "config": [
+      16,
+      8,
+      6,
+      1,
+      6
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.260728808119893
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 2x3",
+    "config": [
+      16,
+      8,
+      6,
+      2,
+      3
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.2994400691241026
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 2x2",
+    "config": [
+      16,
+      8,
+      6,
+      2,
+      2
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.312586199492216
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,8,6] sb 4x1",
+    "config": [
+      16,
+      8,
+      6,
+      4,
+      1
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.2729365844279528
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 2x4",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.467692106962204
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 4x2",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.4662580098956823
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 8x1",
+    "config": [
+      16,
+      12,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.4864200726151466
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 1x4",
+    "config": [
+      16,
+      12,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.4812279026955366
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 2x2",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.463210629299283
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,4] sb 4x1",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999479405820332,
+    "ms": 1.4804668258875608
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 4x2",
+    "config": [
+      16,
+      12,
+      6,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 8x1",
+    "config": [
+      16,
+      12,
+      6,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 1x6",
+    "config": [
+      16,
+      12,
+      6,
+      1,
+      6
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 2x3",
+    "config": [
+      16,
+      12,
+      6,
+      2,
+      3
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 2x2",
+    "config": [
+      16,
+      12,
+      6,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[16,12,6] sb 4x1",
+    "config": [
+      16,
+      12,
+      6,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 1x8",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.404072530567646
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 2x4",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.4048745390027761
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 4x2",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.4171483926475048
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 8x1",
+    "config": [
+      8,
+      8,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.406301325187087
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 1x4",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.4008850324898958
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 2x2",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.444957498461008
+  },
+  {
+    "op": "kv_split",
+    "candidate": "[8,8,8] sb 4x1",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999636897991067,
+    "ms": 1.4117379672825336
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 1x8 (shipped)",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8863565977662802
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 2x4",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.893198698759079
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 4x2",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8642842993140221
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 8x1",
+    "config": [
+      8,
+      8,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8787254337221384
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 1x4",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8910255040973425
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 2x2",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8699961937963963
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,8,8] sb 4x1",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8828903082758188
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 2x4",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8233685977756977
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 4x2",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8236896246671677
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 8x1",
+    "config": [
+      16,
+      8,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8043403271585703
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 1x4",
+    "config": [
+      16,
+      8,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.7984002120792866
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 2x2",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.8273904677480459
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,4] sb 4x1",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999796499416088,
+    "ms": 0.7978051900863647
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 1x8",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      8
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 2x4",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 4x2",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 8x1",
+    "config": [
+      16,
+      8,
+      8,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 1x4",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 2x2",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,8,8] sb 4x1",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 1x8",
+    "config": [
+      8,
+      12,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.923143420368433
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 2x4",
+    "config": [
+      8,
+      12,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.9208522737026215
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 4x2",
+    "config": [
+      8,
+      12,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.9294803719967604
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 8x1",
+    "config": [
+      8,
+      12,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.918660219758749
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 1x4",
+    "config": [
+      8,
+      12,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.9253472089767456
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 2x2",
+    "config": [
+      8,
+      12,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.9410313796252012
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[8,12,8] sb 4x1",
+    "config": [
+      8,
+      12,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999694466138827,
+    "ms": 0.929404329508543
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 2x4",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 4x2",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 8x1",
+    "config": [
+      16,
+      12,
+      4,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 1x4",
+    "config": [
+      16,
+      12,
+      4,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 2x2",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wo_residual",
+    "candidate": "[16,12,4] sb 4x1",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 1x8 (shipped)",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3707709033042192
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 2x4",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3768098317086697
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 4x2",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.5842039603739977
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 8x1",
+    "config": [
+      8,
+      8,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3670816086232662
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 1x4",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3734416104853153
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 2x2",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.592746889218688
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,8,8] sb 4x1",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3737055007368326
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 2x4",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.362168276682496
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 4x2",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.5252959914505482
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 8x1",
+    "config": [
+      16,
+      8,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3674092013388872
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 1x4",
+    "config": [
+      16,
+      8,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3487049844115973
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 2x2",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.5359289944171906
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,4] sb 4x1",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999775919759761,
+    "ms": 1.3524759095162153
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 1x8",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      8
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 2x4",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 4x2",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 8x1",
+    "config": [
+      16,
+      8,
+      8,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 1x4",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 2x2",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,8,8] sb 4x1",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 1x8",
+    "config": [
+      8,
+      16,
+      8,
+      1,
+      8
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 2x4",
+    "config": [
+      8,
+      16,
+      8,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 4x2",
+    "config": [
+      8,
+      16,
+      8,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 8x1",
+    "config": [
+      8,
+      16,
+      8,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 1x4",
+    "config": [
+      8,
+      16,
+      8,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 2x2",
+    "config": [
+      8,
+      16,
+      8,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[8,16,8] sb 4x1",
+    "config": [
+      8,
+      16,
+      8,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 2x4",
+    "config": [
+      16,
+      16,
+      4,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 4x2",
+    "config": [
+      16,
+      16,
+      4,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 8x1",
+    "config": [
+      16,
+      16,
+      4,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 1x4",
+    "config": [
+      16,
+      16,
+      4,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 2x2",
+    "config": [
+      16,
+      16,
+      4,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "w_down_residual",
+    "candidate": "[16,16,4] sb 4x1",
+    "config": [
+      16,
+      16,
+      4,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 1x8 (shipped)",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7400893606245518
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 2x4",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.746565405279398
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 4x2",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7818446960300207
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 8x1",
+    "config": [
+      8,
+      8,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7438044063746929
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 1x4",
+    "config": [
+      8,
+      8,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7461483124643564
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 2x2",
+    "config": [
+      8,
+      8,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7809957023710012
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,8,8] sb 4x1",
+    "config": [
+      8,
+      8,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7418643217533827
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 2x4",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7335071917623281
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 4x2",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7516562938690186
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 8x1",
+    "config": [
+      16,
+      8,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7297440897673368
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 1x4",
+    "config": [
+      16,
+      8,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7326690945774317
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 2x2",
+    "config": [
+      16,
+      8,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7360621355473995
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,4] sb 4x1",
+    "config": [
+      16,
+      8,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999637005133514,
+    "ms": 0.7171508856117725
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 1x8",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      8
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 2x4",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 4x2",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 8x1",
+    "config": [
+      16,
+      8,
+      8,
+      8,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 1x4",
+    "config": [
+      16,
+      8,
+      8,
+      1,
+      4
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 2x2",
+    "config": [
+      16,
+      8,
+      8,
+      2,
+      2
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,8,8] sb 4x1",
+    "config": [
+      16,
+      8,
+      8,
+      4,
+      1
+    ],
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 1x8",
+    "config": [
+      8,
+      12,
+      8,
+      1,
+      8
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7819684222340584
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 2x4",
+    "config": [
+      8,
+      12,
+      8,
+      2,
+      4
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7850614376366138
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 4x2",
+    "config": [
+      8,
+      12,
+      8,
+      4,
+      2
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7824874017387629
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 8x1",
+    "config": [
+      8,
+      12,
+      8,
+      8,
+      1
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7892163936048746
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 1x4",
+    "config": [
+      8,
+      12,
+      8,
+      1,
+      4
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.787464389577508
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 2x2",
+    "config": [
+      8,
+      12,
+      8,
+      2,
+      2
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.786898285150528
+  },
+  {
+    "op": "wv",
+    "candidate": "[8,12,8] sb 4x1",
+    "config": [
+      8,
+      12,
+      8,
+      4,
+      1
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7883173879235983
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 2x4",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7350008003413677
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 4x2",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7778922095894814
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 8x1",
+    "config": [
+      16,
+      12,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7519228849560022
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 1x4",
+    "config": [
+      16,
+      12,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7427859120070934
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 2x2",
+    "config": [
+      16,
+      12,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.78170420601964
+  },
+  {
+    "op": "wv",
+    "candidate": "[16,12,4] sb 4x1",
+    "config": [
+      16,
+      12,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9999479246735258,
+    "ms": 0.7295186631381512
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,2] sb 4x2 (shipped)",
+    "config": [
+      8,
+      12,
+      2,
+      4,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.5589222088456154
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,2] sb 8x1",
+    "config": [
+      8,
+      12,
+      2,
+      8,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 3.7886761128902435
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,2] sb 2x2",
+    "config": [
+      8,
+      12,
+      2,
+      2,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.5093914940953255
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,2] sb 4x1",
+    "config": [
+      8,
+      12,
+      2,
+      4,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 3.7834754679352045
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,12,2] sb 4x2",
+    "config": [
+      16,
+      12,
+      2,
+      4,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.6168741285800934
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,12,2] sb 8x1",
+    "config": [
+      16,
+      12,
+      2,
+      8,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 3.8289024960249662
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,12,2] sb 2x2",
+    "config": [
+      16,
+      12,
+      2,
+      2,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.608354715630412
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,12,2] sb 4x1",
+    "config": [
+      16,
+      12,
+      2,
+      4,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 3.796903882175684
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,8,2] sb 4x2",
+    "config": [
+      8,
+      8,
+      2,
+      4,
+      2
+    ],
+    "pcc": 0.9999174089635714,
+    "ms": 2.793765999376774
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,8,2] sb 8x1",
+    "config": [
+      8,
+      8,
+      2,
+      8,
+      1
+    ],
+    "pcc": 0.9999169091390308,
+    "ms": 3.7909643724560738
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,8,2] sb 2x2",
+    "config": [
+      8,
+      8,
+      2,
+      2,
+      2
+    ],
+    "pcc": 0.9999174089635714,
+    "ms": 2.720852103084326
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,8,2] sb 4x1",
+    "config": [
+      8,
+      8,
+      2,
+      4,
+      1
+    ],
+    "pcc": 0.9999169091390308,
+    "ms": 3.79063100554049
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,6,2] sb 4x2",
+    "config": [
+      16,
+      6,
+      2,
+      4,
+      2
+    ],
+    "pcc": 0.9999326053617612,
+    "ms": 3.0876669101417065
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,6,2] sb 8x1",
+    "config": [
+      16,
+      6,
+      2,
+      8,
+      1
+    ],
+    "pcc": 0.9999321467161526,
+    "ms": 4.056646768003702
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,6,2] sb 2x2",
+    "config": [
+      16,
+      6,
+      2,
+      2,
+      2
+    ],
+    "pcc": 0.9999326053617612,
+    "ms": 3.121292917057872
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[16,6,2] sb 4x1",
+    "config": [
+      16,
+      6,
+      2,
+      4,
+      1
+    ],
+    "pcc": 0.9999321467161526,
+    "ms": 4.024531086906791
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 2x4",
+    "config": [
+      8,
+      12,
+      4,
+      2,
+      4
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.557880897074938
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 4x2",
+    "config": [
+      8,
+      12,
+      4,
+      4,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.5543278083205223
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 8x1",
+    "config": [
+      8,
+      12,
+      4,
+      8,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 4.066179832443595
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 1x4",
+    "config": [
+      8,
+      12,
+      4,
+      1,
+      4
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.5354763958603144
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 2x2",
+    "config": [
+      8,
+      12,
+      4,
+      2,
+      2
+    ],
+    "pcc": 0.9998810437085854,
+    "ms": 2.5706185027956963
+  },
+  {
+    "op": "swiglu",
+    "candidate": "[8,12,4] sb 4x1",
+    "config": [
+      8,
+      12,
+      4,
+      4,
+      1
+    ],
+    "pcc": 0.9998808129697684,
+    "ms": 4.0664582047611475
+  }
+]

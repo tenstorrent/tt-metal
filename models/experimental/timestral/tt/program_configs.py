@@ -19,7 +19,10 @@ import math
 _L1_TILE_BUDGET = 640
 _MAX_IN0_BLOCK_W = 12
 _MAX_OUT_BLOCK_H = 12
-_MINIMAL_BLOCK = 8
+# minimal_matmul (M, K, N) blocks and subblock, from tests/perf/sweep_subblocks.py (doc/optimize/iter_04):
+# wo + residual 0.80 vs 0.88 ms for 8 / 8 / 8 at 1 x 8, w_down 1.35 vs 1.37, wv 0.725 vs 0.743.
+_MINIMAL_BLOCKS = ((16, 8, 4), (4, 1))
+_SWIGLU_M_BLOCK = 8
 # minimal_matmul_split ((M, K, N) blocks, subblock) per chunk count, from tests/perf/sweep_qkv_split.py:
 #   2  [Wk | Wv]       swept as [Wv | Wg] (same shape): 1.90 ms vs 2.58 ms as two linears (doc/optimize/iter_04)
 #   3  [Wq | Wk | Wv]  2.79 ms vs the fused 2D linear's 2.76 ms (doc/optimize/iter_03)
@@ -84,30 +87,14 @@ def matmul_2d_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, *, fused_ac
     )
 
 
-def minimal_matmul_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, *, max_dest: int = 8):
-    """8 x 8 x 8 tile blocks (the sweep's best for N = 768 at K = 768 and 2048)."""
+def _blocked_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, blocks, max_dest: int):
+    """``MinimalMatmulConfig`` from ``((M, K, N) caps, preferred subblock)``; the subblock falls back to the
+    largest legal one when the capped blocks or the dest size rule it out."""
     import ttnn
 
-    m_block = min(_MINIMAL_BLOCK, m_tiles)
-    n_block = _largest_divisor_at_most(n_tiles, _MINIMAL_BLOCK)
-    sub_h, sub_w = _subblock(m_block, n_block, max_dest)
-    return ttnn.MinimalMatmulConfig(
-        M_block_size=m_block,
-        K_block_size=_largest_divisor_at_most(k_tiles, _MINIMAL_BLOCK),
-        N_block_size=n_block,
-        subblock_h=sub_h,
-        subblock_w=sub_w,
-        compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
-    )
-
-
-def split_config(grid, m_tiles: int, k_tiles: int, chunk_tiles: int, chunks: int, *, max_dest: int = 8):
-    """``minimal_matmul_split`` config for ``chunks`` outputs of ``chunk_tiles`` columns each."""
-    import ttnn
-
-    (m_cap, k_cap, n_cap), (sub_h, sub_w) = _SPLIT_BLOCKS[chunks]
+    (m_cap, k_cap, n_cap), (sub_h, sub_w) = blocks
     m_block = min(m_cap, m_tiles)
-    n_block = _largest_divisor_at_most(chunk_tiles, n_cap)
+    n_block = _largest_divisor_at_most(n_tiles, n_cap)
     if m_block % sub_h or n_block % sub_w or sub_h * sub_w > max_dest:
         sub_h, sub_w = _subblock(m_block, n_block, max_dest)
     return ttnn.MinimalMatmulConfig(
@@ -120,17 +107,27 @@ def split_config(grid, m_tiles: int, k_tiles: int, chunk_tiles: int, chunks: int
     )
 
 
+def minimal_matmul_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, *, max_dest: int = 8):
+    return _blocked_config(grid, m_tiles, k_tiles, n_tiles, _MINIMAL_BLOCKS, max_dest)
+
+
+def split_config(grid, m_tiles: int, k_tiles: int, chunk_tiles: int, chunks: int, *, max_dest: int = 8):
+    """``minimal_matmul_split`` config for ``chunks`` outputs of ``chunk_tiles`` columns each."""
+    return _blocked_config(grid, m_tiles, k_tiles, chunk_tiles, _SPLIT_BLOCKS[chunks], max_dest)
+
+
 def swiglu_config(grid, m_tiles: int, k_tiles: int, n_out_tiles: int, *, max_dest: int = 8):
     """``minimal_matmul(fuse_swiglu=True)`` blocks: one gate/up tile pair per N block, K blocks up to 12
-    (MLP front half 3.85 ms vs 7.96 ms split; ``tests/perf/sweep_swiglu.py``, ``doc/optimize/iter_02``)."""
+    (MLP front half 3.85 ms vs 7.96 ms split; ``tests/perf/sweep_swiglu.py``, ``doc/optimize/iter_02``);
+    subblock 2 x 2 (2.51 vs 2.55 ms at 4 x 2; ``tests/perf/sweep_subblocks.py``, ``doc/optimize/iter_04``)."""
     import ttnn
 
-    m_block = min(_MINIMAL_BLOCK, m_tiles)
+    m_block = min(_SWIGLU_M_BLOCK, m_tiles)
     return ttnn.MinimalMatmulConfig(
         M_block_size=m_block,
         K_block_size=_largest_divisor_at_most(k_tiles, _MAX_IN0_BLOCK_W),
         N_block_size=2,
-        subblock_h=_largest_divisor_at_most(m_block, max_dest // 2),
+        subblock_h=_largest_divisor_at_most(m_block, min(2, max_dest // 2)),
         subblock_w=2,
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
     )
