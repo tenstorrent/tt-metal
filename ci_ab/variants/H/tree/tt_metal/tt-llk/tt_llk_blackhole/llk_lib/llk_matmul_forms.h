@@ -17,18 +17,18 @@
 namespace ckernel
 {
 inline constexpr const char* matmul_forms_table[48] = {
-    ".r..h", "hh..R", ".Rr.R", "..r.r", // k 1, LoFi
-    ".R..R", "rR..R", "rRRrR", "rRrrr", // k 1, HiFi2
-    "rr.rR", "rrrrR", "rRRRR", "rRr.r", // k 1, HiFi3
-    "rR.RR", "RRrRR", "rrrrr", "rrrrr", // k 1, HiFi4
-    ".h.rR", "rrrrR", "RRRrR", "..r.R", // k 2-4, LoFi
-    "rRRrR", "rRrrR", "RRRRR", "rRrRR", // k 2-4, HiFi2
-    "rRRrR", "rRrrR", "rRRRR", "rRRrR", // k 2-4, HiFi3
-    "RRRRR", "RRRRR", "rrrrr", "rrrrr", // k 2-4, HiFi4
-    "RRRRR", "RRRRR", "RRRRR", "RRrRR", // k 5+, LoFi
-    "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi2
+    "....h", "....R", "rrrrR", "..r.r", // k 1, LoFi
+    ".R..R", "rr..R", "rrRrR", "rrrrr", // k 1, HiFi2
+    "rr.rR", "rr.rR", "rrRrR", "rrr.r", // k 1, HiFi3
+    ".R.rR", "rrrrR", ".rrRr", "rrrrr", // k 1, HiFi4
+    ".r..R", "rr.rR", ".rRrR", "....R", // k 2-4, LoFi
+    ".RRRR", "rRrrR", "rRRRR", "rRrRR", // k 2-4, HiFi2
+    "rRRrR", "rRrrR", "rRRRR", "rRrrR", // k 2-4, HiFi3
+    ".RRrR", "RRrRR", "rrrRr", "rrrrr", // k 2-4, HiFi4
+    ".RR.R", "RRR.R", ".RRRR", "rrrrR", // k 5+, LoFi
+    ".RR.R", "RRRRR", "rRRRR", "RRRRR", // k 5+, HiFi2
     "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi3
-    "RRRRR", "RRRRR", "rrrrr", "rrrrr", // k 5+, HiFi4
+    ".RRrR", "RRRRR", "RrrRr", "rrrrr", // k 5+, HiFi4
 };
 
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
