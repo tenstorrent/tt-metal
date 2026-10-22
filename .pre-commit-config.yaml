@@ -62,6 +62,8 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+      # The matmul config model (12 MB, 3000 GBDT trees) is loaded at runtime; it is replaced only by retraining
+      exclude: ^ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model\.blob$
     - id: validate-metalium-api
       name: validate-metalium-api
       entry: python3 scripts/validate_api/validate_api.py tt_metal/api
