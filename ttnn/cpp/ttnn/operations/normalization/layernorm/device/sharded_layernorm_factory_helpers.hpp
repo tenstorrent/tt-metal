@@ -396,8 +396,6 @@ struct RuntimeArgsContext {
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 
     // Storage core info for write-back
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
     uint32_t num_storage_cores = 0;
 };
 
