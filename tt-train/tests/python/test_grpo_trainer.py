@@ -425,6 +425,8 @@ def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_erro
 @pytest.mark.parametrize(
     "lr_scheduler_type, warmup_steps, total_steps, min_lr_rate, expected",
     [
+        ("constant", 0, 3, 0.0, [1.0, 1.0, 1.0]),
+        ("constant", 2, 3, 0.0, [1.0, 1.0, 1.0]),
         ("constant_with_warmup", 1, 3, 0.0, [1.0, 1.0, 1.0]),
         ("constant_with_warmup", 2, 4, 0.0, [0.5, 1.0, 1.0, 1.0]),
         ("constant_with_warmup", 4, 5, 0.0, [0.25, 0.5, 0.75, 1.0, 1.0]),
@@ -453,5 +455,32 @@ def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_st
     lrs = []
     for _ in range(total_steps):
         lrs.append(opt.get_lr() / base_lr)
-        sched.step()
+        if sched is not None:
+            sched.step()
     assert lrs == pytest.approx(expected, abs=1e-6)
+
+
+def _make_muon_with_adamw():
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    return MuonWithAdamW({"muon": {"lr": 0.02}, "adamw": {"lr": 0.0003}}, ttml.NamedParameters())
+
+
+@pytest.mark.parametrize(
+    "lr_scheduler_type, warmup_steps",
+    [("constant", 0), ("constant", 2), ("constant_with_warmup", 0), ("constant_with_warmup", 1)],
+)
+def test_build_lr_scheduler_returns_none_for_constant_lr(lr_scheduler_type, warmup_steps):
+    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+
+    cfg = GRPOConfig(**{**_HOST_GRPO_CONFIG, "lr_scheduler_type": lr_scheduler_type, "warmup_steps": warmup_steps})
+    assert _build_lr_scheduler(_make_muon_with_adamw(), cfg, 4) is None
+
+
+@pytest.mark.parametrize("lr_scheduler_type, warmup_steps", [("constant_with_warmup", 2), ("cosine", 0), ("cosine", 2)])
+def test_build_lr_scheduler_rejects_schedules_for_muon_with_adamw(expect_error, lr_scheduler_type, warmup_steps):
+    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+
+    cfg = GRPOConfig(**{**_HOST_GRPO_CONFIG, "lr_scheduler_type": lr_scheduler_type, "warmup_steps": warmup_steps})
+    with expect_error(ValueError, "does not support LR schedules"):
+        _build_lr_scheduler(_make_muon_with_adamw(), cfg, 4)
