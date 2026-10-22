@@ -11,7 +11,6 @@ row. Run from ``python_tests`` as ``python -m helpers.ulp_budget_diff <command>`
 
 import argparse
 import itertools
-import json
 import sys
 from dataclasses import dataclass, field, fields
 from enum import Enum
@@ -19,15 +18,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .llk_params import MathOperation
-from .ulp_domains import (
-    Domain,
-    TableError,
-    binade_edges,
-    entries_of,
-    largest_figure,
-    partition,
-    usable_budget_ceiling,
-)
+from .ulp_domains import Domain, usable_budget_ceiling
 from .ulp_table import (
     MEASURED_ARCH,
     BudgetKey,
@@ -147,14 +138,10 @@ class Held:
 
     @property
     def baseline(self) -> int | None:
-        """The measurement a tolerance row records for a full cell; only a row pinning
-        both formats is one, as the emitter writes every row."""
-        row = self.row
-        if row is None or self.gated or not self.full:
+        """The measurement a tolerance row records for a full cell."""
+        if self.row is None or self.gated or not self.full:
             return None
-        return (
-            row.measured if row.input is not None and row.output is not None else None
-        )
+        return _recorded(self.row)
 
     @property
     def nonfinite(self) -> int:
@@ -182,6 +169,13 @@ class Held:
                 if value is not None
             ]
         return "tolerance" + (f" ({', '.join(parts)})" if parts else "")
+
+
+def _recorded(row: Row) -> int | None:
+    """The figure a tolerance row records, for the diff's baseline and the headroom
+    report alike: only a row pinning both formats is a measured cell, as the emitter
+    writes every row; a broader row's figure is a hand judgement."""
+    return row.measured if row.input is not None and row.output is not None else None
 
 
 def _held(table: Table, op: MathOperation, query: BudgetKey, full: bool) -> Held:
@@ -501,13 +495,12 @@ def render_budget_diff(changes: list[Change]) -> str:
 @dataclass
 class CellReading:
     """Every record of one cell folded together: the worst of each figure, whether any
-    lane was ranked, its binade profile, and per entry of its list the worst lane and
-    the most ranked lanes."""
+    lane was ranked, and per entry of its list the worst lane and the most ranked
+    lanes."""
 
     worst: int = 0
     nonfinite: int = 0
     ranked: bool = False
-    bins: tuple[tuple[int, int, int, int], ...] = ()
     entries: dict[tuple[float, float], tuple[int | None, int]] = field(
         default_factory=dict
     )
@@ -516,7 +509,6 @@ class CellReading:
         self.worst = max(self.worst, m.worst)
         self.nonfinite = max(self.nonfinite, m.nonfinite)
         self.ranked = self.ranked or m.lanes > 0
-        self.bins = self.bins or m.bins
         for r in m.readings:
             worst, lanes = self.entries.get((r.low, r.high), (None, 0))
             if r.worst is not None:
@@ -621,7 +613,7 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
                 )
                 found(Finding(cell, verdict, reading.worst, budget))
             continue
-        was = row.measured if row.input is not None and row.output is not None else None
+        was = _recorded(row)
         if was is None:
             out.unjudged += 1
         elif not reading.ranked:
@@ -676,26 +668,6 @@ def render_headroom(headroom: Headroom) -> str:
     return "\n".join(out) + "\n"
 
 
-def draw(reading: CellReading, query: BudgetKey) -> tuple[Domain, ...]:
-    """The list the emitter's rule draws on *reading*'s binade profile: a binade lies
-    wholly inside one entry, so the worst of an entry's binades is the figure the
-    emitter measures over its lanes."""
-    profile = {
-        b: (present, ranked, worst) for b, present, ranked, worst in reading.bins
-    }
-
-    def worst_in(low: float, high: float) -> int | None:
-        found = [
-            w
-            for b, (_, r, w) in profile.items()
-            if r and low <= binade_edges(b)[0] < high
-        ]
-        return max(found) if found else None
-
-    ceiling = usable_budget_ceiling(query.output_format)
-    return entries_of(partition(profile, ceiling), worst_in)
-
-
 # ── Command line ──────────────────────────────────────────────────────────────
 
 
@@ -724,7 +696,9 @@ def main(argv: list[str] | None = None) -> int:
             headroom = judge(load_table(args.table), read_measurements(args.measured))
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
-    except (TableError, json.JSONDecodeError, OSError) as refused:
+    except (ValueError, OSError) as refused:
+        # A TableError, a JSON syntax error and a non-UTF-8 file are all ValueErrors;
+        # a missing file is an OSError. Any of them is "cannot load", exit 2.
         report, status = f"cannot load: {refused}\n", 2
     print(report, end="")
     if args.out is not None:

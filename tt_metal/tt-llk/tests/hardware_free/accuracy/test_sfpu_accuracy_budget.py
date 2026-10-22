@@ -227,6 +227,16 @@ def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bog
         BudgetKey(**{field: bogus})
 
 
+def test_a_bad_query_is_refused_before_the_unenrolled_early_return():
+    """`accuracy_contract` builds the key before it looks the op up, so a miswired
+    driver for an op with no row is refused rather than handed the default."""
+    unenrolled = next(
+        op for op in MathOperation if op not in budget._SFPU_ACCURACY_BUDGET
+    )
+    with refused(Problem.NOT_A_MEMBER):
+        accuracy_contract(unenrolled, output_format=DataFormat.Float16_b, arch=True)
+
+
 @pytest.mark.parametrize(
     "broad, narrow",
     [

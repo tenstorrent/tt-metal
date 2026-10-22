@@ -347,7 +347,7 @@ def local_step(
     return float((upward - scalar).to(torch.float32))
 
 
-def ulp_failure_message(
+def ulp_verdict_message(
     golden: torch.Tensor,
     result: torch.Tensor,
     distance: torch.Tensor,
@@ -355,16 +355,14 @@ def ulp_failure_message(
     *,
     mask: torch.Tensor | None = None,
     max_ulp: int | None = None,
-    stats: dict[str, Any] | None = None,
     flush_subnormals: bool | None = None,
     rescued: torch.Tensor | None = None,
 ) -> str:
-    """What a gate logs: a non-finite disagreement first (the step count cannot describe
-    one), then the worst lane with the size of one step there and the distribution.
-    *stats* must come from the same *mask*; of *rescued* (the floor's lanes) only those
+    """What a gate logs, pass, fail or report alike: a non-finite disagreement first (the
+    step count cannot describe one), then the worst lane with the size of one step
+    there and the distribution over *mask*. Of *rescued* (the floor's lanes) only those
     past *max_ulp* count as held."""
-    if stats is None:
-        stats = ulp_stats(distance, mask)
+    stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
     if rescued is not None and max_ulp is not None:
         rescued = rescued & ((distance < 0) | (distance > max_ulp))
