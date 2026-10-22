@@ -1851,7 +1851,7 @@ def test_update_padded_kv_cache_split_rejects_transposed_tiles(mesh_device, scal
 PAGE_UNMAPPED = -1
 
 
-def _page_table_tensor(mesh_device, table):
+def _paged_kv_table_tensor(mesh_device, table):
     """[rows, width] INT32 page table, ROW_MAJOR in DRAM, replicated: every chip reads its own pages' entries."""
     return ttnn.from_torch(
         table.to(torch.int32),
@@ -1879,7 +1879,7 @@ def _page_pool(mesh_device, *, page_size, sp_axis, num_pages, num_layers, dtype,
     )
 
 
-def _shuffled_page_tables(*, num_users, pages_per_user, mapped_pages, page_size, chunk_local, sp, seed):
+def _shuffled_paged_kv_tables(*, num_users, pages_per_user, mapped_pages, page_size, chunk_local, sp, seed):
     """Per-user rows mapping global page q to a shuffled physical page of the rank that owns q.
 
     Pages >= mapped_pages stay unmapped. Each rank allocates its pages from its own pool, with spare pages left over
@@ -2001,7 +2001,7 @@ def test_update_padded_kv_cache_paged(
     # Under the clamp, the pages the last chunk's padding would reach are mapped, so a write past the clamp shows.
     check_len = cum_total - last_isl + chunk_global if clamp else cum_total
     mapped_pages = -(-check_len // page_size)
-    table, num_pages = _shuffled_page_tables(
+    table, num_pages = _shuffled_paged_kv_tables(
         num_users=num_users,
         pages_per_user=cache_global // page_size,
         mapped_pages=mapped_pages,
@@ -2043,7 +2043,7 @@ def test_update_padded_kv_cache_paged(
         dtype=dtype,
         layout=layout,
     )
-    tt_table = _page_table_tensor(mesh_device, table)
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
 
     input_shard_dims = [None, None]
     input_shard_dims[sp_axis] = 2
@@ -2090,7 +2090,7 @@ def test_update_padded_kv_cache_paged(
                         num_layers=num_layers,
                         cluster_axis=sp_axis,
                         valid_global=valid_t,
-                        page_table=tt_table,
+                        paged_kv_table=tt_table,
                     )
                     for t in (slot_t, kv_t, valid_t):
                         if t is not None:
@@ -2105,7 +2105,7 @@ def test_update_padded_kv_cache_paged(
                         kv_actual_global=kv_actual,
                         cluster_axis=sp_axis,
                         valid_global=valid_end if clamp else None,
-                        page_table=tt_table,
+                        paged_kv_table=tt_table,
                     )
         kv_actual = valid_end
     ttnn.synchronize_device(mesh_device)
@@ -2161,7 +2161,7 @@ def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layou
     # One spare tile: the stacked input is not a whole number of pages, only each window has to be.
     stacked_local = C * len(_PAGED_WINDOW_LANES) + ttnn.TILE_SIZE
     pages_per_row = (max(depth for _, depth, _ in _PAGED_WINDOW_LANES) + 2) * C * sp // page_size
-    table, num_pages = _shuffled_page_tables(
+    table, num_pages = _shuffled_paged_kv_tables(
         num_users=len(_PAGED_WINDOW_LANES),
         pages_per_user=pages_per_row,
         mapped_pages=pages_per_row,
@@ -2182,7 +2182,7 @@ def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layou
         )
         for _ in range(2)
     ]
-    tt_table = _page_table_tensor(mesh_device, table)
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
     shard_dims = [None, None]
     shard_dims[sp_axis] = 2
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
@@ -2202,7 +2202,7 @@ def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layou
             layer_idx=layer_idx,
             num_layers=num_layers,
             cluster_axis=sp_axis,
-            page_table=tt_table,
+            paged_kv_table=tt_table,
             **window,
         )
         ttnn.deallocate(slot_t)
@@ -2253,7 +2253,7 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
     pages = chunk_global // page_size
     tables, num_pages = [], 0
     for seed, width in ((1, pages), (2, pages + 16), (3, pages + 16)):
-        table, n = _shuffled_page_tables(
+        table, n = _shuffled_paged_kv_tables(
             num_users=num_users,
             pages_per_user=width,
             mapped_pages=pages,
@@ -2290,7 +2290,7 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
             shard,
         )
         # Kept alive, so table C cannot reuse table B's memory.
-        tt_tables.append(_page_table_tensor(mesh_device, table))
+        tt_tables.append(_paged_kv_table_tensor(mesh_device, table))
         if path == "metadata":
             slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=slot)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -2301,7 +2301,7 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
                 layer_idx=0,
                 num_layers=1,
                 cluster_axis=sp_axis,
-                page_table=tt_tables[-1],
+                paged_kv_table=tt_tables[-1],
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -2312,7 +2312,7 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
                 num_layers=1,
                 kv_actual_global=0,
                 cluster_axis=sp_axis,
-                page_table=tt_tables[-1],
+                paged_kv_table=tt_tables[-1],
             )
         ttnn.synchronize_device(mesh_device)
         entries.append(mesh_device.num_program_cache_entries())
@@ -2362,10 +2362,10 @@ def test_update_padded_kv_cache_paged_row_end(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    decoy = _page_table_tensor(mesh_device, torch.full((1, 32), decoy_page, dtype=torch.int32))
+    decoy = _paged_kv_table_tensor(mesh_device, torch.full((1, 32), decoy_page, dtype=torch.int32))
     decoy_address = decoy.buffer_address()
     ttnn.deallocate(decoy)
-    tt_table = _page_table_tensor(mesh_device, table)
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
     assert tt_table.buffer_address() == decoy_address, "the narrow table must reuse the wider one's memory"
 
     concat_dims = [None, None]
@@ -2386,7 +2386,7 @@ def test_update_padded_kv_cache_paged_row_end(mesh_device):
     sent = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
     slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=0)
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        pool, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=sp_axis, page_table=tt_table
+        pool, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=sp_axis, paged_kv_table=tt_table
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -2437,7 +2437,7 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
 
     tt_input = make(C)
     width = 2 * C * sp // page_size  # two chunks
-    good = _page_table_tensor(mesh_device, torch.zeros(2, width, dtype=torch.int32))
+    good = _paged_kv_table_tensor(mesh_device, torch.zeros(2, width, dtype=torch.int32))
     as_uint32 = ttnn.from_torch(
         torch.zeros(2, width, dtype=torch.int64),
         device=mesh_device,
@@ -2456,7 +2456,7 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
             layer_idx=0,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global,
-            page_table=table,
+            paged_kv_table=table,
             **kwargs,
         )
 
@@ -2467,7 +2467,7 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
     write(kv_actual_global=C * sp)
     with expect_error(RuntimeError, "overflow global cache capacity"):
         write(kv_actual_global=C * sp + 32)
-    with expect_error(RuntimeError, "page_table must be INT32"):
+    with expect_error(RuntimeError, "paged_kv_table must be INT32"):
         write(table=as_uint32)
     # Two rows per chip: every chip would read another request's row 0.
     sharded = ttnn.from_torch(
@@ -2478,7 +2478,7 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
-    with expect_error(RuntimeError, "page_table must be replicated"):
+    with expect_error(RuntimeError, "paged_kv_table must be replicated"):
         write(table=sharded)
     with expect_error(RuntimeError, "a paged cache does not support tp_axis"):
         write(tp_axis=1)
@@ -2498,7 +2498,7 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
             layer_idx=0,
             num_layers=num_layers,
             cluster_axis=sp_axis,
-            page_table=good,
+            paged_kv_table=good,
             input_row_offset=0,
             input_rows=96,
         )
@@ -2540,7 +2540,7 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
     )
-    table, num_pages = _shuffled_page_tables(
+    table, num_pages = _shuffled_paged_kv_tables(
         num_users=1,
         pages_per_user=pages,
         mapped_pages=pages,
@@ -2559,7 +2559,7 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
     )
-    tt_table = _page_table_tensor(mesh_device, table)
+    tt_table = _paged_kv_table_tensor(mesh_device, table)
     shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None])
     tt_input = _make_input(
         torch.randn(1, 1, C * sp, head_dim, dtype=torch.bfloat16), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, shard
@@ -2580,7 +2580,7 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is
             **paging,
         )
 
-    paging = dict(page_table=tt_table)
+    paging = dict(paged_kv_table=tt_table)
     write(contiguous)
     write(pool, **paging)
     ttnn.synchronize_device(mesh_device)

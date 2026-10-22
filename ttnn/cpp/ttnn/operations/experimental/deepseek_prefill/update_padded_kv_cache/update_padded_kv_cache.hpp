@@ -37,11 +37,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // directly. Tiled RoPE is untilized with LLK inside the cache update.
 // No packed intermediate is allocated.
 //
-// Optional `page_table` (both forms): a paged cache, in the format of device/kernels/paged_kv_table.hpp. `cache` is
+// Optional `paged_kv_table` (both forms): a paged cache, in the format of device/kernels/paged_kv_table.hpp. `cache` is
 // then, on every chip, its own pool of single-head pages [num_pages * num_layers, 1, page, head_dim] (page p of layer l
-// at entry p * num_layers + l; the page size is its per-chip seq dim) and `page_table` an INT32 ROW_MAJOR DRAM tensor
-// [rows, width] replicated across the mesh. `slot_idx` selects the request's row, which bounds it to width * page
-// tokens: the scalar form rejects a longer write, the tensor form writes only the row's pages. An entry of -1 is
+// at entry p * num_layers + l; the page size is its per-chip seq dim) and `paged_kv_table` an INT32 ROW_MAJOR DRAM
+// tensor [rows, width] replicated across the mesh. `slot_idx` selects the request's row, which bounds it to width *
+// page tokens: the scalar form rejects a longer write, the tensor form writes only the row's pages. An entry of -1 is
 // unmapped and its rows are not written; neither is an entry outside the pool, which is invalid. The tensor form does
 // not check `slot_idx` against the table's rows: a row past them is read from beyond the table, and its writes land on
 // arbitrary pool pages. The table's width is part of the program key, so a workload keeps one fixed-width table. The
@@ -71,7 +71,7 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& paged_kv_table = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -93,7 +93,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
     std::optional<uint32_t> input_rows = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& paged_kv_table = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 

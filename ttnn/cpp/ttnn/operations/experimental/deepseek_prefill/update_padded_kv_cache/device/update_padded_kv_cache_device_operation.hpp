@@ -72,7 +72,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> scales;
         // Optional page table [rows, width] INT32 (kernels/paged_kv_table.hpp): `cache` is then a page pool and
         // slot_idx selects the row.
-        std::optional<Tensor> page_table;
+        std::optional<Tensor> paged_kv_table;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -152,6 +152,6 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
     std::optional<uint32_t> input_rows = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& paged_kv_table = std::nullopt);
 
 }  // namespace ttnn::prim
