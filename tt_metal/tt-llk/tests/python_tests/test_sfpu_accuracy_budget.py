@@ -2228,7 +2228,26 @@ def _acknowledges(key, cell) -> bool:
 #: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
 #: resolves to the global default, and nothing holds it. A cell listed here is a
 #: decision, with its reason, not a gap.
-_UNRESOLVED_SWEPT_CELLS: dict = {}
+_UNRESOLVED_SWEPT_CELLS: dict = {
+    # #54080: Logsigmoid was enrolled on the ttsim Wormhole model, which cannot unpack a
+    # Float32 input; its Float32-in rows are ttsim Blackhole measurements, and Blackhole
+    # does not support a Float16 output at dest_acc=No. Nothing reachable measures the
+    # cell, so it resolves to tolerance until a Wormhole board sweeps the op.
+    (
+        MathOperation.Logsigmoid,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        DestAccumulation.No,
+    ): "Float32 input unreachable on the ttsim Wormhole model; cell unsupported on Blackhole",
+    (
+        MathOperation.Logsigmoid,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.No,
+        DestAccumulation.No,
+    ): "Float32 input unreachable on the ttsim Wormhole model; cell unsupported on Blackhole",
+}
 
 
 def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():

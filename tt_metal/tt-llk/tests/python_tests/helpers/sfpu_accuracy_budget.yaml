@@ -2337,7 +2337,7 @@ LogicalNot:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0, measured: 0, sampled: 2026-09-21}
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0, measured: 0, sampled: 2026-09-21}
 
-Logsigmoid:  # exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b sweep on ttsim wormhole; the Float32-in rows are ttsim blackhole measurements (ttsim wormhole cannot unpack a Float32 input)
+Logsigmoid:  # exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b sweep on the ttsim Wormhole model; the Float32-in rows are ttsim Blackhole measurements (the Wormhole model cannot unpack a Float32 input). Float32 -> Float16 at dest No has no row: unsupported on Blackhole and unreachable on the model, so it resolves to tolerance
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 10213, run: 2026-10-22}
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 10213, run: 2026-10-22}
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-22}
@@ -2369,7 +2369,6 @@ Logsigmoid:  # exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b sweep on ttsim wormhol
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 3, measured: 2, run: 2026-10-22}
   - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance, measured: 3286, run: 2026-10-19}  # ttsim blackhole
   - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 3301, nonfinite: 2, run: 2026-10-19}  # not measurable: 2 lane(s) disagreeing with the golden about being finite (golden -> result: x=-3.38132e+38: -3.37624e+38 -> -inf; x=-3.3731e+38: -3.37624e+38 -> -inf); ttsim blackhole
-  - {in: Float32, out: Float16, dest: "No", metric: tolerance}  # not measured: unsupported on blackhole, and ttsim wormhole cannot unpack a Float32 input
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-19}  # ttsim blackhole
   - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2, measured: 1, run: 2026-10-19}  # ttsim blackhole
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1, measured: 0, run: 2026-10-19}  # ttsim blackhole
