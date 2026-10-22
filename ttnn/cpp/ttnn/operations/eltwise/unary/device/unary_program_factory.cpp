@@ -636,9 +636,10 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
 
-    // Preserve Float32 input precision and bitcasts whose input buffer is interpreted as Float32.
-    // The latter must keep all 32 bits even when the source tensor has an integer dtype.
-    // Other Float32 buffers under a 32-bit Dest retain the explicit UnpackToSrc mode required by Metal 2.0.
+    // Preserve Float32 input precision and every buffer a bitcast interprets as Float32. Bitcast formats
+    // its input buffer as the output dtype, so a bitcast to Float32 must carry all 32 bits of each word,
+    // whatever the source dtype (ttnn::bitcast does not check widths, so this includes bfloat16).
+    // Any other Float32 buffer under a 32-bit Dest keeps the explicit UnpackToSrc mode Metal 2.0 requires.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets

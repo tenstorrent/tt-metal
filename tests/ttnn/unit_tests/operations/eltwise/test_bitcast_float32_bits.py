@@ -27,6 +27,8 @@ import ttnn
         (ttnn.TILE_LAYOUT, "block_sharded"),
         (ttnn.ROW_MAJOR_LAYOUT, "dram"),
         (ttnn.ROW_MAJOR_LAYOUT, "l1"),
+        (ttnn.ROW_MAJOR_LAYOUT, "height_sharded"),
+        (ttnn.ROW_MAJOR_LAYOUT, "block_sharded"),
     ],
 )
 def test_bitcast_preserves_all_32bit_words(device, source_dtype, target_dtype, layout, memory):
@@ -67,5 +69,6 @@ def test_bitcast_preserves_all_32bit_words(device, source_dtype, target_dtype, l
     source = ttnn.from_torch(host, dtype=source_dtype, layout=layout, device=device, memory_config=memory_config)
     assert torch.equal(ttnn.to_torch(source).view(torch.int32), words), "Input upload changed stored words"
     output = ttnn.bitcast(source, target_dtype, memory_config=memory_config)
+    assert output.dtype == target_dtype
     actual = ttnn.to_torch(output).view(torch.int32)
     assert torch.equal(actual, words), f"Bitcast changed {int((actual != words).sum())} stored 32-bit words"
