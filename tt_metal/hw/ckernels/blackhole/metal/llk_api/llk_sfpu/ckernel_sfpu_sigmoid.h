@@ -40,9 +40,11 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     return result;
 }
 
-// The BF16-grade sigmoid of _sfpu_sigmoid_<false>, operation for operation (exp_21f of -x, then one Newton step of
-// the reciprocal of 1 + exp(-x)), with its constants in registers the caller loads once per call, so its loop
-// reloads no FP32 constant. (-x) / ln2 is formed as x * -(1 / ln2): the product is the same, sign included.
+// The BF16-grade sigmoid of _sfpu_sigmoid_<false> (exp_21f of -x, then one Newton step of the reciprocal of
+// 1 + exp(-x)), with its constants in registers the caller loads once per call, so its loop reloads no FP32 constant.
+// (-x) / ln2 is formed as x * -(1 / ln2): the product is the same, sign included. The exponent is clamped at 254
+// rather than 255, so exp(-x) stays finite (below 2**128) and the reciprocal needs no NaN guard: from 2**126 up its
+// estimate is 0 and the Newton step keeps it 0, the result the guarded step gives for an infinite exp(-x).
 struct SigmoidBf16Constants {
     sfpi::vFloat neg_one_ln2 = -1.4426950216293334961f;
     sfpi::vFloat exp_bias = 127.f;
@@ -53,14 +55,14 @@ struct SigmoidBf16Constants {
 
 template <typename Constants>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_bf16_preloaded_(sfpi::vFloat x, const Constants& k) {
-    sfpi::vFloat xlog2 = sfpi::clamp(x * k.neg_one_ln2 + k.exp_bias, 0.0f, 255.0f);
+    sfpi::vFloat xlog2 = sfpi::clamp(x * k.neg_one_ln2 + k.exp_bias, 0.0f, 254.0f);
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
     sfpi::vInt exponential_part = sfpi::exexp(z, sfpi::ExponentMode::Biased);
     sfpi::vMag fractional_part = sfpi::exman(z);
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
     frac = PolynomialEvaluator::eval(frac, k.c0, k.c1, k.c2);
     sfpi::vFloat exp_neg_x = sfpi::setexp(frac, exponential_part);
-    return sfpu_reciprocal_iter<1>(1.0f + exp_neg_x);
+    return sfpu_reciprocal_iter<1, /*normalized=*/true>(1.0f + exp_neg_x);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
