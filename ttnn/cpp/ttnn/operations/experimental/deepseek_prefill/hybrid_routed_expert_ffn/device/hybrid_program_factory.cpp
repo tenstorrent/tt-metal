@@ -1190,7 +1190,10 @@ constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
 // a property of the UNION, not of that op -- it must track upstream's highest index.
 constexpr uint32_t CB_BASE =
     ::ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::geometry::CB_DOWN_BIAS + 1;
-constexpr uint32_t CB_IN0_X = CB_BASE + 0;
+// Tilize-once output: the helper asserts its CB index is below 32 (see CB_X_RM), so it takes
+// the base slot. CB_IN0_X is no longer a tilize operand and moves above the 25..31 block.
+constexpr uint32_t CB_X_TILIZED = CB_BASE + 0;
+constexpr uint32_t CB_IN0_X = CB_BASE + 20;
 constexpr uint32_t CB_IN1_GATE = CB_BASE + 16;
 constexpr uint32_t CB_IN1_UP = CB_BASE + 2;
 constexpr uint32_t CB_IN1_DOWN = CB_BASE + 3;
@@ -1222,10 +1225,8 @@ constexpr uint32_t CB_START_SCRATCH_READER = CB_BASE + 15;
 // bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
 // created (and never touched by the kernels) when x is already TILE.
 // Swapped down out of the +16 slot it would otherwise take: tilize_helpers.inl asserts both
-// the tilize input (this) and its output (CB_IN0_X) are below CB index 32, which is stricter
+// the tilize input (this) and its output (CB_X_TILIZED) are below CB index 32, which is stricter
 // than the 64 slots the hardware has, and the fused block already occupies 0..24.
-// Swapped down out of the +16 slot: tilize_helpers.inl asserts the tilize input (this) and
-// its output (CB_IN0_X) are both below CB index 32, and the fused block occupies 0..24.
 constexpr uint32_t CB_X_RM = CB_BASE + 1;
 // Optional per-expert projection biases (gpt-oss, FUSE_BIAS). Each holds this
 // core's N-column slice of the (1, N) bias, read once by the reader and added
@@ -1498,10 +1499,10 @@ void append_to_descriptor(
     // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
+        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
@@ -1790,23 +1791,23 @@ void append_to_descriptor(
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
-    // both on the compute threads sharing DST -> serial), so a second slot buys no
-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
-    // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
-    // while N's posted mcast still drains — single-buffering reuses the slot
-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
-    // unchanged.
+    // Row-major x is tilized once per M-row and multicast as bf8_b, so the reader fills
+    // cb_in0_x in both layouts and both double-buffer it: block kb+1 lands while kb's
+    // matmul runs.
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2u, in0_x_tile_size);
+    // Row-major bf16 x staging and its bf8_b tilize output (x_is_row_major only;
+    // skipped when x is TILE so the bf8_b path's L1 is unchanged).
+    // Single slot each: only the K-block's owner uses them, and a core owns at most one
+    // block per owner-rotation period, so one block is in flight per core. cb_x_rm is no
+    // longer a multicast source; cb_x_tilized is, and its reader frees it only after the
+    // multicast has been acked.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles,
             tt::tile_size(tt::DataFormat::Float16_b));
+        make_cb(CB_X_TILIZED, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -1878,9 +1879,10 @@ void append_to_descriptor(
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * 2u, in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tilized", gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -2102,6 +2104,7 @@ void append_to_descriptor(
         .source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = core_range_set,
         .compile_time_args = reader_ct_args,
+        .named_compile_time_args = {{"cb_x_tilized", CB_X_TILIZED}},
         .defines = {reader_defines.begin(), reader_defines.end()},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
@@ -2240,6 +2243,8 @@ void append_to_descriptor(
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
         {"cb_x_rm", CB_X_RM},
+        // bf8_b tilize-once staging (x_is_row_major only); tilize output on owner cores.
+        {"cb_x_tilized", CB_X_TILIZED},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},
@@ -2566,7 +2571,10 @@ void append_to_descriptor(
         compute_descriptor.emplace_runtime_args(
             core,
             {(valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
-             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w});   // 1 down valid N subblocks
+             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+             gx,                                                        // 2 tilize-once: own column
+             GRID_X,                                                    // 3 tilize-once: M-row width
+             gy});                                                      // 4 tilize-once: own row
     }
 
     descriptor.kernels.push_back(std::move(reader_descriptor));
