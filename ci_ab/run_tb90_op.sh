@@ -22,13 +22,13 @@ tests/ttnn/unit_tests/operations/data_movement/test_permute.py
 tests/ttnn/unit_tests/operations/data_movement/test_sort.py"
 setarm C
 for t in $FUNC; do
-  timeout -s INT -k 60 1500 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread -x --maxfail=50 $t > $OUT/func_C.log 2>&1
+  timeout -s INT -k 60 1200 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread --maxfail=50 $t > $OUT/func_C.log 2>&1
   echo "== func C $t: $(grep -aE '[0-9]+ (passed|failed)' $OUT/func_C.log | tail -1)"
   grep -aE '^(FAILED|ERROR) ' $OUT/func_C.log | cut -c1-250 | sort -u | head -30 > $OUT/fail_C.txt; cat $OUT/fail_C.txt
   if [[ -s $OUT/fail_C.txt ]]; then
     setarm H
     sed 's/^[A-Z]* //; s/ - .*//' $OUT/fail_C.txt > $OUT/rerun.txt
-    timeout -s INT -k 60 1500 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread $(cat $OUT/rerun.txt | tr '\n' ' ') > $OUT/func_H.log 2>&1
+    timeout -s INT -k 60 1200 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread $(cat $OUT/rerun.txt | tr '\n' ' ') > $OUT/func_H.log 2>&1
     echo "== rerun on head $t: $(grep -aE '[0-9]+ (passed|failed)' $OUT/func_H.log | tail -1)"
     setarm C
   fi
