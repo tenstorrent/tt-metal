@@ -57,8 +57,13 @@ constexpr uint32_t scale_bits = get_compile_time_arg_val(15);
 constexpr uint32_t M = get_compile_time_arg_val(16);
 constexpr uint32_t G = get_compile_time_arg_val(17);
 constexpr uint32_t Tt = 1;  // this core's packed Q tiles (of M / 4): one
-static_assert(M / 4 == 2, "2 packed Q tiles per kv head, one per core (the 2 cores share the K / V reads)");
+static_assert(
+    M == 8 || M <= 4, "one packed Q tile per core: 2 per kv head (M = 8) or 1 (M <= 4, its first M row groups)");
+#ifdef BA_SWIN
+constexpr uint32_t NM = 4;  // causal masks (tiles 1, 2), the window's first 2 chunks' masks (tiles 3, 4)
+#else
 constexpr uint32_t NM = 2;
+#endif
 constexpr uint32_t mask_sink = NM * Tt + 1, tile_sink = NM * Tt + 2, tile_zero = NM * Tt + 3;  // cb_aux tiles
 
 // formats for the next op: SrcA, SrcB operands and the pack output (compute_kernel_hw_startup runs once, at the start)
@@ -217,7 +222,14 @@ void kernel_main() {
 #endif
     const bool root = (info >> 14) & 1;
     const uint32_t rounds = (info >> 15) & 7;
+#ifdef BA_SWIN
+    const int32_t off =
+        static_cast<int32_t>((info >> 18) & 0x7F) - 1;          // chunk j: causal mask e = j - off (0 <= e <= 1)
+    const int32_t woff = static_cast<int32_t>(info >> 25) - 1;  // chunk j: window mask e = j - woff
+#else
     const int32_t off = static_cast<int32_t>(info >> 18) - 1;  // chunk j takes causal mask e = j - off (0 <= e <= 1)
+    constexpr int32_t woff = -1000;
+#endif
     const uint32_t n_groups = (nc + G - 1) / G;
 
     cb_wait_front(cb_q, 2 * Tt);
@@ -271,7 +283,9 @@ void kernel_main() {
         for (uint32_t b = 0; b < nb; ++b) {
             const int32_t e = static_cast<int32_t>(j0 + jb + b) - off;
             const uint32_t jg = j0 + jb + b;
+            const int32_t ew = static_cast<int32_t>(jg) - woff;
             const uint32_t mk = (e == 0 || e == 1)       ? 1 + NM * t + e
+                                : (ew == 0 || ew == 1)   ? 3 + NM * t + ew
                                 : (win_first && jg == 0) ? 1 + NM * t + 1
                                                          : tile_zero;
             add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_aux, mk, b);

@@ -1,0 +1,189 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// A copy of ttnn's moe_gpt SwiGLU SFPU (ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h)
+// for the grouped MoE (gmoe_gu_compute.cpp), with the namespace renamed so both can coexist.
+
+#pragma once
+
+//=============================================================================
+// GPT-OSS SwiGLU Activation for SFPU (runs on PACK thread)
+//
+// Formula:
+//   gate_clamped = clamp(gate, max=clamp_limit)
+//   up_clamped   = clamp(up, min=-clamp_limit, max=clamp_limit)
+//   result       = (up_clamped + 1) * gate_clamped * sigmoid(alpha * gate_clamped)
+//
+// Usage:
+//   // With default GPT-OSS config (alpha=1.702, clamp_limit=7.0):
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(gate, up, out)));
+//
+//   // With custom config:
+//   struct MyConfig { static constexpr float alpha = 1.0f; static constexpr float clamp_limit = 5.0f; };
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false, MyConfig>(gate, up, out)));
+//
+// This header is designed to be reusable across different models.
+// Include it from a compute kernel that runs SFPU on the PACK or MATH thread.
+//=============================================================================
+
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+
+namespace ckernel::sfpu::gmoe_swiglu {
+
+//-----------------------------------------------------------------------------
+// Configuration structs - add new models here
+//-----------------------------------------------------------------------------
+struct SwiGLUConfigGPTOSS {
+    static constexpr float alpha = 1.702f;
+    static constexpr float clamp_limit = 7.0f;
+};
+
+//-----------------------------------------------------------------------------
+// Sigmoid: sigmoid(x) = 1 / (1 + exp(-x))
+// Precision level matches dest accumulation mode.
+//-----------------------------------------------------------------------------
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
+    sfpi::vFloat exp_neg_x;
+    if constexpr (is_fp32_dest_acc_en) {
+        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
+    } else {
+        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
+    }
+    sfpi::vFloat denominator = 1.0f + exp_neg_x;
+    if constexpr (is_fp32_dest_acc_en) {
+        return sfpu_reciprocal_iter<2>(denominator);
+    } else {
+        return sfpu_reciprocal_iter<1>(denominator);
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Core SwiGLU computation
+//-----------------------------------------------------------------------------
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
+inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+    constexpr float alpha = Config::alpha;
+    constexpr float clamp_limit = Config::clamp_limit;
+
+    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+
+        // Clamp gate: clamp(gate, max=clamp_limit)
+        v_if(gate > clamp_limit) { gate = clamp_limit; }
+        v_endif;
+
+        // Clamp up: clamp(up, min=-clamp_limit, max=clamp_limit)
+        v_if(up > clamp_limit) { up = clamp_limit; }
+        v_endif;
+        v_if(up < -clamp_limit) { up = -clamp_limit; }
+        v_endif;
+
+        // up = up + 1
+        up = up + 1.0f;
+
+        // sigmoid(alpha * gate)
+        sfpi::vFloat alpha_gate = gate * alpha;
+        sfpi::vFloat sig = _swiglu_sigmoid_<is_fp32_dest_acc_en>(alpha_gate);
+
+        // result = (up + 1) * gate * sigmoid(alpha * gate)
+        // Compute gate*sig first (bounded range, similar to SiLU), then multiply by up.
+        sfpi::vFloat glu = gate * sig;
+        sfpi::vFloat result = up * glu;
+
+        // Round to bf16 if not in fp32 dest accumulation mode
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
+        }
+
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+// calculate_swiglu times a third DST tile (the dense decode MoE's routing weights, dense_swiglu_compute.cpp): the
+// same products in the same order as the SwiGLU then a separate multiply, without that pass over DST
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
+inline void calculate_swiglu_weighted(
+    const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx, const uint w_tile_idx) {
+    constexpr float alpha = Config::alpha;
+    constexpr float clamp_limit = Config::clamp_limit;
+    constexpr uint dst_tile_size = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        v_if(gate > clamp_limit) { gate = clamp_limit; }
+        v_endif;
+        v_if(up > clamp_limit) { up = clamp_limit; }
+        v_endif;
+        v_if(up < -clamp_limit) { up = -clamp_limit; }
+        v_endif;
+        up = up + 1.0f;
+        sfpi::vFloat alpha_gate = gate * alpha;
+        sfpi::vFloat sig = _swiglu_sigmoid_<is_fp32_dest_acc_en>(alpha_gate);
+        sfpi::vFloat glu = gate * sig;
+        sfpi::vFloat result = up * glu;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
+        }
+        result = result * sfpi::dst_reg[w_tile_idx * dst_tile_size];
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
+        }
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+inline void swiglu_init() {
+    // SwiGLU uses sigmoid internally, which needs reciprocal table init.
+    recip_init<false, false>();
+}
+
+}  // namespace ckernel::sfpu::gmoe_swiglu
+
+namespace ckernel {
+
+inline void gmoe_swiglu_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::gmoe_swiglu::swiglu_init);
+}
+
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::gmoe_swiglu::SwiGLUConfigGPTOSS>
+inline void gmoe_swiglu(uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        gmoe_swiglu::calculate_swiglu,
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        vector_mode);
+}
+
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::gmoe_swiglu::SwiGLUConfigGPTOSS>
+inline void gmoe_swiglu_weighted(uint gate_tile, uint32_t up_tile, uint32_t w_tile, uint32_t out_tile) {
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        gmoe_swiglu::calculate_swiglu_weighted,
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        VectorMode::RC,
+        w_tile);
+}
+
+}  // namespace ckernel
+
+#endif  // TRISC_PACK || TRISC_MATH

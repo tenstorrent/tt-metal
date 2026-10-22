@@ -471,10 +471,23 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto mesh_workers = mesh_dram_bank_workers(device, noc);
+    // coord: one chip's program (its own placement: a mesh's chips can differ in harvesting and in where each bank's
+    // best reader is); none: one program for the mesh, on the placement every chip can use (mesh_dram_bank_workers)
+    MeshDramBankWorkers mesh_workers;
+    if (coord != nullptr) {
+        const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, *coord);
+        mesh_workers.workers.resize(per_bank.size());
+        for (const auto& [bank, core] : per_bank) {
+            TT_FATAL(bank < mesh_workers.workers.size(), "DRAM bank id {} out of range", bank);
+            mesh_workers.workers[bank] = core;
+        }
+    } else {
+        mesh_workers = mesh_dram_bank_workers(device, noc);
+    }
     const auto& primary_workers = mesh_workers.workers;
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
@@ -522,7 +535,9 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
+                        coord != nullptr
+                            ? *coord
+                            : tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
                         candidate,
                         primary_workers[bank],
                         noc);

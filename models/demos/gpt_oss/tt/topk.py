@@ -304,6 +304,29 @@ class TopKRouter:
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
 
+    def _dense_route(self, logits):
+        """[32, E] BF16 logits tile -> the dense routing weights (dense_route.cpp; K_SEL = top_k, every logit tied with
+        the top_k-th routed, up to 2 top_k)."""
+        from .fused_decode.boundary import KERNEL_DIR
+
+        mesh = logits.device()
+        gx = mesh.compute_with_storage_grid_size().x
+        cores = ttnn.num_cores_to_corerangeset(ttnn.TILE_SIZE, mesh.compute_with_storage_grid_size(), row_wise=True)
+        w = ttnn.empty(list(logits.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+                       memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        ct = [0, gx, self.top_k, 2 * self.top_k]  # (up to 2 top_k routed: ge(logits, kth) keeps every tie)
+        for t in (logits, w):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_route.cpp"), core_ranges=cores, compile_time_args=ct,
+            runtime_args=[], common_runtime_args=[logits.buffer_address(), w.buffer_address()],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+        )  # fmt: skip
+        cb = ttnn.CBDescriptor(total_size=128, core_ranges=cores, format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=128)])  # fmt: skip
+        ttnn.generic_op([logits, w], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb]))
+        return w
+
     def dense_decode(self, hidden_states):
         """Batched decode routing (one 32-token tile per device, fused_decode.config.dense_moe_decode_supported).
 
@@ -348,6 +371,12 @@ class TopKRouter:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
+        if tokens == ttnn.TILE_SIZE and self.num_experts == ttnn.TILE_SIZE:
+            # one program, one core per token (fused_decode/kernels/dense_route.cpp): the same selection, the softmax
+            # in fixed point on the RISC-V cores (as the DFlash verify's route program)
+            weights = self._dense_route(logits)
+            logits.deallocate(True)
+            return ttnn.reshape(weights, (tokens, self.num_experts))
         values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
         indices.deallocate(True)
         # Reductions, not column slices: a slice inside a tile becomes untilize + slice + tilize.
