@@ -1,0 +1,4 @@
+ci_ab/test_tp_prof.py::test_transpose[hs_64_1_256_128_b8]
+ci_ab/test_tp_prof.py::test_transpose[w_1_1_4096_4096]
+ci_ab/test_tp_prof.py::test_transpose[k_1_8_1024_128]
+ci_ab/test_tp_prof.py::test_transpose[dec_1_32_32_128]
