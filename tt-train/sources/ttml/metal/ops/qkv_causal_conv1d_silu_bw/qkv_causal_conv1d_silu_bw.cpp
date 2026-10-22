@@ -60,9 +60,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         const uint32_t tile_rows = row_count / tt::constants::TILE_HEIGHT;
         // Cost of one work item in 32-row steps: its own steps, the halo step, and a fixed overhead for loading the
         // taps and filling / draining the reader-compute-writer pipeline. Without the overhead the model prefers a
-        // second pass over the cores whenever it saves one step per item, and that loses on hardware: at
-        // T=4096, chunk 256, 4 splits (1 pass) beat 9 (2 passes) by 2% at C=6144, and 2 splits beat 16 (7 passes)
-        // by 12% at C=12288. Two steps of overhead reproduces both choices.
+        // second pass over the cores whenever it saves one step per item, and that loses on hardware. Measured on
+        // a p300 with a 110-core compute grid at T=4096, chunk 256: 4 splits (1 pass) beat 9 (2 passes) by 2% at
+        // C=6144, and 2 splits beat 16 (7 passes) by 12% at C=12288. Two steps of overhead reproduces both
+        // choices; the pass boundaries move with the grid size.
         constexpr uint64_t item_overhead_steps = 2;
         uint64_t best_cost = ~0ULL;
         for (uint32_t candidate = 1; candidate <= tile_rows; ++candidate) {

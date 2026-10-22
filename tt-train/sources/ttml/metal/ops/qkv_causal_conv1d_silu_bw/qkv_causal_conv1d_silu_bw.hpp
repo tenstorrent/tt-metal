@@ -10,8 +10,8 @@
 
 namespace ttml::metal {
 
-// Largest tile-aligned divisor of Q+K+V that is <= 256 and fits the per-core L1 budget. Measured on a p300 at
-// T=4096 with automatic row_splits (fused fw / fused bw, ms):
+// Largest tile-aligned divisor of Q+K+V that is <= 256 and fits the per-core L1 budget. Measured on a p300 with a
+// 110-core compute grid at T=4096 with automatic row_splits (fused fw / fused bw, ms):
 //   Q=K=V=2048: chunk 64 -> 1.12 / 1.12, 128 -> 0.82 / 1.00, 256 -> 0.42 / 0.92
 //   Q=K=V=4096: chunk 64 -> 2.24 / 2.26, 128 -> 1.60 / 1.92, 256 -> 0.80 / 1.73
 // 256 is fastest for both directions at both widths. Chunk 32 makes the reader issue 64-byte row reads and is
