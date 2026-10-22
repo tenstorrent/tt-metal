@@ -71,6 +71,31 @@ uint32_t emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, con
     return value;
 }
 
+// A sender channel's `name` argument, as the ERISCs in `serviced_by`, which run the channel, all receive it. The
+// builder gives an ERISC that doesn't run the channel either the same value or 0, for an argument it gates on running
+// the channel, such as SENDER_CH_{}_WAIT_STATIC_CONNECTION. When no ERISC runs the channel, every ERISC must agree.
+uint32_t sender_channel_value(
+    const std::vector<NamedArgs>& named_ct_args_per_risc,
+    const std::string& name,
+    const std::vector<uint32_t>& serviced_by) {
+    if (serviced_by.empty()) {
+        return emitted_value(named_ct_args_per_risc, name);
+    }
+    const uint32_t value = get_named_arg(named_ct_args_per_risc.at(serviced_by.front()), name);
+    for (uint32_t risc_id = 0; risc_id < named_ct_args_per_risc.size(); ++risc_id) {
+        const uint32_t actual = get_named_arg(named_ct_args_per_risc[risc_id], name);
+        const bool runs_channel = std::ranges::find(serviced_by, risc_id) != serviced_by.end();
+        TT_FATAL(
+            actual == value || (!runs_channel && actual == 0),
+            "Fabric manifest: ERISC{} {} is {}, but the ERISCs that run the channel have {}",
+            risc_id,
+            name,
+            actual,
+            value);
+    }
+    return value;
+}
+
 bool emitted_flag(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
     return emitted_value(named_ct_args_per_risc, name) != 0;
 }
@@ -491,7 +516,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         manifest::k_sender_channel_fields,
         {.compact = c, .fabric_position = index.fabric_position},
         ctx.emission,
-        [&](const std::string& name) { return emitted_value(args, name); });
+        [&](const std::string& name) { return sender_channel_value(args, name, sender.serviced_by); });
     return sender;
 }
 
