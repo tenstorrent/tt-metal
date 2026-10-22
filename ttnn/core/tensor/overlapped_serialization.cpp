@@ -54,9 +54,7 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
         // repeats the check) while the others wait in the barrier below.
         ttnn::verify_shards_match_topology(cpu_tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
     }
-    // Only rank 0 serializes and writes; the other ranks wait in the barrier below. If rank 0 fails the write itself
-    // they wait until the launcher tears the job down; reporting that needs a collective in place of the barrier;
-    // follow-up.
+    // Only rank 0 serializes and writes; the other ranks wait in the barrier below.
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         std::vector<SerializedTensorBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
