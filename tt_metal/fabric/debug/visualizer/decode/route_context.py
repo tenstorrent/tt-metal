@@ -4,7 +4,7 @@
 
 """
 What the route rules need of a manifest, read once per snapshot, and the keys decode names chips by. The routing tables
-and the slots both walk routes with it.
+and the ring buffer slots both walk routes with it.
 """
 
 from __future__ import annotations
@@ -37,12 +37,6 @@ class RouteContext:
     chip_keys: dict[str, dict[Coord, str]]  # each mesh's chip keys, by coordinate
     coords: dict[str, Coord]  # every chip's coordinate, by its key
     line: LineView1D | None  # a 1D run's wiring; None in a 2D run
-
-    def get_chip_key(self, mesh_key: str, coord: Coord) -> str:
-        key = self.chip_keys[mesh_key].get(coord)
-        if key is None:
-            raise ManifestError(f"meshes.{mesh_key} has no chip at {coord}")
-        return key
 
 
 def get_route_context(manifest: dict) -> RouteContext:
@@ -100,13 +94,14 @@ class ChipWalk2D:
 
 def name_walk_2d(walk: Walk2D, mesh_key: str, ctx: RouteContext) -> ChipWalk2D:
     """`walk`, a walk through mesh `mesh_key`, with its coordinates replaced by chip keys."""
-
-    def key(coord: Coord) -> str:
-        return ctx.get_chip_key(mesh_key, coord)
-
-    return ChipWalk2D(
-        delivers=[key(chip) for chip in walk.delivers],
-        steps=[ChipStep2D(key(step.src), step.direction, key(step.dst)) for step in walk.steps],
-        exits=[key(chip) for chip in walk.exits],
-        odd=[ChipOdd2D(key(odd.chip), odd.kind, odd.direction) for odd in walk.odd],
-    )
+    # One dict lookup per chip, since a walk of random bytes can take dozens of steps.
+    keys = ctx.chip_keys[mesh_key]
+    try:
+        return ChipWalk2D(
+            delivers=[keys[chip] for chip in walk.delivers],
+            steps=[ChipStep2D(keys[step.src], step.direction, keys[step.dst]) for step in walk.steps],
+            exits=[keys[chip] for chip in walk.exits],
+            odd=[ChipOdd2D(keys[odd.chip], odd.kind, odd.direction) for odd in walk.odd],
+        )
+    except KeyError as error:
+        raise ManifestError(f"meshes.{mesh_key} has no chip at {error.args[0]}") from None

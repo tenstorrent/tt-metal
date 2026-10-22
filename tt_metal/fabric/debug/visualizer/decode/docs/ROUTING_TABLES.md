@@ -60,7 +60,7 @@ store.routers["M0/C0/E0"].state_manager
 
 **The route context.** `get_route_context(manifest)` reads, once per snapshot, what the route rules need of the
 manifest: the encodings, the routing mode, each mesh's view, each chip's key and coordinate, and in a 1D run the
-extension words and the line view. The slots use it too, so the tables and the slots name chips the same way.
+extension words and the line view. The ring buffer slots use it too, so the tables and the slots name chips the same way.
 `name_walk_2d` turns a `Walk2D`'s coordinates into chip keys, as a `ChipWalk2D`.
 
 ## Storing each table once
