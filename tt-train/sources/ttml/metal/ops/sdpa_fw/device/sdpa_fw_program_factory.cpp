@@ -329,9 +329,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    // Circular buffers (CBs) are the L1 queues between the reader, compute and writer kernels.
-    // Inputs hold two chunks so the reader fetches the next one while compute works on the current.
-    // The per-row softmax state (max, sum, ...) is one tile per Q row of the chunk.
     const uint32_t cb_query_tiles = 2U * Sq_chunk_t * qWt;
     const uint32_t cb_key_tiles = 2U * Sk_chunk_t * kWt;
     const uint32_t cb_value_tiles = 2U * Sk_chunk_t * vWt;
