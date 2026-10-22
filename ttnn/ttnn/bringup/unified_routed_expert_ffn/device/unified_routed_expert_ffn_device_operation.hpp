@@ -56,8 +56,6 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t min_active_tokens = 0,
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
     bool high_precision = false,
-    const std::optional<ttnn::Tensor>& routing_weights = std::nullopt,
-    bool fp8_act_quant = false,
     bool weights_transposed = false);
 
 }  // namespace ttnn::prim::bringup

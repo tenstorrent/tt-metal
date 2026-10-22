@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""EXPERTS_COMBINE=weighted (P.8): the routed experts and their weighted combine in ONE program per chip, on the
+"""The routed experts (P.8; the only path since FIX.9): the flat expert and their weighted combine in ONE program per chip, on the
 model's layout (tokens replicated over the mesh row, dispatch groups = mesh columns, dispatch and combine along axis 0).
 
 Marko Staletovic's wiring (ttnn/ttnn/bringup/combine_rf/examples/scratch_flat_combine_rf.py) with the combine_rf
@@ -35,8 +35,8 @@ COMBINE_ACC=bf16 (P.9, sparse_combine_rf acc_dtype): the sums in bf16 (10 KB a t
 rounds each added row to bf16), so the 1024 home tokens fit the same 9 accumulators in ONE pass (114 tokens x 5 bf16
 tiles = 1140 KB an accumulator): the expert weights stream once a layer. TtExperts asserts the single pass for bf16.
 
-Rows are one fabric packet each (10240 B + a 32 B trailer): the mesh opens with a 10880 B fabric payload under
-EXPERTS_COMBINE=weighted (bringup/hooks.py:device_params). Everything that depends only on shapes is built once
+Rows are one fabric packet each (10240 B + a 32 B trailer): the mesh opens with a 10880 B fabric payload
+(bringup/hooks.py:device_params). Everything that depends only on shapes is built once
 per (mesh, chunk); the descriptors that bake the per-call arena's address once per address. No host work per call
 beyond program-cache bookkeeping.
 """

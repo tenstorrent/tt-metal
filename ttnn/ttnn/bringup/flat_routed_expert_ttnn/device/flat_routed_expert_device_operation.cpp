@@ -34,9 +34,6 @@ void FlatRoutedExpertDeviceOperation::validate_on_program_cache_miss(
         "whose first hidden values are whole 512 B read segments)",
         xw,
         cfg.hidden);
-    TT_FATAL(
-        cfg.routed_weight == t.routing_weights.has_value(),
-        "flat_routed_expert: routing_weights iff the config's routed_weight");
     for (const Tensor* r : {&t.counts, &t.regions}) {
         TT_FATAL(
             r->layout() == Layout::ROW_MAJOR && (r->dtype() == DataType::UINT32 || r->dtype() == DataType::INT32) &&

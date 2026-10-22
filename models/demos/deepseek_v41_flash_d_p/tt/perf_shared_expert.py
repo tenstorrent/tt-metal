@@ -1,21 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""SHARED_EXPERT_IMPL A/B (P.12): the shared expert as today's ttnn.linear chain vs the flat routed expert (always-on
-slices, bfp8 weights), on one layer at the run's chunk with the layer's real weights and random inputs.
+"""The shared expert on the flat routed expert (P.12: always-on slices, bfp8 weights; the only path since FIX.9, which
+deleted the ttnn.linear chain it was compared with), on one layer at the run's chunk with the layer's real weights
+and random inputs.
 
-Not a gate: a measurement for BREADCRUMBS / the SHARED_EXPERT_IMPL description. Per side, with the current settings
-otherwise (EXPERTS_PRECISION, FFN_NORM_DTYPE, CCL_IMPL, EXPERTS_COMBINE ...):
+Not a gate: a measurement for BREADCRUMBS / tt/shared_expert.py. With the current settings (EXPERTS_PRECISION,
+FFN_NORM_DTYPE, CCL_IMPL ...):
   shared   the mean wall time of N_CALLS synchronized shared-expert partials (the model's shared_expert step: the
-           forward has no host sync, so this is its device time per layer per chunk); flat: with its own row-major
+           forward has no host sync, so this is its device time per layer per chunk): with its own row-major
            conversion of x ("own") and reading the routed experts' gathered q(x) by token index ("rows", the model's
-           path under EXPERTS_COMBINE=weighted)
+           path)
   moe      the mean wall time of the MoE block as the model runs it (router -> experts.partial -> shared.partial ->
            moe_add -> the one reduce-scatter over the row), synchronized
   error    shared_out (partial reduced over the row) vs float64 with the checkpoint's exact fp8 weights on N_REF rows
-           (rel L2, bias <out - ref, ref> / |ref|^2, worst row); flat also vs float64 with the bfp8-rounded weights
+           (rel L2, bias <out - ref, ref> / |ref|^2, worst row); also vs float64 with the bfp8-rounded weights
            (ttnn's host packing: the device path apart from the weight format); the weights' bfp8 statistics
   ops      (prof: the device profiler env of testing/profiler.py) the device time per op of one more partial
+(P.12, layers 0 / 24, vs the linear chain: device 1431 -> 250 us a layer; rel vs float64 0.0030 linear, 0.020-0.022
+flat.)
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py -k time
@@ -77,7 +80,7 @@ def _timed(mesh, fn, n=N_CALLS) -> float:
 @pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
-def test_shared_flat_vs_linear(mesh_device, layer, prof):
+def test_shared_flat(mesh_device, layer, prof):
     from models.demos.deepseek_v41_flash_d_p.tt import ccl
     from models.demos.deepseek_v41_flash_d_p.tt.experts import build_experts
     from models.demos.deepseek_v41_flash_d_p.tt.router import build_router
@@ -89,7 +92,7 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
     mesh = mesh_device
     R = mesh.shape[0]
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    keys = ("EXPERTS_PRECISION", "MATMUL_FIDELITY", "FFN_NORM_DTYPE", "CCL_IMPL", "EXPERTS_COMBINE")
+    keys = ("EXPERTS_PRECISION", "MATMUL_FIDELITY", "FFN_NORM_DTYPE", "CCL_IMPL")
     tag = " ".join(f"{k}={settings.get(k)}" for k in keys)
     g = torch.Generator().manual_seed(layer)
     x = torch.randn(chunk, cfg.dim, generator=g)
@@ -112,11 +115,11 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
     router = build_router(mesh, ck, cfg, layer, chunk)
     experts = build_experts(mesh, ck, cfg, layer, chunk)
     outs = {}
-    for impl in ("linear", "flat"):
+    for impl in ("flat",):
         t0 = time.time()
-        se = SE.build_shared_expert(mesh, ck, cfg, layer, chunk=chunk, impl=impl)
+        se = SE.build_shared_expert(mesh, ck, cfg, layer, chunk=chunk)
         load = time.time() - t0
-        rows_ok = impl == "flat" and se.reads_rows and experts.weighted
+        rows_ok = se.reads_rows
         experts.keep_rows = rows_ok
 
         def moe():
@@ -132,7 +135,7 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
 
         sides = {"own": lambda: ttnn.deallocate(se.partial(xd))}
         if rows_ok:
-            # (the routed experts' gathered rows, as the weighted path hands them over; made once, re-used per call)
+            # (the routed experts' gathered rows, as the model hands them over; made once, re-used per call)
             rows = experts.wc.gather_x(xd if xdt == ttnn.bfloat16 else ttnn.typecast(xd, ttnn.bfloat16))
 
             def with_rows():
@@ -209,7 +212,6 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
             ttnn.deallocate(rows)
         experts.keep_rows = False
         del se
-    print(f"SHARED_CMP L{layer:02d} flat vs linear: {_err(outs['flat'][sel], outs['linear'][sel])}")
     assert bool(torch.isfinite(outs["flat"]).all())
     ttnn.deallocate(xd)
     experts.free()
@@ -232,7 +234,7 @@ VARIANTS = {  # flat_opts of TtSharedExpert (comparison only): the setting's own
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 def test_flat_variants(mesh_device, layer):
     """The flat shared expert's tile formats / fidelity / packer rounding (own x path): partial time and shared_out
-    vs float64 (exact and bfp8-rounded weights), to pick what SHARED_EXPERT_IMPL=flat ships."""
+    vs float64 (exact and bfp8-rounded weights), to pick what the flat shared expert ships."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
     S = spec()
@@ -251,7 +253,7 @@ def test_flat_variants(mesh_device, layer):
     ref8 = _ref64(x[sel], wq["w1"], wq["w3"], wq["w2"], lim)
     xd = row_split_to_device(mesh, x, dtype=xdt)
     for name, opts in VARIANTS.items():
-        se = SE.build_shared_expert(mesh, ck, cfg, layer, chunk=chunk, impl="flat", flat_opts=opts)
+        se = SE.build_shared_expert(mesh, ck, cfg, layer, chunk=chunk, flat_opts=opts)
         ms = _timed(mesh, lambda: ttnn.deallocate(se.partial(xd)))
         od = se(xd)
         got = hidden_split_to_host(mesh, od).double()[sel]
