@@ -24,9 +24,10 @@ _MAX_OUT_BLOCK_H = 12
 _MINIMAL_BLOCKS = ((16, 8, 4), (4, 1))
 _SWIGLU_M_BLOCK = 8
 # minimal_matmul_split ((M, K, N) blocks, subblock) per chunk count, from tests/perf/sweep_qkv_split.py:
-#   2  [Wk | Wv]       swept as [Wv | Wg] (same shape): 1.90 ms vs 2.58 ms as two linears (doc/optimize/iter_04)
-#   3  [Wq | Wk | Wv]  2.79 ms vs the fused 2D linear's 2.76 ms (doc/optimize/iter_03)
-_SPLIT_BLOCKS = {2: ((16, 4, 6), (8, 1)), 3: ((16, 12, 4), (2, 4))}
+#   2  [Wv | Wg], [Wk | Wv]  1.90 ms vs 2.58 ms as two linears (doc/optimize/iter_04)
+#   3  [Wq | Wk | Wv]        2.79 ms vs the fused 2D linear's 2.76 ms (doc/optimize/iter_03)
+#   4  [Wq | Wk | Wv | Wg]   3.63 vs 2.62 + 1.36 ms device as the 3-chunk split plus wg (doc/optimize/iter_04)
+_SPLIT_BLOCKS = {2: ((16, 4, 6), (8, 1)), 3: ((16, 12, 4), (2, 4)), 4: ((16, 8, 6), (4, 2))}
 
 
 def _largest_divisor_at_most(n: int, cap: int) -> int:

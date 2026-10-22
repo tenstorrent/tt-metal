@@ -7,12 +7,12 @@ reference : models/experimental/timestral/reference/src/timestral/layers.py (``A
     xn = RMSNorm(x)                                   # gain folded into Wqkv and Wg
     q, k, v = heads(xn @ Wqkv)                        # rows reordered to (qkv, heads, head_dim)
     time:    q, k = RoPE(q, k); ctx = SDPA(q, k, v)   # causal, or the uploaded mask
-             q, k, v come out of the matmul as three flat tensors; one fused op per tensor splits
-             the heads head-major (1, H, R * S_pad, Dh) and applies RoPE to q, k (pair order), and
-             SDPA runs on the (H, R, S_pad, Dh) view of that layout
-    variate: one row per series -> ctx = v exactly (softmax over one key)
+             q, k, v and xn @ Wg come out of one [Wq | Wk | Wv | Wg] matmul as four flat tensors;
+             one fused op per tensor splits the heads head-major (1, H, R * S_pad, Dh) and applies
+             RoPE to q, k (pair order), and SDPA runs on the (H, R, S_pad, Dh) view of that layout
+    variate: one row per series -> ctx = v exactly (softmax over one key), [Wv | Wg] in one matmul
              else SDPA over each series' rows, (S * B, H, V, Dh)
-    return (merge(ctx) * sigmoid(xn @ Wg)) @ Wo
+    return (merge(ctx) * sigmoid(xn @ Wg)) @ Wo       # the sigmoid inside the MUL where Wg was packed
 
 With ``SplitStreams`` the context and decoder tokens are two flat streams. Context queries attend
 causally on (H, R, L_pad, Dh); the decoder queries of ``rows_per_block`` rows fill one tile and attend
@@ -103,14 +103,18 @@ class TtAttention:
         self.is_time = weights.is_time
         self.eps = weights.eps
         dtype = precision.weight_dtype()
-        self._wqkv = upload_linear(device, weights.wqkv, dtype)
-        self._wkv = upload_linear(device, weights.wqkv[self.d_model :], dtype) if kv_only else None
-        self._wv = None if weights.is_time else upload_linear(device, weights.wv, dtype)
-        self._wg = upload_linear(device, weights.wg, dtype)
-        self._wo = upload_linear(device, weights.wo, precision.weight_dtype(residual=True))
-        self._ones = upload(device, torch.ones(1, self.d_model))
+        d = self.d_model
+        # The gate's pre-activation rides along as the last chunk of the split projections.
         if weights.is_time:
+            self._wqkvg = upload_linear(device, torch.cat([weights.wqkv, weights.wg]), dtype)
+            self._wkv = upload_linear(device, weights.wqkv[d:], dtype) if kv_only else None
             self._rope_trans = upload(device, pair_rotation(TILE).reshape(1, 1, TILE, TILE))
+        else:
+            self._wqkv = upload_linear(device, weights.wqkv, dtype)
+            self._wvg = upload_linear(device, torch.cat([weights.wv, weights.wg]), dtype)
+            self._wg = upload_linear(device, weights.wg, dtype)
+        self._wo = upload_linear(device, weights.wo, precision.weight_dtype(residual=True))
+        self._ones = upload(device, torch.ones(1, d))
 
     def __call__(self, x, inputs: TtAttentionInputs, residual=None, decoder: DecoderSlots | None = None):
         """Flat device ``(1, 1, R * S_pad, D)`` -> same shape, plus ``residual`` (added in the wo
@@ -119,18 +123,21 @@ class TtAttention:
         import ttnn
 
         xn = rms_norm(x, self.eps, self.precision)
-        merged = self._context(xn, inputs)
+        merged, gate_logits = self._context(xn, inputs)
+        if gate_logits is not None:
+            ttnn.deallocate(xn)
+            xn = None
         if decoder is None:
-            return self._output(merged, xn, residual)
+            return self._output(merged, xn, residual, gate_logits)
         # Nothing after the context mixes token slots.
-        full = (merged, xn)
-        merged, xn = decoder.take(merged, inputs), decoder.take(xn, inputs)
+        full = [t for t in (merged, xn, gate_logits) if t is not None]
+        merged, xn, gate_logits = (None if t is None else decoder.take(t, inputs) for t in (merged, xn, gate_logits))
         for t in full:
             ttnn.deallocate(t)
         if residual is None:
-            return self._output(merged, xn, None)
+            return self._output(merged, xn, None, gate_logits)
         residual = decoder.take(residual, inputs)
-        out = self._output(merged, xn, residual)
+        out = self._output(merged, xn, residual, gate_logits)
         ttnn.deallocate(residual)
         return out
 
@@ -142,36 +149,47 @@ class TtAttention:
         p, ctx, dec = self.precision, streams.context, streams.decoder
         xn_c = rms_norm(x_c, self.eps, p)
         if context_out:
-            q_c, k_c, v_c = linear_split(xn_c, self._wqkv, p, 3)
+            q_c, k_c, v_c, g_c = linear_split(xn_c, self._wqkvg, p, 4)
         else:
             k_c, v_c = linear_split(xn_c, self._wkv, p, 2)
-            ttnn.deallocate(xn_c)
+        ttnn.deallocate(xn_c)
         k_c, v_c = self._heads(k_c, ctx, rope=True), self._heads(v_c, ctx, rope=False)
         xn_d = rms_norm(x_d, self.eps, p)
-        q_d, k_d, v_d = linear_split(xn_d, self._wqkv, p, 3)
+        q_d, k_d, v_d, g_d = linear_split(xn_d, self._wqkvg, p, 4)
+        ttnn.deallocate(xn_d)
         q_d, k_d, v_d = (
             self._heads(q_d, dec, rope=True),
             self._heads(k_d, dec, rope=True),
             self._heads(v_d, dec, rope=False),
         )
-        y_d = self._output(self._decoder_attention(q_d, k_c, v_c, k_d, v_d, streams), xn_d, x_d)
+        y_d = self._output(self._decoder_attention(q_d, k_c, v_c, k_d, v_d, streams), None, x_d, g_d)
         if not context_out:
             ttnn.deallocate(k_c)
             ttnn.deallocate(v_c)
             return None, y_d
         merged_c = self._time_sdpa(self._heads(q_c, ctx, rope=True), k_c, v_c, ctx)
-        return self._output(merged_c, xn_c, x_c), y_d
+        return self._output(merged_c, None, x_c, g_c), y_d
 
-    def _output(self, merged, xn, residual):
-        """``(merged * sigmoid(xn @ Wg)) @ Wo``, plus ``residual`` when given; consumes ``merged`` and ``xn``."""
+    def _output(self, merged, xn, residual, gate_logits=None):
+        """``(merged * sigmoid(gate_logits)) @ Wo``, plus ``residual`` when given; without ``gate_logits``
+        they are ``xn @ Wg``. Consumes ``merged``, ``xn`` and ``gate_logits``."""
         import ttnn
 
         p = self.precision
-        gate = linear(xn, self._wg, p, activation="sigmoid")
-        ttnn.deallocate(xn)
-        gated = ttnn.mul(merged, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if gate_logits is None:
+            gate = linear(xn, self._wg, p, activation="sigmoid")
+            ttnn.deallocate(xn)
+            gated = ttnn.mul(merged, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(gate)
+        else:
+            gated = ttnn.mul(
+                merged,
+                gate_logits,
+                input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(gate_logits)
         ttnn.deallocate(merged)
-        ttnn.deallocate(gate)
         if residual is None:
             out = linear(gated, self._wo, p)
         else:
@@ -180,11 +198,12 @@ class TtAttention:
         return out
 
     def _context(self, xn, inputs: TtAttentionInputs):
+        """``(merged, gate_logits)``; ``gate_logits`` is None where the gate is computed from ``xn``."""
         if self.is_time:
             return self._time_context(xn, inputs)
         if inputs.group_size == 1:
-            return linear(xn, self._wv, self.precision)
-        return self._variate_context(xn, inputs)
+            return tuple(linear_split(xn, self._wvg, self.precision, 2))
+        return self._variate_context(xn, inputs), None
 
     def _split_heads(self, qkv):
         import ttnn
@@ -243,13 +262,14 @@ class TtAttention:
         return out
 
     def _time_context(self, xn, inputs: TtAttentionInputs):
-        q, k, v = linear_split(xn, self._wqkv, self.precision, 3)
-        return self._time_sdpa(
+        q, k, v, gate_logits = linear_split(xn, self._wqkvg, self.precision, 4)
+        merged = self._time_sdpa(
             self._heads(q, inputs, rope=True),
             self._heads(k, inputs, rope=True),
             self._heads(v, inputs, rope=False),
             inputs,
         )
+        return merged, gate_logits
 
     def _time_sdpa(self, q, k, v, inputs: TtAttentionInputs):
         """Head-major ``(1, H, R * S_pad, Dh)`` q, k, v -> merged ``(1, 1, R * S_pad, D)``; consumes them."""

@@ -1,4 +1,16 @@
-# R4-2: wg packed into the split projections (rejected)
+# R4-2: wg packed into the split projections (rejected on the single stream, accepted on the split streams)
+
+## Re-measured on the split streams (accepted)
+
+Same packing on top of R4-1 and R4-4 to R4-6: `[Wq | Wk | Wv | Wg]` on both streams of every time attention,
+`[Wv | Wg]` on the univariate variate path, the sigmoid on the gate MUL's input b. The last layer's context
+stream still computes only `[Wk | Wv]`, so the last-layer cost that sank it on the single stream is gone.
+
+Benchmark (`candidates/r4_2b_packed_gate_split.json` vs `candidates/r4_6_cached_constants.json`): paper device
+362.8 → 354.2 ms (−2.4 %), wall 412.4 → 408.6 ms; performance 349.8 → 338.1 ms (−3.3 %), long_context
+194.1 → 188.5 ms (−2.9 %), multivariate 567.4 → 560.6 ms (−1.2 %). PCC 0.99996.
+
+## Single stream (rejected)
 
 Candidate: time attention `minimal_matmul_split(xn, [Wq | Wk | Wv | Wg], chunks=4)` (M16 / K8 / N6, subblock 4x2),
 univariate V-path `[Wv | Wg]` with 2 chunks (M16 / K4 / N6, subblock 8x1), and the sigmoid applied to the
