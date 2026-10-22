@@ -1,0 +1,39 @@
+# Host-bridged inter-mesh links (E2H2H2E rank to rank over MPI): every link that leaves its mesh is
+# built on the host bridge transport and all inter-mesh pairs exchange traffic across them. Needs two
+# or more meshes on separate ranks, e.g. one 4-chip Blackhole box as two 1x2 meshes:
+#   tt-run --rank-binding tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh_rank_bindings.yaml \
+#       build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config <this file>
+# The test infra builds these fabrics single-erisc (bridged routers need it).
+Tests:
+  - name: "HostBridgeInterMeshAllToAll"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: intermesh
+        type: host_bridge
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+        mesh_scope: inter_mesh
+
+  - name: "HostBridgeInterMeshNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: intermesh
+        type: host_bridge
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 32
+      num_packets: 10000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh

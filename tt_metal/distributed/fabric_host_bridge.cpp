@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/host_bridge_links.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -29,8 +30,11 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 
 namespace tt::tt_metal::distributed {
 
@@ -199,8 +203,18 @@ struct FabricHostBridge::Impl {
         std::unique_ptr<HostTransport> transport;
         std::shared_ptr<RelayEndpoint> endpoint;
     };
-    struct Link {
-        FabricHostBridgeLink cfg;
+    // One bridged router on this host. A link inside this host contributes two ends.
+    struct End {
+        tt::tt_fabric::FabricNodeId node{tt::tt_fabric::MeshId{0}, 0};
+        tt::tt_fabric::chan_id_t eth_chan = 0;
+        MeshCoordinate coord{0, 0};
+        tt::tt_fabric::FabricNodeId peer_node{tt::tt_fabric::MeshId{0}, 0};
+        tt::tt_fabric::chan_id_t peer_chan = 0;
+        multihost::Rank peer_rank{0};
+        // Both ends of a link derive the same id, which selects its MPI tags (or the loopback pair).
+        uint32_t link_id = 0;
+        // The lower end owns streams 0 and 1 (its tx and rx rings), the upper end streams 2 and 3.
+        bool lower = false;
         ChipId device_id = 0;
         CoreCoord eth_noc0;
         tt_cxy_pair target{0, 0, 0};
@@ -209,12 +223,38 @@ struct FabricHostBridge::Impl {
     };
 
     std::shared_ptr<MeshDevice> mesh;
-    std::vector<Link> links;
+    std::vector<End> ends;
     std::vector<std::shared_ptr<RelayEndpoint>> endpoints;
 };
 
-FabricHostBridge::FabricHostBridge(
-    const std::shared_ptr<MeshDevice>& mesh_device, std::vector<FabricHostBridgeLink> links, uint32_t ring_pages) :
+namespace {
+
+using LinkKey = std::tuple<uint32_t, uint32_t, uint32_t>;  // mesh, chip, chan
+
+LinkKey link_key(tt::tt_fabric::FabricNodeId node, tt::tt_fabric::chan_id_t chan) {
+    return {*node.mesh_id, static_cast<uint32_t>(node.chip_id), static_cast<uint32_t>(chan)};
+}
+
+// The MPI rank whose mesh device holds `node`.
+multihost::Rank rank_of(
+    const tt::tt_fabric::ControlPlane& control_plane, tt::tt_fabric::FabricNodeId node, multihost::Rank my_rank) {
+    const auto host_rank = control_plane.get_mesh_graph().get_host_rank_for_chip(node.mesh_id, node.chip_id);
+    const auto local_meshes = control_plane.get_local_mesh_id_bindings();
+    if (std::find(local_meshes.begin(), local_meshes.end(), node.mesh_id) != local_meshes.end() &&
+        host_rank == control_plane.get_local_host_rank_id_binding()) {
+        return my_rank;
+    }
+    for (const auto& [rank, binding] : control_plane.get_global_logical_bindings()) {
+        if (binding.first == node.mesh_id && host_rank.has_value() && binding.second == *host_rank) {
+            return rank;
+        }
+    }
+    TT_THROW("FabricHostBridge: no rank owns mesh {} chip {}", *node.mesh_id, node.chip_id);
+}
+
+}  // namespace
+
+FabricHostBridge::FabricHostBridge(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t ring_pages) :
     impl_(std::make_unique<Impl>()) {
     TT_FATAL(mesh_device != nullptr, "FabricHostBridge needs a mesh device");
     TT_FATAL(ring_pages >= 2, "FabricHostBridge: ring_pages must be at least 2");
@@ -223,78 +263,107 @@ FabricHostBridge::FabricHostBridge(
     auto& env = mesh_device->impl().metal_env();
     auto& cluster = env.get_cluster();
     const auto& hal = env.get_hal();
-    const auto& router_cfg =
-        env.get_control_plane().get_fabric_context().get_builder_context().get_fabric_router_config();
+    const auto& control_plane = env.get_control_plane();
+    const auto& spec = env.get_rtoptions().get_fabric_host_bridge();
+    const auto& router_cfg = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
     TT_FATAL(
-        router_cfg.host_bridge_block_address != 0,
+        !spec.empty() && router_cfg.host_bridge_block_address != 0,
         "FabricHostBridge: no router was built host-bridged; set TT_METAL_FABRIC_HOST_BRIDGE before opening the mesh");
     const uint32_t block = static_cast<uint32_t>(router_cfg.host_bridge_block_address);
     const uint32_t page = hb::frame_page_bytes(static_cast<uint32_t>(router_cfg.channel_buffer_size_bytes));
     const uint64_t l1_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::ACTIVE_ETH);
 
     const auto context = multihost::DistributedContext::get_current_world();
-    const int my_rank = *context->rank();
+    const multihost::Rank my_rank = context->rank();
 
-    // Both ranks must build the streams in the same order: each transport exchanges a warm-up message
-    // with its peer when it is constructed.
-    std::sort(links.begin(), links.end(), [](const auto& a, const auto& b) { return a.link_id < b.link_id; });
+    // Every bridged router on this host, with its peer across the cable.
+    std::vector<Impl::End> ends;
+    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
+        IDevice* device = mesh_device->get_device(coord);
+        const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+            if (!tt::tt_fabric::host_bridge::link_is_bridged(spec, control_plane, node, chan)) {
+                continue;
+            }
+            const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan);
+            TT_FATAL(
+                peer.has_value(),
+                "FabricHostBridge: bridged router chip {} eth_chan {} has no peer across the cable",
+                device->id(),
+                chan);
+            Impl::End end;
+            end.node = node;
+            end.eth_chan = chan;
+            end.coord = coord;
+            end.peer_node = peer->first;
+            end.peer_chan = peer->second;
+            end.peer_rank = rank_of(control_plane, peer->first, my_rank);
+            end.lower = link_key(node, chan) < link_key(peer->first, peer->second);
+            end.device_id = device->id();
+            ends.push_back(std::move(end));
+        }
+    }
 
-    for (const auto& cfg : links) {
-        Impl::Link link;
-        link.cfg = cfg;
-        IDevice* device = mesh_device->get_device(cfg.device);
-        link.device_id = device->id();
-        const auto& soc = cluster.get_soc_desc(link.device_id);
-        const auto eth_noc0 = soc.get_eth_core_for_channel(cfg.eth_chan, CoordSystem::NOC0);
-        link.eth_noc0 = CoreCoord{eth_noc0.x, eth_noc0.y};
+    // Link ids: per peer rank, the position of the link's canonical key in sorted order. The peer rank
+    // enumerates the same links with the same keys, so it derives the same ids; the two ends of a link
+    // inside this host share one id and pair up through the loopback transport. Both ranks must also
+    // build the streams in the same order: each MPI transport exchanges a warm-up message when it is
+    // constructed.
+    std::sort(ends.begin(), ends.end(), [](const Impl::End& a, const Impl::End& b) {
+        const LinkKey ka = std::min(link_key(a.node, a.eth_chan), link_key(a.peer_node, a.peer_chan));
+        const LinkKey kb = std::min(link_key(b.node, b.eth_chan), link_key(b.peer_node, b.peer_chan));
+        return std::tie(a.peer_rank, ka, a.lower) < std::tie(b.peer_rank, kb, b.lower);
+    });
+    {
+        std::optional<multihost::Rank> group_rank;
+        std::optional<LinkKey> last_key;
+        uint32_t next_id = 0;
+        for (auto& end : ends) {
+            const LinkKey key = std::min(link_key(end.node, end.eth_chan), link_key(end.peer_node, end.peer_chan));
+            if (group_rank != end.peer_rank) {
+                group_rank = end.peer_rank;
+                last_key.reset();
+                next_id = 0;
+            }
+            if (last_key.has_value() && *last_key == key) {
+                end.link_id = next_id - 1;  // the other end of a link inside this host
+            } else {
+                end.link_id = next_id++;
+            }
+            last_key = key;
+        }
+    }
+
+    for (auto& end : ends) {
+        const auto& soc = cluster.get_soc_desc(end.device_id);
+        const auto eth_noc0 = soc.get_eth_core_for_channel(end.eth_chan, CoordSystem::NOC0);
+        end.eth_noc0 = CoreCoord{eth_noc0.x, eth_noc0.y};
         const CoreCoord eth_virtual =
-            cluster.get_virtual_coordinate_from_physical_coordinates(link.device_id, link.eth_noc0);
-        link.target = tt_cxy_pair(link.device_id, eth_virtual);
+            cluster.get_virtual_coordinate_from_physical_coordinates(end.device_id, end.eth_noc0);
+        end.target = tt_cxy_pair(end.device_id, eth_virtual);
         const tt::umd::CoreCoord translated = soc.get_coord_at(eth_virtual, CoordSystem::TRANSLATED);
         tt::umd::TTDevice* tt_device =
-            cluster.is_mock_or_emulated() ? nullptr : cluster.get_driver()->get_tt_device(link.device_id);
+            cluster.is_mock_or_emulated() ? nullptr : cluster.get_driver()->get_tt_device(end.device_id);
+        end.status_addr = block + l1_offset;
 
-        // The router zeroes nothing itself: the builder cleared the block before launch and the kernel
-        // stamps the magic once it runs, so a stale armed word from an earlier process cannot be seen.
-        const uint64_t status_addr = block + l1_offset;
-        link.status_addr = status_addr;
-        {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-            uint32_t magic = 0;
-            while (true) {
-                cluster.read_core(&magic, sizeof(magic), link.target, status_addr + offsetof(hb::Status, magic));
-                if (magic == hb::kMagic) {
-                    break;
-                }
-                TT_FATAL(
-                    std::chrono::steady_clock::now() < deadline,
-                    "FabricHostBridge: router on chip {} eth_chan {} never stamped its control block (read 0x{:08x})",
-                    link.device_id,
-                    cfg.eth_chan,
-                    magic);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        }
-
-        const bool lower = my_rank < *cfg.peer_rank;
         const int tag_base =
-            kTagBase + static_cast<int>(cfg.link_id) * kStreamsPerLink * host_transport::kTagsPerConnection;
+            kTagBase + static_cast<int>(end.link_id) * kStreamsPerLink * host_transport::kTagsPerConnection;
         for (int k = 0; k < kStreamsPerLink; k++) {
-            auto& stream = link.streams[k];
-            const bool mine = lower ? (k < 2) : (k >= 2);
+            auto& stream = end.streams[k];
+            const bool mine = end.lower ? (k < 2) : (k >= 2);
             const uint32_t socket_offset = (k % 2 == 0) ? hb::kTxSocketOffset : hb::kRxSocketOffset;
             const std::string name = fmt::format(
                 "bridge link {} chip {} eth {} {}{}",
-                cfg.link_id,
-                link.device_id,
-                cfg.eth_chan,
+                end.link_id,
+                end.device_id,
+                end.eth_chan,
                 mine ? "out" : "in",
                 (k % 2 == 0) ? "/tx" : "/rx");
 
             TransportParams tp;
             tp.geometry = RingGeometry{.page_size = page, .num_pages = ring_pages};
             tp.is_sender = mine;
-            tp.peer_rank = *cfg.peer_rank;
+            tp.peer_rank = *end.peer_rank;
             tp.context = context;
             tp.tag_base = tag_base + k * host_transport::kTagsPerConnection;
             tp.max_batch_pages = 0;
@@ -302,7 +371,7 @@ FabricHostBridge::FabricHostBridge(
             if (mine) {
                 stream.d2h = std::make_unique<D2HSocket>(
                     mesh_device,
-                    MeshCoreCoord(cfg.device, link.eth_noc0),
+                    MeshCoreCoord(end.coord, end.eth_noc0),
                     page * ring_pages,
                     D2HSocket::ExternalConfigBuffer{
                         .address = block + socket_offset,
@@ -314,7 +383,7 @@ FabricHostBridge::FabricHostBridge(
                 stream.transport = host_transport::make_host_transport(tp);
                 stream.endpoint = std::make_shared<RelaySender>(*stream.transport, *stream.d2h, tp.geometry, 0);
             } else {
-                stream.ring = make_pinned_ring(*mesh_device, cfg.device, link.device_id, tp.geometry.fifo_bytes());
+                stream.ring = make_pinned_ring(*mesh_device, end.coord, end.device_id, tp.geometry.fifo_bytes());
                 tp.ring = stream.ring.mem.get();
                 stream.transport = host_transport::make_host_transport(tp);
                 stream.endpoint = std::make_shared<BridgeInjector>(
@@ -326,26 +395,34 @@ FabricHostBridge::FabricHostBridge(
                     tt_device,
                     translated,
                     cluster,
-                    link.target,
+                    end.target,
                     name);
             }
             impl_->endpoints.push_back(stream.endpoint);
         }
 
-        // Both socket configs are in L1: let the router open them.
+        // Both socket configs are in L1: let the router open them. The builder zeroed the block before
+        // the router launched, so nothing stale can be read as armed.
         const uint32_t armed = hb::kArmed;
-        cluster.write_core(&armed, sizeof(armed), link.target, status_addr + offsetof(hb::Status, armed));
+        cluster.write_core(&armed, sizeof(armed), end.target, end.status_addr + offsetof(hb::Status, armed));
         log_info(
             tt::LogFabric,
-            "FabricHostBridge: link {} chip {} eth_chan {} <-> rank {} armed (page {} B, ring {} pages, block 0x{:x})",
-            cfg.link_id,
-            link.device_id,
-            cfg.eth_chan,
-            *cfg.peer_rank,
+            "FabricHostBridge: link {} mesh {} chip {} (device {}) eth_chan {} <-> mesh {} chip {} eth_chan {} on rank "
+            "{}{} armed (page {} B, ring {} pages, block 0x{:x})",
+            end.link_id,
+            *end.node.mesh_id,
+            end.node.chip_id,
+            end.device_id,
+            end.eth_chan,
+            *end.peer_node.mesh_id,
+            end.peer_node.chip_id,
+            end.peer_chan,
+            *end.peer_rank,
+            end.peer_rank == my_rank ? " (this host)" : "",
             page,
             ring_pages,
             block);
-        impl_->links.push_back(std::move(link));
+        impl_->ends.push_back(std::move(end));
     }
 
     for (auto& endpoint : impl_->endpoints) {
@@ -362,30 +439,31 @@ FabricHostBridge::~FabricHostBridge() {
     }
     impl_->endpoints.clear();
     // Transports before the rings and sockets they point into.
-    for (auto& link : impl_->links) {
-        for (auto& stream : link.streams) {
+    for (auto& end : impl_->ends) {
+        for (auto& stream : end.streams) {
             stream.endpoint.reset();
             stream.transport.reset();
         }
     }
-    impl_->links.clear();
+    impl_->ends.clear();
 }
+
+size_t FabricHostBridge::num_ends() const { return impl_->ends.size(); }
 
 std::string FabricHostBridge::first_error() const { return RelayLoop::instance().first_error(); }
 
 std::string FabricHostBridge::describe() const {
     std::string out;
     auto& cluster = impl_->mesh->impl().metal_env().get_cluster();
-    for (const auto& link : impl_->links) {
+    for (const auto& end : impl_->ends) {
         hb::Status status{};
-        cluster.read_core(&status, sizeof(status), link.target, link.status_addr);
+        cluster.read_core(&status, sizeof(status), end.target, end.status_addr);
         out += fmt::format(
-            "link {} chip {} eth_chan {}: router magic=0x{:x} armed=0x{:x} packets={} reg_writes={} tx(opened={} "
+            "link {} chip {} eth_chan {}: router armed=0x{:x} packets={} reg_writes={} tx(opened={} "
             "unarmed={} ring_full={}) rx(opened={} unarmed={} ring_full={})\n",
-            link.cfg.link_id,
-            link.device_id,
-            link.cfg.eth_chan,
-            status.magic,
+            end.link_id,
+            end.device_id,
+            end.eth_chan,
             status.armed,
             status.packets,
             status.reg_writes,
@@ -395,17 +473,14 @@ std::string FabricHostBridge::describe() const {
             status.rx_opened,
             status.rx_unarmed,
             status.rx_ring_full);
-    }
-    for (const auto& link : impl_->links) {
         for (const uint32_t off : {hb::kTxSocketOffset, hb::kRxSocketOffset}) {
             uint32_t w[32] = {0};
-            cluster.read_core(w, sizeof(w), link.target, link.status_addr + off);
+            cluster.read_core(w, sizeof(w), end.target, end.status_addr + off);
             // sender_socket_md at word 0, bytes_acked at 8, frame header scratch at 16
             out += fmt::format(
                 "  link {} {} socket: bytes_sent={} write_ptr={} acked={} | last frame kind={} addr=0x{:x} "
-                "value=0x{:x} "
-                "seq={}\n",
-                link.cfg.link_id,
+                "value=0x{:x} seq={}\n",
+                end.link_id,
                 off == hb::kTxSocketOffset ? "tx" : "rx",
                 w[0],
                 w[2],

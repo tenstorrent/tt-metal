@@ -50,10 +50,9 @@ constexpr uint32_t kBlockBytes = kRxSocketOffset + kSocketSlotBytes;
 constexpr uint32_t header_scratch_offset(uint32_t socket_offset) { return socket_offset + kSocketConfigBytes; }
 
 constexpr uint32_t kArmed = 0x41524D44;  // 'ARMD': host wrote both socket configs
-constexpr uint32_t kMagic = 0x48425247;  // 'HBRG'
 
+// The builder zeroes the block before the router launches; the router only ever writes the counters.
 struct Status {
-    uint32_t magic;       // kMagic once the router ran its init
     uint32_t armed;       // kArmed once the host wrote both socket configs; the router opens them lazily
     uint32_t packets;     // PACKET frames sent from this core
     uint32_t reg_writes;  // REG_WRITE frames sent from this core

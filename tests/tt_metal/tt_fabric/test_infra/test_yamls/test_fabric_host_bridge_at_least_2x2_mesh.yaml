@@ -1,0 +1,104 @@
+# Host-bridged links inside one mesh (E2H2H2E through this host, both ends local): every intra-mesh
+# link on one axis is built on the host bridge transport and traffic is pushed across it in each of
+# the four directions, then across every link at once. Needs a 2D mesh of at least 2x2.
+# The test infra builds these fabrics single-erisc (bridged routers need it).
+Tests:
+  - name: "HostBridgeNorth"
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: NS
+        type: host_bridge
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    senders:
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]
+
+  - name: "HostBridgeSouth"
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: NS
+        type: host_bridge
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [0, [1, 1]]
+
+  - name: "HostBridgeEast"
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: EW
+        type: host_bridge
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [0, [1, 1]]
+
+  - name: "HostBridgeWest"
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: EW
+        type: host_bridge
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    senders:
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [0, [1, 0]]
+
+  - name: "HostBridgeAllNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      override_transport:
+        direction: all
+        type: host_bridge
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+    patterns:
+      - type: neighbor_exchange

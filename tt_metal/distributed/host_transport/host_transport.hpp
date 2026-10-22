@@ -76,7 +76,7 @@ struct TransportParams {
     bool is_sender = false;
     // The local pinned ring the transport reads from or writes into.
     void* ring = nullptr;
-    // Used for the handshake, and for MPI the data path too.
+    // Used for the handshake, and for MPI the data path too. This rank: in-process loopback.
     int peer_rank = 0;
     std::shared_ptr<multihost::DistributedContext> context;
     // Separates concurrent connections between the same rank pair. Both ends must

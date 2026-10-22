@@ -5,6 +5,9 @@
 #pragma once
 
 #include <array>
+#include <chrono>
+#include <thread>
+#include <atomic>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -17,6 +20,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_host_bridge.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -291,7 +295,8 @@ public:
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_ ||
             fabric_setup.max_packet_size != current_max_packet_size_ || trimming != current_channel_trimming_ ||
-            fabric_setup.use_vc2 != current_use_vc2_) {
+            fabric_setup.use_vc2 != current_use_vc2_ ||
+            fabric_setup.override_transport != current_override_transport_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
@@ -362,15 +367,44 @@ public:
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
-    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
+    void wait_for_programs() {
+        if (!host_bridge_) {
+            tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+            return;
+        }
+        // A stall on a bridged link shows up here; dump the bridge's counters while we wait.
+        std::atomic<bool> done{false};
+        std::thread watchdog([&] {
+            for (int seconds = 0; !done.load(); seconds++) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (!done.load() && seconds > 0 && seconds % 15 == 0) {
+                    log_warning(
+                        tt::LogTest, "still waiting after {} s; host bridge:\n{}", seconds, host_bridge_->describe());
+                }
+            }
+        });
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        done.store(true);
+        watchdog.join();
+        const auto error = host_bridge_->first_error();
+        TT_FATAL(error.empty(), "host bridge relay failed: {}", error);
+    }
 
     void close_devices() {
         if (!are_devices_open_) {
             log_info(tt::LogTest, "Devices are already closed, skipping close_devices call");
             return;
         }
+        // The bridge holds sockets and pinned rings on the mesh: down before the mesh.
+        host_bridge_.reset();
         mesh_device_->close();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_host_bridge("");
+        if (saved_disable_fabric_2_erisc_.has_value()) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_disable_fabric_2_erisc_mode(
+                *saved_disable_fabric_2_erisc_);
+            saved_disable_fabric_2_erisc_.reset();
+        }
 
         // Clear all class members
         local_available_node_ids_.clear();
@@ -384,6 +418,7 @@ public:
         current_max_packet_size_ = std::nullopt;
         current_channel_trimming_ = {};
         current_use_vc2_ = false;
+        current_override_transport_.reset();
         are_devices_open_ = false;
     }
 
@@ -2023,6 +2058,9 @@ private:
     std::optional<TrimmingRtOptionsSnapshot> trimming_rtoptions_snapshot_{std::nullopt};
     bool env_trimming_honor_logged_ = false;
     std::shared_ptr<MeshDevice> mesh_device_;
+    std::unique_ptr<tt::tt_metal::distributed::FabricHostBridge> host_bridge_;
+    std::optional<TransportOverride> current_override_transport_;
+    std::optional<bool> saved_disable_fabric_2_erisc_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
     std::optional<MeshHostRankId> local_host_rank_;
@@ -2066,11 +2104,40 @@ private:
         local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
     }
 
+    // TT_METAL_FABRIC_HOST_BRIDGE spec (tt_metal/fabric/host_bridge_links.hpp) for an override, or "".
+    static std::string host_bridge_link_spec(const std::optional<TransportOverride>& override_transport) {
+        if (!override_transport.has_value() || override_transport->type == LinkTransportType::ETH) {
+            return "";
+        }
+        TT_FATAL(
+            override_transport->type == LinkTransportType::HOST_BRIDGE,
+            "override_transport type 'pcie' is reserved; only eth and host_bridge are implemented");
+        switch (override_transport->direction) {
+            case TransportOverrideDirection::ALL: return "all";
+            case TransportOverrideDirection::NS: return "NS";
+            case TransportOverrideDirection::EW: return "EW";
+            case TransportOverrideDirection::INTERMESH: return "intermesh";
+        }
+        TT_THROW("unknown override_transport direction");
+    }
+
     void open_devices_internal(
         tt::tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricTensixConfig fabric_tensix_config,
         tt_fabric::FabricReliabilityMode reliability_mode,
         const TestFabricSetup& fabric_setup) {
+        // override_transport: the fabric builder reads the link spec when it builds the routers, and
+        // FabricHostBridge (below) opens the same links once the mesh is up.
+        const std::string host_bridge_spec = host_bridge_link_spec(fabric_setup.override_transport);
+        if (!host_bridge_spec.empty()) {
+            // Bridged routers run single-erisc (the second erisc's PCIe writes are never acked on Blackhole):
+            // TT_METAL_DISABLE_FABRIC_TWO_ERISC, for this fabric only.
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            saved_disable_fabric_2_erisc_ = rtoptions.get_disable_fabric_2_erisc_mode();
+            rtoptions.set_disable_fabric_2_erisc_mode(true);
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fabric_host_bridge(host_bridge_spec);
+
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
         // Create FabricRouterConfig if max_packet_size is specified
         tt::tt_fabric::FabricRouterConfig router_config{};
@@ -2127,7 +2194,17 @@ private:
                 user_meshes[0]);
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
+        if (!host_bridge_spec.empty()) {
+            host_bridge_ = std::make_unique<tt::tt_metal::distributed::FabricHostBridge>(mesh_device_);
+            log_info(
+                tt::LogTest,
+                "override_transport {} -> host_bridge: {} router(s) on this host bridged",
+                host_bridge_spec,
+                host_bridge_->num_ends());
+        }
+
         current_fabric_config_ = fabric_config;
+        current_override_transport_ = fabric_setup.override_transport;
         current_fabric_tensix_config_ = fabric_tensix_config;
         current_fabric_reliability_mode_ = reliability_mode;
         current_max_packet_size_ = fabric_setup.max_packet_size;

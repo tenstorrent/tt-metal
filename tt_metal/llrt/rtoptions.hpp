@@ -883,6 +883,7 @@ public:
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
+    void set_disable_fabric_2_erisc_mode(bool disable) { disable_fabric_2_erisc_mode = disable; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }

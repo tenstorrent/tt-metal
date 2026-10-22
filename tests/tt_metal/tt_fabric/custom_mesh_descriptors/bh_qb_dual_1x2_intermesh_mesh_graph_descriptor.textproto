@@ -1,6 +1,5 @@
-# A 4-chip Blackhole box as two 1x2 meshes, one per rank, with the cables between them inter-mesh.
-# FabricHostBridgeTest builds those cables' routers host-bridged (TT_METAL_FABRIC_HOST_BRIDGE=intermesh)
-# and carries their traffic rank to rank over MPI.
+# A 4-chip Blackhole box (chips 0-1-2-3 cabled in a ring) as two 1x2 meshes, one per rank, with the cables
+# between the meshes inter-mesh. Pairs with bh_qb_dual_1x2_intermesh_rank_bindings.yaml.
 mesh_descriptors {
   name: "M1x2"
   arch: BLACKHOLE

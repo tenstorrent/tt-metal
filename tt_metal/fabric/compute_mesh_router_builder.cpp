@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdlib>
 #include <limits>
-#include <optional>
 #include "hostdevcommon/fabric_host_bridge.h"
 #include "tt_metal/fabric/host_bridge_links.hpp"
 #include <string>
@@ -37,34 +36,24 @@
 namespace tt::tt_fabric {
 
 namespace {
-// A cmd buf on `noc` that no router channel uses, so the host bridge's PCIe writes cannot clobber a
-// stateful cmd buf (the receiver's local writes and forwards, the sender's worker acks).
-uint32_t host_bridge_free_cmd_buf(
-    const FabricEriscDatamoverConfig& cfg, std::size_t noc, std::optional<uint32_t> also_taken) {
-    std::array<bool, 4> taken{};
+// The host bridge writes its ring frames on a write cmd buf of that direction's NOC. A cmd buf the router
+// drives statelessly on that NOC (receiver local writes, worker acks) can be shared: every such write
+// programs the whole command, as the bridge does, and one RISC issues them in sequence. The forwarding
+// cmd bufs cannot be shared: the router sets their state once (setup_edm_noc_cmd_buf) and reuses it.
+uint32_t host_bridge_cmd_buf(const FabricEriscDatamoverConfig& cfg, std::size_t noc) {
+    std::array<bool, 4> stateful{};
     for (std::size_t i = 0; i < cfg.num_used_receiver_channels; i++) {
         if (cfg.receiver_channel_forwarding_noc_ids[i] == noc) {
-            taken[cfg.receiver_channel_forwarding_data_cmd_buf_ids[i]] = true;
-            taken[cfg.receiver_channel_forwarding_sync_cmd_buf_ids[i]] = true;
-        }
-        if (cfg.receiver_channel_local_write_noc_ids[i] == noc) {
-            taken[cfg.receiver_channel_local_write_cmd_buf_ids[i]] = true;
+            stateful[cfg.receiver_channel_forwarding_data_cmd_buf_ids[i]] = true;
+            stateful[cfg.receiver_channel_forwarding_sync_cmd_buf_ids[i]] = true;
         }
     }
-    for (std::size_t i = 0; i < cfg.num_used_sender_channels; i++) {
-        if (cfg.sender_channel_ack_noc_ids[i] == noc) {
-            taken[cfg.sender_channel_ack_cmd_buf_ids[i]] = true;
+    for (const uint32_t buf : {FabricEriscDatamoverConfig::WR_CMD_BUF, FabricEriscDatamoverConfig::WR_REG_CMD_BUF}) {
+        if (!stateful[buf]) {
+            return buf;
         }
     }
-    if (also_taken.has_value()) {
-        taken[*also_taken] = true;
-    }
-    for (uint32_t b = 0; b < taken.size(); b++) {
-        if (!taken[b]) {
-            return b;
-        }
-    }
-    TT_THROW("host bridge: every cmd buf on NOC {} is in use by a router channel", noc);
+    TT_THROW("host bridge: both write cmd bufs on NOC {} are stateful forwarding cmd bufs", noc);
 }
 }  // namespace
 
@@ -995,7 +984,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         TT_FATAL(
             get_configured_risc_count() == 1,
             "host bridge on chip {} eth_chan {}: bridged routers need single-erisc mode "
-            "(TT_METAL_DISABLE_MULTI_AERISC=1)",
+            "(TT_METAL_DISABLE_FABRIC_TWO_ERISC=1)",
             device_id,
             eth_chan);
         defines["FABRIC_HOST_BRIDGE"] = "1";
@@ -1008,7 +997,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 device_id,
                 cluster.get_virtual_coordinate_from_logical_coordinates(device_id, eth_logical_core, CoreType::ETH)),
             router_cfg.host_bridge_block_address);
-        log_warning(
+        log_info(
             tt::LogFabric,
             "Fabric router chip {} eth_chan {} -> {} is host-bridged (block 0x{:x})",
             device_id,
@@ -1035,16 +1024,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
         named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
         if (host_bridged) {
-            // Each direction writes its ring on a cmd buf no channel on that NOC drives statefully.
+            // Sender direction on the worker-ack NOC, receiver direction on the local-write NOC.
             const auto tx_noc = router_cfg.sender_channel_ack_noc_ids[0];
-            const auto tx_cmd_buf = host_bridge_free_cmd_buf(router_cfg, tx_noc, std::nullopt);
             const auto rx_noc = router_cfg.receiver_channel_local_write_noc_ids[0];
-            // One RISC servicing both directions never runs them concurrently, so they may share a cmd buf.
-            const bool separate_riscs = num_enabled_risc_cores > 1;
-            const auto rx_cmd_buf = host_bridge_free_cmd_buf(
-                router_cfg,
-                rx_noc,
-                (separate_riscs && rx_noc == tx_noc) ? std::optional<uint32_t>(tx_cmd_buf) : std::nullopt);
+            const auto tx_cmd_buf = host_bridge_cmd_buf(router_cfg, tx_noc);
+            const auto rx_cmd_buf = host_bridge_cmd_buf(router_cfg, rx_noc);
             named_ct_args["HOST_BRIDGE_BLOCK_ADDR"] = static_cast<uint32_t>(router_cfg.host_bridge_block_address);
             named_ct_args["HOST_BRIDGE_PAGE_BYTES"] =
                 host_bridge::frame_page_bytes(static_cast<uint32_t>(router_cfg.channel_buffer_size_bytes));
@@ -1052,7 +1036,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             named_ct_args["HOST_BRIDGE_TX_CMD_BUF"] = tx_cmd_buf;
             named_ct_args["HOST_BRIDGE_RX_NOC"] = static_cast<uint32_t>(rx_noc);
             named_ct_args["HOST_BRIDGE_RX_CMD_BUF"] = rx_cmd_buf;
-            log_warning(
+            log_debug(
                 tt::LogFabric,
                 "host bridge eth_chan {} risc {}: tx noc {} cmd_buf {}, rx noc {} cmd_buf {}",
                 eth_chan,

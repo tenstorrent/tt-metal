@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-// NOC / cmd buf are chosen by the builder so they never collide with the router's own stateful cmd bufs.
+// NOC / cmd buf come from the builder: a write cmd buf the router only drives statelessly on that NOC.
 template <uint32_t SOCKET_CONFIG_ADDR, uint32_t STATUS_ADDR, uint32_t PAGE_BYTES, uint8_t NOC, uint8_t CMD_BUF>
 struct HostBridgeLinkTransport {
     using Header = tt::tt_fabric::host_bridge::FrameHeader;
@@ -118,9 +118,9 @@ struct HostBridgeLinkTransport {
     static FORCE_INLINE void write_to_host(uint32_t src_l1, uint64_t dst_host, uint32_t size) {
         while (size) {
             const uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
-            // The router's own NOC counters are left alone (update_counter=false): flush_writes() waits
-            // on the hardware counters instead.
-            noc_wwrite_with_state<noc_mode, CMD_BUF, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, false, false>(
+            // Counted like any other non-posted write on this RISC: the router's own flushes compare
+            // the NIU's ack count with the software count, so an uncounted write wedges the next one.
+            noc_wwrite_with_state<noc_mode, CMD_BUF, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
                 NOC, src_l1, pcie_xy_enc, dst_host, chunk, 1);
             src_l1 += chunk;
             dst_host += chunk;
@@ -128,9 +128,8 @@ struct HostBridgeLinkTransport {
         }
     }
 
-    // Every nonposted write this RISC issued on NOC has been acked. Hardware counters only: the
-    // receiver RISC's software counters do not cover its transaction-id writes, so the generic
-    // noc_async_write_barrier() would never return there.
+    // Every nonposted write this RISC issued on NOC has been acked, by the hardware counters: the
+    // router's own writes on this NOC are not all tracked by the software counters.
     static FORCE_INLINE void flush_writes() {
         while (NOC_STATUS_READ_REG(NOC, NIU_MST_NONPOSTED_WR_REQ_SENT) !=
                NOC_STATUS_READ_REG(NOC, NIU_MST_WR_ACK_RECEIVED)) {

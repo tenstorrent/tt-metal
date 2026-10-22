@@ -109,6 +109,7 @@ if(TT_METAL_ENABLE_HOST_TRANSPORT)
         DISTRIBUTED_SRC
         host_mesh_socket.cpp
         host_transport/host_transport.cpp
+        host_transport/loopback_transport.cpp
         host_transport/mpi_transport.cpp
         host_transport/socket_relay.cpp
         fabric_host_bridge.cpp

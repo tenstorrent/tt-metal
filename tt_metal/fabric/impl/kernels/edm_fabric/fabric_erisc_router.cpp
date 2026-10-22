@@ -2678,11 +2678,6 @@ void kernel_main() {
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
 
-#ifdef FABRIC_HOST_BRIDGE
-    // The builder zeroed the block before launch; the host waits for this before it arms the bridge.
-    SenderLinkTransport::status()->magic = tt::tt_fabric::host_bridge::kMagic;
-#endif
-
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     asm volatile("nop");
     static_assert(

@@ -1,0 +1,17 @@
+# Two ranks on one 4-chip Blackhole box: rank 0 owns chips 0,1 (mesh 0), rank 1 owns chips 2,3 (mesh 1).
+#   tt-run --rank-binding tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh_rank_bindings.yaml \
+#       build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
+#       --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_host_bridge_multi_mesh.yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh_mesh_graph_descriptor.textproto"
