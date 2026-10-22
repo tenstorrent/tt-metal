@@ -40,6 +40,7 @@ all fit with 1.1-2.0 GiB per chip to spare.
 
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
+| 1   | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 265 ms | 12.5 | 60 | 12.5 | one run, one user per row (the 8 rows decode the same prompt in parallel; a single user's figures); decode step 80.1 ms; 128-token first token == HF |
 | 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 266 ms | 12.0 | 33 | 385 | one run: one random token per user slot (diverse expert routing); decode step 83.1 ms; 128-token first token == HF head |
 | 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 139 ms | 8.7 | 19 | 2217 | one run: dense expert pass, one random token per user slot; decode step 115.5 ms; greedy id == host head for every user |
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31.8 s | 9.8 | 60 | 79 | one prompt, replicated to the 8 rows; 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
