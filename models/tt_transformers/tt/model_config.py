@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -1713,8 +1714,14 @@ class ModelArgs:
                 )
             )
         )
+        # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
+        grid_size = (
+            self.mesh_device.compute_with_storage_grid_size()
+            if is_blackhole() and self.mesh_device is not None
+            else (8, 8)
+        )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=grid_size,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1745,13 +1752,38 @@ class ModelArgs:
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
-        else:
+        grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
+        # The full Blackhole grid is faster from batch 8 up to 64 (user, KV head) pairs per device; at 256 pairs (8B at
+        # batch 32) the (8, 8) grid is faster from position 2047.
+        wide_blackhole_grid = (
+            is_blackhole()
+            and grid is not None
+            and grid.x > 8
+            and grid.y > 4
+            and self.max_batch_size >= 8
+            and self.max_batch_size * max(1, self.n_kv_heads // self.cluster_shape[1]) <= 64
+        )
+        if wide_blackhole_grid:
+            # The op reads batch b's Q from the b-th core of sub_core_grids, so the 8x4 Q shard block comes first.
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                sub_core_grids=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+                    ]
+                ),
                 exp_approx_mode=False,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
@@ -3038,6 +3070,10 @@ class ModelArgs:
                 "EXAONE-4.5-33B": 16,
             }.get(self.base_model_name, 0)
 
+            # A hidden dim that is not a whole number of tiles cannot be sharded; zero padding is exact.
+            if default_padded_cores == 0 and self.hidden_dim % (ttnn.TILE_SIZE * max(self.num_devices, 1)):
+                default_padded_cores = 8
+
             # Override MLP padding cores from env var
             mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
 
@@ -3931,13 +3967,16 @@ class ModelArgs:
             in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
         else:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
-        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
+        if self.is_galaxy or self.prefetcher is not None:
+            return program_config
+        return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
     def matmul_1d_ring_config(
         self,

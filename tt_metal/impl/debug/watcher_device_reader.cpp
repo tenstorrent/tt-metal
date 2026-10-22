@@ -1247,7 +1247,9 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             launch_msg_.kernel_config().brisc_noc_id());
     }
     if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
-        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
+        // The go message for the launch message slot the core is on.
+        auto go_ring = mbox_data_.go_messages()[mbox_data_.go_message_index()].slot();
+        DumpRunState(go_ring[mbox_data_.launch_msg_rd_ptr() % go_ring.size()].signal());
     } else {
         LogRunningKernels();
         TT_THROW(

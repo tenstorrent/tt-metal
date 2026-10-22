@@ -247,14 +247,16 @@ def test_zeros_like_paged_cache():
     assert torch.all(result == 0)
 
 
+@pytest.mark.parametrize("use_multicore_pipeline", [False, True])
 @pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2])
-def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank):
+def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank, use_multicore_pipeline):
     """Test program_config_to_dict for a config that has to_json (matmul configs)."""
     cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=4,
         per_core_M=1,
         per_core_N=2,
         num_workers_per_dram_bank=num_workers_per_dram_bank,
+        use_multicore_pipeline=use_multicore_pipeline,
     )
     d = program_config_to_dict(cfg)
 
@@ -265,7 +267,12 @@ def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank):
     assert d["per_core_N"] == 2
     assert d["num_workers_per_dram_bank"] == num_workers_per_dram_bank
     assert "fused_activation" in d
+    assert d["use_multicore_pipeline"] == use_multicore_pipeline
     assert f"num_workers_per_dram_bank={num_workers_per_dram_bank}" in repr(cfg)
+    assert "use_multicore_pipeline=" in repr(cfg)
+    roundtrip_cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.from_json(cfg.to_json())
+    assert roundtrip_cfg.use_multicore_pipeline == use_multicore_pipeline
+    assert roundtrip_cfg.num_workers_per_dram_bank == num_workers_per_dram_bank
 
     json_str = json.dumps(d, sort_keys=True)
     roundtrip = json.loads(json_str)

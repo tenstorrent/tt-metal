@@ -33,7 +33,7 @@ from . import golden_generators as golden_generators_module
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    quasar_arch_variant,
+    quasar_variant,
 )
 from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
@@ -373,7 +373,7 @@ class TestConfig:
 
     @staticmethod
     def _quasar_variant_suffix() -> str:
-        variant = quasar_arch_variant()
+        variant = quasar_variant()
         return f"-{variant}" if variant else ""
 
     @staticmethod
@@ -727,7 +727,8 @@ class TestConfig:
         ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
 
-        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
+        and expose the tree root for qualified includes of the base headers.
         """
         root = Path(arch_root)
         roots = [
@@ -737,7 +738,8 @@ class TestConfig:
             root / "common" / "inc" / "sfpu",
         ]
         if root.name == "tt_llk_quasar":
-            variant = quasar_arch_variant()
+            roots.append(root)
+            variant = quasar_variant()
             if variant:
                 # First, so the variant's headers shadow the base Quasar ones.
                 roots.insert(0, root / "arch" / variant)

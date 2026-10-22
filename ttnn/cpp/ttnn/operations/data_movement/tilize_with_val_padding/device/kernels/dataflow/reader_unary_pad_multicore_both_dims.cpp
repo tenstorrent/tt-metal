@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
@@ -38,7 +39,8 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in);
     Scratchpad<uint8_t> staging(scratch::staging);
 
-    uint32_t temp_addr_raw = staging.get_base_address();
+    // Raw L1 address needed: rounded up to dram_alignment below and fed to fill_l1_range / tt_memmove arithmetic.
+    uint32_t temp_addr_raw = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(staging.local_mem()));
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
 
     auto read_block = [&](uint32_t num_rows,
