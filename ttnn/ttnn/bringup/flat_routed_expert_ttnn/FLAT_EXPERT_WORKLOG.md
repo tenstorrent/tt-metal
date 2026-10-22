@@ -1382,3 +1382,44 @@ UB 2 335 / 406, LEAN 3 + UB 2 336 / 392. K3 (Hr 3584, I 3072, E 28, M 91 / 128):
 - On the real x path nothing moves by 1%: x binds (GLM-5.3 M 80 +1.0%, M 128 / 160 -0.5 / -0.2% with NS 10;
   GLM-Flash and K3 within 0.3%). UB 2 loses everywhere on the real path (K3 +6%).
 - Kept as a probe (LEAN 3, NS 10). Revisit with fp8 x: with half the x bytes it is already -1.5% at M 80.
+
+### Utilization sweep, six models at Galaxy 8x4 experts per chip (2026-10-22, bh-lb-09 12 x 10, flat alone)
+
+Current defaults (pure DRISC, even splits, default kernel, real x path), balanced M (every expert the same rows),
+`models/demos/glm53_flash_d_p_lb/tests/test_flat_balanced_sweep.py` (RT-profiler device time, median of 10 calls,
+1.35 GHz). Experts per chip: GLM-5.3 8, GLM-5.3-Flash 9, K3 28, K2.7 12, M3 4, DSv4.1-Flash 12. DRAM % = (bfp4
+weights + x bf16 read once + y bf16) / 512 GB/s; math % against LoFi peak on 90 compute cores / the 110-core grid (the
+plans' real compute cores: 96, K3 92, DSv4.1 80). Scripts and logs: /localdev/mstaletovic/flat_util_sweep/.
+
+Plans: gate/up 64 x pairs (GLM-5.3, GLM-Flash, K2.7), 64 x 3 16-column units (K3, M3), 48 x 3 units (DSv4.1); down 32
+(K3 28); 4 relays, 1 Tensix launcher.
+
+us per call / DRAM % / math % (90):
+
+| M | GLM-5.3 | GLM-5.3-Flash | K3 | K2.7 | M3 | DSv4.1-Flash |
+|---|---|---|---|---|---|---|
+| 32 | 408 / 84 / 10 | 312 / 83 / 9 | 1110 / 94 / 11 | 695 / 87 / 10 | 297 / 86 / 10 | 530 / 91 / 10 |
+| 64 | 436 / 82 / 18 | 330 / 81 / 18 | 1169 / 91 / 20 | 735 / 85 / 18 | 326 / 80 / 18 | 570 / 87 / 19 |
+| 96 | 468 / 79 / 25 | 356 / 78 / 25 | 1233 / 89 / 29 | 784 / 82 / 26 | 354 / 75 / 25 | 609 / 84 / 27 |
+| 128 | 516 / 74 / 30 | 389 / 74 / 30 | 1308 / 85 / 36 | 829 / 80 / 33 | 375 / 73 / 31 | 656 / 80 / 33 |
+| 160 | 539 / 73 / 36 | 410 / 72 / 36 | 1434 / 80 / 41 | 875 / 79 / 39 | 390 / 72 / 37 | 711 / 76 / 38 |
+| 192 | 572 / 71 / 41 | 435 / 70 / 40 | 1503 / 78 / 47 | 927 / 77 / 44 | 411 / 69 / 43 | 761 / 73 / 43 |
+| 256 | 642 / 67 / 48 | 494 / 65 / 47 | 1692 / 72 / 56 | 1062 / 71 / 51 | 457 / 65 / 51 | 880 / 67 / 50 |
+| 384 | 787 / 61 / 59 | 598 / 60 / 58 | 2244 / 59 / 64 | 1350 / 62 / 60 | 555 / 58 / 63 | 1088 / 60 / 60 |
+| 512 | 960 / 55 / 65 | 718 / 55 / 65 | 2791 / 51 / 68 | 1670 / 55 / 65 | 661 / 53 / 70 | 1344 / 53 / 65 |
+| 1024 | 1722 / 42 / 72 | 1283 / 42 / 73 | 4999 / 36 / 76 | 3138 / 40 / 69 | 1159 / 38 / 80 | 2589 / 37 / 68 |
+| 2048 | 3300 / 34 / 75 | 2462 / 34 / 76 | 9849 / 27 / 77 | 6077 / 32 / 72 | 2131 / 30 / 87 | 5068 / 29 / 69 |
+
+- DRAM-bound up to M ~256-384, math-bound from ~384 (the crossover is at 384 for every model).
+- A fixed ~40-95 us per call above the weight floor even at M 32 (GLM-5.3 64, GLM-Flash 54, K3 69, K2.7 93, M3 42,
+  DSv4.1 48 us): pipeline fill / drain. It is 10-16% of the call for the few-expert plans (GLM-5.3 8, GLM-Flash 9,
+  M3 4 experts) and 6% for K3 (28), which is why K3 reaches 94% and the others 83-86% at M 32.
+- The Galaxy 5120 range (M 80-160): GLM-5.3 / GLM-Flash / M3 at 72-80% DRAM with math at 25-37%: neither bound is
+  near full; that middle range is the weakest. GLM-5.3 at 8 experts and M 160 is 73% (539 us) against 82% at 32
+  experts (the earlier sweeps): the fixed cost and x weigh more with fewer experts.
+- Math tops out at 69-77% of the 90-core peak (M3 87%); DSv4.1's 69% is on 80 real compute cores (78% of those).
+- DSv4.1-Flash (48 x 3 16-column units) shows no trace of the old ~33% DRISC-only slowdown at M 32-80 (91 / 87% DRAM,
+  above the pair-split GLM models): no LEAN 3 run needed.
+- Correctness: test_closeout_flat (GLM-5.3, GLM-Flash, K3, M3 at chunks 5120 / 16384, K2.7 at 5120) plus DSv4.1-Flash
+  at both chunks (the same check, run ad hoc): 11 passed, min PCC 0.9980 (K3) against the bfp4 reference; M covered
+  about 80-512.
