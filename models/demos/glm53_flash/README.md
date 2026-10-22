@@ -53,7 +53,10 @@ per user, traced decode step 71.2 ms at 32 users (14.1 tok/s per user, 450 aggre
 256 users with the combine op (7.2 tok/s per user) and 126.3 ms with the dense row-exchange combine (7.9 tok/s per
 user, 2028 aggregate; hybrid dense 115.5 ms); a reduce-scatter combine is under validation.
 
-Accuracy on the same stack: the 16 K and 64 K needle prompts generate 8/8 greedy tokens identical to the HF CPU
+Accuracy on the same stack: on a 128-token natural prompt the next-token logits reach PCC 0.994 vs HF with top-1
+agreement 90 % and top-5 overlap 94 % over the 128 positions (`tests/test_mesh_model_logits.py`; the residual-stream
+PCC after 45 layers is ~0.90 and is depth-chaotic, not a correctness metric); the 16 K and 64 K needle prompts
+generate 8/8 greedy tokens identical to the HF CPU
 reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens (32 of 32 slots in the 32-user run; a needle placed 523 K tokens before the question is missed, and on that prompt one slot per row also flipped its first token, under investigation); the
 image demo's 16 greedy tokens match HF. Targets are the design goals of `~/ashai/GLM_5.3_DESIGN.md` (19 / 33 / 60
 tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, the EP32 exchange,
