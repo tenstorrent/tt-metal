@@ -407,3 +407,17 @@ def test_boxes_section_renders(fx, tmp_path):
     assert r.returncode == 0, r.stderr
     text = r.stderr.split("@@")[1]
     assert "BOXES" in text and "PAGE ERROR" not in text and "dispatch" in text
+
+
+def test_profile_ops_go_gzipped_beside_the_profile_and_the_dashboard_reads_them(tmp_path):
+    """F148: DeepSeek-V4.1 FIX.5's per-op profile (613 KB, 498 KB of op rows) was refused by the 500 KB hook."""
+    import gzip
+    import json
+
+    ops = {"L20.attention": [{"op": "x", "ms": 1.0, "calls": 1, "programs": 4} for _ in range(5000)]}
+    with gzip.open(tmp_path / "T_ops.json.gz", "wt") as f:
+        json.dump(ops, f)
+    assert (tmp_path / "T_ops.json.gz").stat().st_size < 50_000
+    prof = {"ops_file": "T_ops.json.gz"}
+    with gzip.open(tmp_path / prof["ops_file"], "rt") as f:
+        assert json.load(f) == ops
