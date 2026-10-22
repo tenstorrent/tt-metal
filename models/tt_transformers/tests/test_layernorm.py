@@ -16,6 +16,23 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
+def torch_rmsnorm_ref(first_layer_prefix, state_dict, model_args, input):
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    reference_model = model_args.reference_rms_norm()
+    reference_model.load_state_dict(partial_state_dict)
+    return reference_model(input)
+
+
+def torch_layernorm_ref(x, weight, eps):
+    """Mean-centered biasless LayerNorm matching HF Cohere/transformers semantics (fp32 internals)."""
+    mean = x.float().mean(dim=-1, keepdim=True)
+    var = x.float().var(dim=-1, keepdim=True, unbiased=False)
+    x_norm = (x.float() - mean) * torch.rsqrt(var + eps)
+    return (x_norm * weight.float()).to(x.dtype)
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
@@ -40,23 +57,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 )
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def torch_rmsnorm_ref(first_layer_prefix, state_dict, model_args, input):
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    reference_model = model_args.reference_rms_norm()
-    reference_model.load_state_dict(partial_state_dict)
-    return reference_model(input)
-
-
-def torch_layernorm_ref(x, weight, eps):
-    """Mean-centered biasless LayerNorm matching HF Cohere/transformers semantics (fp32 internals)."""
-    mean = x.float().mean(dim=-1, keepdim=True)
-    var = x.float().var(dim=-1, keepdim=True, unbiased=False)
-    x_norm = (x.float() - mean) * torch.rsqrt(var + eps)
-    return (x_norm * weight.float()).to(x.dtype)
-
-
 def test_layernorm_inference(
     max_seq_len,
     batch_size,
