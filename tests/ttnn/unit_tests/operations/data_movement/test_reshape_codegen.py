@@ -89,6 +89,9 @@ _PATHS = [
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     # Row-major stick program: dividing widths.
     ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major stick program, non-aligned: 6 B source sticks repacked by RISC copies, merged 8 to one and split back.
+    ("rm_merge_nonaligned", [5120, 3], [640, 24], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_split_nonaligned", [640, 24], [5120, 3], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
     ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     ("rm_slab_dividing", [2, 409600], [4, 204800], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
@@ -130,8 +133,12 @@ def _check_sub_core_grids(device, in_shape, out_shape, dtype, layout):
     assert device.num_program_cache_entries() == entries
 
 
+# The slab and non-aligned programs size reads and scratch by each side's alignment, which differs between DRAM and L1.
+_PLACED = _KEYED + [p for p in _PATHS if p[0] in ("rm_arbitrary_bf16", "rm_merge_nonaligned", "rm_split_nonaligned")]
+
+
 @pytest.mark.parametrize("in_mem,out_mem", [(_DRAM, _L1), (_L1, _DRAM)], ids=["dram_to_l1", "l1_to_dram"])
-@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _PLACED, ids=[p[0] for p in _PLACED])
 def test_reshape_codegen_mixed_placement(device, path, in_shape, out_shape, dtype, layout, in_mem, out_mem):
     _check_bit_exact(device, in_shape, out_shape, dtype, layout, in_mem, out_mem)
 
