@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-// calculate_cumsum's tile walk, replaying the product chain that cumprod_init records.
+// The cumsum tile walk, replaying the product chain that cumprod_init records.
 template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
 inline void calculate_cumprod(const bool first) {
     if (first) {
@@ -17,7 +17,7 @@ inline void calculate_cumprod(const bool first) {
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 6, 0);
         TTI_SFPMOV(0, p_sfpu::LCONST_1, 7, 0);
     }
-    calculate_cumsum<APPROXIMATION_MODE, ITERATIONS>(/*first=*/false);
+    scan_tile_columns();
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>

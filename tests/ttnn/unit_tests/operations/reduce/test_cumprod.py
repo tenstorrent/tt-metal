@@ -372,3 +372,10 @@ def test_cumprod_tile_axis_fallback_permutes(torch_dtype, reverse_order, device)
     expected = torch.cumprod(torch_input.flip(dim) if reverse_order else torch_input, dim)
     expected = expected.flip(dim) if reverse_order else expected
     assert torch.equal(ttnn.to_torch(output_tensor, dtype=torch_dtype), expected)
+
+
+def test_cumprod_host_input_raises(expect_error):
+    """A host tensor reaches the tile-axis check before any device check: it must raise, not crash."""
+    input_tensor = ttnn.from_torch(torch.ones(64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE)
+    with expect_error(RuntimeError, "is_device_tensor"):
+        ttnn.cumprod(input_tensor, dim=-1)
