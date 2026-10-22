@@ -2968,6 +2968,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
+            // Resident mode: a core whose resident chunks span two heads streams the second head's pieces into
+            // the same K/V CBs between this head's pieces, so its CB write pointer drifts from the chain's. The
+            // chain forward writes to the sender's own CB address on the next core (ChainLink::forward), which
+            // needs every member's pointer in lockstep; a drifted sink receives the forward over the entry its
+            // compute is reading (2026-10-21: head-boundary cores wrong at 1184 rows, NaN at 4736; chains off
+            // exact). Such cores read their own K/V for both heads instead: drop them from the chain's tail (the
+            // injector rule already skips them at the head).
+            if (sol_resident) {
+                while (!chain_segs.empty() && core_work[chain_segs.back().first].head_work.size() > 1) {
+                    chain_segs.pop_back();
+                }
+            }
             if (sol_chain_len >= 2 && chain_segs.size() > sol_chain_len) {
                 // Split into consecutive groups of at most sol_chain_len cores; each group picks its own injector
                 // (first single-head core of the group) and cores before it read their own K/V.
