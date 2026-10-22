@@ -146,10 +146,23 @@ struct Walk {
     // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for `stripe`. The order depends
     // only on (e0, ne), never on the stripe, so a relay's positions match its upstream's. next() costs two divides
     // per run (row and page).
+    // When runs stop at the row end, a slice that starts mid-row walks that partial row first (head), then tiles
+    // anchored at row starts: tiles anchored mid-row would straddle every row end and split every column in two.
     FORCE_INLINE void init(uint32_t stripe, uint32_t e0, uint32_t ne, uint32_t skip, uint32_t take) {
         stripe_units_ = stripe * S_;
         left_ = take;
-        tw_.init(e0, ne, skip, lambda_, h_);
+        const uint32_t row_elems = S_ / E_;
+        const uint32_t into_row = e0 % row_elems;
+        const uint32_t head = (cross_row_ || into_row == 0) ? 0 : std::min(ne, row_elems - into_row);
+        body_first_ = e0 + head;
+        body_ne_ = ne - head;
+        if (skip < head) {
+            head_left_ = head - skip;
+            tw_.init(e0, head, skip, lambda_, h_);
+        } else {
+            head_left_ = 0;
+            tw_.init(body_first_, body_ne_, skip - head, lambda_, h_);
+        }
     }
 
     FORCE_INLINE bool next(DstRun& r) {
@@ -174,6 +187,12 @@ struct Walk {
         r = {l, n, lambda_, out_.get_noc_addr(page, off * A_)};
         tw_.advance(n);
         left_ -= n;
+        if (head_left_ != 0) [[unlikely]] {
+            head_left_ -= n;
+            if (head_left_ == 0) {
+                tw_.init(body_first_, body_ne_, 0, lambda_, h_);
+            }
+        }
         return true;
     }
 
@@ -199,7 +218,7 @@ private:
     const OutAcc& out_;
     uint32_t A_, Uo_, S_, N_, E_, L_, lambda_, h_;
     bool dst_cross_, cross_row_, whole_runs_ = false;
-    uint32_t stripe_units_ = 0, left_ = 0;
+    uint32_t stripe_units_ = 0, left_ = 0, head_left_ = 0, body_first_ = 0, body_ne_ = 0;
     TiledWalk tw_;
 };
 

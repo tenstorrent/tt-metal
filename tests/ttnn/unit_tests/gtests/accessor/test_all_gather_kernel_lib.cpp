@@ -561,6 +561,36 @@ TEST(AllGatherKernelLib, MatrixShapes) {
     }
 }
 
+// A slice that starts mid-row (2 links, odd row count) walks as many runs as one that starts a row: tiles anchored
+// mid-row straddled every row end (bf16 tile [416, 8192] d3 on BH: link 1 had 104 runs of 2 pages, 40% slower).
+TEST(AllGatherKernelLib, MidRowSlice) {
+    for (uint32_t R : {1u, 3u, 13u}) {
+        Case c{};
+        c.A = c.ri = c.ro = 64;
+        c.P = 15168;
+        c.N = 8;
+        c.R = R;
+        c.Pps = 32;
+        c.ci = c.co = c.ai = c.ao = 2048;
+        c.Ui = c.Uo = 32;
+        c.links = 2;
+        finish(c, "midrow");
+        const InterleavedAcc out{8, c.ao, c.R * c.N * c.Pps};
+        const InterleavedAcc in{8, c.ai, c.R * c.Pps};
+        std::vector<uint64_t> runs;
+        for (const auto [e0, ne] : ttnn::operations::ccl::all_gather_plan::make_slices(c.R * c.Pps, c.links)) {
+            Stats st;
+            run_pass(c, out, in, 0, e0, ne, 0, ne, false, st);
+            runs.push_back(st.runs);
+        }
+        ASSERT_EQ(runs.size(), 2u);
+        EXPECT_EQ(runs[0], runs[1]) << c.desc;
+        if (R == 13) {
+            EXPECT_EQ(runs[1], 56u);  // 6.5 rows x 8 lanes, one run per lane per row
+        }
+    }
+}
+
 // H4: the slot ring against a simulated CB whose pump pops pushed slots at random times. A slot is refilled only
 // once the pump has popped it and its local-copy writes are flushed; a held slot's writes follow its read barrier;
 // at most `inflight` slots are held; without local copy every slot is pushed at once, behind the read fence.

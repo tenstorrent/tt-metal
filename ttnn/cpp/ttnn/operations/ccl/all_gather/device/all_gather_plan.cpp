@@ -240,7 +240,8 @@ bool prefer_unicast(
     uint64_t busiest_link_bytes,
     uint64_t stripe_row_bytes) {
     // Row-major gathers of small row segments (a few hundred bytes) are bound by the packet rate either way (at most
-    // 4 segments per packet); composite might win there (unmeasured).
+    // 4 segments per packet); composite might win there (unmeasured). On BH (8 devices, 2 links, 16.8 MB, 256 B -
+    // 4 KB segments) the rule picks multicast, and forced unicast is 8-67% slower on the ring, 49-99% on the line.
     switch (arch) {
         case tt::ARCH::BLACKHOLE: {
             // Measured on 8x p150b at 2 links, payload 15168, 8 KB - 13 MB per link. 1 link is unmeasured; past 2,
