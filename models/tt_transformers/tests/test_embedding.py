@@ -77,8 +77,11 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     prompts = ["Joy"] * 32
     pt_input = torch.tensor([model_args.encode_prompt(prompt, instruct=False) for prompt in prompts])
     reference_output = reference_emb(pt_input)
-    if use_scaled_embedding and getattr(reference_emb, "embed_scale", None) is None:
+    ref_scale = getattr(reference_emb, "embed_scale", None)
+    if use_scaled_embedding and ref_scale is None:
         reference_output = reference_output * model_args.embed_scale
+    elif not use_scaled_embedding and ref_scale is not None:
+        reference_output = reference_output / ref_scale
     logger.info(f"reference_output: {reference_output.shape}")
 
     tt_input = ttnn.from_torch(
