@@ -292,7 +292,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // uint32_t num_devices = ring_size;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t num_links = operation_attributes.num_links;
 
     auto* mesh_device = input_tensor.device();

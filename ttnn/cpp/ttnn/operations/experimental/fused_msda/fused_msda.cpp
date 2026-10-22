@@ -46,4 +46,16 @@ ttnn::Tensor fused_msda_from_offsets(
         memory_config);
 }
 
+bool can_use_fused_msda_from_offsets_l1_value(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& reference_points,
+    const ttnn::Tensor& sampling_offsets,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    MSDAReferenceMode reference_mode,
+    bool align_corners) {
+    return ttnn::prim::can_use_fused_msda_from_offsets_l1_value(
+        value, reference_points, sampling_offsets, attention_weights, spatial_shapes, reference_mode, align_corners);
+}
+
 }  // namespace ttnn::experimental
