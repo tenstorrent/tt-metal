@@ -27,6 +27,21 @@ def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
 
 
+def bf16_activations() -> bool:
+    """Setting BF16_ACTIVATIONS (P.20): the activations DeepSeek's GPU code keeps in bf16 are bf16 on the device."""
+    return settings.get("BF16_ACTIVATIONS") == "on"
+
+
+def stream_dtype() -> ttnn.DataType:
+    """The mHC residual streams' dtype (block boundary, h_mid): bf16 under BF16_ACTIVATIONS=on, else fp32."""
+    return ttnn.bfloat16 if bf16_activations() else ttnn.float32
+
+
+def act_dtype() -> ttnn.DataType:
+    """The dtype of an activation the GPU code holds in bf16 (collapse, attn_norm, q_resid, projection outputs)."""
+    return ttnn.bfloat16 if bf16_activations() else ttnn.float32
+
+
 def fp32_acc(needed: bool = True) -> bool:
     """Whether a program accumulates in fp32 DEST (setting FP32_ACC): all = every program (the bring-up precision,
     max precision); needed = only the sites that pass ``needed=True``: fp32 data paths (SFPU fp32 sums / Sinkhorn /
@@ -121,19 +136,20 @@ def fpu_weight(w: torch.Tensor) -> torch.Tensor:
     return torch.where(torch.isfinite(w), r.view(torch.float32), w)
 
 
-def tp_sum(mesh, t: ttnn.Tensor, how: str | None = None, exact: bool = False) -> ttnn.Tensor:
+def tp_sum(mesh, t: ttnn.Tensor, how: str | None = None, exact: bool = False, fp32: bool = True) -> ttnn.Tensor:
     """Sum ``t`` ([1, 1, R, W], fp32 TILE) over the TP axis, the result replicated on every chip of the row. Does not
     consume ``t``. gather_add: the exact fp32 sum, bit-identical on every chip (K-30), by tt/ccl.py:tp_sum (CCL_IMPL
     stock: all_gather on dim 1 + the TP slices added in mesh-column order on the SFPU; fabric: the bring-up fabric
     reduce-scatter with its exact SFPU add + fabric all_gather). all_reduce: one CCL (FPU, ~TF32). ``exact``: never the
-    bf16 reduce-scatter of CCL_IMPL=fabric_bf16 (tt/ccl.py:tp_sum)."""
+    bf16 reduce-scatter of CCL_IMPL=fabric_bf16 (tt/ccl.py:tp_sum). ``fp32`` False: that bf16 reduce-scatter's result
+    stays bf16 (P.20)."""
     tp = mesh.shape[TP_AXIS]
     if tp == 1:
         return ttnn.clone(t, memory_config=DRAM)
     how = how or settings.get("HC_TP_SUM")
     if how == "all_reduce":
         return ttnn.all_reduce(t, cluster_axis=TP_AXIS, memory_config=DRAM)
-    return ccl.tp_sum(mesh, t, exact=exact)
+    return ccl.tp_sum(mesh, t, exact=exact, fp32=fp32)
 
 
 def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:

@@ -177,6 +177,20 @@ TABLE = {
         "moves only (the same bf16 rows and the same keys per query): not a precision switch. Memory: a replicated "
         "copy of each source's compressed KV per slot (2x2 at 57,344: r2 28 MiB, r1 56 MiB a chip)",
     ),
+    "BF16_ACTIVATIONS": Setting(
+        "on",
+        ("on", "off"),
+        "P.20 (owner comparison 2026-10-22, precision-debt report J5): the activations DeepSeek's GPU code keeps in bf16 "
+        "(bringup/official_taps.yaml) held in bf16 on the device. on = the four mHC residual streams (embedding, "
+        "engram add, attn / ffn residual: block boundary and h_mid, tt/common.stream_dtype) bf16 (the mHC forks read "
+        "them exactly into their fp32 DEST and write them with one rounding, fork option: bf16 streams), the "
+        "collapses (attn_in / ffn_in) bf16, attn_norm and the final norm bf16, the attention-input projection's "
+        "exchanged [wq_a | wkv] output and q_resid (q_norm) bf16, wo_a writing bf16, the compressor's normed latent "
+        "bf16 (the rope and wk read it), the engram projection bf16 (engram_kv), with no casts between them. fp32 stays "
+        "where the reference is fp32: the hc mixes, the Sinkhorn, every norm's statistic and the engram gates (fp32 "
+        "SFPU math on the exact bf16 values), the router; every matmul keeps its fp32 accumulation (FP32_ACC). off = "
+        "the P.21 path (fp32 streams, collapses, attn_norm, q_resid, latent; casts to bf16 at each consumer)",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",

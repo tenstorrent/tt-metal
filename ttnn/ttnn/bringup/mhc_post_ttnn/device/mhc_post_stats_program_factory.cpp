@@ -117,8 +117,17 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     const bool f16 = f.dtype() == DataType::BFLOAT16;
     const uint32_t f_page = f.buffer()->page_size();
     TT_FATAL(f_page == (f16 ? page / 2 : page), "mhc_post stats: F must be fp32 or bf16 tiles");
-    for (const Tensor* t : {&x, &in.post, &in.comb, &in.weight, &out, &stats, &scratch}) {
-        TT_FATAL(t->buffer()->page_size() == page, "mhc_post stats: every operand but F must be fp32 tiles");
+    // P.20: bf16 X (with bf16 F): X / X' tiles in bf16 pages (CB_IN, CB_OUT, CB_XS; define MHC_POST_STATS_X16), the
+    // matmul reads the bf16 X'; fp32 X: the program it always was
+    const bool x16 = x.dtype() == DataType::BFLOAT16;
+    TT_FATAL(!x16 || f16, "mhc_post stats: a bf16 residual needs a bf16 F");
+    const uint32_t x_page = x16 ? page / 2 : page;
+    const DataType x_dt = x16 ? DataType::BFLOAT16 : DataType::FLOAT32;
+    for (const Tensor* t : {&x, &out}) {
+        TT_FATAL(t->buffer()->page_size() == x_page, "mhc_post stats: X / X' must be fp32 or bf16 tiles");
+    }
+    for (const Tensor* t : {&in.post, &in.comb, &in.weight, &stats, &scratch}) {
+        TT_FATAL(t->buffer()->page_size() == page, "mhc_post stats: post / comb / W must be fp32 tiles");
     }
     TT_FATAL(coef_tiles + n + 1 <= 8, "mhc_post stats: n={} does not fit the 8 fp32 DEST tiles", n);
 
@@ -153,7 +162,7 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     }
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(CB_IN, page, 2 * (n + 1) * B, all_cores));
+    desc.cbs.push_back(make_cb(CB_IN, x_page, 2 * (n + 1) * B, all_cores, x_dt));
     desc.cbs.push_back(make_cb(CB_W, page, 2 * n * B, all_cores));
     desc.cbs.push_back(make_cb(CB_CF, page, 2 * 2 * coef_tiles, all_cores));
     desc.cbs.push_back(make_cb(CB_RAW, page, 2, all_cores));
@@ -161,8 +170,8 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 1, all_cores));
     TT_FATAL(NB <= 64, "mhc_post stats: {} partials per row", NB);
     desc.cbs.push_back(make_cb(CB_PART, page, NB, all_cores));  // one row's partials
-    desc.cbs.push_back(make_cb(CB_OUT, page, 2 * n * B, all_cores));
-    desc.cbs.push_back(make_cb(CB_XS, page, n * B, all_cores));
+    desc.cbs.push_back(make_cb(CB_OUT, x_page, 2 * n * B, all_cores, x_dt));
+    desc.cbs.push_back(make_cb(CB_XS, x_page, n * B, all_cores, x_dt));
     desc.cbs.push_back(make_cb(CB_SSC, page, B, all_cores));
     desc.cbs.push_back(make_cb(CB_MFIN, page, 2, all_cores));
     desc.cbs.push_back(make_cb(CB_SFIN, page, 2, all_cores));
@@ -245,6 +254,11 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     if (f16) {  // absent for fp32 F: the reader / compute unchanged
         for (size_t k : {size_t{0}, size_t{2}}) {
             desc.kernels[k].defines.emplace_back("MHC_POST_STATS_F16", "1");
+        }
+    }
+    if (x16) {  // absent for fp32 X: every kernel unchanged (P.20)
+        for (auto& k : desc.kernels) {
+            k.defines.emplace_back("MHC_POST_STATS_X16", "1");
         }
     }
     if (params.post_col != 0 || params.comb_col != 0) {  // absent when 0 / 0: the writer unchanged

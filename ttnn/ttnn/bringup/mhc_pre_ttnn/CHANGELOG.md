@@ -211,3 +211,27 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
      `device/mhc_pre_xing_program_factory.cpp`, `kernels/mhc_pre_xing_{reader,writer,compute}.cpp`,
      `tests/unit/test_xing_partials.py`.
+
+11. bf16 streams in `mhc_pre_xing` (collapse modes) and `mhc_pre_xing_pack` (sum of squares; engram mode with bf16
+    keys) (deepseek_v41_flash_d_p P.20).
+   - What: the `streams` (and `engram_keys`) may be bfloat16 TILE (were refused: fp32 only). bf16 streams: CB_X (and
+     the engram CB_IN) in bf16 pages, unpacked to the fp32 DEST exactly (UnpackToDestFp32: bf16 -> fp32 is exact), so
+     every sum is the fp32 program's on the same values; the collapse y is written in the streams' dtype (bf16: the
+     packer rounds the fp32 sum once, to nearest, ties away from zero); the pack row / engram row stay fp32. The
+     compute kernels reconfigure srcA before each copy from a CB of the other format; defines MHC_XING_X16 (compute)
+     / MHC_ENGRAM_X16 (reader, compute), present only with bf16 streams. engram_keys must share the streams' dtype.
+     fp32 streams: every program, CT / RT arg, define and hash unchanged (the hash includes the streams' spec).
+   - Why: DeepSeek's GPU code (inference/model.py) keeps the mHC residual streams in bf16 (hc_post .type_as(x),
+     hc_pre .to(x.dtype)); deepseek_v41_flash_d_p held them in fp32 and paid double DRAM traffic in every stream pass
+     (DS41-80). Model (BF16_ACTIVATIONS=on, 2x2, chunk 53248-55296, plain profile vs FIX.10's): attn_hc 2.65 ->
+     1.75 ms, ffn_hc 1.57 -> 1.12, engram_add 1.79 -> 1.34 ms a chunk.
+   - Tests: `tests/unit/test_xing_bf16_streams.py` (DS41 2x2 / 4x4 shapes and a small one: pack and engram rows
+     bit-identical to the fp32 call on the upcast values; hc bit-identical and y = the fp32 call's y rounded to nearest
+     (ties away) bit for bit, for the coefficient + collapse, collapse_pre and coefficients_given calls; sum x^2 vs
+     float64 <= 4.2e-7; negative control (truncation instead of rounding); refusals). Regression, option off
+     (2026-10-22, 2x2): unit + golden 355 passed / 1 skipped (= the recorded 345 / 1 + 10 new), model cases 103
+     passed (= recorded). No source tests (a new op: no tests/source_baseline.json).
+   - Needed by: deepseek_v41_flash_d_p P.20 (tt/mhc.py, tt/collapse.py, tt/engram_add.py, setting BF16_ACTIVATIONS).
+   - Files: `mhc_pre_xing.cpp`, `device/mhc_pre_xing_device_operation.cpp`, `device/mhc_pre_xing_program_factory.cpp`,
+     `device/mhc_engram_pack_program_factory.cpp`, `kernels/mhc_pre_xing_compute.cpp`,
+     `kernels/mhc_engram_pack_{reader,compute}.cpp`, `tests/unit/test_xing_bf16_streams.py`.

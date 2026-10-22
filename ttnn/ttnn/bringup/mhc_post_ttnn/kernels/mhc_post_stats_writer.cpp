@@ -101,7 +101,12 @@ void kernel_main() {
     constexpr auto s_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
     constexpr auto st_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
 
-    const auto o_acc = TensorAccessor(o_args, get_arg_val<uint32_t>(0), page);
+#ifdef MHC_POST_STATS_X16
+    constexpr uint32_t o_page = page / 2;  // P.20: bf16 X' tiles
+#else
+    constexpr uint32_t o_page = page;
+#endif
+    const auto o_acc = TensorAccessor(o_args, get_arg_val<uint32_t>(0), o_page);
     const auto p_acc = TensorAccessor(p_args, get_arg_val<uint32_t>(1), page);
     const auto c_acc = TensorAccessor(c_args, get_arg_val<uint32_t>(2), page);
     const auto s_acc = TensorAccessor(s_args, get_arg_val<uint32_t>(3), page);
@@ -140,7 +145,7 @@ void kernel_main() {
             const uint32_t src = get_read_ptr(cb_out);
             for (uint32_t c = 0; c < U.valid; ++c) {
                 for (uint32_t k = 0; k < n; ++k) {
-                    noc_async_write_page(U.r * n * ct + k * ct + U.col0 + c, o_acc, src + (c * n + k) * page);
+                    noc_async_write_page(U.r * n * ct + k * ct + U.col0 + c, o_acc, src + (c * n + k) * o_page);
                 }
             }
             noc_async_writes_flushed();

@@ -7,12 +7,14 @@ embedding to the final norm, every block runs ``run_block`` over the reference's
 
 Resting layout between steps (components.yaml header, tt/layout.py): per chip (r, c) of the SP x TP mesh
 
-    block boundary (in / x / out)  ``DevH``: streams [1, 1, S/SP, 4 x H/TP] fp32 (stream-major) + the pending pre
-                                   [1, 1, S/SP, 4] fp32 (row-split, replicated over TP; DS41-3)
-    h_mid                          streams [1, 1, S/SP, 4 x H/TP] fp32
+    block boundary (in / x / out)  ``DevH``: streams [1, 1, S/SP, 4 x H/TP] (stream-major; bf16 under
+                                   BF16_ACTIVATIONS=on (P.20), else fp32) + the pending pre [1, 1, S/SP, 4] fp32
+                                   (row-split, replicated over TP; DS41-3)
+    h_mid                          streams [1, 1, S/SP, 4 x H/TP] (the streams' dtype)
     mHC mixes                      [1, 1, S/SP, 24] fp32, replicated over TP
-    attn_in / attn_norm / ffn_in   [1, 1, S/SP, H/TP] fp32 (hidden split)
-    q_resid / kv                   [1, 1, S/SP, 1280] fp32 / [1, 1, S/SP, 512] bf16 (row-split, TP-replicated)
+    attn_in / attn_norm / ffn_in   [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on, else fp32)
+    q_resid / kv                   [1, 1, S/SP, 1280] (bf16 under BF16_ACTIVATIONS=on, else fp32) / [1, 1, S/SP, 512]
+                                   bf16 (row-split, TP-replicated)
     ffn_norm                       [1, 1, S/SP, H] fp32 (whole rows, replicated over TP)
     experts_out / shared_out       the fp32 partials [1, 1, S/SP, H] before the one MoE exchange (moe_add sums them,
                                    then one exact all_gather + SFPU add over TP: components.yaml moe_add notes)
@@ -44,7 +46,7 @@ from . import ccl
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
 from .ccl import dealloc
 from .collapse import TtHcCollapse
-from .common import DRAM, SP_AXIS, TP_AXIS, set_load_layer
+from .common import DRAM, SP_AXIS, TP_AXIS, act_dtype, bf16_activations, set_load_layer, stream_dtype
 from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
@@ -598,6 +600,9 @@ class TtDS41Model:
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
+        if bf16_activations():  # P.20: the bf16 paths exist on the fused / folded / stock-rope / fork-norm path only
+            off = [k for k in ("MHC_FUSED", "GLUE_FOLD", "ROPE_IMPL", "NORM_IMPL") if settings.get(k) != "on"]
+            assert not off, f"BF16_ACTIVATIONS=on needs {off} on"
         ccl.configure()  # GLUE_FOLD=on (P.19): tt/ccl.py:dealloc through the binding
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
@@ -636,7 +641,10 @@ class TtDS41Model:
         self.pre0 = row_split_to_device(mesh, pre0.reshape(self.chunk, self.pre_w))
         assert self.pre0.shape[-2] == rows, (self.pre0.shape, rows)
         self.final_collapse = TtHcCollapse(n=cfg.hc)  # MHC_FUSED=on: mhc_pre_xing(coefficients_given=True)
-        self.final_norm_mod = TtDistributedRmsNorm(mesh, ck.weight("norm.weight", torch.float32), cfg.eps)
+        # BF16_ACTIVATIONS=on (P.20): the final norm writes bf16 (the GPU code's RMSNorm .to(dtype))
+        self.final_norm_mod = TtDistributedRmsNorm(
+            mesh, ck.weight("norm.weight", torch.float32), cfg.eps, dtype=act_dtype()
+        )
         self.head_w = ck.weight("head.weight", torch.float32) if lm_head else None
         self.blocks = {}
         for i in self.layers:
@@ -732,6 +740,12 @@ class TtDS41Model:
         dealloc(dev_ids)
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp
         e4 = ttnn.reshape(e, [1, 1, rows, w])
+        if stream_dtype() == ttnn.bfloat16:  # BF16_ACTIVATIONS=on (P.20): the bf16 embedding rows as they are
+            streams = ttnn.concat([e4] * HC, dim=-1, memory_config=DRAM)
+            dealloc(e4)
+            if e.is_allocated():
+                dealloc(e)
+            return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
         ef = ttnn.typecast(e4, ttnn.float32, memory_config=DRAM)
         dealloc(e4)  # a view of e's buffer (K-1): then e is freed with it
         if e.is_allocated():
@@ -744,7 +758,7 @@ class TtDS41Model:
         return self.blocks[i](h, start, state, end)
 
     def final_norm(self, h: DevH) -> ttnn.Tensor:
-        """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] fp32 (hidden split)."""
+        """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on)."""
         x = self.final_collapse(h.streams, h.pre)
         out = self.final_norm_mod(x)
         dealloc(x)

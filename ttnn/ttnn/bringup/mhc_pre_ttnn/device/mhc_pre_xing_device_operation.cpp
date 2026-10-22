@@ -29,7 +29,7 @@ void MhcPreXingDeviceOperation::validate_on_program_cache_hit(
 MhcPreXingDeviceOperation::spec_return_value_t MhcPreXingDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& s = tensor_args.input.logical_shape();
-    auto spec = [&](uint32_t last) {
+    auto spec = [&](uint32_t last, DataType dt = DataType::FLOAT32) {
         ttsl::SmallVector<uint32_t> dims;
         for (size_t i = 0; i + 1 < s.rank(); ++i) {
             dims.push_back((attrs.partials > 1 && i + 3 == s.rank()) ? 1 : s[i]);  // partials: (1, 1, T, ...)
@@ -38,7 +38,7 @@ MhcPreXingDeviceOperation::spec_return_value_t MhcPreXingDeviceOperation::comput
         return tt::tt_metal::TensorSpec(
             ttnn::Shape(dims),
             tt::tt_metal::TensorLayout(
-                DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG));
+                dt, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::DRAM_MEMORY_CONFIG));
     };
     spec_return_value_t specs;
     if (attrs.pack_stats) {
@@ -49,7 +49,8 @@ MhcPreXingDeviceOperation::spec_return_value_t MhcPreXingDeviceOperation::comput
         specs.push_back(spec(attrs.n * (attrs.n + 2)));
     }
     if (tensor_args.streams.has_value()) {
-        specs.push_back(spec(tensor_args.streams->logical_shape()[-1] / attrs.n));
+        // y in the streams' dtype (fp32, or bf16 streams -> bf16 y: P.20)
+        specs.push_back(spec(tensor_args.streams->logical_shape()[-1] / attrs.n, tensor_args.streams->dtype()));
     }
     return specs;
 }

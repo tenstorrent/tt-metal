@@ -55,7 +55,7 @@ import ttnn
 
 from . import ccl
 from .ccl import dealloc
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
 from .norm import TtDistributedRmsNorm
 from .rope import (
     PairPerm,
@@ -403,7 +403,12 @@ class TtCompressor:
         assert torch.equal(w_t.bfloat16().float(), w_t), "compressor weights must be bf16-exact (as stored)"
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
         self.proj_w = _upload(mesh, w_t.reshape(1, 1, hidden, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT, dims)
-        self.norm = TtDistributedRmsNorm(mesh, w["norm"].float()[perm], cfg.eps, split=False)
+        # BF16_ACTIVATIONS=on (P.20, ROPE_IMPL=on): the normed latent written bf16 (the GPU code's norm(kv.to(dtype))),
+        # read as is by the rope (ckv) and by wk, which writes bf16 too (the GPU code's bf16 wk)
+        self.bf16 = bf16_activations() and self.stock
+        self.norm = TtDistributedRmsNorm(
+            mesh, w["norm"].float()[perm], cfg.eps, split=False, dtype=ttnn.bfloat16 if self.bf16 else None
+        )
         wk = w["wk"].float()[permk][:, perm].t().contiguous()  # [512 (latent, de-interleaved), 128]
         assert torch.equal(wk.bfloat16().float(), wk), "wk must be bf16-exact (as stored)"
         self.wk = _upload(mesh, wk.reshape(1, 1, self.hd, self.idx), ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -499,10 +504,11 @@ class TtCompressor:
     def _rope_stock(self, latent: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """ROPE_IMPL=on (P.17): the fp32 latent (consumed) -> (ckv, k) bf16 through tt/rope.rope_stock: ckv = rope of
         the latent cast to bf16; k = rope of k_norm(latent wk^T) written bf16 (wk reads the fp32 latent, as before)."""
-        lb = ttnn.typecast(latent, ttnn.bfloat16, memory_config=DRAM)
+        lb = cast(latent, ttnn.bfloat16)  # BF16_ACTIVATIONS=on: the latent itself (already bf16)
         ckv = rope_stock(lb, cos, sin, self.rope.trans)
-        dealloc(lb)
-        kp = self._mm(latent, self.wk)
+        if lb is not latent:
+            dealloc(lb)
+        kp = self._mm(latent, self.wk, dtype=ttnn.bfloat16 if self.bf16 else ttnn.float32)
         dealloc(latent)
         kn = self.k_norm(kp)
         dealloc(kp)
