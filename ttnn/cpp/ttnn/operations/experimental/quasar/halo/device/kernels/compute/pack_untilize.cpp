@@ -24,6 +24,10 @@ void kernel_main() {
 
     const uint32_t total_blocks = get_arg(args::total_blocks);
 
+    DataflowBuffer src_cb(src_cb_id);
+    DataflowBuffer out_cb0(out_cb_id0);
+    DataflowBuffer out_cb1(out_cb_id1);
+
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 
     // QSR FIX: the Quasar pack_untilize LLK bakes the destination CB's base L1 address at
@@ -43,7 +47,8 @@ void kernel_main() {
                 out_cb_id0,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                src_cb, out_cb0, block_size);
         } else {
             compute_kernel_lib::untilize<
                 tiles_per_row,
@@ -51,7 +56,8 @@ void kernel_main() {
                 out_cb_id1,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                src_cb, out_cb1, block_size);
         }
     }
 }
