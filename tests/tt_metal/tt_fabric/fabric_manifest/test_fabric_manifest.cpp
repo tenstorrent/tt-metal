@@ -389,9 +389,12 @@ void check_router_link(const json& manifest, const std::vector<RouterEntry>& rou
         const auto peer = control_plane().try_get_connected_mesh_chip_chan_ids(entry.node, entry.eth_chan);
         if (peer.has_value()) {
             // A same-mesh Z edge is always an express chord: classification rejects one on a mesh without express.
-            const EdgeCapability expected = peer->first.mesh_id != entry.node.mesh_id ? EdgeCapability::INTERMESH
-                                            : faces_z ? EdgeCapability::INTRAMESH_EXPRESS
-                                                      : EdgeCapability::INTRAMESH_CARDINAL;
+            EdgeCapability expected = EdgeCapability::INTRAMESH_CARDINAL;
+            if (peer->first.mesh_id != entry.node.mesh_id) {
+                expected = EdgeCapability::INTERMESH;
+            } else if (faces_z) {
+                expected = EdgeCapability::INTRAMESH_EXPRESS;
+            }
             EXPECT_EQ(link.at("edge_capability"), lower_enum_name(expected));
         }
 
