@@ -58,7 +58,12 @@ class GLM53MeshModel:
         self.max_batch = max_batch  # per row
         self.total_users = max_batch * self.mesh.rows
         self.max_seq_len = max_seq_len
-        if os.environ.get("GLM53_PREFILL_EXPERTS", "blocks") == "auto":
+        if os.environ.get("GLM53_PREFILL_EXPERTS", "auto") == "auto" and max_seq_len <= 4096:
+            os.environ[
+                "GLM53_PREFILL_EXPERTS"
+            ] = "blocks"  # short prompts: the traced prefill is as fast on the blocks path
+            logger.info(f"mesh model: GLM53_PREFILL_EXPERTS=auto -> blocks prefill path for max_seq_len {max_seq_len}")
+        if os.environ.get("GLM53_PREFILL_EXPERTS", "auto") == "auto":
             # the regions prefill path, with the stacked expert copy kept for the decode block op when the memory
             # planner says both fit beside the caches of (max_batch users per row x max_seq_len); resolved for the
             # whole process before the layers are built (tt/moe.py reads the knobs at construction)
