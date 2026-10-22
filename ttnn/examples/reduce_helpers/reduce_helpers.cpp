@@ -55,16 +55,6 @@ using tt::constants::TILE_WIDTH;
 constexpr NodeCoord kNode{0, 0};
 const ComputeHardwareConfig kComputeHardware{.fpu_math_fidelity = MathFidelity::HiFi4};
 
-// The planner must see the configuration the compute kernel is built with.
-reduce_host::ReduceHardwareConfig reduce_hardware_config(const ttnn::Tensor& tensor) {
-    return {
-        .arch = tensor.device()->arch(),
-        .fp32_dest_acc_en = kComputeHardware.enable_32_bit_dest,
-        .dst_full_sync_en = !kComputeHardware.double_buffer_dest,
-        .math_fidelity = kComputeHardware.fpu_math_fidelity,
-    };
-}
-
 DataflowBufferSpec tile_dfb(const char* name, tt::DataFormat format, uint32_t tiles) {
     return {
         .unique_id = DFBSpecName{name},
@@ -116,16 +106,17 @@ ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor&
     TT_FATAL(Wt % kOutputGroup == 0, "The reader only delivers whole strips");
     const uint32_t input_dfb_tiles = 2 * kOutputGroup;
 
-    // 2. Factory: describe the block. The planner rejects an output group larger than
-    //    max_reduce_output_group() for this hardware configuration.
+    // 2. Factory: describe the block and the compute kernel's hardware configuration. The planner rejects an
+    //    output group larger than max_reduce_output_group() for this hardware configuration.
     auto block = reduce_host::ReduceBlockSpec::tiled(
         input.logical_shape()[-2], input.logical_shape()[-1], input.dtype(), output.dtype());
     block.input_cb_tiles = input_dfb_tiles;
     block.output_group = kOutputGroup;
+    const auto hardware = reduce_host::make_reduce_hardware_config(input.device()->arch(), kComputeHardware);
 
     // 3. Planner. The scalar is absent, so AVG divides by the logical height.
     const reduce_host::ReducePlan plan = reduce_host::make_reduce_plan(
-        block, ReduceOpMath::AVG, ReduceOpDim::H, std::nullopt, ReduceFp32Mode::Fast, reduce_hardware_config(input));
+        block, ReduceOpMath::AVG, ReduceOpDim::H, std::nullopt, ReduceFp32Mode::Fast, hardware);
 
     ProgramSpec spec{.name = "reduce_helpers_column_mean"};
 
@@ -144,8 +135,7 @@ ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor&
     const auto compute_args =
         reduce_host::ReduceCallArgs(plan, {.input_cb_id = Input, .auxiliary_cb_id = Auxiliary, .output_cb_id = Output})
             .get_compile_time_args();
-    const auto writer_args =
-        reduce_host::ReduceAuxiliaryArgs({.cb_id = Auxiliary, .tiles = plan.auxiliary_tiles}).get_compile_time_args();
+    const auto writer_args = reduce_host::ReduceAuxiliaryArgs(plan, Auxiliary).get_compile_time_args();
 
     // 6. Factory: kernels and the work unit.
     spec.tensor_parameters = {
@@ -192,7 +182,8 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     const uint32_t Ht = a.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t accumulator_tiles = Ht;
 
-    // 2. Factory: describe each call's block and the DFBs the sequence uses.
+    // 2. Factory: describe each call's block, the DFBs the sequence uses and the compute kernel's hardware
+    //    configuration.
     auto describe = [&](const ttnn::Tensor& input) {
         auto block = reduce_host::ReduceBlockSpec::tiled(
             input.logical_shape()[-2], input.logical_shape()[-1], input.dtype(), output.dtype());
@@ -211,10 +202,11 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
         .output_cb_id = Output,
         .accumulator_cb_tiles = accumulator_tiles,
     };
+    const auto hardware = reduce_host::make_reduce_hardware_config(a.device()->arch(), kComputeHardware);
 
     // 3. Planner. AVG divides by the combined logical width of both calls.
-    const reduce_host::ReduceSequencePlan plan = reduce_host::make_reduce_sequence_plan(
-        {{InputA, describe(a)}, {InputB, describe(b)}}, sequence_dfbs, reduce_hardware_config(a));
+    const reduce_host::ReduceSequencePlan plan =
+        reduce_host::make_reduce_sequence_plan({{InputA, describe(a)}, {InputB, describe(b)}}, sequence_dfbs, hardware);
 
     ProgramSpec spec{.name = "reduce_helpers_row_mean_of_two_inputs"};
 

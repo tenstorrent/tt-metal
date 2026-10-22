@@ -290,6 +290,45 @@ TEST(ReduceHostPlanner, OutputGroupIsACallerContract) {
     EXPECT_EQ(shared.tail_plan->chunk.output_tiles, 2U);
 }
 
+TEST(ReduceHostPlanner, HardwareConfigFollowsComputeHardwareConfig) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const auto defaults = make_reduce_hardware_config(tt::ARCH::WORMHOLE_B0, {});
+    EXPECT_EQ(defaults.arch, tt::ARCH::WORMHOLE_B0);
+    EXPECT_FALSE(defaults.fp32_dest_acc_en);
+    EXPECT_FALSE(defaults.dst_full_sync_en);
+    EXPECT_EQ(defaults.math_fidelity, MathFidelity::HiFi4);
+    EXPECT_EQ(max_reduce_output_group(defaults, DataType::BFLOAT16, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 8U);
+
+    const auto full_sync_fp32 = make_reduce_hardware_config(
+        tt::ARCH::BLACKHOLE,
+        {.fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = true, .double_buffer_dest = false});
+    EXPECT_EQ(full_sync_fp32.arch, tt::ARCH::BLACKHOLE);
+    EXPECT_TRUE(full_sync_fp32.fp32_dest_acc_en);
+    EXPECT_TRUE(full_sync_fp32.dst_full_sync_en);
+    EXPECT_EQ(full_sync_fp32.math_fidelity, MathFidelity::LoFi);
+    EXPECT_EQ(max_reduce_output_group(full_sync_fp32, DataType::BFLOAT16, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 8U);
+}
+
+TEST(ReduceHostPlanner, AuxiliaryArgsFromAPlanMatchTheAuxiliaryPlan) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0};
+    const auto plan = make_reduce_plan(
+        whole_input(ReduceBlockSpec::tiled(100, 70, DataType::BFLOAT16, DataType::BFLOAT16)),
+        ReduceOpMath::AVG,
+        ReduceOpDim::H,
+        std::nullopt,
+        ReduceFp32Mode::Fast,
+        hardware);
+    ASSERT_GT(plan.auxiliary_tiles.size(), 1U);
+    EXPECT_EQ(
+        ReduceAuxiliaryArgs(plan, 5).get_compile_time_args(),
+        ReduceAuxiliaryArgs({.cb_id = 5, .tiles = plan.auxiliary_tiles, .cb = plan.auxiliary_cb})
+            .get_compile_time_args());
+    EXPECT_ANY_THROW(ReduceAuxiliaryArgs(plan, no_cb_id));
+}
+
 TEST(ReduceHostPlanner, SfpuReductionsPlanAPlaceholderAuxiliary) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
