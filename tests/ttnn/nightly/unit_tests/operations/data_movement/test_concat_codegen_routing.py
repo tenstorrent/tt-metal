@@ -5,8 +5,8 @@
 # --- BEGIN GENERATED (agentic_port phase 8) ---
 # Contracts: (1) every case the codegen gate rejects falls back to native; (2) an accepted case
 # dispatched twice on the codegen path stays a program-cache hit and rebinds its buffers; (3) a
-# perf-demoted case still lands on native. This block is emitted from the port's coverage ledger
-# and is regenerated on every port update; hand-add off-grid regressions after its END line.
+# perf-demoted case still lands on native. This block is emitted by the port pipeline and is
+# regenerated on every port update; hand-add regressions after its END line.
 
 import pytest
 import torch
@@ -47,8 +47,8 @@ def _reference(inputs, **kwargs):
     return torch.cat([ttnn.to_torch(t) for t in inputs], dim=kwargs["dim"])
 
 
-# 12 of the ledger's 979 gate-rejected cases, sampled to keep every refusal reason
-# and the extremes of each reason's input and call sizes; the port pipeline checked the full set.
+# A sample of the gate-rejected cases that keeps every refusal reason and the extremes of each
+# reason's input and call sizes.
 _ROUTING = [
     (
         [[1, 1, 16], [1, 1, 1]],
@@ -871,33 +871,365 @@ def test_concat_forced_codegen_refuses_out_of_scope_case(device, expect_error):
         _force_codegen(xt, **kwargs)
 
 
-@pytest.mark.parametrize("shapes,kwargs,dtype,layout,placement", _CACHE_HIT, ids=_CACHE_HIT_IDS)
-def test_concat_codegen_program_key_is_frontier_invariant(device, shapes, kwargs, dtype, layout, placement):
-    xt = _device_inputs(shapes, dtype, layout, device=device, memory_config=placement)
-    golden = _reference(xt, **kwargs)
-    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
-    entries_before = device.num_program_cache_entries()
-    # Trace capture compiles nothing it has not already cached, and what warm-up cached
-    # depends on where the frontier stood at warm-up -- so a CB plan that reads live L1
-    # occupancy is uncapturable, and the same call re-keys the cache once anything else is
-    # resident. This tensor moves the frontier by many pages per bank, so a plan reading it
-    # at all lands on a different key here.
-    resident = ttnn.from_torch(
-        torch.zeros([1, 1, 256, 4096], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    try:
-        assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
-        msg = "the program key moved with the L1 frontier, so the op cannot be traced"
-        assert device.num_program_cache_entries() == entries_before, msg
-    finally:
-        ttnn.deallocate(resident)
-
-
 # --- END GENERATED ---
 
 
 # --- Off-grid regressions (hand-added; edit here, not the emitter) ---
+
+import contextlib  # noqa: E402
+
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch  # noqa: E402
+
+_DRAM = ttnn.DRAM_MEMORY_CONFIG
+_L1 = ttnn.L1_MEMORY_CONFIG
+
+
+def _auto_route(device, xt, **kwargs):
+    """Dispatches `ttnn.concat` after warming native, so cache growth means the call took codegen.
+
+    Returns (output, grew).
+    """
+    device.clear_program_cache()
+    _force_native(xt, **kwargs)
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.concat(xt, **kwargs)
+    return out, device.num_program_cache_entries() > entries_before
+
+
+# Cases the auto router must send to codegen. The 3+-input width cases hold more than 32 output sticks,
+# the smallest size the perf gate keeps on codegen.
+_AUTO_CODEGEN = [
+    pytest.param([[33, 64]] * 3, 1, None, id="width_3in_33_sticks"),
+    pytest.param([[40, 32]] * 8, 1, None, id="width_8in_max_inputs"),
+    pytest.param([[64, 3], [64, 5], [64, 16]], 1, None, id="width_3in_odd_widths"),
+    pytest.param([[64, 64], [64, 3], [64, 5], [64, 16]], 1, None, id="width_4in_odd_widths"),
+    pytest.param([[40, 1]] * 3, 1, None, id="width_3in_single_element_sticks"),
+    pytest.param([[40, 1], [40, 32], [40, 1]], 1, None, id="width_3in_mixed_single_element"),
+    pytest.param([[40, 32]] * 3, 1, (_L1, _DRAM, _L1), id="width_3in_mixed_placement"),
+    pytest.param([[1, 2, 20, 16], [1, 2, 20, 8], [1, 2, 20, 8]], 3, None, id="width_3in_rank4"),
+    pytest.param([[1, 33, 7], [1, 33, 9], [1, 33, 16]], 2, None, id="width_3in_rank3_unaligned"),
+    pytest.param([[1, 20, 28, 28], [1, 34, 28, 28]], 1, None, id="nonwidth_2in_rank4"),
+    pytest.param([[1, 20, 28, 28], [1, 34, 28, 28]], 1, (_L1, _DRAM), id="nonwidth_2in_mixed_placement"),
+    pytest.param([[40, 64], [24, 64]], 0, None, id="nonwidth_2in_rows"),
+    pytest.param([[40, 7], [24, 7]], 0, None, id="nonwidth_2in_unaligned_stick"),
+    pytest.param([[40, 32], [40, 48]], 1, None, id="width_2in"),
+    pytest.param([[32], [48]], 0, None, id="rank1_2in"),
+]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32], ids=["bf16", "i32", "u32"])
+@pytest.mark.parametrize("shapes,dim,placement", _AUTO_CODEGEN)
+def test_concat_auto_routes_in_scope_case_to_codegen(device, shapes, dim, placement, dtype):
+    xt = _device_inputs(shapes, dtype, ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
+    out, grew = _auto_route(device, xt, dim=dim, memory_config=_DRAM)
+    assert_equal(_reference(xt, dim=dim), ttnn.to_torch(out))
+    assert grew, "auto served an in-scope case on native; expected codegen"
+    # The second dispatch uses fresh allocations and must rebind them on a program-cache hit.
+    entries = device.num_program_cache_entries()
+    yt = _device_inputs(shapes, dtype, ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
+    assert_equal(_reference(yt, dim=dim), ttnn.to_torch(ttnn.concat(yt, dim=dim, memory_config=_DRAM)))
+    assert device.num_program_cache_entries() == entries, "second dispatch missed the program cache"
+
+
+@pytest.mark.parametrize("out_config", [_L1, None], ids=["l1_out", "default_out"])
+@pytest.mark.parametrize("shapes,dim", [([[40, 32]] * 3, 1), ([[40, 32], [40, 48]], 1), ([[40, 64], [24, 64]], 0)])
+def test_concat_auto_codegen_honours_output_memory_config(device, shapes, dim, out_config):
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim} if out_config is None else {"dim": dim, "memory_config": out_config}
+    out, grew = _auto_route(device, xt, **kwargs)
+    assert_equal(_reference(xt, dim=dim), ttnn.to_torch(out))
+    assert grew
+    if out_config is not None:
+        assert out.memory_config().buffer_type == out_config.buffer_type
+
+
+# The perf gate demotes a 3+-input row-major width concat to native up to this many output sticks.
+_MAX_DEMOTED_STICKS = 32
+# The most inputs the codegen reader kernels take.
+_MAX_CODEGEN_INPUTS = 8
+
+
+@pytest.mark.parametrize(
+    "sticks,expect_codegen",
+    [(_MAX_DEMOTED_STICKS, False), (_MAX_DEMOTED_STICKS + 1, True)],
+    ids=["32_sticks_native", "33_sticks_codegen"],
+)
+def test_concat_width_nway_perf_gate_boundary(device, sticks, expect_codegen):
+    xt = _device_inputs([[sticks, 32]] * 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out, grew = _auto_route(device, xt, dim=1, memory_config=_DRAM)
+    assert_equal(_reference(xt, dim=1), ttnn.to_torch(out))
+    assert grew == expect_codegen
+
+
+@pytest.mark.parametrize("dim,shape", [(1, [40, 32]), (0, [40, 32])], ids=["width", "rows"])
+def test_concat_input_count_limit(device, dim, shape, expect_error):
+    at_limit = _device_inputs([shape] * _MAX_CODEGEN_INPUTS, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out, grew = _auto_route(device, at_limit, dim=dim, memory_config=_DRAM)
+    assert_equal(_reference(at_limit, dim=dim), ttnn.to_torch(out))
+    assert grew, "auto served a case at the input-count limit on native; expected codegen"
+
+    over = _device_inputs([shape] * (_MAX_CODEGEN_INPUTS + 1), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out, grew = _auto_route(device, over, dim=dim, memory_config=_DRAM)
+    assert_equal(_reference(over, dim=dim), ttnn.to_torch(out))
+    assert not grew, "auto routed a case over the input-count limit to codegen"
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(over, dim=dim, memory_config=_DRAM)
+
+
+def _codegen_vs_golden(device, xt, dim):
+    entries = device.num_program_cache_entries()
+    out = _force_codegen(xt, dim=dim, memory_config=_DRAM)
+    assert_equal(_reference(xt, dim=dim), ttnn.to_torch(out))
+    return device.num_program_cache_entries() - entries
+
+
+@pytest.mark.parametrize("dim", [0, 1], ids=["rows", "width"])
+def test_concat_codegen_repeated_input_does_not_alias_distinct_inputs(device, dim):
+    # A cached program is patched per Buffer*; a call whose inputs repeat one buffer must not share a
+    # cache entry with one whose inputs are distinct, in either order.
+    x, y, z = _device_inputs([[40, 32]] * 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    view = ttnn.reshape(x, list(x.shape))  # a new tensor over the same buffer
+    device.clear_program_cache()
+    assert _codegen_vs_golden(device, [x, x], dim) == 1
+    assert _codegen_vs_golden(device, [x, y], dim) == 1
+    assert _codegen_vs_golden(device, [x, view], dim) == 0
+    assert _codegen_vs_golden(device, [y, z], dim) == 0
+    assert _codegen_vs_golden(device, [x, x], dim) == 0
+
+
+def test_concat_codegen_repeated_input_nway(device):
+    x, y, z = _device_inputs([[40, 32]] * 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    device.clear_program_cache()
+    assert _codegen_vs_golden(device, [x, y, x], 1) == 1
+    assert _codegen_vs_golden(device, [x, y, z], 1) == 1
+    assert _codegen_vs_golden(device, [y, x, y], 1) == 0
+    assert _codegen_vs_golden(device, [x, x, x], 1) == 1
+    assert _codegen_vs_golden(device, [z, x, y], 1) == 0
+
+
+def test_concat_forced_codegen_refuses_grouped_call(device, expect_error):
+    xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, dim=0, groups=2)
+
+
+def test_concat_forced_codegen_refuses_sub_core_grids(device, expect_error):
+    xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, dim=0, sub_core_grids=grid)
+
+
+def test_concat_forced_codegen_refuses_empty_input(device, expect_error):
+    empty = ttnn.from_torch(
+        torch.zeros([0, 32], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    other = _device_inputs([[4, 32]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)[0]
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen([empty, other], dim=0)
+
+
+# --- Live-L1 gate and CB plan ---
+# The CB depth is planned from the L1 free at dispatch and is part of the program-cache key, and a call
+# the free L1 cannot hold at all falls back to native. A stick of `_stick_bytes` makes the output CB
+# footprint a whole number of "slots" (2 * batch * stick for row-major, plus a small scratch for width
+# concats), so pinning a known headroom selects a known batch of 4, 2 or 1.
+_TILE_BYTES = 32 * 32 * 2
+
+
+def _pin_l1_headroom(device, headroom_bytes):
+    """Lowers the live L1 frontier to about `headroom_bytes` above the CB base on every bank."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.cb_limit - headroom_bytes) // _TILE_BYTES
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    return resident, resident.buffer_address() - info.address_at_first_l1_cb_buffer
+
+
+def _stick_bytes(device):
+    """An output stick of about a ninth of clear L1, so a batch-4 plan (8 slots) still fits unpinned."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    return (info.cb_limit - info.address_at_first_l1_cb_buffer) // 9 // 128 * 128
+
+
+# (inputs, dim, elements per input stick) with an output stick of `stick` bytes.
+_L1_CASES = {
+    "rows_2in": lambda stick: ([[4, stick // 2]] * 2, 0),
+    "rows_3in": lambda stick: ([[4, stick // 2]] * 3, 0),
+    "width_2in": lambda stick: ([[40, stick // 4]] * 2, 1),
+}
+
+
+@pytest.mark.parametrize("case", list(_L1_CASES))
+def test_concat_codegen_cb_plan_follows_live_l1(device, case):
+    shapes, dim = _L1_CASES[case](_stick_bytes(device))
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim, "memory_config": _DRAM}
+    golden = _reference(xt, **kwargs)
+    stick = _stick_bytes(device)
+
+    out, grew = _auto_route(device, xt, **kwargs)
+    assert_equal(golden, ttnn.to_torch(out))
+    assert grew, "auto served the unpressured call on native; expected codegen"
+    entries_clear = device.num_program_cache_entries()
+
+    # With 5 slots free the batch-4 program (8 slots) would overlap the pinned buffer, so a
+    # smaller plan must be compiled; with 3 slots free, a smaller one still.
+    entries = entries_clear
+    for slots in (5, 3):
+        resident, headroom = _pin_l1_headroom(device, slots * stick)
+        try:
+            assert slots * stick <= headroom < (slots + 1) * stick, f"pinned headroom {headroom} B is not {slots} slots"
+            assert_equal(golden, ttnn.to_torch(ttnn.concat(xt, **kwargs)))
+            msg = f"the call with {slots} slots free hit a program planned for more L1"
+            assert device.num_program_cache_entries() == entries + 1, msg
+            entries += 1
+        finally:
+            ttnn.deallocate(resident)
+
+    # Releasing the pin restores the original plan, which is still cached.
+    assert_equal(golden, ttnn.to_torch(ttnn.concat(xt, **kwargs)))
+    assert device.num_program_cache_entries() == entries, "releasing the pin did not return to the cached plan"
+
+
+def test_concat_codegen_cache_key_ignores_a_frontier_move_that_keeps_the_plan(device):
+    shapes, dim = _L1_CASES["rows_2in"](_stick_bytes(device))
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim, "memory_config": _DRAM}
+    out, grew = _auto_route(device, xt, **kwargs)
+    assert grew
+    entries = device.num_program_cache_entries()
+    # About 2 MB over the whole grid: far below the slack left over by the batch-4 plan.
+    small = ttnn.from_torch(
+        torch.zeros([1, 1, 256, 4096], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_L1,
+    )
+    try:
+        assert_equal(_reference(xt, **kwargs), ttnn.to_torch(ttnn.concat(xt, **kwargs)))
+        assert device.num_program_cache_entries() == entries
+    finally:
+        ttnn.deallocate(small)
+
+
+def test_concat_falls_back_to_native_when_free_l1_holds_no_codegen_plan(device):
+    # A width concat needs a scratch stick of alignment bytes on top of the two output slots; with
+    # just over two slots free codegen has no plan and native, which stages less, must serve the call.
+    stick = _stick_bytes(device)
+    shapes, dim = _L1_CASES["width_2in"](stick)
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim, "memory_config": _DRAM}
+    golden = _reference(xt, **kwargs)
+    device.clear_program_cache()
+    _force_native(xt, **kwargs)
+    entries = device.num_program_cache_entries()
+    resident, headroom = _pin_l1_headroom(device, 2 * stick + stick // 5)
+    try:
+        assert 2 * stick <= headroom < 5 * stick // 2, f"pinned headroom {headroom} B is not just over 2 slots"
+        assert_equal(golden, ttnn.to_torch(ttnn.concat(xt, **kwargs)))
+        assert device.num_program_cache_entries() == entries, "auto compiled a codegen program that does not fit"
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize("case", ["rows_2in", "width_2in"])
+def test_concat_forced_codegen_refuses_when_free_l1_holds_no_slot(device, case, expect_error):
+    stick = _stick_bytes(device)
+    shapes, dim = _L1_CASES[case](stick)
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    resident, headroom = _pin_l1_headroom(device, stick // 3)
+    try:
+        assert headroom < stick
+        with expect_error(RuntimeError, "of L1 per core"):
+            _force_codegen(xt, dim=dim, memory_config=_DRAM)
+    finally:
+        ttnn.deallocate(resident)
+
+
+# Trace capture compiles nothing, so the plan it needs must already be cached. The plan follows the
+# frontier, hence the capture only finds it when warm-up ran under the same frontier.
+_TRACE_DEVICE_PARAMS = {"trace_region_size": 4 * 1024 * 1024}
+
+
+def _best_effort(action):
+    try:
+        action()
+    except RuntimeError:
+        pass
+
+
+@contextlib.contextmanager
+def _capturing(device):
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        yield trace_id
+    finally:
+        _best_effort(lambda: ttnn.end_trace_capture(device, trace_id, cq_id=0))
+
+
+@pytest.mark.parametrize(
+    "pin_before_warmup",
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.xfail(
+                reason="https://github.com/tenstorrent/tt-metal/issues/46533: a live-L1-derived plan "
+                "misses the cache when the frontier moves between warm-up and capture, and a capture "
+                "cannot compile the plan it then needs",
+            ),
+        ),
+    ],
+    ids=["warm_under_pressure", "warm_then_pressure"],
+)
+@pytest.mark.parametrize("device_params", [_TRACE_DEVICE_PARAMS], indirect=True)
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
+def test_concat_codegen_trace_capture_under_pressure(device, pin_before_warmup):
+    stick = _stick_bytes(device)
+    shapes, dim = _L1_CASES["rows_2in"](stick)
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim, "memory_config": _DRAM}
+    golden_before = _reference(xt, **kwargs)
+    swapped = _make_input(shapes[0], ttnn.bfloat16)
+    golden_after = torch.cat([swapped, ttnn.to_torch(xt[1])], dim=dim)
+
+    trace_id = None
+    resident = None
+    try:
+        if pin_before_warmup:
+            resident, _ = _pin_l1_headroom(device, 3 * stick)
+        warm = _force_codegen(xt, **kwargs)
+        assert_equal(golden_before, ttnn.to_torch(warm))
+        ttnn.deallocate(warm)
+        entries_after_warmup = device.num_program_cache_entries()
+        if not pin_before_warmup:
+            resident, _ = _pin_l1_headroom(device, 3 * stick)
+
+        with _capturing(device) as trace_id:
+            output = _force_codegen(xt, **kwargs)
+        ttnn.synchronize_device(device)
+        assert (
+            device.num_program_cache_entries() == entries_after_warmup
+        ), "capture needed a plan warm-up had not cached"
+
+        # Replace the first input in place, so a replay that never reached the device would differ.
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(swapped, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), xt[0])
+        ttnn.synchronize_device(device)
+        ttnn.execute_trace(device, trace_id, blocking=True)
+        ttnn.synchronize_device(device)
+        assert_equal(golden_after, ttnn.to_torch(output))
+    finally:
+        if trace_id is not None:
+            _best_effort(lambda: ttnn.release_trace(device, trace_id))
+        if resident is not None:
+            ttnn.deallocate(resident)
