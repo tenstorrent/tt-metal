@@ -511,6 +511,7 @@ std::optional<MuxDeployment> create_mux_deployment(
     }
 
     auto mux_config = std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
+        *device,
         num_channels,
         num_buffers_per_channel,
         channel_buffer_size_bytes,

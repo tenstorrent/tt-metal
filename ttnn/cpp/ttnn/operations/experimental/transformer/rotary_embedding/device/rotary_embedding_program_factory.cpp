@@ -29,13 +29,12 @@ namespace {
 struct RotaryWorkSplit {
     bool row_major = true;
     uint32_t num_cores = 0;
-    uint32_t num_cores_x = 0;
-    uint32_t num_cores_y = 0;
     uint32_t num_rows_per_core_group_1 = 0;
     uint32_t num_rows_per_core_group_2 = 0;
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
+    std::vector<CoreCoord> cores;
     bool in_sharded = false;
     bool out_sharded = false;
     uint32_t num_input_tiles = 0;
@@ -51,9 +50,6 @@ RotaryWorkSplit compute_rotary_work_split(const Tensor& input, const Tensor& out
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
-    w.num_cores_x = compute_with_storage_grid_size.x;
-    w.num_cores_y = compute_with_storage_grid_size.y;
-
     if (shard_spec.has_value()) {
         w.row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
         w.all_cores = shard_spec.value().grid;
@@ -65,9 +61,7 @@ RotaryWorkSplit compute_rotary_work_split(const Tensor& input, const Tensor& out
         w.num_input_tiles = w.in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         w.num_output_tiles =
             w.out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        auto bbox = w.all_cores.bounding_box();
-        w.num_cores_x = bbox.end_coord.x + 1;
-        w.num_cores_y = bbox.end_coord.y + 1;
+        w.cores = corerange_to_cores(w.all_cores, w.num_cores, w.row_major);
     } else {
         w.row_major = true;
         std::tie(
@@ -80,6 +74,8 @@ RotaryWorkSplit compute_rotary_work_split(const Tensor& input, const Tensor& out
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, w.row_major);
         w.num_input_tiles = 2 * Wt;
         w.num_output_tiles = w.num_input_tiles;
+        w.cores =
+            grid_to_cores(w.num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, w.row_major);
     }
     return w;
 }
@@ -128,10 +124,7 @@ ProgramDescriptor create_single_tile_descriptor(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     auto work = compute_rotary_work_split(input, output, Wt);
-    bool row_major = work.row_major;
     uint32_t num_cores = work.num_cores;
-    uint32_t num_cores_x = work.num_cores_x;
-    uint32_t num_cores_y = work.num_cores_y;
     uint32_t num_rows_per_core_group_1 = work.num_rows_per_core_group_1;
     uint32_t num_rows_per_core_group_2 = work.num_rows_per_core_group_2;
     CoreRangeSet all_cores = work.all_cores;
@@ -433,7 +426,7 @@ ProgramDescriptor create_single_tile_descriptor(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto& cores = work.cores;
 
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
@@ -513,10 +506,7 @@ ProgramDescriptor create_multi_tile_descriptor(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     auto work = compute_rotary_work_split(input, output, Wt);
-    bool row_major = work.row_major;
     uint32_t num_cores = work.num_cores;
-    uint32_t num_cores_x = work.num_cores_x;
-    uint32_t num_cores_y = work.num_cores_y;
     uint32_t num_rows_per_core_group_1 = work.num_rows_per_core_group_1;
     uint32_t num_rows_per_core_group_2 = work.num_rows_per_core_group_2;
     CoreRangeSet all_cores = work.all_cores;
@@ -842,7 +832,7 @@ ProgramDescriptor create_multi_tile_descriptor(
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto& cores = work.cores;
 
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
@@ -928,7 +918,7 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     // descriptor variants share the reader/writer runtime-arg layouts below.
     const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
     const auto work = compute_rotary_work_split(input, output, Wt);
-    const auto cores = grid_to_cores(work.num_cores, work.num_cores_x, work.num_cores_y, work.row_major);
+    const auto& cores = work.cores;
 
     // Interleaved reader args: {src, cos, sin, num_rows, num_tiles_written, start_row_id,
     // cos_sin_start_id}.  The sharded reader drops src -- it arrives on CB c_0 -- so every later index

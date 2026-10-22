@@ -523,10 +523,12 @@ void py_module(nb::module_& mod) {
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
         .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
-            Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The weight
-            MUST be queued with the ``(weight, block_count, rotation)`` request form. GCB-backed
-            mcast_in0 consumes natural FIFO order and requires this flag to remain false.
-            Defaults to false.
+            Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB or with
+            PrefetcherPipes. The weight MUST be queued with the ``(weight, block_count, rotation)``
+            request form. Without it, gather_in0 over PrefetcherPipes takes its K-blocks in K order,
+            into a pipe ring that holds the whole layer.
+            mcast_in0 consumes natural FIFO order and requires this flag to remain false. Defaults
+            to false.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
@@ -562,13 +564,14 @@ void py_module(nb::module_& mod) {
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t>(),
+            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t, bool>(),
             nb::kw_only(),
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("fused_activation") = nb::none(),
-            nb::arg("num_workers_per_dram_bank") = 1)
+            nb::arg("num_workers_per_dram_bank") = 1,
+            nb::arg("use_multicore_pipeline") = false)
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -602,12 +605,30 @@ void py_module(nb::module_& mod) {
             "num_workers_per_dram_bank",
             &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::num_workers_per_dram_bank,
             R"doc(
-            Number of Tensix reader/compute workers assigned to each DRAM bank.
+            Number of compute cores per DRAM bank.
 
-            The default of 1 preserves the established cross-architecture path. Values of 2 or 3
-            split each bank's width shard evenly across multiple workers on Blackhole. All readers
-            for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
-            width in tiles must equal this value times the reader width.
+            1 (the default) runs the single-reader program. 2 or 3 run the single-reader program
+            with that many readers per bank (Blackhole only; the per-bank shard width in tiles must
+            equal N times the reader width), unless use_multicore_pipeline is set and the call
+            qualifies for the multi-core pipeline.
+        )doc")
+        .def_rw(
+            "use_multicore_pipeline",
+            &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::use_multicore_pipeline,
+            R"doc(
+            Explicit opt-in to the multi-core DRAM-sharded pipeline (default False).
+
+            False keeps the single-reader program for every num_workers_per_dram_bank. True with
+            num_workers_per_dram_bank N >= 2, on a call with no bias, no fused activation, no
+            untilize_out, 32x32 tiles, K a whole number of tiles, A in L1 and an L1 width-sharded
+            ROW_MAJOR output, runs the multi-core pipeline on Blackhole and Wormhole: N cores next
+            to each bank split the bank's weight columns (unevenly when N does not divide the shard
+            width; when N exceeds the shard width it is rounded down to a multiple of it and the
+            extra cores split K and reduce their partial sums), every core reads its activation rows
+            straight from the L1 shards, and in0_block_w is the number of K tiles per streamed
+            weight block (any value). Accumulation follows compute_kernel_config: fp32_dest_acc_en
+            keeps each core's whole K in fp32 Dest, otherwise 16-bit Dest with packer L1
+            accumulation in Float16_b. A call that does not qualify runs as if the flag were False.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
@@ -615,12 +636,13 @@ void py_module(nb::module_& mod) {
                 config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
-                "fused_activation={}, num_workers_per_dram_bank={})",
+                "fused_activation={}, num_workers_per_dram_bank={}, use_multicore_pipeline={})",
                 config.in0_block_w,
                 config.per_core_M,
                 config.per_core_N,
                 fused_activation_repr,
-                config.num_workers_per_dram_bank);
+                config.num_workers_per_dram_bank,
+                config.use_multicore_pipeline ? "True" : "False");
         });
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
@@ -762,7 +784,7 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -892,7 +914,8 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
-            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
+            prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
+            in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig``, an interleaved (DRAM or L1) input_tensor_a and no ``transpose_a``. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -915,7 +938,8 @@ void py_module(nb::module_& mod) {
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none(),
-            nb::arg("prefetcher_pipes") = PrefetcherPipeList{}));
+            nb::arg("prefetcher_pipes") = PrefetcherPipeList{},
+            nb::arg("in0_column_offset") = nb::none()));
 
     ttnn::bind_function<"matmul_batched_weights">(
         mod,

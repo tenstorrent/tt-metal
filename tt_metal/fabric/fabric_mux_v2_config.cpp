@@ -9,10 +9,15 @@
 #include <limits>
 #include <unordered_map>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <hostdevcommon/fabric_mux_v2_common.h>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -104,6 +109,7 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
 FabricMuxV2Config::FabricMuxV2Config(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     uint8_t num_channels,
     uint8_t num_buffers_per_channel,
     size_t channel_buffer_size_bytes,
@@ -118,11 +124,13 @@ FabricMuxV2Config::FabricMuxV2Config(
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto& metal_env = mesh_device.impl().metal_env();
+    const auto& hal = metal_env.get_hal();
     noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
     per_channel_scalar_region_stride_bytes_ = noc_aligned_address_size_bytes_;
 
-    const size_t max_channel_buffer_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const size_t max_channel_buffer_size_bytes =
+        metal_env.get_control_plane().get_fabric_context().get_fabric_channel_buffer_size_bytes();
     TT_FATAL(
         channel_buffer_size_bytes_ <= max_channel_buffer_size_bytes,
         "FabricMuxV2 channel buffer size must be <= {}, got {}",

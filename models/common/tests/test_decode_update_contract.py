@@ -263,14 +263,14 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
     from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
 
     for generator_cls in (Qwen25Generator, Qwen3Generator):
-        generator = SimpleNamespace(
-            model=SimpleNamespace(
-                rope_setup=SimpleNamespace(
-                    batch_size=4,
-                    rope_deltas=torch.tensor([10, 20, 30, 40]),
-                )
+        model = SimpleNamespace(
+            rope_setup=SimpleNamespace(
+                batch_size=4,
+                rope_deltas=torch.tensor([10, 20, 30, 40]),
             )
         )
+        # Qwen3-VL reads self.model; Qwen2.5-VL remaps per data-parallel lane through the shared generator.
+        generator = SimpleNamespace(model=model, data_parallel=1, _ttt_generator=SimpleNamespace(model=[model]))
 
         generator_cls.remap_rope_deltas(generator, [3, 1, 2, 3])
 
@@ -624,6 +624,7 @@ def test_gemma4_decode_restores_full_layer_page_tables_after_sequential_prefill(
         _decode_forward_trace_text=lambda **kwargs: decode("replay", **kwargs),
         _prepare_decode_trace_variant=lambda **kwargs: decode("prepare", **kwargs),
         _apply_sampling_slot_remap=lambda remap: None,
+        _install_per_layer_page_tables=ChunkedPrefillPageTableGuardMixin._install_per_layer_page_tables,
     )
     fake._clear_sequential_batch_page_tables = (
         lambda: ChunkedPrefillPageTableGuardMixin._clear_sequential_batch_page_tables(fake)

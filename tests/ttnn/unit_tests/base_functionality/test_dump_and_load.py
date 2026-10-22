@@ -331,6 +331,21 @@ def test_load_inconsistent_replica_group_raises(tmp_path, expect_error):
         ttnn.load_tensor(file_name)
 
 
+def test_verify_shards_match_topology(expect_error):
+    """The write-side check is callable on its own, on the host copy of a tensor, for callers that gather a tensor by
+    its label: it refuses the mislabelled tensor, passes it on sizes alone when asked to, and passes once the label is
+    restored."""
+    tensor, true_label, _ = _mislabelled_replicate_tensor()
+    host = tensor.cpu()
+
+    with expect_error(RuntimeError, "contents differ"):
+        ttnn.verify_shards_match_topology(host)
+    ttnn.verify_shards_match_topology(host, compare_replica_contents=False)
+
+    host.update_tensor_topology(true_label)
+    ttnn.verify_shards_match_topology(host)
+
+
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

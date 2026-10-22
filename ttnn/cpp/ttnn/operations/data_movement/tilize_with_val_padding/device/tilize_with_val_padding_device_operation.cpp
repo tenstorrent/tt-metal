@@ -14,9 +14,12 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
-namespace {
-bool can_use_sharded_optimized_factory(
+bool can_use_tilize_with_val_padding_sharded_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    // Its CBs alias the input and output shards, so both must be in L1.
+    if (!input_tensor.memory_config().is_l1() || !operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
@@ -38,12 +41,10 @@ bool can_use_sharded_optimized_factory(
     return !operation_attributes.sub_core_grids.has_value();
 }
 
-}  // namespace
-
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -179,7 +180,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+    if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
         // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
         // tensor to be width-sharded.
         log_warning(

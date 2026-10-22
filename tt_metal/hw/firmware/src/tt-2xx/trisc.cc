@@ -10,7 +10,7 @@
 #include <cstdint>
 #include "hostdev/dev_msgs.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "internal/hw_thread.h"
@@ -25,6 +25,9 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#if defined(UCK_CHLKC_MATH)
+#include "cmath_common.h"    // ckernel::math::DataFormatConfigSet (definition of data_format_config_set below)
+#endif
 
 // clang-format on
 
@@ -118,11 +121,22 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
+namespace pack {
+// Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
+// Declared extern thread_local in cpack_common.h.
+thread_local std::uint32_t clear_dest_bank_id __attribute__((used)) = 0;
+}  // namespace pack
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
 
 using namespace ckernel;
+
+// Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
+#if defined(UCK_CHLKC_MATH)
+thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
+    ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+#endif
 
 void init_sync_registers() {
     // TODO: check if this is needed with transition to DFBs

@@ -56,7 +56,7 @@ def _classify(*paths):
         ("tests/pipeline_reorg/llk_unit_tests.yaml", "false"),
         ("tt_metal/hw/inc/api/compute/compute_kernel_api.h", "false"),
         ("tt_metal/hw/inc/api/numeric/bfloat16.h", "false"),
-        ("tt_metal/tools/profiler/perf_counters.hpp", "false"),
+        ("tt_metal/hw/inc/internal/profiler/perf_counters.hpp", "false"),
         ("tt_metal/tt-llk/tools/include/sanitizer/api.h", "false"),
         ("tt_metal/tt-llk/.github/Dockerfile.ci", "false"),
         ("tt_metal/hw/inc/internal/tt-2xx/quasar/tensix_types.h", "false"),

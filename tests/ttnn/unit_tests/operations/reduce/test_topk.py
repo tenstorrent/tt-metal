@@ -131,8 +131,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 64, 3, 4),
         (1, 1, 32, 8192, 3, 6),
         (1, 2048, 1, 64, 1, 8),
-        (1, 1, 32, 32768, 3, 3000),
-        (1, 1, 32, 18992, 3, 3000),
+        # Kt = 94 output tiles, Wt = 97: fills the whole insertion cascade, then merges the last
+        # three tiles in steady state. The wide k=3000 shapes are in the reduction nightly.
+        (1, 1, 32, 3100, 3, 3000),
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
@@ -219,6 +220,25 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+@pytest.mark.parametrize("W", [40, 1000])
+@pytest.mark.parametrize("largest", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_topk_padded_width_sentinel_ties(W, largest, dtype, device):
+    """Rows with fewer than k values beyond the pad sentinel must not return indices into the padding."""
+    k = 32
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch.manual_seed(0)
+    torch_input = torch.full((1, 1, 32, W), float("-inf") if largest else float("inf"), dtype=torch_dtype)
+    torch_input[..., :10] = torch.randn((1, 1, 32, 10), dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True)
+    values = ttnn.to_torch(ttnn_values)
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert bool((indices < W).all()), "index points into the padding"
+    assert_equal(torch.topk(torch_input, k, dim=-1, largest=largest, sorted=True).values, values)
+    assert_equal(values, torch.gather(torch_input, -1, indices))
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
@@ -229,8 +249,8 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 151936, 3, 50),
-        (1, 1, 32, 128256, 3, 50),
+        # Narrowest width needing 32-bit indices; the 151936 / 128256 vocab widths are in the reduction nightly.
+        (1, 1, 32, W_NEEDS_UINT32, 3, 50),
         (1, 1, 16, 20, 3, 16),
     ),
 )
@@ -918,7 +938,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # (input[index] == value, in-range, unique), never index-order equality.
 # ---------------------------------------------------------------------------
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def run_topk_large_k_routed_test(N, C, H, W, k, device):
@@ -932,9 +952,10 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
 
     # Index dtype contract must match the stock device op: UINT16 iff the
-    # tile-padded width fits 16 bits, else UINT32.
+    # tile-padded width fits 16 bits -- every width up to and including 65536,
+    # whose largest index is 65535 -- else UINT32.
     padded_w = 32 * ((W + 31) // 32)
-    uint16_expected = padded_w <= UINT16_MAX
+    uint16_expected = padded_w <= UINT16_MAX + 1
     assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)
 
     desired_shape = [N, C, H, k]

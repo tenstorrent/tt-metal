@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "api/debug/assert.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "internal/risc_attribs.h"
 

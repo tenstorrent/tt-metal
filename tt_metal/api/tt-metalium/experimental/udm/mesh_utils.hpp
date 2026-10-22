@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
-#include <set>
 #include <tt-metalium/experimental/udm/types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 
