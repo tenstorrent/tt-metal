@@ -7,6 +7,18 @@
 import numpy as np
 import torch
 from loguru import logger
+from PIL import Image
+
+
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    """Deterministic synthetic conditioning image for the I2V tests (no image file needed in CI)."""
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def check_output_sanity(frames, *, num_frames, height, width, log=True):

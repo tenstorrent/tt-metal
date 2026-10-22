@@ -48,7 +48,7 @@ Options:
   --fail-fast              Stop after the first failing leg
   --no-dedupe              Also run the e2e pipeline legs when --suite all
                            (by default they are skipped: the unit legs already
-                           run test_pipeline_wan{,_i2v}.py across every mesh
+                           run test_pipeline_wan.py across every mesh
                            config and both resolutions)
   --log-dir DIR            Where to write per-leg logs
                            (default: $TT_METAL_HOME/generated/wan2_2_tests/<ts>)
@@ -103,15 +103,15 @@ fi
 if [[ "$ARCH" == bh ]]; then
     GLX_ID="bh_glx"                             # umt5 / embeddings: 4x8, 2 links
     PERF_ID="ring_bh_4x8_sp1tp0"                # test_performance_wan.py
-    PIPE_T2V_ID="4x8sp1tp0nl2_ring_is_fsdp0"    # test_pipeline_wan.py
-    PIPE_I2V_ID="4x8sp1tp0nl2_linear_is_fsdp0"  # test_pipeline_wan_i2v.py (no 4x8 ring case)
-    I2V_UNIT_K=""                               # BH has the DRAM for is_fsdp0
+    PIPE_T2V_ID="4x8sp1tp0nl2_ring_is_fsdp0"    # test_pipeline_wan.py, t2v
+    PIPE_I2V_ID="4x8sp1tp0nl2_linear_is_fsdp0"  # test_pipeline_wan.py, i2v (4x8 ring is t2v only)
+    I2V_UNIT_K="i2v"                            # BH has the DRAM for is_fsdp0
 else
     GLX_ID="wh_glx"                             # umt5 / embeddings: 4x8, 4 links
     PERF_ID="wh_4x8_sp1tp0"
     PIPE_T2V_ID="4x8sp1tp0nl4_ring_is_fsdp1"
     PIPE_I2V_ID="4x8sp1tp0nl4_ring_is_fsdp1"
-    I2V_UNIT_K="is_fsdp1"                       # wh_galaxy OOMs on is_fsdp0 (CI hack)
+    I2V_UNIT_K="i2v and is_fsdp1"               # wh_galaxy OOMs on is_fsdp0 (CI hack)
 fi
 
 TS="$(date +%Y%m%d-%H%M%S)"
@@ -208,7 +208,7 @@ summary() {
 
 want() { [[ "$1" == all || "$1" == "$2" ]]; }
 
-# The unit legs run test_pipeline_wan{,_i2v}.py over every mesh config at both
+# The unit legs run test_pipeline_wan.py over every mesh config at both
 # resolutions, which is a superset of the CI e2e pipeline legs. Skip those in
 # --suite all unless --no-dedupe.
 pipeline_covered_by_unit() { (( DEDUPE )) && [[ "$SUITE" == all ]]; }
@@ -225,12 +225,12 @@ if want "$SUITE" unit; then
         # (float32 variants are covered by the bf16 pass and are very slow).
         run t2v-unit-vae         10000  "$WAN_DIR/test_vae_wan2_1.py"     "not f32"  --maxfail 10
         run t2v-unit-transformer 10000  "$WAN_DIR/test_transformer_wan.py" ""        --maxfail 10
-        run t2v-unit-pipeline    10000  "$WAN_DIR/test_pipeline_wan.py"    ""        --maxfail 10
+        run t2v-unit-pipeline    10000  "$WAN_DIR/test_pipeline_wan.py"    "t2v"     --maxfail 10
         run t2v-unit-umt5         1000  "models/tt_dit/tests/encoders/umt5/test_umt5.py" "$GLX_ID"
         run t2v-unit-embeddings   1000  "models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding" "$GLX_ID"
     fi
     if want "$MODEL" i2v; then
-        run i2v-unit-pipeline    10000  "$WAN_DIR/test_pipeline_wan_i2v.py" "$I2V_UNIT_K" --maxfail 10
+        run i2v-unit-pipeline    10000  "$WAN_DIR/test_pipeline_wan.py"    "$I2V_UNIT_K" --maxfail 10
     fi
 fi
 
@@ -244,7 +244,7 @@ if want "$SUITE" e2e; then
         if pipeline_covered_by_unit; then
             skip_leg t2v-e2e-pipeline "covered by t2v-unit-pipeline (--no-dedupe to run)"
         else
-            run t2v-e2e-pipeline  3000  "$WAN_DIR/test_pipeline_wan.py" "$PIPE_T2V_ID"
+            run t2v-e2e-pipeline  3000  "$WAN_DIR/test_pipeline_wan.py" "$PIPE_T2V_ID and t2v"
         fi
     fi
     if want "$MODEL" i2v; then
@@ -253,7 +253,7 @@ if want "$SUITE" e2e; then
         if pipeline_covered_by_unit; then
             skip_leg i2v-e2e-pipeline "covered by i2v-unit-pipeline (--no-dedupe to run)"
         else
-            run i2v-e2e-pipeline  3000  "$WAN_DIR/test_pipeline_wan_i2v.py" "$PIPE_I2V_ID"
+            run i2v-e2e-pipeline  3000  "$WAN_DIR/test_pipeline_wan.py" "$PIPE_I2V_ID and i2v"
         fi
     fi
 fi

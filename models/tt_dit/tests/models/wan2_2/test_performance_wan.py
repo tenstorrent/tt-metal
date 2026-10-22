@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 import torch
 from loguru import logger
-from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -28,6 +27,7 @@ from ....utils.test import (
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
 )
+from .common import create_fractal_image
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
 
@@ -48,7 +48,7 @@ def vbench_thresholds(model_type: str, height: int) -> dict:
     # binary per clip, so 0.75 requires three of the four seeds to move.
     if model_type == "i2v":
         # The I2V conditioning image is a fractal: dynamic_degree and imaging_quality are meaningless
-        # on it, so only intra-video consistency is gated (see test_pipeline_wan_i2v.py).
+        # on it, so only intra-video consistency is gated (see test_pipeline_wan.py).
         return {"subject_consistency": 0.70, "background_consistency": 0.80 if height == 720 else 0.82}
     return {
         "subject_consistency": 0.8,
@@ -61,16 +61,6 @@ def vbench_thresholds(model_type: str, height: int) -> dict:
 
 def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
     return {k: v * factor for k, v in expected_metrics.items()}
-
-
-def create_fractal_image(width: int, height: int) -> Image.Image:
-    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
-    z = np.zeros_like(c)
-    img = np.zeros(c.shape, dtype=np.uint8)
-    for i in range(32):
-        z = z * z + c
-        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
-    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def t2v_metrics(mesh_device, height):
