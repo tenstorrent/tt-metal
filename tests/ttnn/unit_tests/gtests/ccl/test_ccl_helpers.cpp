@@ -19,8 +19,8 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
 
 namespace {
