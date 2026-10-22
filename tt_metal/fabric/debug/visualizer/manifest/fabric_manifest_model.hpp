@@ -230,7 +230,7 @@ struct ReceiverChannel {
 };
 
 // A router's channels.
-struct Channels {
+struct RouterChannels {
     // Indexed [vc][channel], over RouterShape's counts.
     std::vector<std::vector<SenderChannel>> senders;
     std::vector<std::vector<ReceiverChannel>> receivers;
@@ -268,7 +268,7 @@ struct Router {
     RouterShape shape;
     // Always reserved, although not always used. Whether a VC uses them is its mesh's credit_transport backing.
     L1CreditCounters credit_counters;
-    Channels channels;
+    RouterChannels channels;
     // Indexed [vc], by edge.
     std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
     // Router-wide fields passed to the kernel
