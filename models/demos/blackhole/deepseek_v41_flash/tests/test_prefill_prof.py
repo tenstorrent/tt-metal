@@ -164,6 +164,32 @@ def test_prefill_prof(mesh_device):
             ttnn.synchronize_device(md)
 
     NCH = int(os.environ.get("PROF_NCH", "0"))
+    POS = os.environ.get("PROF_POS")
+    if (
+        MODE == "trace" and POS
+    ):  # PROF_POS=s0,s0,...: capture the chunk trace at S (one run of chunk 0), then time ONE replay of it at each chunk start (device time, no host uploads inside)
+        model.run_traced_chunks(
+            tokens[:, :C],
+            C,
+            hashes=torch.zeros(B, C, 1, dtype=torch.long),
+            S_pad_max=int(os.environ.get("PROF_SPAD", S)),
+        )
+        log(f"PROF POS captured: S_pad={model.dyn.S_pad} C={C} traces=1")
+        for rep in range(REPS):
+            for s0 in [int(x) for x in POS.split(",")]:
+                model.begin_chunk(s0, C)
+                ttnn.synchronize_device(md)
+                ts = []
+                for _ in range(3):
+                    t1 = time.perf_counter()
+                    ttnn.execute_trace(md, model.dyn_trace, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(md)
+                    ts.append(time.perf_counter() - t1)
+                log(
+                    f"PROF POS run {rep}: S_pad={model.dyn.S_pad} U={U} C={C} layers={len(LAYERS)} s0={s0}: replay {min(ts) * 1e3:.1f} ms (min of 3; all {[round(t * 1e3, 1) for t in ts]})"
+                )
+        log("PROF DONE")
+        return
     if (
         MODE == "trace" and NCH
     ):  # PROF_NCH=n: capture the chunk trace at the full S (S_pad_max) but replay only n chunks (the per-chunk cost of a long context without a full-prompt run)

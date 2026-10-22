@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 
 DEFAULT_MODE = "read"  # shipped default (release 2026-10): paged prefill, reads the pool; DSV41_PF_PAGED=0 selects the previous dense-table release path
@@ -114,7 +115,9 @@ class PagedCtx:
         h2d(ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._shard), self.pt)
         for r, dev in self.off.items():
             o = torch.zeros(1, 32, dtype=torch.int32)
-            o[0, 0] = ctx.L[r] - (s0 + C) // r
+            o[0, 0] = (
+                s0 // r if PS.enabled() else ctx.L[r] - (s0 + C) // r
+            )  # single trace: first entry of the chunk (scratch slots); FIFO: slot - off = entry
             h2d(ttnn.from_torch(o, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep), dev)
         i = torch.arange(C).view(-1, 1)
         c = torch.arange(WINDOW).view(1, -1)
@@ -130,7 +133,11 @@ class PagedCtx:
         h2d(ttnn.from_torch(w, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep), self.win)
 
     def translate(self, ids, ratio, src_layer):
-        """ids [U,1,C,512] uint32 RM (FIFO slots) -> pool rows (same shape)."""
+        """ids [U,1,C,512] uint32 RM (FIFO slots; single trace: slots of the scratch / history layout, tt/prefill_single.py) -> pool rows (same shape)."""
+        if PS.enabled():
+            return PS.translate_ids_single(
+                ids, self.pt, self.off[ratio], ratio=ratio, src_off=P.SRC_OFF[src_layer], C=self.C, ccur=self.C // ratio
+            )
         return translate_ids(ids, self.pt, self.off[ratio], ratio=ratio, src_off=P.SRC_OFF[src_layer], C=self.C)
 
     def write_window(self, full_rm):

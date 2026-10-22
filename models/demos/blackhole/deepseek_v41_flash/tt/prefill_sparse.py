@@ -27,6 +27,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PG
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOCAL_HEADS, WINDOW
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
@@ -328,9 +329,12 @@ class DSV41PrefillIndexer:
         ), "export from the key owner (layers 2, 8, 14, 20); layers 24-36 alias layer 20's slab"
         n = ceil32(n_entries)
         keys = self.keys_full()
-        assert n <= k_cache.shape[2] and n <= keys.shape[2]
+        o = (
+            self.sh["Cc"] if (self.sh is not None and self.sh.get("single")) else 0
+        )  # single trace: entry j at slot Cc + j
+        assert n <= k_cache.shape[2] and o + n <= keys.shape[2]
         # a full-range slice may ALIAS the slab: never deallocate the slice itself (that freed the key FIFO of the owner and crashed the next prefill)
-        src = keys if n == keys.shape[2] else ttnn.slice(keys, [0, 0, 0, 0], [self.U, 1, n, IDIM])
+        src = keys if (n == keys.shape[2] and not o) else ttnn.slice(keys, [0, 0, o, 0], [self.U, 1, o + n, IDIM])
         if k_cache.dtype != ttnn.bfloat16:
             conv = ttnn.typecast(src, k_cache.dtype)
             if src is not keys:
@@ -634,6 +638,143 @@ class DSV41PrefillIndexer:
         ttnn.deallocate(qh)
         return per_user[0] if U == 1 else ttnn.concat(per_user, dim=0)
 
+    # ---- SINGLE-TRACE slab (DSV41_PF_SINGLE=1, tt/prefill_single.py) -------------------------------------------------------------------
+    # per mesh column: [scratch: the current chunk's Cc / cols local slots | history: entry j at global slot Cc + j] + 32 pad rows; the valid keys of a chunk are a PREFIX of it
+    # (length = device tensor ``nvalid``), so scoring, top-k and the staircase mask only touch the prefix.
+    def alloc_single(self, ctx, L, cols, mc, ccl, owner):
+        r, U, md = self.ratio, self.U, self.md
+        C = ctx.C
+        Cc = C // r
+        Cc8 = Cc // cols
+        Tl = (Cc + L) // cols
+        assert (Cc + L) % cols == 0 and Tl % 32 == 0 and Cc8 % 32 == 0, (r, L, C, cols, Tl, Cc8)
+        reg = ctx.__dict__.setdefault("pidx_single", {})
+        if r not in reg:
+            j = torch.arange(Cc8)
+            kidx = torch.stack(
+                [(torch.arange(U).view(-1, 1) * Cc + c + cols * j.view(1, -1)).reshape(-1, 1) for c in range(cols)]
+            )  # [cols, U*Cc8, 1]: rows of the [U*Cc, 128] key block that column c keeps (global slot of row jj is jj: column jj % cols)
+            m = torch.arange(C).view(-1, 1)
+            q = torch.arange(Cc8).view(1, -1)
+            # query row m sees the scratch entry of slot s = q * cols + c (entry cs + s) iff cs + s < (s0 + m + 1) // r  <=>  s < (m + 1) // r  (s0 % r == 0)
+            stair = torch.stack([torch.where((q * cols + c) < ((m + 1) // r), 0.0, float("-inf")) for c in range(cols)])
+            reg[r] = {
+                "kidx": _col_sharded(
+                    md, kidx.reshape(cols * U * Cc8, 1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+                "cid": _col_sharded(
+                    md, torch.arange(cols, dtype=torch.float32).reshape(cols, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT
+                ),
+                "stair": _col_sharded(
+                    md, stair.reshape(cols, 1, C, Cc8).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+                ),
+                "skip_rm": ttnn.from_torch(
+                    torch.full((1, 1, C, 32), SKIP, dtype=torch.int64).to(torch.int32),
+                    device=md,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+                ),
+            }
+        self.sh = dict(reg[r], cols=cols, Lc=Tl, mc=mc, ccl=ccl, single=True, Cc=Cc, Cc8=Cc8)
+        self.KL_full = Cc + L
+        self.KL = Tl
+        ctx.sg.ensure(r)
+        if owner:
+            self.keys_rm = None
+            self.keys = ttnn.zeros([U, 1, Tl + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+
+    def add_keys_single(self, lat_pre, tab, Cc, ctx):
+        """the chunk's index keys -> scratch (static slice_write) + history (``key_append`` at the tensor-driven offset)"""
+        d, U, sh = self.dec, self.U, self.sh
+        x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
+        k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
+        k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
+        k = ttnn.reshape(k, [U, 1, Cc, IDIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        k = self._rope(k, (c, s_))
+        if self.fp4_k:
+            k = self._fp4(k)
+        Cc8 = sh["Cc8"]
+        kl = ttnn.embedding(
+            sh["kidx"],
+            ttnn.to_layout(ttnn.reshape(k, [U * Cc, IDIM]), ttnn.ROW_MAJOR_LAYOUT),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )  # [U*Cc8, 1, 128]: this column's rows (global slot jj % cols == column)
+        klt = ttnn.to_layout(ttnn.reshape(kl, [U, 1, Cc8, IDIM]), ttnn.TILE_LAYOUT)
+        ttnn.experimental.slice_write(klt, self.keys, [0, 0, 0, 0], [U, 1, Cc8, IDIM], [1, 1, 1, 1])
+        PS.key_append(klt, ctx.sg.kofs[self.ratio], self.keys, U, Cc8 // 32, int(self.keys.shape[2]))
+
+    def select_single(self, h, qr, tab, C, ctx):
+        """ids [U,1,C,512] = GLOBAL slots (scratch / history layout) of the top-512 entries of every query of the chunk (0xFFFFFFFF where fewer are visible): per column the local top-512 of the
+        valid prefix of its slab, merged over the 8 columns."""
+        d, U, sh = self.dec, self.U, self.sh
+        r = self.ratio
+        cols, Lc, mc, ccl, Cc8 = sh["cols"], sh["Lc"], sh["mc"], sh["ccl"], sh["Cc8"]
+        nvalid = ctx.sg.nvalid[r]
+        tk = PS.Ticker(self.md, f"select_single r{r}")
+        w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        qh = self._rope(qh, (c, s_))
+        if self.fp4_q:
+            qh = self._fp4(qh)
+        wt = ttnn.to_layout(ttnn.reshape(w, [U, 1, C, IHEADS]), ttnn.TILE_LAYOUT)
+        tk.tick("proj_rope_fp4")
+        per_user = []
+        for u in range(U):
+            qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, C, IDIM])
+            wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, C, IHEADS])
+            kvarg = {"kv_len_tensor": nvalid} if PS.use_kv_tensor() else {"kv_len": Lc}
+            sc = ttnn.experimental.indexer_score_dsa(
+                qu, self.slab, wu, chunk_start_idx=Lc, program_config=self.cfg, cache_batch_idx=u, **kvarg
+            )  # [1,1,C,Lc+32] RM: only the columns [0, nvalid) are written
+            tk.tick("score")
+            scr = ttnn.to_layout(ttnn.slice(sc, [0, 0, 0, 0], [1, 1, C, Cc8]), ttnn.TILE_LAYOUT)
+            blk = ttnn.to_layout(ttnn.add(scr, sh["stair"]), ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.experimental.slice_write(blk, sc, [0, 0, 0, 0], [1, 1, C, Cc8], [1, 1, 1, 1])
+            tk.tick("stair")
+            ids = ttnn.experimental.topk_large_indices(sc, k=TOPK, valid_length_tensor=nvalid)
+            tk.tick("topk_local")
+            idf = ttnn.to_layout(
+                ttnn.typecast(ids, ttnn.float32), ttnn.TILE_LAYOUT
+            )  # local slots, 0xFFFFFFFF -> ~4.3e9
+            valid = ttnn.lt(idf, float(Lc))
+            idc = ttnn.typecast(ttnn.where(valid, idf, 0.0), ttnn.uint32)
+            vals = ttnn.where(
+                ttnn.typecast(valid, ttnn.bfloat16),
+                ttnn.to_layout(ttnn.gather(sc, 3, index=ttnn.to_layout(idc, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT),
+                float("-inf"),
+            )
+            pg = ttnn.typecast(
+                ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
+            )  # global slot = local * cols + column
+            tk.tick("gather_vals")
+            cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+            cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
+            tk.tick("allgathers")
+            pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
+            tk.tick("topk_merge")
+            posf = ttnn.to_layout(ttnn.typecast(pos, ttnn.float32), ttnn.TILE_LAYOUT)
+            posu = ttnn.typecast(
+                ttnn.clamp(posf, max=float(cols * TOPK)), ttnn.uint32
+            )  # a sentinel position selects the 0xFFFFFFFF column
+            cpe = ttnn.concat(
+                [cp, sh["skip_rm"]], dim=3
+            )  # row-major end to end (the tile conversions of the [C, 4128] candidates cost ~4 ms)
+            fin = ttnn.gather(cpe, 3, index=ttnn.to_layout(posu, ttnn.ROW_MAJOR_LAYOUT))
+            tk.tick("final_gather")
+            per_user.append(fin)
+            for t_ in (sc, scr, blk, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
+                ttnn.deallocate(t_)
+        ttnn.deallocate(qh)
+        tk.report()
+        return per_user[0] if U == 1 else ttnn.concat(per_user, dim=0)
+
     def select_dyn(self, h, qr, tab, vis, C, L):
         """ids [U,1,C,512] = FIFO slots of the top-512 entries of every query of the chunk (0xFFFFFFFF where fewer are visible)."""
         d, U = self.dec, self.U
@@ -841,12 +982,25 @@ class DSV41PrefillSparse:
         self.ctx, self.dyn_on = ctx, L >= TOPK + 32
         if not self.dyn_on:
             return
-        cols = shard_cols(self.md, L, ctx.C, r) if self.indexer is not None else 0
+        single = PS.enabled()
+        if single:
+            assert (
+                PG.read_on()
+            ), "DSV41_PF_SINGLE=1 needs DSV41_PF_PAGED=read (the latents are read from the paged pool)"
+            cols = PS.shard_cols_single(self.md, ctx.C, r) if self.indexer is not None else 0
+            assert (
+                cols or self.indexer is None
+            ), f"DSV41_PF_SINGLE=1: chunk {ctx.C} ratio {r} does not split into whole tiles over the mesh columns"
+            if not hasattr(ctx, "sg"):
+                ctx.sg = PS.SingleCtx(self.md, ctx, self.U)
+                ctx.upd_hooks.append(ctx.sg.update)
+        else:
+            cols = shard_cols(self.md, L, ctx.C, r) if self.indexer is not None else 0
         paged = PG.read_on()
         if self.owner:
             self._free_tables()  # the eager-sized tables (or those of a previous capture) are replaced, never leaked
             self.kvt = PagedView(PG.BOUND["sink"].pool) if paged else PrefillKV(self.md, self.U, L, ctx.C)
-            if self.indexer is not None and self.indexer.key_owner is None and not cols:
+            if self.indexer is not None and self.indexer.key_owner is None and not cols and not single:
                 ix = self.indexer
                 ix.KL = L
                 ix.keys = ttnn.zeros([self.U, 1, L, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md)
@@ -855,7 +1009,9 @@ class DSV41PrefillSparse:
         if self.indexer is not None:
             if not cols:
                 getattr(ctx, "pidx_pcol", {}).pop(r, None)
-            if cols:
+            if cols and single:
+                self.indexer.alloc_single(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
+            elif cols:
                 self.indexer.alloc_shard(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
             else:
                 self.indexer.sh = None
@@ -868,7 +1024,8 @@ class DSV41PrefillSparse:
         if not hasattr(ctx, "sp_win"):
             ctx.sp_win, ctx.sp_vis = {}, {}
             ctx.upd_hooks.append(self._upd_hook)
-            ctx.build_hooks.append(self._build_hook)
+            if not single:  # (the single-trace indexer needs no [C, L] visibility masks)
+                ctx.build_hooks.append(self._build_hook)
         if not hasattr(ctx, "sp_perm"):
             ctx.sp_perm = _rep(self.md, perm_table(True), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:
@@ -1025,7 +1182,10 @@ class DSV41PrefillSparse:
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
-            (ix.add_keys_dyn_sharded if ix.sh else ix.add_keys_dyn)(lat_pre, tab, Cc, ctx)
+            if PS.enabled():
+                ix.add_keys_single(lat_pre, tab, Cc, ctx)
+            else:
+                (ix.add_keys_dyn_sharded if ix.sh else ix.add_keys_dyn)(lat_pre, tab, Cc, ctx)
         full = self.kvt.rm(ttnn.concat([halo, kv], dim=2))
         if paged:
             ctx.pg.write_window(full)
@@ -1033,7 +1193,12 @@ class DSV41PrefillSparse:
             ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)
         if ix is not None:
-            self.ids = (ix.select_dyn_sharded if ix.sh else ix.select_dyn)(h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L)
+            if PS.enabled():
+                self.ids = ix.select_single(h, qr, ctx.tabs[True], C, ctx)
+            else:
+                self.ids = (ix.select_dyn_sharded if ix.sh else ix.select_dyn)(
+                    h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L
+                )
             if paged:  # FIFO slots -> pool rows (one translation per (kv source, index source) pair)
                 if getattr(self, "pids", None) is not None:
                     ttnn.deallocate(self.pids)

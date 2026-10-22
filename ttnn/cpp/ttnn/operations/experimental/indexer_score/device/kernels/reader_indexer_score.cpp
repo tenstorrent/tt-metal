@@ -820,6 +820,41 @@ void kernel_main() {
         }
     };
 
+    if constexpr (!fused_ring_enabled && metadata_mode) {
+        // CLASSIC path, on-device kv_len (kv_len_tensor): the valid key length is read from a 1-element uint32 DRAM
+        // tensor at the start of EVERY dispatch (a captured trace replays this kernel without re-applying runtime
+        // arguments), the causal words (chunk_start / straddle_q / straddle_jump of this device, host scalars) arrive
+        // in the three common arguments after the tensor's address (factory: ChunkMetadata + 1..3) and are only
+        // forwarded. Same mailbox layout as the fused branch below, so compute and writer take all four words from it.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.reserve_back(1);
+        const uint32_t derived_l1 = cb_derived.get_write_ptr();
+        const uint32_t kv_len_elems = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_common_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
+        const uint32_t kv_tiles = (kv_len_elems + 31) / 32;
+        kv_len_tiles = kv_tiles < k_len_tiles ? kv_tiles : k_len_tiles;
+        const uint32_t w_chunk_start = get_common_arg_val<uint32_t>(meta_rt_base + 1);
+        const uint32_t w_straddle_q = get_common_arg_val<uint32_t>(meta_rt_base + 2);
+        const uint32_t w_straddle_jump = get_common_arg_val<uint32_t>(meta_rt_base + 3);
+        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
+        mailbox->kv_len_tiles = kv_len_tiles;
+        mailbox->chunk_start_tiles = w_chunk_start;
+        mailbox->straddle_q_tile = w_straddle_q;
+        mailbox->straddle_jump_tiles = w_straddle_jump;
+        clobber_all_memory();
+        cb_derived.push_back(1);
+
+        CircularBuffer cb_wmeta(cb_meta_writer);
+        cb_wmeta.reserve_back(1);
+        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
+        wmailbox->kv_len_tiles = kv_len_tiles;
+        wmailbox->chunk_start_tiles = w_chunk_start;
+        wmailbox->straddle_q_tile = w_straddle_q;
+        wmailbox->straddle_jump_tiles = w_straddle_jump;
+        clobber_all_memory();
+        cb_wmeta.push_back(1);
+    }
+
     if constexpr (fused_ring_enabled && metadata_mode) {
         // Derive causal values before the blocking ring receiver so compute can consume them independently.
         // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.

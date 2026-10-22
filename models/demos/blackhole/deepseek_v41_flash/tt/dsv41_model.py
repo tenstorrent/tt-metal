@@ -22,6 +22,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PGM
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PSG
 from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
@@ -163,7 +164,10 @@ class Model:
             submit(L)
         first_pmoe = None
         for i, L in enumerate(self.layer_ids):
-            submit(L + 1), submit(L + 2)
+            for L_next in self.layer_ids[
+                i + 1 : i + 3
+            ]:  # the next two layers of the list (= L + 1, L + 2 for a contiguous list; layer subsets of tests need not be)
+                submit(L_next)
             w = futs.pop(L).result()
             attn = self._build_attention(L, w, slot=i)
             layer = DSV41Layer(
@@ -782,6 +786,10 @@ class Model:
         self._set_loop_state(zeros, torch.as_tensor(lens).long())
         self._warm = True
 
+    def single_spad(self, C):
+        """DSV41_PF_SINGLE=1: the padded context of THE chunk trace = the build's maximum context rounded up to the chunk (every prompt of the build fits)."""
+        return -(-(self.max_ctx - 1) // C) * C
+
     def _export_index_keys(self, lens):
         """Hand-off of the index keys: the prefill indexers' key slabs (key owners 2/8/14/20) -> the decode indexers' key slabs ``k_cache``."""
         if not self.use_indexer or not getattr(self, "prefill_sparse", None):
@@ -861,6 +869,8 @@ class Model:
             spad_env = int(self.max_ctx)
         s_pad_max = max(s_pad_max or 0, spad_env)
         s_pad_max = -(-s_pad_max // C) * C if s_pad_max else None
+        if PSG.enabled():
+            s_pad_max = self.single_spad(C)
         S_dyn = max(S_pad, s_pad_max or 0)
         self.log(f"  prefill_dyn: admit users")
         self.admit_users(lens, max_new_tokens, active)
@@ -1247,6 +1257,8 @@ class Model:
             off = (
                 ix.KL_full if ix.sh is not None else ix.KL
             ) - s_end // r  # column-sharded FIFO: ix.KL is the per-column length
+            if ix.sh is not None and ix.sh.get("single"):
+                off = ix.sh["Cc"]  # single trace: entry j sits at slot Cc + j
             n = min(ceil32(mx // r), s_end // r, dec.k_cache.shape[2])
             for (i_src, u_dst), rws in by_u.items():
                 self._export_user_keys(ix, dec.k_cache, i_src, u_dst, sorted(rws), off, n)
@@ -1425,6 +1437,8 @@ class Model:
         max_end = max(ends.values())
         self.check_context_supported(max_end)
         S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
+        if PSG.enabled():
+            S_pad = self.single_spad(C)  # ONE chunk trace for every prompt length (tt/prefill_single.py)
         assert S_pad <= self.max_ctx + 128, (
             f"padded prompt length {S_pad} (chunk {C}) exceeds the RoPE tables of the model (max_ctx {self.max_ctx} + 128): build the model with "
             f"max_ctx >= {S_pad - 128} (a multiple of the chunk is the simplest)"
@@ -1948,6 +1962,8 @@ class Model:
             self._hooks_set = pm
         pm.timing = {}
         extra = sorted({int(x) for x in extra_spads if 0 < int(x) < int(s_pad)}) if Up == U else []
+        if PSG.enabled():
+            extra = []  # ONE chunk trace serves every prompt length: no small-S_pad context
         first = []
         if extra and os.environ.get("DSV41_PF_EXTRA_FIRST", "0") == "1":
             # ALLOCATION ORDER: the persistent tables of the small context are allocated BEFORE the max-context ones. Allocated afterwards they land in the holes the max-context compile left

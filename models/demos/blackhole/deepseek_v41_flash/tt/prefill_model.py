@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as _PS
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
@@ -870,6 +871,10 @@ class DSV41PrefillModel:
         """Host side of a chunk: refresh every per-chunk persistent tensor (RoPE tables, masks, latent offsets) and call the registered hooks
         (e.g. the paged-state sink's own uploads) right before the replay."""
         t0 = time.perf_counter()
+        act = getattr(self, "active_mask", None)
+        self.dyn.active = (
+            None if act is None else torch.as_tensor(act).bool()
+        )  # (single-trace key append: users not in this replay write the scratch rows)
         self.dyn.update(s0)
         t1 = time.perf_counter()
         if getattr(self.dyn, "umask", None) is not None:
@@ -951,6 +956,22 @@ class DSV41PrefillModel:
         ttnn.synchronize_device(self.md)
         self._dyn_compiled = (C, bufs, t0)
 
+    def _trace_region_mib(self):
+        try:
+            tv = ttnn.get_memory_view(self.md, ttnn.BufferType.TRACE)
+            return tv.total_bytes_allocated_per_bank / 2**20
+        except Exception:  # noqa: BLE001
+            return float("nan")
+
+    def _log_chunk_trace(self, C, before):
+        """PF_TRACES line: how many prefill chunk traces are held and what this capture added to the trace region (MiB per DRAM bank; x 8 banks... = per chip)."""
+        after = self._trace_region_mib()
+        print(
+            f"PF_TRACES prefill chunk trace captured: C={C} S_pad={self.dyn.S_pad} single={os.environ.get('DSV41_PF_SINGLE', '0')} -> chunk traces held {len(self.dyn_buckets())} "
+            f"(S_pads {self.dyn_buckets()}); this capture +{after - before:.1f} MiB/bank, trace region now {after:.1f} MiB/bank",
+            flush=True,
+        )
+
     def capture_dyn_trace(self, C):
         """Second half of ``capture_dyn``: capture the chunk trace (everything is compiled and allocated)."""
         C_, bufs, t0 = self._dyn_compiled
@@ -970,11 +991,15 @@ class DSV41PrefillModel:
             for _, pl in self.layers:
                 pl.pa.reset_dyn()
             ttnn.synchronize_device(self.md)
+        tr0 = self._trace_region_mib()
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+        _PS.CAPTURING[0] = True
         with corruptible(self.md):
             self.forward_device(bufs, C, 0, C, dyn=True)
+        _PS.CAPTURING[0] = False
         ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
         ttnn.synchronize_device(self.md)
+        self._log_chunk_trace(C, tr0)
         self._dyn_compiled = None
         self.timing["compile_and_capture"] = time.perf_counter() - t0
 
@@ -1107,9 +1132,14 @@ class DSV41PrefillModel:
                 self.dyn_trace.end()
                 ov.seg = None
             else:
+                tr0 = self._trace_region_mib()
                 self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+                _PS.CAPTURING[0] = True
                 self.forward_device(bufs, S, 0, C, dyn=True)
+                _PS.CAPTURING[0] = False
                 ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+                ttnn.synchronize_device(self.md)
+                self._log_chunk_trace(C, tr0)
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
         MODE = os.environ.get(
