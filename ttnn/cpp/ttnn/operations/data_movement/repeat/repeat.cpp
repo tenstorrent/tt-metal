@@ -130,7 +130,7 @@ std::tuple<ttnn::Tensor, ttsl::SmallVector<uint32_t>> match_input_rank(
     if (input_shape.rank() < repetition_vector.size()) {
         ttsl::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
-        working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
+        working_tensor = view_keeping_row_padding(working_tensor, ttnn::Shape(new_shape_vec));
         working_repetition_vector = repetition_vector;
     }
     // Pad repetition vector when shorter than tensor rank (torch errors; we allow it).

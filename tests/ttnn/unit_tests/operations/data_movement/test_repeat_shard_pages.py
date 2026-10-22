@@ -53,8 +53,9 @@ def _route(call):
     return "composite"
 
 
-def _repeat(device, shape, input_memory, repeats, output_memory, preallocate):
-    """Repeats uint32 words that use the high bits; checks every output word and a preallocated output."""
+def _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route):
+    """Repeats uint32 words that use the high bits; checks every output word and a preallocated output. The route is
+    asserted before the call runs, so a case routed onto a path that hangs fails instead."""
     values = (torch.arange(prod(shape), dtype=torch.int64).reshape(shape) * 1000003 + 7).to(torch.int32)
     source = ttnn.from_torch(
         values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
@@ -71,13 +72,13 @@ def _repeat(device, shape, input_memory, repeats, output_memory, preallocate):
             memory_config=output_memory,
         )
         kwargs["optional_output_tensor"] = target
-    route = _route(lambda: ttnn.repeat(source, repeats, **kwargs))
+    assert _route(lambda: ttnn.repeat(source, repeats, **kwargs)) == route
     result = ttnn.repeat(source, repeats, **kwargs)
     assert torch.equal(ttnn.to_torch(result).to(torch.int64), expected)
     if preallocate:
         assert result.buffer_address() == target.buffer_address()
         assert torch.equal(ttnn.to_torch(target).to(torch.int64), expected)
-    return result, route
+    return result
 
 
 def _assert_derived_placement(result, input_memory):
@@ -109,11 +110,35 @@ def test_repeat_narrow_rows(device, rank, strategy, output, preallocate):
     repeats = [1] * rank
     repeats[-2] = 2
     sharded = _sharded(layout, grid, [8, 5])
-    result, route = _repeat(
-        device, shape, _sharded(layout, grid, [4, 5]), repeats, _output_memory(output, sharded), preallocate
+    result = _repeat(
+        device, shape, _sharded(layout, grid, [4, 5]), repeats, _output_memory(output, sharded), preallocate, "native"
     )
-    assert route == "native"
     assert result.memory_config() == (sharded if output == "implicit" else _output_memory(output, sharded))
+
+
+@pytest.mark.parametrize(
+    "layout, grid, shard, shape, repeats",
+    [
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [1, 1, 2, 1]),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [3, 1, 1, 1]),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1]),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [4, 3], [1, 2, 1]),
+    ],
+    ids=["block_new_axis", "block_outer_x3", "width_new_axis", "width_rank2"],
+)
+@pytest.mark.parametrize("output, preallocate", INTERLEAVED_OUTPUTS)
+def test_repeat_narrow_rows_rank_expansion(device, layout, grid, shard, shape, repeats, output, preallocate):
+    # A repeat vector longer than the input rank adds leading axes before routing. That view keeps the padded row
+    # too: re-deriving the shard from the logical width throws for WIDTH, and for BLOCK reads 12-byte pages out of
+    # 16-byte slots.
+    input_memory = _sharded(layout, _cores(*grid), shard)
+    result = _repeat(device, shape, input_memory, repeats, _output_memory(output, None), preallocate, "native")
+    if output == "implicit":
+        memory = result.memory_config()
+        assert memory.memory_layout == layout and memory.shard_spec.grid == input_memory.shard_spec.grid
+        assert memory.shard_spec.shape[1] == shard[1]
+    else:
+        assert result.memory_config() == _output_memory(output, None)
 
 
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
@@ -121,10 +146,15 @@ def test_repeat_narrow_row_wider_page(device, output, preallocate):
     # An 8-word row in a 9-word shard: the 36-byte page holds the 32-byte row and one padding word.
     layout, grid = ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1)
     sharded = _sharded(layout, grid, [4, 9])
-    result, route = _repeat(
-        device, [1, 2, 8], _sharded(layout, grid, [2, 9]), [1, 2, 1], _output_memory(output, sharded), preallocate
+    result = _repeat(
+        device,
+        [1, 2, 8],
+        _sharded(layout, grid, [2, 9]),
+        [1, 2, 1],
+        _output_memory(output, sharded),
+        preallocate,
+        "native",
     )
-    assert route == "native"
     assert result.memory_config() == (sharded if output == "implicit" else _output_memory(output, sharded))
 
 
@@ -134,7 +164,7 @@ def test_repeat_narrow_row_wider_page(device, output, preallocate):
 @pytest.mark.parametrize("output, preallocate", INTERLEAVED_OUTPUTS)
 def test_repeat_partial_final_shard(device, rank, strategy, width, shard_width, output, preallocate):
     # A row split over shards whose last shard is partial (7 words over 5-word shards; 30 over 8-word, 32-byte,
-    # aligned shards) stays off native: the rank-collapse view cannot keep the last page's padding.
+    # aligned shards) stays on codegen or the composite path.
     cores = -(-width // shard_width)
     layout = (
         ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -146,8 +176,8 @@ def test_repeat_partial_final_shard(device, rank, strategy, width, shard_width, 
     repeats = [1] * rank
     repeats[-2] = 2
     output_memory = _output_memory(output, None)
-    result, route = _repeat(device, shape, input_memory, repeats, output_memory, preallocate)
-    assert route == ("composite" if rank == 5 else "codegen")
+    route = "composite" if rank == 5 else "codegen"
+    result = _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route)
     if output_memory is None:
         _assert_derived_placement(result, input_memory)
     else:
@@ -176,11 +206,11 @@ def test_repeat_unaligned_split_rows(device, rank, strategy, output, preallocate
         output_shape, core_grid=grid, strategy=strategy, orientation=ttnn.ShardOrientation.ROW_MAJOR
     )
     output_memory = _output_memory(output, sharded)
-    result, route = _repeat(device, shape, input_memory, repeats, output_memory, preallocate)
     if rank < 5:
-        assert route == "codegen"
+        route = "codegen"
     else:
-        assert route == ("staged" if output == "sharded" else "composite")
+        route = "staged" if output == "sharded" else "composite"
+    result = _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route)
     if output_memory is None:
         _assert_derived_placement(result, input_memory)
     else:
@@ -197,15 +227,15 @@ def test_repeat_aligned_rows_into_unaligned_pages(device, rank, preallocate):
     repeats = [1] * rank
     repeats[-2] = 2
     output_memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [14, 5])
-    result, route = _repeat(
+    result = _repeat(
         device,
         shape,
         _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [7, 8]),
         repeats,
         output_memory,
         preallocate,
+        "staged",
     )
-    assert route == "staged"
     assert result.memory_config() == output_memory
 
 
@@ -218,6 +248,6 @@ def test_repeat_nondividing_output_width(device, rank, preallocate):
     repeats[-2] = 2
     input_memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(2, 4), [7, 5])
     output_memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(4, 1), [14, 12])
-    result, route = _repeat(device, shape, input_memory, repeats, output_memory, preallocate)
-    assert route == ("composite" if rank == 5 else "codegen")
+    route = "composite" if rank == 5 else "codegen"
+    result = _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route)
     assert result.memory_config() == output_memory
