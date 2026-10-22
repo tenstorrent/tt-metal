@@ -274,7 +274,12 @@ vllm serve ... \
   touches no device). The plugin proposes for an ordinary step when it commits it, a step after its submission; when
   the lane's next step is already enqueued, the resident hidden the MTP would read is that step's, so the propose
   enqueues nothing and offers placeholder drafts, which make the plugin drain the newer step and propose for it (that
-  propose drafts on device). A verify answers host tensors, also when asked to defer its read.
+  propose drafts on device). A verify answers host tensors, also when asked to defer its read, unless
+  `MIMO_SPEC_DEFER=1`: a fused_sample verify asked to defer then returns a handle (`VerifyHandle`, with a `tip_id`)
+  and its result pages travel to the host behind it without blocking; the plugin reads the handle a step later,
+  possibly on another thread (`read_decode_output(handle)`: the committed tokens, counts and p0), and its propose
+  returns the drafts the pages carry without enqueueing anything. Every verify now enqueues all its passes, each
+  followed by a non-blocking copy of its page, before the host waits.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;

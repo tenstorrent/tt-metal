@@ -13,6 +13,7 @@ a step comes when it commits, after the next step's submission. Checked: the dec
 defer its read answering host tensors, the reads passing a verify's host output through, and a propose for an older
 ordinary step enqueueing nothing (placeholder drafts that make the plugin drain and propose again)."""
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -178,9 +179,11 @@ def test_lanes_of_several_requests_propose_without_the_device(adapter):
     assert adapter.chain_stats["stale"] == adapter.chain_stats["misplaced"] == 0
 
 
-def test_a_deferred_verify_answers_host_tensors(adapter):
-    """``defer_read`` on a fused_sample verify: host tensors (the plugin reads it synchronously, chaining nothing),
-    which ``read_decode_output`` passes through, as it passes an argmax_ids or logits verify's tensor."""
+def test_a_deferred_verify_answers_host_tensors(adapter, monkeypatch):
+    """``defer_read`` on a fused_sample verify with MIMO_SPEC_DEFER=0: host tensors (the plugin reads it
+    synchronously, chaining nothing), which ``read_decode_output`` passes through, as it passes an argmax_ids or
+    logits verify's tensor."""
+    monkeypatch.setattr(generator_vllm, "SPEC_DEFER", False)
     drafts = start(adapter, 600)
     rows, width = ROWS, 1 + MAX_DRAFTS
     tokens = torch.zeros(rows, width, dtype=torch.int32)
@@ -228,3 +231,125 @@ def test_synchronous_proposes_are_unchanged(adapter):
     assert propose(adapter, committed, positions, counts) == [
         draft_of(703 + int(counts[SPEC_ROW]), j) for j in range(MAX_DRAFTS)
     ]
+
+
+# ---------------------------------------------------------------------- deferred verifies (MIMO_SPEC_DEFER)
+def block(last, p, drafts):
+    """The plugin's candidate block for the speculating row alone: its last committed token at p and its drafts."""
+    width = 1 + MAX_DRAFTS
+    tokens = torch.zeros(ROWS, width, dtype=torch.int32)
+    positions = torch.full((ROWS, width), -1, dtype=torch.int32)
+    valid = torch.zeros(ROWS, dtype=torch.int32)
+    tokens[SPEC_ROW, : 1 + len(drafts)] = torch.tensor([last] + list(drafts), dtype=torch.int32)
+    positions[SPEC_ROW, : 1 + len(drafts)] = torch.arange(p, p + 1 + len(drafts), dtype=torch.int32)
+    valid[SPEC_ROW] = len(drafts)
+    return tokens, positions, valid
+
+
+def deferred(model, tokens, positions, valid, **chain):
+    return model.decode_forward(
+        tokens,
+        positions,
+        TABLE,
+        None,
+        spec_mode="fused_sample",
+        num_valid_drafts=valid,
+        accepted_counts=torch.ones(ROWS, dtype=torch.int32),
+        defer_read=True,
+        **chain,
+    )
+
+
+def read_on_thread(model, handle):
+    """``read_decode_output(handle)`` where the plugin resolves deferred output: another thread."""
+    box = []
+    reader = threading.Thread(target=lambda: box.append(model.read_decode_output(handle)))
+    reader.start()
+    reader.join(timeout=30)
+    assert box, "the read did not finish"
+    return box[0]
+
+
+def commit(readout):
+    """The plugin's propose arguments after committing a FusedReadout: positions from p0 (p0 + 1 + j, -1 on gaps)."""
+    width = readout.accepted_token_ids.shape[1]
+    first = readout.p0.to(torch.int64).unsqueeze(1)
+    positions = (first + torch.arange(1, width + 1)).masked_fill(first < 0, -1).to(torch.int32)
+    return readout.accepted_token_ids, positions, readout.accepted_counts
+
+
+@pytest.fixture
+def defer(monkeypatch):
+    monkeypatch.setattr(generator_vllm, "SPEC_DEFER", True)
+
+
+def test_deferred_verifies_follow_the_oracle(adapter, defer):
+    """Each fused verify returns a handle (increasing tip ids, no host tensors); its read, on another thread, is the
+    synchronous answer with p0 the submitted column 0; its propose returns the drafts its page carries, enqueueing
+    nothing. Greedy decoding through them reproduces the oracle."""
+    from vllm_tt_plugin.spec_decode import FusedReadout
+
+    lane = adapter.models[1]
+    p = 200
+    drafts = start(adapter, p)
+    seq, tips = SEQ[: p + 1], []
+    while len(seq) < 400:
+        tokens, positions, valid = block(seq[-1], len(seq) - 1, drafts)
+        reads = lane.reads
+        out = deferred(adapter, tokens, positions, valid)
+        assert out.accepted_token_ids is None and out.accepted_counts is None
+        handle = out.handle
+        tips.append(handle.tip_id)
+        assert lane.reads == reads + 1, "one page copy enqueued behind the pass"
+        readout = read_on_thread(adapter, handle)
+        assert isinstance(readout, FusedReadout) and adapter.read_decode_output(handle) is readout
+        assert readout.p0.dtype == torch.int32 and torch.equal(readout.p0, positions[:, 0])
+        m = int(readout.accepted_counts[SPEC_ROW])
+        assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[len(seq) : len(seq) + m]
+        assert readout.accepted_counts.tolist() == [1] * SPEC_ROW + [m] + [1] * (ROWS - SPEC_ROW - 1)
+        seq += readout.accepted_token_ids[SPEC_ROW, :m].tolist()
+        planned = lane.mtp.planned
+        out = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=handle)
+        drafts = out.draft_token_ids[SPEC_ROW].tolist()
+        assert int(out.num_valid.sum()) == MAX_DRAFTS and lane.mtp.planned == planned, "nothing enqueued"
+        assert drafts == [draft_of(len(seq) - 1, k) for k in range(MAX_DRAFTS)]
+        with pytest.raises(RuntimeError, match="proposed a second time"):
+            adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=handle)
+    assert seq == SEQ[: len(seq)]
+    assert tips == sorted(set(tips)) and all(isinstance(t, int) for t in tips)
+    assert adapter.chain_stats["chained"] == len(tips) and adapter.chain_stats["host"] == 1
+
+
+def test_a_handle_outlives_later_steps(adapter, defer):
+    """A handle's read and propose come after later steps ran on its lane (a plain step here): its page was copied
+    behind its own pass. A propose without a handle drafts nothing from a deferred verify, and a row whose request is
+    gone (position -1) is offered none."""
+    lane = adapter.models[1]
+    drafts = start(adapter, 900)
+    out = deferred(adapter, *block(SEQ[900], 900, drafts))
+    planned = lane.mtp.planned
+    tokens, positions, _ = block(SEQ[900], 900, [])
+    plain = adapter.propose_draft_tokens(MAX_DRAFTS, tokens, positions, torch.ones(ROWS, dtype=torch.int32))
+    assert int(plain.num_valid.sum()) == 0 and lane.mtp.planned == planned
+    assert int(read(adapter, submit(adapter, {SPEC_ROW: 950}))[SPEC_ROW]) == SEQ[951]
+    readout = read_on_thread(adapter, out.handle)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[901 : 901 + m]
+    got = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=out.handle)
+    assert got.draft_token_ids[SPEC_ROW].tolist() == [draft_of(900 + m, k) for k in range(MAX_DRAFTS)]
+    out = deferred(adapter, *block(SEQ[900 + m], 900 + m, got.draft_token_ids[SPEC_ROW].tolist()))
+    committed, positions, counts = commit(read_on_thread(adapter, out.handle))
+    positions[SPEC_ROW] = -1
+    gone = adapter.propose_draft_tokens(MAX_DRAFTS, committed, positions, counts, hidden=out.handle)
+    assert int(gone.num_valid.sum()) == 0
+
+
+@pytest.mark.parametrize("why", ["no_chain", "no_rope_tables"])
+def test_without_the_chain_a_deferred_verify_answers_host_tensors(adapter, defer, monkeypatch, why):
+    if why == "no_chain":
+        monkeypatch.setattr(generator_vllm, "SPEC_CHAIN", False)
+    else:
+        adapter.models[0].rope_tables = None
+    drafts = start(adapter, 1200)
+    out = deferred(adapter, *block(SEQ[1200], 1200, drafts))
+    assert out.handle is None and out.accepted_token_ids is not None

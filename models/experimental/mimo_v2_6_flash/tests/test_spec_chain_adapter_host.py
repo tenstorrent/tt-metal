@@ -53,6 +53,15 @@ class FakeChain:
         self.lane.reads += 1
         return unpack_result(self.words)
 
+    def read_async(self):
+        """The copy enqueued behind the pass: the page as the pass left it."""
+        self.lane.reads += 1
+        return list(self.words)
+
+    @staticmethod
+    def unpack(host):
+        return unpack_result(host)
+
 
 class FakeMTP:
     def __init__(self, lane):

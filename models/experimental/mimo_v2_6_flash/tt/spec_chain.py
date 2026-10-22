@@ -12,7 +12,9 @@ Two one-core steps on persistent buffers only:
 * ``drafts``, at the end of the MTP draft trace (TtMiMoMTP._body): writes the anchor slot's drafts into the result
   page, whichever wrote ``mtp_packed`` (the chain step, or the host for a host-planned draft).
 
-The host reads the result page, one page from the row's first chip (``read``). Every buffer either step reads or
+The host reads the result page, one page from the row's first chip (``read``), or copies it to the host behind the
+pass without blocking (``read_async``, ``unpack``: every pass of a verify is enqueued before the host waits, and a
+deferred verify is read a step later). Every buffer either step reads or
 writes is persistent (made before any trace capture: TtMiMoMTP.setup_cache), so both steps compile in the decode
 trace's warm-up (``warm``) with the runtime arguments their captures use, and nothing compiles after a capture.
 
@@ -127,4 +129,17 @@ class SpecChain:
     def read(self):
         """The result page (reference.spec_chain.ChainResult; blocks until the steps writing it finished)."""
         words = ttnn.to_torch(ttnn.get_device_tensors(self.result)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
+        return unpack_result(words.tolist())
+
+    def read_async(self):
+        """Enqueue a copy of the result page to the host behind the work already enqueued, without blocking (the
+        decode step's token read, generator_vllm.read_decode_output, does the same). Returns the host tensor it
+        fills, valid once an event recorded after it completed (``unpack``); the page itself may be rewritten by the
+        next pass meanwhile."""
+        return self.result.cpu(blocking=False)
+
+    @staticmethod
+    def unpack(host):
+        """The ChainResult of a host copy made by ``read_async`` (after its event completed; touches no device)."""
+        words = ttnn.to_torch(ttnn.get_device_tensors(host)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
         return unpack_result(words.tolist())
