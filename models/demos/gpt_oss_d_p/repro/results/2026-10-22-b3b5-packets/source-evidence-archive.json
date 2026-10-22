@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-22T08:54:35.870478+00:00",
+  "status": "EVIDENCE_PRESERVED",
+  "path": "/data/divanovic/gptoss-b3b5e13-pd-20261022/archives/gptoss-b3b5e13-pd-20261022-saved-evidence.tar.gz",
+  "manifest": "/data/divanovic/gptoss-b3b5e13-pd-20261022/archives/saved-evidence-manifest.json",
+  "files": 9928,
+  "raw_request_files": 8439,
+  "uncompressed_bytes": 2270293049,
+  "archive_bytes": 187243403,
+  "sha256": "62533ecc513452f29283789851fe67d7687a49110c509c3d7f6bafb7796f6286",
+  "every_member_sha256_verified": true,
+  "cleanup_verified": false,
+  "measurement_commit": "e09bd1a0de971e532f04733473137217df3e4f78"
+}

@@ -13,8 +13,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 06:24:39.137 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 06:38:19.483 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+      "2026-10-22 06:24:39.137 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 06:38:19.483 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
@@ -36,8 +35,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:40:18.489 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:47:38.535 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+      "2026-10-22 04:40:18.489 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:47:38.535 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
@@ -59,8 +57,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:13:54.436 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:19:50.598 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+      "2026-10-22 04:13:54.436 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:19:50.598 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
@@ -82,8 +79,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 05:48:38.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 05:57:59.269 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+      "2026-10-22 05:48:38.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 05:57:59.269 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
@@ -105,8 +101,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 01:12:07.660 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 02:09:33.299 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+      "2026-10-22 01:12:07.660 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 02:09:33.299 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
@@ -128,8 +123,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 05:09:26.184 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 05:26:03.015 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+      "2026-10-22 05:09:26.184 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 05:26:03.015 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",
@@ -151,8 +145,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 06:40:54.907 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 06:54:12.136 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+      "2026-10-22 06:40:54.907 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 06:54:12.136 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
@@ -174,8 +167,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:50:27.003 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:56:41.592 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+      "2026-10-22 04:50:27.003 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:56:41.592 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
@@ -197,8 +189,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:22:21.935 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:28:26.373 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+      "2026-10-22 04:22:21.935 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:28:26.373 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
@@ -220,8 +211,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 06:00:25.548 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 06:09:35.070 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+      "2026-10-22 06:00:25.548 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 06:09:35.070 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
@@ -243,8 +233,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 02:12:46.678 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 03:52:54.567 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+      "2026-10-22 02:12:46.678 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 03:52:54.567 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
@@ -266,8 +255,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 05:28:28.418 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 05:35:40.898 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+      "2026-10-22 05:28:28.418 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 05:35:40.898 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",
@@ -289,8 +277,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 06:56:50.532 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 07:10:57.491 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop"
+      "2026-10-22 06:56:50.532 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 07:10:57.491 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 748 chunks; exiting request loop",
@@ -312,8 +299,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:59:46.087 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 05:06:05.332 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop"
+      "2026-10-22 04:59:46.087 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 05:06:05.332 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 44 chunks; exiting request loop",
@@ -335,8 +321,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 04:30:55.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:36:32.579 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop"
+      "2026-10-22 04:30:55.407 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:36:32.579 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 20 chunks; exiting request loop",
@@ -358,8 +343,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 06:12:15.207 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 06:21:19.837 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop"
+      "2026-10-22 06:12:15.207 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 06:21:19.837 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 188 chunks; exiting request loop",
@@ -381,8 +365,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 03:56:01.493 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 04:09:52.519 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop"
+      "2026-10-22 03:56:01.493 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 04:09:52.519 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 4 chunks; exiting request loop",
@@ -404,8 +387,7 @@
       ]
     },
     "readiness_lines": [
-      "2026-10-22 05:38:07.524 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop",
-      "2026-10-22 05:45:29.756 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop"
+      "2026-10-22 05:38:07.524 | INFO     | models.demos.common.prefill.runners.prefill_runner:_serve_request:1003 - [pp rank 0] setup complete, entering request loop"
     ],
     "closure_lines": [
       "2026-10-22 05:45:29.756 | INFO     | models.demos.common.prefill.runners.prefill_runner:run_request_loop:503 - [pp rank 0] SHUTDOWN sentinel received after 88 chunks; exiting request loop",

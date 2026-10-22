@@ -1,0 +1,32 @@
+{
+  "utc": "2026-10-22T08:52:52.833290+00:00",
+  "status": "CLEANUP_UNVERIFIED_AFTER_EXPIRY",
+  "measurements_complete": true,
+  "publication_remote_verified": true,
+  "measurement_commit": "e09bd1a0de971e532f04733473137217df3e4f78",
+  "final_prefill_closed": true,
+  "controller_exited": true,
+  "publisher_exited": true,
+  "cleanup_mutations_dispatched": false,
+  "reason": "Read-only ownership login reset stopped cleanup before first mutation; next observed execution time was beyond all deadlines and allocation expiry.",
+  "last_cleanup_preview_utc": "2026-10-22T07:27:35.275701+00:00",
+  "decoder_exit": 124,
+  "decoder_exit_utc": "2026-10-22T07:59:59.947335+00:00",
+  "supported_decoder_owner_stop_sent": false,
+  "queue_empty": true,
+  "terminal_jobs": {
+    "142547": {
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "slurm_load_jobs error: Invalid job id specified\n"
+    },
+    "142679": {
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "slurm_load_jobs error: Invalid job id specified\n"
+    }
+  },
+  "no_compute_access_after_expiry": true,
+  "final_process_and_device_holder_absence_verified": false,
+  "task_completion_claim": false
+}

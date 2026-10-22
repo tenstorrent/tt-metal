@@ -24,5 +24,8 @@
   "numerical_accuracy_claim": false,
   "raw_inventory_files": 8439,
   "cleanup_guard_tests": 10,
-  "cleanup_helper_sha256": "00577c7a12b73050a0fad70ce37d1ea8993df38791264f04959b5a98bb9eadc7"
+  "cleanup_helper_sha256": "d21e5333801d2721e918947532e033dd96d100708eea7af28164cc78dde4961d",
+  "cleanup_control_sha256": "f5262d3cea3a2973d33074bd1437e0dedec54f0b36b77c4b928321d2d1e58fa2",
+  "padding_independent_source_review": true,
+  "final_control_review": "PASS; no critical/important findings remain"
 }

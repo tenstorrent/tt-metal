@@ -1,5 +1,10 @@
 # GPT-OSS-120B: three payloads on Metal b3b5e13
 
+## Cleanup outcome: unverified after allocation expiry
+
+All87 cases are published and audited. Final process/device-holder absence was not verified before ownership expired. The decoder wrapper records timeout exit124; no supported owner-stop or manual base-service stop was sent. Slurm now has no active task allocations; terminal records are unavailable and accounting is disabled. No compute host was accessed after expiry. Full task completion is not claimed. See [DEADLINE-OUTCOME.md](DEADLINE-OUTCOME.md) and the [verified9928-file evidence archive receipt](source-evidence-archive.json).
+
+
 ## Measurement result
 
 **87/87 cases complete and audited: 348 requests (87 warmups +261 measured), zero errors, failed cases or pending measurements.** The final request completed at07:09:23UTC; final prefill closure was verified at07:11:07UTC, and the controller exited. The publisher exited after a final independent saved-evidence audit. Publication and resource cleanup are recorded separately in the completion receipts.

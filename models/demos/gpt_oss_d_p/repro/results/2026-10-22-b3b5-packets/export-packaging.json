@@ -1,10 +1,10 @@
 {
   "b3b5-status.json": {
     "file": "full-b3b5-status.json.gz",
-    "sha256": "4821a131481c74f8aae0ea5cf4535cdbbe786b10db9418bf31f25be92dc285bc",
-    "compressed_sha256": "b070901522bff93105002900869500253387272e6174ae49edbf38fcb1969849",
-    "bytes": 2393755,
-    "compressed_bytes": 263199
+    "sha256": "b9e8db30eeb626d53aef81718799dd9ecf866baff033e33f9e70b2f8a6c54eb9",
+    "compressed_sha256": "fa61f5a9910a3b9477229d49224b5d9f101cce82d525a5d4473fe246dc6e9149",
+    "bytes": 2393907,
+    "compressed_bytes": 263318
   },
   "baseline.json": {
     "file": "baseline.json.gz",
