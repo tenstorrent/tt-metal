@@ -132,7 +132,12 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #endif
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
+#if defined(ARCH_BLACKHOLE)
+        // The unpack thread sets a 16-bit transpose's rate, so the context poll goes ahead of the address writes
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, true>(icb, itile)));
+#else
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile)));
+#endif
         MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(idst, icb)));
     }
 #else

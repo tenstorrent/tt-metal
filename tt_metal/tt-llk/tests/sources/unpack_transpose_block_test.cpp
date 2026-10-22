@@ -6,6 +6,7 @@
 // then the A2D datacopy) with the unpack of each DEST section as one _llk_unpack_A_transpose_block_ call.
 // UNPACK_FORM 1: every section is a block. UNPACK_FORM 2: blocks and per tile calls alternate by section.
 // UNPACK_FORM 3 and 4: forms 1 and 2 with the back to back block, whose W counter walks through the tiles.
+// UNPACK_FORM 5: every section is per tile calls with the early context poll. UNPACK_FORM 6: back to back blocks and early poll per tile calls alternate.
 
 #include <cstdint>
 
@@ -40,15 +41,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
         const std::uint32_t first = block * num_tiles_in_block;
-        if (UNPACK_FORM % 2 == 1 || block % 2 == 0)
+        constexpr bool early_poll = UNPACK_FORM >= 5;
+        if (UNPACK_FORM != 5 && (UNPACK_FORM % 2 == 1 || block % 2 == 0))
         {
-            _llk_unpack_A_transpose_block_<(UNPACK_FORM >= 3)>(L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride);
+            _llk_unpack_A_transpose_block_<(UNPACK_FORM == 3 || UNPACK_FORM == 4 || UNPACK_FORM == 6)>(
+                L1_ADDRESS(params.buffer_A[first]), num_tiles_in_block, tile_stride);
         }
         else
         {
             for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
             {
-                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, early_poll>(
                     L1_ADDRESS(params.buffer_A[first + tile]), formats.unpack_A_src, formats.unpack_A_dst);
             }
         }

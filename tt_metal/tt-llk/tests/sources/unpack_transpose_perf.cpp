@@ -78,7 +78,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
             for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
             {
-                _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, true>(
+                    PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
             }
 #endif
         }
