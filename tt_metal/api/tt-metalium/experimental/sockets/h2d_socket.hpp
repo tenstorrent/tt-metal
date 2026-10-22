@@ -227,8 +227,12 @@ public:
      */
     bool had_clean_prior_shutdown() const;
 
+    // Non-copyable and non-movable: the destructor drains the device acknowledgement and
+    // releases pinned/shared memory, so the instance must stay put. Hold it by unique_ptr.
     H2DSocket(const H2DSocket&) = delete;
     H2DSocket& operator=(const H2DSocket&) = delete;
+    H2DSocket(H2DSocket&&) = delete;
+    H2DSocket& operator=(H2DSocket&&) = delete;
 
 private:
     // Wrap an already-built implementation object (connect paths).
