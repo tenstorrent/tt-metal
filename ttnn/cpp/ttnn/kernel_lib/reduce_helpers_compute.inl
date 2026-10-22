@@ -550,6 +550,21 @@ ALWI void reduce(
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
+                uint32_t wt_begin = 0;
+#if defined(ARCH_BLACKHOLE) && defined(REDUCE_ROW_SUM_BLOCK)
+                // The block holds the row's scaler: it pays at LoFi, where unpack binds; HiFi2 reads equal or slower
+                constexpr bool row_sum_block =
+                    reduce_type != PoolType::MAX && !is_sfpu && !waits_per_tile(input_policy) &&
+                    reduce_math_fidelity<reduce_type, reduce_dim, reduce_pow2_scaler>(MATH_FIDELITY) ==
+                        MathFidelity::LoFi;
+                if constexpr (row_sum_block) {
+                    if (Wt >= 4) {
+                        reduce_block<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                            input_dfb_id, scaler_dfb_id, waits_bulk(input_policy) ? 0 : index_offset, 0, dst_idx, Wt, 0);
+                        wt_begin = Wt;
+                    }
+                }
+#endif
 #ifdef ARCH_BLACKHOLE
                 if constexpr (reduce_type == PoolType::MAX && !is_sfpu && !waits_per_tile(input_policy)) {
                     // Resident row: one block call pools the tiles and transposes once.
@@ -558,7 +573,7 @@ ALWI void reduce(
                 } else
 #endif
                 {
-                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                    for (uint32_t wt = wt_begin; wt < Wt; ++wt) {
                         if constexpr (is_sfpu) {
                             constexpr uint32_t sfpu_work_dst = 1;
                             const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
