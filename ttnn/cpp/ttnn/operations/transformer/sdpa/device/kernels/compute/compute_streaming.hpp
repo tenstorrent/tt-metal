@@ -209,13 +209,17 @@ struct RingAccumulatorState {
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
 // The local tail is runtime on the dynamic-length path (the per-chip length moves it), a constant elsewhere.
+// The setter is what the producer calls on both paths (kernel_main is not a template, so an `if constexpr`
+// there would still have to compile an assignment to the constant).
 template <bool Dynamic, uint32_t Ct>
 struct LocalNPaddedTilesField {
     uint32_t local_n_padded_tiles = Ct;
+    void set_local_n_padded_tiles(uint32_t value) { local_n_padded_tiles = value; }
 };
 template <uint32_t Ct>
 struct LocalNPaddedTilesField<false, Ct> {
     static constexpr uint32_t local_n_padded_tiles = Ct;
+    static void set_local_n_padded_tiles(uint32_t) {}
 };
 
 template <

@@ -330,7 +330,7 @@ void kernel_main() {
     // Precompute padded tile counts that are constant across ring iterations.
     constexpr uint32_t local_n_padded_tiles_ct =
         (kv_local_padded_Nt_ct % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt_ct % Sk_chunk_t)) : 0;
-    [[maybe_unused]] const uint32_t local_n_padded_tiles =
+    const uint32_t local_n_padded_tiles =
         (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
     // joint_n_padded_tiles is per-ring-iter (the joint tail lands in a different shard each iteration),
     // so it is resolved inside the ring loop and stamped onto lw_mask, mirroring global_n_padded_tiles.
@@ -585,9 +585,7 @@ void kernel_main() {
             straddle_chunk_id,
             dynamic_local_n>
             lw_mask;
-        if constexpr (dynamic_local_n) {
-            lw_mask.local_n_padded_tiles = local_n_padded_tiles;
-        }
+        lw_mask.set_local_n_padded_tiles(local_n_padded_tiles);  // a no-op on the static path
         lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col_live;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
