@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_ftz_band,
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
@@ -46,18 +47,6 @@ Accuracy criteria
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
                               test_tanhshrink
 """
-
-
-def assert_ftz_band(result, band_mask, band_desc):
-    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
-
-    The band is a deterministic slice of the exhaustive sweep, so the
-    non-emptiness assertion guards against a future golden/kernel change that
-    shifts a boundary and silently empties the band (which would otherwise let
-    the test pass without ever checking the documented FTZ behavior).
-    """
-    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
-    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,7 +111,7 @@ def test_piecewise_division_ops(device, ttnn_op):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,7 +152,7 @@ def test_hardswish(device):
     assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
 
     remaining = ~golden_overflow & ~near_zero_ftz
-    assert_with_ulp(golden[remaining], result[remaining], 2)
+    assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +204,7 @@ def test_silu_swish_ops(device, ttnn_op):
     assert_ftz_band(result, neg_ftz_band, "negative sigmoid-underflow sliver")
 
     remaining = ~near_zero_ftz & ~neg_ftz_band
-    assert_with_ulp(golden[remaining], result[remaining], 2)
+    assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,7 +252,7 @@ def test_softsign(device):
     assert boundary_ok.all(), "boundary magnitude must be either FTZ'd to 0 or exactly the golden ±1"
 
     ftz_safe = ~near_max & ~boundary
-    assert_with_ulp(golden[ftz_safe], result[ftz_safe], 2)
+    assert_with_ulp(expected_result=golden[ftz_safe], actual_result=result[ftz_safe], ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +287,7 @@ def test_log_sigmoid(device):
     result_neg = ttnn.to_torch(ttnn.log_sigmoid(tt_neg))
     result_pos = ttnn.to_torch(ttnn.log_sigmoid(tt_pos))
 
-    assert_with_ulp(golden_neg, result_neg, 2)
+    assert_with_ulp(expected_result=golden_neg, actual_result=result_neg, ulp_threshold=2)
     assert_with_pcc(golden_pos, result_pos, pcc=0.999)
 
 
@@ -334,5 +323,5 @@ def test_tanhshrink(device):
     cancellation_band = input_tensor.abs().float() < 1.0
     remaining = ~cancellation_band
 
-    assert_with_ulp(golden[remaining], result[remaining], 2)
+    assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)
     assert_with_pcc(golden[cancellation_band], result[cancellation_band], pcc=0.999)

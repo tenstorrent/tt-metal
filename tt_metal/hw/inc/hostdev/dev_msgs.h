@@ -25,6 +25,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 #include "hostdev/profiler_common.h"
@@ -75,6 +76,14 @@ constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::C
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+#endif
+// Go messages per sub-device: one per launch message slot on Tensix, which fast dispatch targets. Other cores are only
+// slow-dispatched and keep one.
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC) || \
+    defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t GO_RING_DEPTH = 1;
+#else
+constexpr uint32_t GO_RING_DEPTH = 8;
 #endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
@@ -172,7 +181,7 @@ struct kernel_config_msg_t {
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
-    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4];  // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -183,6 +192,9 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if the program does not
+    // reload. Written by the host with the rest of the launch message.
+    volatile uint32_t reload_table_addr;
     volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
@@ -190,11 +202,9 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // Byte offset of PrefetcherPipe kernel-config region from kernel_config_base.
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
-    // Placed here (after the 2-byte origin pair) so the field is uint16-aligned without
-    // growing mailboxes_t: pad3 is 2 B smaller than the prior 1+X+4 layout.
+    // Placed after the 2-byte origin pair so the field is uint16-aligned.
     volatile uint16_t prefetcher_pipe_offset;
-    volatile uint8_t pad3[((1 - MaxProcessorsPerCoreType % 2) * 10) + 3];  // CODEGEN:skip — was 1+X+4; −2 B for
-                                                                           // prefetcher_pipe_offset
+    volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -215,6 +225,7 @@ static_assert(offsetof(kernel_config_msg_t, prefetcher_pipe_offset) % sizeof(uin
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
@@ -229,6 +240,11 @@ struct go_msg_t {
         };
     };
 } __attribute__((packed));
+
+// One sub-device's go messages, indexed by launch message slot.
+struct go_ring_t {
+    struct go_msg_t slot[GO_RING_DEPTH];
+};
 
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
@@ -306,6 +322,7 @@ enum debug_assert_type_t {
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
     DebugAssertNCriscNOCPacketTagClearedTripped = 11,
+    DebugAssertNocMidNotClearedTripped = 12,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -417,13 +434,17 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
     volatile CoreMagicNumber core_magic_number;
-    uint8_t pad;  // CODEGEN:skip
+    // DRAM cores only (0 elsewhere). Bit N is set when this core is a DRAM view's preferred
+    // endpoint on NOC N, i.e. that NIU forwards DRAM accesses over AXI and must stay in NOC2AXI
+    // mode. DRISC firmware puts every other NIU in stream mode. See experimental/drisc_mode.h.
+    volatile uint8_t noc2axi_niu_mask;
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+static_assert(GO_RING_DEPTH == 1 || GO_RING_DEPTH == launch_msg_buffer_num_entries);
 
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
@@ -431,9 +452,10 @@ struct mailboxes_t {
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_messages[go_message_num_entries];
+    volatile struct go_ring_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
-    volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    // Index into go_messages to use. Always 0 on unicast cores.
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile uint32_t go_message_index;
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
@@ -447,7 +469,9 @@ struct mailboxes_t {
 };
 
 // DevicePrintMemoryLayout asserts
-static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+#ifdef DEVICE_PRINT_BUFFER_SIZE
+static_assert(sizeof(DevicePrintMemoryLayout) == DEVICE_PRINT_BUFFER_SIZE);
+#endif
 static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);

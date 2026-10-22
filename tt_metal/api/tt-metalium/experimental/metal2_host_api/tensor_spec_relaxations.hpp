@@ -32,11 +32,6 @@ namespace tt::tt_metal::experimental {
 // must guarantee that your kernel logic outside of the TensorAccessor itself
 // tolerates any relaxations that you declare.
 //
-// NOTE: The TensorSpecRelaxations structure is under active development and will
-// change. We are starting with a crude "bag of bools" approach, introducing new
-// relaxations as they are needed. This will be replaced with a more structured
-// construct after the set of required relaxations is better understood.
-//
 // ============================================================================
 struct TensorSpecRelaxations {
     // Permit tensor arguments whose logical_shape differs from the declared shape.

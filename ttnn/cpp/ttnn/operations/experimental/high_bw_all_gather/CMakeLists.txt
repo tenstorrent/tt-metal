@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_high_bw_all_gather ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::HighBwAllGather ALIAS ttnn_op_experimental_high_bw_all_gather)
 
-target_precompile_headers(ttnn_op_experimental_high_bw_all_gather REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_high_bw_all_gather TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_high_bw_all_gather)
 
 set_target_properties(

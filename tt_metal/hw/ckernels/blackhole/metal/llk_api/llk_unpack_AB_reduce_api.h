@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_unpack_AB_reduce.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB REDUCE
@@ -17,6 +18,12 @@
 // descriptor.
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(init<OperationUnpackReduce>(
+        StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
+        StateVal<OperationUnpackReduce::ReduceDim>(to_underlying(reduce_dim)),
+        StateVal<OperationUnpackReduce::FaceHeight>(tensor_shape.face_r_dim),
+        StateVal<OperationUnpackReduce::NumFaces>(tensor_shape.total_num_faces())));
+
     _llk_unpack_AB_reduce_init_<pool_type, reduce_dim>(tensor_shape);
 }
 
@@ -52,6 +59,24 @@ inline void llk_unpack_AB_reduce(
 
     LLK_ASSERT(cb_access_within_bounds(operandA_id, tile_index_a, 1), "Indexed tile read exceeds CB boundary");
     LLK_ASSERT(cb_access_within_bounds(operandB_id, tile_index_b, 1), "Indexed tile read exceeds CB boundary");
+
+    // SUM/AVG REDUCE_ROW swaps the operands (scaler -> SrcA, data -> SrcB), see _llk_unpack_AB_reduce_.
+    [[maybe_unused]] constexpr bool swap_operands =
+        (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX);
+    [[maybe_unused]] const std::uint32_t unpA_operand_id = swap_operands ? operandB_id : operandA_id;
+    [[maybe_unused]] const std::uint32_t unpB_operand_id = swap_operands ? operandA_id : operandB_id;
+
+    SAN_HOOK(execute<OperationUnpackReduce>(
+        StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
+        StateVal<OperationUnpackReduce::ReduceDim>(to_underlying(reduce_dim)),
+        StateVal<OperationUnpackReduce::FaceHeight>(get_operand_face_r_dim(operandA_id)),
+        StateVal<OperationUnpackReduce::NumFaces>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[unpB_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[unpB_operand_id]),
+        StateDiscard<std::uint32_t>(tile_index_a),
+        StateDiscard<std::uint32_t>(tile_index_b)));
 
     llk_unpack_AB_reduce_impl<pool_type, reduce_dim>(address_a, address_b);
 }

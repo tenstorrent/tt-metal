@@ -65,26 +65,38 @@ def t2v_metrics(mesh_device, height):
                 "total": 850.0,
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 140.0,
-                "vae": 2.0,
-                "total": 142.1,
+                "encoder": 0.21,
+                "denoising": 75.0,
+                "vae": 0.42,
+                "total": 76.0,
             }
         else:
             expected_metrics = {
-                "encoder": 0.2,
-                "denoising": 370.0,
-                "vae": 7.0,
-                "total": 375.2,
+                "encoder": 0.23,
+                "denoising": 142.0,
+                "vae": 1.55,
+                "total": 144.0,
+            }
+    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 205.0,
+                "vae": 0.85,
+                "total": 206.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 449.0,
+                "vae": 3.4,
+                "total": 452.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
@@ -430,10 +442,13 @@ def test_pipeline_performance(
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
             (4, 32): "BH_QG",
         }
+        benchmark_profiler.start("inference")
+        benchmark_profiler.end("inference")
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", num_frames / total_times[-1])
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
-            ml_model_name="Wan2.2",
+            ml_model_name="wan-2.2-i2v" if model_type == "i2v" else "wan-2.2-t2v",
             batch_size=1,
             config_params={
                 "width": width,

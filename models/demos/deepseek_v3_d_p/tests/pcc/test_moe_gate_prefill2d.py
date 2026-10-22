@@ -17,13 +17,14 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
@@ -61,12 +62,26 @@ GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
     "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
-    "glm_5_2": GLM52Config,
+    "glm_5_3": GLM53Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
+    "mistral_small_4": MistralSmall4Config,
 }
+
+
+def _zero_bias_if_bias_free(gate_model: str, gate_w: dict) -> dict:
+    """Zero the correction bias for a router that has none, so the golden matches the real model.
+
+    create_gate_weights always synthesizes a random bias. With a nonzero one the GPT_* path
+    validates GPT-OSS routing (top-k on BIASED logits) rather than Mistral's softmax -> top-k ->
+    renormalize; zeroing it makes the two coincide, which is why Mistral can reuse the GPT modes.
+    """
+    if not getattr(GATE_MODELS[gate_model], "ROUTER_HAS_CORRECTION_BIAS", True):
+        gate_w["e_score_correction_bias"] = torch.zeros_like(gate_w["e_score_correction_bias"])
+    return gate_w
+
 
 # Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
 # only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
@@ -126,7 +141,7 @@ _REAL_GATE_SOURCES = {
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
-        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        fallbacks=("/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e",),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),
@@ -246,14 +261,20 @@ REGULAR_GATE_CASES = [
     pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
-    pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),
-    pytest.param("glm_5_2", GateComputeMode.DEVICE_FP32, id="glm_5_2-device_fp32"),
+    pytest.param("glm_5_3", GateComputeMode.HOST_ALL, id="glm_5_3-host_all"),
+    pytest.param("glm_5_3", GateComputeMode.DEVICE_FP32, id="glm_5_3-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
+    # Mistral's router is softmax -> top-4 -> renormalize, which is the GPT-OSS rule: softmax is
+    # monotonic, so top-k on logits equals top-k on softmax, and renormalizing the selected k equals
+    # softmaxing them. The sigmoid device gate cannot express it (moe_grouped_topk.cpp's
+    # parse_score_func takes only sigmoid/sqrtsoftplus), which is why the adapter picks GPT_DEVICE.
+    pytest.param("mistral_small_4", GateComputeMode.GPT_HOST, id="mistral_small_4-gpt_host"),
+    pytest.param("mistral_small_4", GateComputeMode.GPT_DEVICE, id="mistral_small_4-gpt_device"),
 ]
 
 
@@ -362,9 +383,15 @@ def _validate_gate(
         broadcast_groups=n_tp_devices,
     )
 
+    # Compare the selected-weight distributions, not their slot alignment. The top-k slot is a write
+    # offset that tt_reduce's weighted sum collapses, so a device order differing from torch's near a
+    # selection tie leaves the routed output unchanged -- and the slots are ordered by score+bias while
+    # the values are the unbiased scores, so transposing two near-tied slots writes two materially
+    # different weights and costs a position-wise PCC as much as a genuine mis-route does. Membership
+    # is covered above by recall_topk_indices, which pairs every expert with its own weight.
     pcc_scores = validate_composed(
-        host_tt_topk_scores,
-        reference_topk_scores,
+        host_tt_topk_scores.sort(dim=-1, descending=True).values,
+        reference_topk_scores.sort(dim=-1, descending=True).values,
         1,
         n_sp_devices,
         compare_pcc(scores_pcc_threshold, label="pcc_scores"),
@@ -391,9 +418,9 @@ def _ci_unsupported_param_combos_forward_pass(**params):
 
     if not on_ci:
         return False
-    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
+    if gate_fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE):
+        return False
+    return True
 
 
 def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
@@ -505,6 +532,7 @@ def test_forward_pass(
     gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
 
     # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
     use_real = gate_model == "dsv3" and use_real_weights
@@ -546,9 +574,9 @@ def test_forward_pass(
     else:
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.93
-        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
-        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
+        # Order-insensitive since pcc_scores sorts both sides, so near-tie slot swaps no longer cost
+        # anything and every model clears this without a per-model relaxation.
+        scores_pcc_threshold = 0.98
         scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
@@ -565,6 +593,95 @@ def test_forward_pass(
     )
 
 
+def _real_rows_per_sp_device(actual_isl: int, n_sp_devices: int, rows_per_device: int) -> list[int]:
+    """Right-padded real-token count on each SP device (sequential layout), as build_padding_config derives it."""
+    return [min(rows_per_device, max(0, actual_isl - d * rows_per_device)) for d in range(n_sp_devices)]
+
+
+@pytest.mark.parametrize(
+    "gate_model, gate_fallback_mode",
+    [case for case in REGULAR_GATE_CASES if case.values[1] == GateComputeMode.GPT_DEVICE],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_gpt_device_gate_padded_rows(
+    gate_model, gate_fallback_mode, mesh_device, device_params, num_links, expect_error
+):
+    """GPT_DEVICE's padding-aware path (_sentinel_padded_rows) against the same gate run unpadded.
+
+    Real rows must be bit-identical to the unpadded run (same input, same program) and every padded
+    row must carry the n_routed_experts sentinel that dispatch/combine key on. The same gate instance
+    then sentinels a second, shorter row count, which a mask cached from the first shape would get
+    wrong, and rejects a left-padded call, which the helper cannot express.
+    """
+    random.seed(42)
+    torch.manual_seed(42)
+
+    config = _gate_config(gate_model)
+    config.ccl_config["NUM_LINKS"] = num_links
+    config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[config.ccl_config["TP_AXIS"]]
+    adjust_shapes_for_testing(config, mesh_device)
+
+    gate_w = _zero_bias_if_bias_free(gate_model, create_gate_weights(config.n_routed_experts, config.dim))
+    n_sp_devices = mesh_device.shape[0]
+    rows = config.sp_dim
+    k = config.n_activated_experts
+    torch_input = _make_gate_input(config, rows * n_sp_devices, allow_real_input=False)
+    tt_input = _shard_gate_input(config, mesh_device, torch_input)
+
+    tt_model = TtMoEGatePrefill(
+        config,
+        mesh_device,
+        weight=gate_w["weight"],
+        bias=gate_w["e_score_correction_bias"],
+        fallback_mode=gate_fallback_mode,
+    )
+    sp_composer = get_sp_mesh_composer(mesh_device)
+
+    def compose(t, n_rows):
+        return ttnn.to_torch(t, mesh_composer=sp_composer).view(n_sp_devices, n_rows, -1).to(torch.int64)
+
+    # Leading SP devices full, one a quarter full (so the half-length check below cuts inside it), the rest padding.
+    actual_isl = rows * (n_sp_devices * 5 // 8) + rows // 4
+    real = _real_rows_per_sp_device(actual_isl, n_sp_devices, rows)
+    assert any(0 < r < rows for r in real), f"test needs a partially padded device, got real rows {real}"
+    padding_config = tt_model.build_padding_config(actual_isl)
+
+    _, tt_full_indices, _ = tt_model(tt_input)
+    full = compose(tt_full_indices, rows)
+    assert (full < config.n_routed_experts).all(), "unpadded gate must never emit the sentinel"
+    _, tt_padded_indices, _ = tt_model(tt_input, actual_isl=actual_isl, padding_config=padding_config)
+    padded = compose(tt_padded_indices, rows)
+
+    sentinel = config.n_routed_experts
+    for d, real_d in enumerate(real):
+        assert torch.equal(padded[d, :real_d], full[d, :real_d]), f"SP device {d}: real rows changed"
+        assert (padded[d, real_d:] == sentinel).all(), f"SP device {d}: padded rows not sentinel-marked"
+
+    # Same gate, shorter row count (a short prompt after a long one): masks must follow the shape.
+    half = rows // 2
+    assert half % ttnn.TILE_SIZE == 0, f"{half} rows per device is not tile aligned"
+    _, tt_full_indices, _ = tt_model(tt_input)
+    tt_half = ttnn.slice(tt_full_indices, [0, 0], [half, k])
+    half_full = compose(tt_half, half)
+    tt_half_padded = tt_model._sentinel_padded_rows(tt_half, padding_config)
+    half_padded = compose(tt_half_padded, half)
+    for d, real_d in enumerate(real):
+        keep = min(real_d, half)
+        assert torch.equal(
+            half_padded[d, :keep], half_full[d, :keep]
+        ), f"SP device {d}: real rows changed at {half} rows"
+        assert (
+            half_padded[d, keep:] == sentinel
+        ).all(), f"SP device {d}: padded rows not sentinel-marked at {half} rows"
+
+    with expect_error(ValueError, "right-padding only"):
+        tt_model(tt_input, actual_isl=actual_isl, padding_side="left", padding_config=padding_config)
+
+
 # Hash gate compute modes: HASH_HOST reuses the reference HashRouter on host and ships results to
 # device; HASH_DEVICE runs the fully on-device moe_hash_gate (fused tid2eid[input_ids] lookup).
 HASH_GATE_MODES = [
@@ -573,6 +690,17 @@ HASH_GATE_MODES = [
 ]
 
 
+def _ci_unsupported_param_combos_hash_gate(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_compute_mode = params["gate_compute_mode"]
+    if not on_ci:
+        return False
+    if gate_compute_mode != GateComputeMode.HASH_DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(
@@ -702,6 +830,7 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
     # Scaling the dim to EMB_SIZE / 4 puts every model off its real router's width, so the checkpoint
     # weights cannot be loaded here and the golden is built from seeded synthetic weights instead.
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
     torch_input = _make_gate_input(config, config.sp_dim * n_sp_devices, allow_real_input=False)
     reference_logits = torch_input @ gate_w["weight"].T
     reference_topk_indices, reference_topk_scores = _reference_topk(
@@ -728,5 +857,5 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
         reference_logits,
         0.95,
         0.997,
-        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.93),
+        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.98),
     )

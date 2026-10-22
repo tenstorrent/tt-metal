@@ -147,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "Ct"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     bind_self_loop(reader, TARGET_DFB, "target");
     bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
@@ -196,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"num_tiles_per_core", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target.tensor_spec()});
@@ -333,7 +333,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Ct", "Wt"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     bind_self_loop(reader, TARGET_DFB, "target");
     bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
@@ -381,7 +381,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"num_tiles_per_core", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target.tensor_spec()});
@@ -523,7 +523,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "num_inner_tile", "C", "Ct"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     bind_self_loop(reader, TARGET_DFB, "target");
     bind_self_loop(reader, OUTPUT_GRAD_DFB, "output_grad");
@@ -571,7 +571,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
             {
                 .runtime_arg_names = {"num_tiles_per_core", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target_spec});

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -28,12 +29,15 @@ struct MeshRingPlan {
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     uint32_t ring_size = 0;
-    uint32_t num_links = 0;
-    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
-    tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
-    std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::optional<uint64_t> route_plan_hash;
+};
+
+// What the edge proof concluded about the geometry in `plan`: Ring where the walk closed, Linear
+// where it only resolved as an open path. Deliberately not a field of the plan -- closure is what
+// decides whether the end ranks have a neighbor, so it is passed explicitly rather than defaulted.
+struct ResolvedMeshRoute {
+    MeshRingPlan plan;
+    tt::tt_fabric::Topology topology;
 };
 
 struct MeshRingPosition {
@@ -48,6 +52,18 @@ ttnn::MeshCoordinate snake_ring_coordinate(
     const tt::tt_metal::distributed::MeshShape& shape,
     ttnn::ccl::snake_ring::Orientation orientation);
 
+// Normalises a possibly-negative tensor dim against `rank`; nullopt when out of range in either direction, so a
+// stale Shard dim left behind by a rank-changing op never matches anything (and never throws).
+std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank);
+
+// `coords` is the row-major walk of a `shape`-sized block of the mesh anchored at `coords.front()`. With the device
+// mesh's shape that is exactly MeshCoordinateRange(shape), in order -- the device order a 1-D mapper shards in; with
+// an N-D mapper's distribution shape it is the sub-mesh whose axes the mapper's placements describe one by one.
+bool has_row_major_mesh_coordinates(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    const tt::tt_metal::distributed::MeshShape& shape);
+
+// The tensor's label coordinates are the row-major walk of its whole device mesh.
 bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor);
 
 bool placement_shards_tensor_dim(
@@ -70,16 +86,27 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
 
 // Resolve an axis line/ring or select the first legal full-mesh snake. For a
 // full mesh, row orientation is preferred and column orientation is the
-// fallback; only orientations with an even lane count are candidates.
-std::optional<MeshRingPlan> resolve_mesh_ring_plan(
+// fallback. The two tiers select differently: a cycle candidate must also have
+// an even lane count in that orientation, because that is what lets the walk
+// return to rank 0, while an open path has no closing edge to place and so
+// tries both orientations.
+//
+// allow_open_path can return a route whose end ranks lack a neighbor one way -- a schedule assuming a ring will hang.
+std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     const ttnn::Tensor& tensor,
     std::optional<uint32_t> cluster_axis,
     uint32_t num_links,
     const std::array<tt::tt_fabric::Topology, 2>& axis_topology,
     bool log_rejection = true,
-    std::string_view operation_name = "mesh ring");
+    std::string_view operation_name = "mesh ring",
+    bool allow_open_path = false);
 
+// topology is the route the caller's schedule assumes: Ring gives every rank both neighbors, Linear
+// leaves the two end ranks dead one way, as an axis line does.
 MeshRingPosition get_mesh_ring_position(
-    const ttnn::Tensor& tensor, const ttnn::MeshCoordinate& coordinate, const MeshRingPlan& plan);
+    const ttnn::Tensor& tensor,
+    const ttnn::MeshCoordinate& coordinate,
+    const MeshRingPlan& plan,
+    tt::tt_fabric::Topology topology);
 
 }  // namespace ttnn::operations::ccl::common

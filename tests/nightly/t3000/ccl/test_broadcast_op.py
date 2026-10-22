@@ -152,7 +152,10 @@ def run_broadcast_impl(
 
     for i in range(num_iters):
         # Create sender tensor
-        if rand_tensor:
+        if input_dtype in (ttnn.uint32, ttnn.int32):
+            # Integer rows are checked exactly; keep values below 2**31 so they survive the int32 round trip.
+            sender_tensor = torch.randint(0, 2**31 - 1, output_shape, dtype=torch.int32)
+        elif rand_tensor:
             sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
         else:
             sender_tensor = torch.arange(1, 1 + torch.prod(torch.tensor(output_shape)), dtype=torch.bfloat16).reshape(
@@ -230,7 +233,7 @@ def run_broadcast_impl(
             assert (
                 received.shape == sender_tensor.shape
             ), f"Shape mismatch: received {received.shape}, expected {sender_tensor.shape}"
-            if input_dtype == ttnn.bfloat16:
+            if input_dtype in (ttnn.bfloat16, ttnn.uint32, ttnn.int32):
                 eq, output = comp_equal(received, sender_tensor)
             else:
                 eq, output = comp_pcc(received, sender_tensor)
@@ -318,6 +321,17 @@ def run_broadcast_impl(
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
+        # Non-bf16 row-major row longer than the fabric max payload (5120 B > 4352 B): the row is split
+        # across packets, and each packet must still leave room for its header in the router slot.
+        (
+            8,
+            0,
+            1,
+            [1, 1, 1, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.uint32,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
     ],
     ids=[
         "2-dev-DRAM",
@@ -330,6 +344,7 @@ def run_broadcast_impl(
         "2-dev-L1-2",
         "4-dev-DRAM-3",
         "4-dev-DRAM-5D",
+        "8-dev-DRAM-uint32-row-over-payload",
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])

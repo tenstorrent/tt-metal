@@ -121,9 +121,3 @@ template <typename T, typename Tag>
 struct std::hash<ttsl::StrongType<T, Tag>> {
     std::size_t operator()(const ttsl::StrongType<T, Tag>& h) const noexcept { return std::hash<T>{}(*h); }
 };
-
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt

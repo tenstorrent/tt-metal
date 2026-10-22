@@ -17,7 +17,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim even in [2,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
@@ -42,18 +42,28 @@ Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
 """
 
+from dataclasses import dataclass
+
+import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
-from helpers.pack import pack_bfp16, pack_fp32
+from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CRK_TILE_DIMM, IN_FACE_DIMS, NUM_FACES
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    CUSTOM_MM_CALLS,
+    IN_FACE_DIMS,
+    NUM_FACES,
+    TemplateParameter,
+)
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize, untilize
+from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -68,25 +78,42 @@ SUPPORTED_M = (1, 2, 4, 8)
 _PACKERS = {
     DataFormat.Float16_b: pack_bfp16,
     DataFormat.Float32: pack_fp32,
+    DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
+    DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
 }
+
+_BFP_UNPACKERS = {
+    DataFormat.Bfp8_b: unpack_bfp8_b,
+    DataFormat.Bfp4_b: unpack_bfp4_b,
+}
+
+
+@dataclass
+class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
 
 
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
 
-    Mirrors compressed_utils.CompressedStimuliConfig but plain: no meta / buffer_C, and B
-    is a plain (Float16_b or Float32) tile stream rather than a packed BFP one.
+    Mirrors compressed_utils.CompressedStimuliConfig but has no meta / buffer_C. The
+    focused odd-K cases also use a uniform BFP4_b or BFP8_b stream for B.
     """
 
-    def __init__(self, kt, ct, in_format, out_format, packed_a, packed_b):
+    def __init__(self, kt, ct, in0_format, in1_format, out_format, packed_a, packed_b):
         super().__init__(
             buffer_A=torch.zeros(
                 1, dtype=torch.float32
             ),  # placeholder; real bytes below
-            stimuli_A_format=in_format,
+            stimuli_A_format=in0_format,
             tile_count_A=kt,
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
-            stimuli_B_format=in_format,
+            stimuli_B_format=in1_format,
             tile_count_B=kt * ct,
             stimuli_res_format=out_format,
             tile_count_res=ct,
@@ -101,25 +128,44 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(M, kt, ct, formats, dest_acc):
+def _run_custom_mm(
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    calls=CUSTOM_MM_CALLS(),
+    preserve_zero_flag=False,
+    operands=None,
+):
+    """Run custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
-    in_format = formats.input_format
+    in0_format = formats.input_format
+    in1_format = formats.input_format_B
     out_format = formats.output_format
-    packer = _PACKERS[in_format]
+    in0_packer = _PACKERS[in0_format]
+    in1_packer = _PACKERS[in1_format]
 
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.float32)
-    torch_b = torch.randn((K, N), dtype=torch.float32)
+    if operands is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.float32)
+        torch_b = torch.randn((K, N), dtype=torch.float32)
+    else:
+        torch_a, torch_b = operands
 
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
     for i in range(kt * 2):
-        packed_a += packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
+        packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
     # in1 (B -> SrcA): kt*ct full [32,32] tiles, k-major / c-minor -- the order the SrcA
     # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles).
     packed_b = b""
+    golden_b = torch_b.clone()
     for r in range(kt):
         for c in range(ct):
             blk = torch_b[
@@ -129,13 +175,23 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
             # Face-major (tilized) layout inside each 32x32 tile. Tilize in the input
             # format so the returned dtype matches the packer (pack_fp32 rejects a
             # bfloat16 tensor, which is tilize's default Float16_b dtype).
-            packed_b += packer(
-                tilize(
-                    blk.reshape(-1),
-                    stimuli_format=in_format,
-                    tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-                )
+            tiled_blk = tilize(
+                blk.reshape(-1),
+                stimuli_format=in1_format,
+                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
             )
+            packed_tile = in1_packer(tiled_blk)
+            packed_b += packed_tile
+            if in1_format in _BFP_UNPACKERS:
+                golden_b[
+                    r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
+                    c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
+                ] = untilize(
+                    _BFP_UNPACKERS[in1_format](packed_tile),
+                    tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+                ).reshape(
+                    DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM
+                )
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in the result reorder below. Instantiate MatmulGolden directly (not via
@@ -143,14 +199,17 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
     # narrow-M reshape.
     golden = MatmulGolden()(
         torch_a,
-        torch_b,
+        golden_b,
         out_format,
         MathFidelity.LoFi,
         input_A_dimensions=[M, K],
         input_B_dimensions=[K, N],
         tilize=False,
-        input_A_format=in_format,
-        input_B_format=in_format,
+        input_A_format=in0_format,
+        # BFP inputs were round-tripped through the exact bytes written to L1 above.
+        input_B_format=(
+            DataFormat.Float16_b if in1_format in _BFP_UNPACKERS else in1_format
+        ),
     ).reshape(M, N)
 
     configuration = TestConfig(
@@ -158,6 +217,8 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
         formats,
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            calls,
+            CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -165,7 +226,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
         variant_stimuli=CustomMMStimuliConfig(
-            kt, ct, in_format, out_format, packed_a, packed_b
+            kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
         ),
         dest_acc=dest_acc,
     )
@@ -206,6 +267,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc):
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
+    return res_tensor
 
 
 # LoFi-only per the header ("fidelity: LoFi only"). Float16_b (16-bit dest) and Float32
@@ -214,7 +276,7 @@ CUSTOM_MM_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
-# kt is even in [2,256]; small values keep L1 in budget while still accumulating over K.
+# kt is in [1,256]; small even values cover the paired MOP path.
 KT_DIMS = [2, 4]
 
 # ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
@@ -238,3 +300,122 @@ def _dest_acc_for(formats):
 )
 def test_custom_mm(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
+
+
+ODD_K_CASES = [
+    pytest.param(
+        1,
+        1,
+        1,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k1-ct1-bfp4-post1",
+    ),
+    pytest.param(
+        1,
+        9,
+        1,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+        ),
+        id="k9-ct1-bfp8-post0",
+    ),
+    pytest.param(
+        1,
+        9,
+        2,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k9-ct2-bfp4-post1",
+    ),
+    pytest.param(
+        8,
+        9,
+        3,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+        ),
+        id="k9-ct3-bfp8-post0",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", ODD_K_CASES)
+def test_custom_mm_odd_k(formats, M, kt, ct):
+    """Exercise the single-K replay tail with both unpack tunings."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, the way the blaze
+# Matmul drives row blocks. The kernel holds math back before each call, so the unpacker enters
+# the next call while math still holds SrcB; a both-bank SrcB clear issued there by an execute
+# (rather than once by the init) drops the SrcA writes it overlaps.
+MULTI_CALL_CASES = [
+    # (id, M, kt, ct, calls, in1 format)
+    ("m1-ct1", 1, 32, 1, 16, DataFormat.Float16_b),
+    ("m8-ct1", 8, 32, 1, 16, DataFormat.Float16_b),
+    ("m1-ct2", 1, 16, 2, 8, DataFormat.Float16_b),
+    ("m1-ct1-bfp8", 1, 32, 1, 16, DataFormat.Bfp8_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
+    )
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@blackhole_only
+@pytest.mark.parametrize("ct", [1, 2])
+def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
+    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
+    ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
+    of the product.
+    """
+    M, kt = 8, 2
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.float32) / OPERAND_SCALE
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
+    )
+    torch_b = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    res = _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(torch_a, torch_b),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"

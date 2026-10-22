@@ -33,7 +33,8 @@ from transformers import AutoConfig, AutoModelForCausalLM
 import ttnn
 from models.experimental.llama32_1b_quasar.lightweightmodule import LightweightModule
 from models.experimental.llama32_1b_quasar.models.executor import EagerLLMExecutor, TracedLLMExecutor
-from models.experimental.llama32_1b_quasar.models.llama32_1b import weight_utils
+from models.experimental.llama32_1b_quasar.models.llama32_1b import pcc_log, weight_utils
+from models.experimental.llama32_1b_quasar.utility_functions import is_quasar
 from models.experimental.llama32_1b_quasar.modules.attention.attention_1d import (
     Attention1D,
     Attention1DConfig,
@@ -381,10 +382,17 @@ class _Llama32_1BWHTuning:
     # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. ~Parity on
     # tiny 1B (matmuls small vs fixed overhead) but kept on for consistency + long-prompt prefill.
     prefill_minimal_matmul: bool = True
+    # True when running on a Quasar device; flips the arch-sensitive knobs below.
+    is_quasar: bool = False
+    # Compute grid for the SDPA program configs. WH/BH keep the tuned (8, 8); Quasar uses the device's
+    # actual (smaller) grid, since (8, 8) does not exist on the emulator.
+    sdpa_grid: tuple[int, int] = (8, 8)
 
 
-def _resolve_llama32_1b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llama32_1BWHTuning:
-    """Pick WH tuning knobs.
+def _resolve_llama32_1b_wh_tuning(
+    *, num_dev: int, max_batch_size: int, mesh_device: ttnn.MeshDevice | None = None
+) -> _Llama32_1BWHTuning:
+    """Pick WH tuning knobs (with Quasar overrides when running on a Quasar device).
 
     TTTv1 (model_config.py): prefill_len_cutoff defaults to 1024 on Wormhole and is only
     reduced to 512 for an explicit model/device allowlist (Llama-3.1-8B, Llama-3.2-11B,
@@ -396,10 +404,26 @@ def _resolve_llama32_1b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llam
     t.mlp_prefill_len_cutoff = 1024
     t.mlp_decode_spill_w1_to_dram = False
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
+
+    # --- Quasar overrides -------------------------------------------------------------------------
+    # minimal_matmul pins an 8x8/8x10 compute grid (attention_1d.py / mlp_1d.py) that does not exist on
+    # the Quasar emulator, so force the ttnn.linear fallback there. The decode SDPA grid is also (8,8)
+    # by default; use the device's real grid on Quasar. NOTE: the DRAM-sharded decode matmuls
+    # (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) are still WH/BH-only
+    # (get_optimal_dram_bank_to_logical_worker_assignment TT_ASSERTs WH/BH) and need a separate
+    # interleaved/1D conversion before the decode path runs on Quasar — see the e2e test's TODO.
+    if is_quasar():
+        t.is_quasar = True
+        t.prefill_minimal_matmul = False
+        if mesh_device is not None:
+            g = mesh_device.compute_with_storage_grid_size()
+            t.sdpa_grid = (g.x, g.y)
+
     logger.info(
-        f"MLP tuning for Llama-3.2-1B on {num_dev} device(s): "
+        f"Tuning for Llama-3.2-1B on {num_dev} device(s) (quasar={t.is_quasar}): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}, sdpa_grid={t.sdpa_grid}"
     )
     return t
 
@@ -476,7 +500,7 @@ def _build_decoder_layer(
             # and performance). Attention1D's generic default builds this prog config with
             # exp_approx_mode=False, leaving decode SDPA slower than TTTv1. Flip it to match.
             decode_sdpa_prg_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=wh.sdpa_grid,
                 exp_approx_mode=True,
                 q_chunk_size=0,
                 k_chunk_size=0,
@@ -533,6 +557,17 @@ def _build_decoder_layer(
             dtype=ttnn.bfloat16,
             cache=(cache_path / "norm", f"{prefix}_{name}") if cache_path else None,
         )
+        if is_quasar():
+            # Quasar interleaved-decode refactor: route the decode RMSNorm off the WIDTH-sharded path,
+            # whose all-to-all mcast reduction fails on the Quasar sim (tile-counter posted=0/acked=2 --
+            # mcast does not post receiver DFB credits; repro: test_quasar_sharded_rmsnorm_mcast_fault.py).
+            # decode_in_sharded=False + decode_out_sharded=False -> RMSNorm1D._decode_local_interleaved
+            # (program_config=None, no mcast). Safe here because the decode residual is already
+            # DRAM-interleaved (decode_residual_memcfg=DRAM) and _all_gather_rmsnorm_tensor is a no-op on
+            # 1 device. The (unused) sharded program/memory configs are dropped.
+            extra = {k: v for k, v in extra.items() if k not in ("decode_program_config", "decode_memory_config")}
+            extra["decode_in_sharded"] = False
+            extra["decode_out_sharded"] = False
         return RMSNorm1D.from_config(
             RMSNorm1DConfig(
                 weight=lw,
@@ -706,6 +741,29 @@ class Llama32_1BTransformer1D(LightweightModule):
         """
         ttnn.SetDefaultDevice(mesh_device)
         cache_path = Path(cache_dir) if cache_dir else None
+        if is_quasar():
+            # Quasar HW does not support the legacy block-float formats bf8_b / bf4_b (it uses MX formats).
+            # A bf8_b/bf4_b tensor cannot live in a Quasar Gen2 DFB (is_data_format_supported == false ->
+            # TT_FATAL). Upload every block-float weight as bf16 (a supported format) for bring-up. Also
+            # bypass the LazyWeight cache: its key does not encode the dtype, so a cached bf8_b tensor would
+            # reload as bf8_b regardless of this override.
+            import dataclasses as _dc
+
+            _bf = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+            _repl = {f.name: ttnn.bfloat16 for f in _dc.fields(precision) if getattr(precision, f.name, None) in _bf}
+            if _repl:
+                precision = _dc.replace(precision, **_repl)
+                logger.info(
+                    f"[quasar] block-float weight dtypes -> bf16 (bf8_b/bf4_b unsupported on Quasar): {sorted(_repl)}"
+                )
+            if cache_path is not None:
+                # The LazyWeight cache key does not encode the dtype, so reusing the existing (bf8_b) cache
+                # would reload bf8_b and defeat the override. Give Quasar its OWN bf16 cache subdir instead
+                # of disabling the cache: the first run uploads fresh + caches the bf16 weights, later runs
+                # load them from cache (a fresh weight upload is ~70s on the functional sim, so caching
+                # matters). The bf8_b cache (WH/BH) is left untouched.
+                cache_path = cache_path / "quasar_bf16"
+                logger.info(f"[quasar] using Quasar bf16 weight cache subdir: {cache_path}")
         num_dev = mesh_device.get_num_devices()
         tt_ccl = get_tt_ccl(mesh_device) if num_dev > 1 else None
         topology = default_topology(mesh_device)
@@ -781,7 +839,7 @@ class Llama32_1BTransformer1D(LightweightModule):
             )
         )
 
-        wh = _resolve_llama32_1b_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size)
+        wh = _resolve_llama32_1b_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size, mesh_device=mesh_device)
 
         layers: list[TransformerBlock1D] = [
             _build_decoder_layer(
@@ -816,6 +874,9 @@ class Llama32_1BTransformer1D(LightweightModule):
                 eps=hf_cfg.rms_norm_eps,
                 max_batch_size=max_batch_size,
                 tt_ccl=tt_ccl,
+                # Quasar interleaved-decode: route the final RMSNorm off the sharded mcast path too
+                # (see _build_norm above / test_quasar_sharded_rmsnorm_mcast_fault.py).
+                **({"decode_in_sharded": False, "decode_out_sharded": False} if is_quasar() else {}),
             )
         )
 
@@ -865,14 +926,19 @@ class Llama32_1BTransformer1D(LightweightModule):
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         page_table: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        if pcc_log.is_enabled():
+            pcc_log.reset_op_log()
         x = x_embed
         for i, layer in enumerate(self.layers):
             x = ttnn.to_memory_config(x, self.decode_residual_memcfg, self.activation_dtypes[i])
             x = layer.decode_forward(x, current_pos, rot_mats, page_table)
+            x = pcc_log.log_op(f"layer{i}.decode", x, self.mesh_device)
 
         x = _all_gather_rmsnorm_tensor(self.norm, x, memory_config=self.norm.config.decode_memory_config)
         x = self.norm.decode_forward(x)
+        x = pcc_log.log_op("norm.decode", x, self.mesh_device)
         x = self.lm_head.forward(x)
+        x = pcc_log.log_op("lm_head.decode", x, self.mesh_device)
         return x
 
     def prefill_forward(
@@ -889,6 +955,8 @@ class Llama32_1BTransformer1D(LightweightModule):
         # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
         # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
         # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
+        if pcc_log.is_enabled():
+            pcc_log.reset_op_log()
         x = x_embed
         for i, layer in enumerate(self.layers):
             activation_dtype = self.activation_dtypes[i]
@@ -897,6 +965,7 @@ class Llama32_1BTransformer1D(LightweightModule):
                 x = ttnn.typecast(x, activation_dtype)
                 ttnn.deallocate(old)
             x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
+            x = pcc_log.log_op(f"layer{i}.prefill", x, self.mesh_device)
 
         if get_last_token == -1:
             return x

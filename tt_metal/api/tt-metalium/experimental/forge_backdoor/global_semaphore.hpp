@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 // clang-format off
@@ -27,16 +30,6 @@ namespace tt::tt_metal::experimental {
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
-
-[[deprecated(
-    "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,

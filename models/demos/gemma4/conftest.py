@@ -10,6 +10,25 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 _DEFAULT_MAX_PREFILL = 8192
 
 
+def pytest_configure(config):
+    # Registered here (not tests/conftest.py) because demo/text_demo.py also uses this
+    # marker and is not under tests/, so a conftest.py scoped to tests/ would leave it
+    # unregistered there and pytest would emit PytestUnknownMarkWarning for every demo
+    # test collected with this marker.
+    config.addinivalue_line(
+        "markers",
+        "gemma4_hf_direct_parity: Direct model prefill/decode PCC vs HuggingFace reference",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_batched_prefill: Batched multi-user prefill integration and perf",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
+    )
+
+
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
     parser.addoption(

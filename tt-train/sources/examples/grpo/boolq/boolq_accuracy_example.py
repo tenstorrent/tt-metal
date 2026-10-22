@@ -11,15 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence, Iterator
 
-# `utils` lives one level up, in the shared examples/grpo directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The `grpo` package lives two levels up, in the examples directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.llama_completer import LlamaCompletionCtx
-from utils.llama_completer import LlamaGRPOCompleter
+from grpo.utils.llama_completer import LlamaCompletionCtx
+from grpo.utils.llama_completer import LlamaGRPOCompleter
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."

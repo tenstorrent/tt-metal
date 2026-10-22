@@ -68,6 +68,14 @@ inline void llk_unpack_AB_matmul_impl(
     WAYPOINT("UPMD");
 }
 
+// Matmul in1 maps to hardware SrcA. CB page sizes already use unpacker address units.
+inline void llk_unpack_AB_matmul_set_in1_column_stride(
+    const std::uint32_t in1_cb_id, const std::uint32_t stride_tiles) {
+    const std::uint32_t operand_id = get_operand_id(in1_cb_id);
+    const std::uint32_t tile_size = get_local_cb_interface(operand_id).fifo_page_size;
+    _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
+}
+
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -100,16 +108,21 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces));
 
-    llk::san::unpack_operand_check(
-        llk::san::IGNORE,
-        unpack_src_format[operandA_id],
-        unpack_src_format[operandB_id],
-        unpack_dst_format[operandA_id],
-        unpack_dst_format[operandB_id],
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
+    SAN_HOOK(init<OperationUnpackMatmul>(
+        StateVal<OperationUnpackMatmul::Transpose>(transpose),
+        StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
+        StateVal<OperationUnpackMatmul::RtDim>(rt_dim),
+        StateVal<OperationUnpackMatmul::KtDim>(kt_dim),
+        StateVal<OperationUnpackMatmul::PartialFaceA>(partial_face_a),
+        StateVal<OperationUnpackMatmul::PartialFaceB>(partial_face_b),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(unpA_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(unpB_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
     llk_unpack_AB_matmul_init_impl(
         transpose,
@@ -158,16 +171,22 @@ inline void llk_unpack_AB_matmul(
         get_operand_num_faces(operandB_id),
         get_operand_num_faces(operandA_id)));
 
-    llk::san::unpack_operand_check(
-        llk::san::IGNORE,
-        unpack_src_format[operandB_id],
-        unpack_src_format[operandA_id],
-        unpack_dst_format[operandB_id],
-        unpack_dst_format[operandA_id],
-        get_operand_face_r_dim(operandB_id),
-        get_operand_face_r_dim(operandA_id),
-        get_operand_num_faces(operandB_id),
-        get_operand_num_faces(operandA_id));
+    SAN_HOOK(execute<OperationUnpackMatmul>(
+        StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
+        StateVal<OperationUnpackMatmul::RtDim>(rt_dim),
+        StateVal<OperationUnpackMatmul::KtDim>(kt_dim),
+        StateVal<OperationUnpackMatmul::PartialFaceA>(partial_face_a),
+        StateVal<OperationUnpackMatmul::PartialFaceB>(partial_face_b),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandA_id)),
+        StateDiscard<std::uint32_t>(tile_index_a),
+        StateDiscard<std::uint32_t>(tile_index_b)));
 
     llk_unpack_AB_matmul_impl(
         base_address_a,

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.modules.tt_ccl import get_num_links as get_common_num_links
+from models.common.tt_ccl import get_num_links as get_common_num_links
 
 
 def get_num_links(mesh_device, cluster_axis=None):
@@ -109,6 +109,9 @@ class TT_CCL:
         return self.rs_semaphore_handles[semaphore_index][current_idx]
 
 
+_DEFAULT_RS_MEMORY_CONFIG = object()
+
+
 def tt_all_reduce(
     input_tensor,
     mesh_device,
@@ -119,7 +122,7 @@ def tt_all_reduce(
     num_all_gather_links=None,
     topology=ttnn.Topology.Linear,
     memory_config=None,
-    rs_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    rs_memory_config=_DEFAULT_RS_MEMORY_CONFIG,
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
@@ -147,6 +150,9 @@ def tt_all_reduce(
     Returns:
         The reduced tensor.
     """
+    if rs_memory_config is _DEFAULT_RS_MEMORY_CONFIG:
+        rs_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     # Skip CCL if single device or only 1 device on the target axis
     mesh_shape = list(mesh_device.shape)
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):

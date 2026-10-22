@@ -3,6 +3,13 @@
 # MPI network interface validation and auto-detection utility
 # Used by exabox cluster scripts to ensure valid MPI interface selection
 
+# True when the environment excludes TCP interfaces, e.g. a container that exports
+# OMPI_MCA_btl_tcp_if_exclude. Open MPI refuses an include alongside it, so callers then skip
+# detection and pass no btl_tcp_if_include. An inherited include is overridden by --mca as usual.
+mpi_if_set_by_env() {
+    [[ -n "${OMPI_MCA_btl_tcp_if_exclude:-}" ]]
+}
+
 # Function to test if a given network interface works for MPI communication
 test_mpi_interface() {
     local interface="$1"
@@ -14,7 +21,7 @@ test_mpi_interface() {
     fi
 
     # MPI OOB (out-of-band) connectivity test
-    timeout 3 mpirun --host "$test_host" \
+    timeout 30 mpirun --host "$test_host" \
         --mca oob_tcp_if_include "$interface" \
         --mca btl_tcp_if_include "$interface" \
         -np 1 hostname &>/dev/null

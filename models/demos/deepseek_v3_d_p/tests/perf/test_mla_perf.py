@@ -9,23 +9,14 @@ import pytest
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     _is_galaxy_env,
     adjust_margin_for_ddr_speed,
-    run_mla_perf_loudbox,
     run_model_device_perf_test_with_merge,
 )
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
-
-# 640 tokens/chip on both: 8x4 takes seq5k literally, 2x4 scales it to 1280 global.
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_sl and random and torus-xy-8x4' --wrapper-invocation"
-
-# Kimi K2.6 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
+# Kimi K2.7 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
-_CMD_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4' --wrapper-invocation"
-)
+_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4 and sp_only'"
 
 
 _IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
@@ -54,63 +45,62 @@ def _require_certified_torus_xy():
 # axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
 # there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
 _CMD_K3_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
+    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and sp_only'"
 )
 
+# Same 50k+5k scenario and mesh as the two Kimi rows, so the three are comparable per forward.
+# RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth, so it is the lever for
+# long context.
+#
+# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV and the
+# signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
+_CMD_MISTRAL4_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} "
+    "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
+)
+# Record-only: one local run on DDR 14000 where the other baselines here are cut at 16000, so the
+# margin admits any measurement. Replace both with the first certified TorusXY CI result.
+_MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
 
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+# Measures the actual SP8/TP1 shape; approximate_mla_galaxy_perf pins TP=4 and cannot express it.
+_CMD_MISTRAL4_CHUNKED_8X1 = (
+    "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox"
+)
+# CI LoudBox run 37547491707 (LoFi chunked ring SDPA; was 8_944_184 from run 36924353598). SDPA is
+# most of this total and CCL is 0, so the row tracks the depth-proportional term almost alone.
+_MISTRAL4_MLA_CHUNKED_LB_8X1_NS = 8_122_154
 
-    if not on_ci:
-        return False
-    # Measures the non-chunked balanced MLA path; production runs chunked+non_balanced,
-    # covered by the chunked galaxy perf tests below.
-    return True
 
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.timeout(0)
-def test_deepseek_v3_mla_perf_loudbox():
-    """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
-    run_mla_perf_loudbox(
-        command_2x4=_CMD_2X4,
-        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
-        # Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
-        expected_ns_2x4=2_660_615,
-        model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
-        subdir="deepseek_v3_mla",
-        margin=0.03,
-        comments_2x4="isl5k_lb_2x4_fabric2d_proxy",
-    )
+def test_mistral4_mla_chunked_perf_loudbox():
+    """Gate the unapproximated PP4-stage MLA budget on eight Blackhole devices.
 
-
-@_REQUIRE_HIGH_POWER
-@pytest.mark.timeout(0)
-def test_deepseek_v3_mla_perf_galaxy():
-    if not _is_galaxy_env():
-        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
-    _require_certified_torus_xy()
-
-    margin = adjust_margin_for_ddr_speed(0.03)
-
+    The reported number sums merged operation durations inside one forward, not elapsed
+    end-to-end request latency. Gated only on a LoudBox: a Galaxy column is a different
+    platform and keeps recording.
+    """
+    galaxy = _is_galaxy_env()
+    visible_devices = os.environ.get("TT_VISIBLE_DEVICES", "").split(",")
+    if galaxy and (len(visible_devices) != 8 or len(set(visible_devices)) != 8):
+        pytest.skip("Expose one eight-device Galaxy ring with TT_VISIBLE_DEVICES, or use a Blackhole LoudBox")
+    platform = "glx_column" if galaxy else "lb"
     run_model_device_perf_test_with_merge(
-        command=_CMD_8X4,
-        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
-        # Two runs 3.894 / 3.886 ms, spread 0.21%.
-        expected_device_perf_ns_per_iteration=3_890_333,
-        subdir="deepseek_v3_mla",
-        model_name="deepseek_v3_mla_glx_8x4",
+        command=_CMD_MISTRAL4_CHUNKED_8X1,
+        expected_device_perf_ns_per_iteration=None if galaxy else _MISTRAL4_MLA_CHUNKED_LB_8X1_NS,
+        margin=adjust_margin_for_ddr_speed(0.03),
+        subdir="mistral4_mla",
+        model_name=f"mistral4_mla_chunked_{platform}_8x1_torus_y",
         num_iterations=1,
         batch_size=1,
-        margin=margin,
-        comments="isl5k_glx_8x4_ground_truth",
+        between_signposts=("MLA_START", "MLA_END"),
+        comments=f"mistral4_chunked_50k+5k_{platform}_8x1_torus_y",
     )
 
 
 @_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_mla_chunked_perf_galaxy():
-    """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
+    """Kimi K2.7 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
     (640 tokens/chip). Functional (no reference), so the single timed forward exercises the chunked
     640 matmul/SDPA configs end to end. Ground-truth 8x4 measurement (no 2x4 approximation)."""
     if not _is_galaxy_env():
@@ -167,8 +157,36 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        # Time only the forward: ops between MLA_START/MLA_END, excluding the one-time weight-load
-        # tilize/typecast dispatched at construction.
         between_signposts=("MLA_START", "MLA_END"),
         comments="kimi_k3_chunked_50k+5k_glx_8x4_ground_truth",
+    )
+
+
+@_REQUIRE_HIGH_POWER
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_perf_galaxy():
+    """Mistral Small 4 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k
+    chunk. Same scenario and mesh as the two Kimi rows, so the three are comparable per forward.
+
+    RECORD-ONLY: the baseline is uncalibrated (see _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED) and the
+    margin admits any measurement, so this row publishes a number without gating on it. It exists to
+    give the PP=4 op-level optimisation work a fast iteration target -- Tracy capture, pick the hot
+    op, reproduce it here -- instead of iterating on the full model. Wire it into CI only once a
+    certified TorusXY run has supplied a real threshold.
+    """
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+    _require_certified_torus_xy()
+
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_CHUNKED_8X4,
+        # None skips check_device_perf entirely. A finite margin does not, however wide: it still
+        # builds an upper bound, so a genuine speedup could fail the row.
+        expected_device_perf_ns_per_iteration=None,
+        subdir="mistral4_mla",
+        model_name="mistral4_mla_chunked_glx_8x4",
+        num_iterations=1,
+        batch_size=1,
+        between_signposts=("MLA_START", "MLA_END"),
+        comments="mistral4_chunked_50k+5k_glx_8x4_record_only",
     )

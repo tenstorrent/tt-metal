@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -18,6 +19,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -34,12 +36,16 @@ from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
+
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
+_APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
@@ -51,14 +57,8 @@ def torch_equal_nan(a, b):
 def _ternary_default_specs(mathop, input_format):
     """Per-operand defaults for *mathop*: its registered domain, else the built-in one.
 
-    No ternary op has an _OP_DOMAIN_REGISTRY entry, so every op currently takes the
-    built-in branch. This is the single place a registered domain would take effect, and
-    callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
+    Callers of _run_sfpu_ternary override any operand to reach an edge the defaults
     exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
-
-    The registry branch reads spec_C rather than reusing spec_B for it: that reuse was correct
-    only while OperandSpecs had two operands, and keeping it would silently drop a registered C
-    domain on the one code path that exists to honour it.
     """
     if mathop in _OP_DOMAIN_REGISTRY:
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
@@ -83,9 +83,10 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    approx_mode=_APPROX_MODE,
+    clobber_lregs=False,
 ):
-    # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
-    # sitting near its tolerance pass or fail by luck. Same as the binary driver.
+    # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
 
     default_A, default_B, default_C = _ternary_default_specs(
@@ -123,16 +124,20 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        DISABLE_SRC_ZERO_FLAG(True),
+        DEST_SYNC(),
+    ]
+    if clobber_lregs:
+        templates.append(SFPU_CLOBBER_LREGS())
+
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
+        templates=templates,
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -163,9 +168,13 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # The op's declared accuracy contract for this exact variant, the same gate the
+    # binary driver applies: the whole contract, step budget included, since the ternary
+    # rows were measured over this driver's own variants. The mode the kernel compiled
+    # is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_against_contract(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
+    )
 
 
 @parametrize(
@@ -197,19 +206,48 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
     _run_sfpu_ternary(formats, dest_acc, mathop)
 
 
+# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
+# (tenstorrent/tt-llk#1701 items 2 and 5).
+_TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuSnakeBeta,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_RECIP_NEWTON_OPS,
+)
+def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
+    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
+            "sfpu_reciprocal_init programs its constants in both modes"
+        )
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode=ApproximationMode.Yes,
+        clobber_lregs=True,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Deliberate edge values on the third operand
 #
-# The random sweep holds c in uniform(1, 2) for addcdiv and snake_beta because both divide by
-# it, so the pole is unreachable by construction; this drives it.
-# `edge_spec(op, ..., operand=Operand.C)` resolves it through the usual metadata:
-#
-#   addcdiv    a + value * b / c    -> _OP_SINGULARITIES C = (0.0, BOTH)
-#   snake_beta a + sin(b*a)^2 / c   -> _OP_SINGULARITIES C = (0.0, BOTH)
-#   lerp       a + c * (b - a)      -> _OP_OPERAND_EDGE_POINTS C = (-1, 0, 1, 2)
-#   addcmul    a + value * b * c    -> nothing; a multiply has no pole, so edge_spec is None
-#
-# Only C gets edge values; A and B keep their random domains, since the divisor is the
+# The random sweep holds c away from zero for the ops that divide by it, so the pole is
+# unreachable by construction; these variants drive it, via each op's registered edge metadata.
+# Only C gets edge values: A and B keep their random domains, since the divisor is the
 # interesting operand and pinning all three would test one point rather than a spread.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -220,26 +258,16 @@ _TERNARY_EDGE_OPS = [
     MathOperation.SfpuSnakeBeta,
 ]
 
-# Ops that divide by c, and therefore need a numerator held away from zero.
-#
-# c = 0 with an unconstrained numerator mixes two questions: the pole with a nonzero numerator,
-# where every element should be ±inf, and 0/0, the indeterminate form already recorded against
-# div, fmod, remainder and xlogy in the binary suite. Measured on Blackhole, unconstrained
-# addcdiv and snake_beta fail only where the golden is NaN and agree on every ±inf, so holding
-# the numerator off zero turns a tolerated xfail into a real assertion about the pole. Driving
-# 0/0 here would want its own variant and xfail, as the binary suite splits classes.
+# Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
+# unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
+# form, which the binary suite covers as a class of its own.
 _TERNARY_DIVIDES_BY_C = frozenset(
     {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
 )
 
-# |x| >= 0.5 on both a and b. addcdiv's numerator is value * b, so b alone decides it;
-# snake_beta's is sin(b*a)^2, which vanishes only when b*a is an exact multiple of pi, and
-# holding both off zero keeps it clear of that too (|b*a| <= 1 < pi).
-#
-# Two specs differing only in seed: the seed is per-spec, so one spec shared by both operands
-# makes them bit-identical and every variant runs a == b -- which still reaches the pole on c,
-# but degenerates snake_beta from sin(b*a) to sin(a^2) and hides a kernel reading the wrong
-# operand. Seeded rather than defaulted so the streams stay reproducible while differing.
+# |x| >= 0.5 on both a and b, keeping both numerators off zero -- addcdiv's is value * b,
+# snake_beta's sin(b*a)^2. Two specs differing only in seed: one spec shared by both operands
+# would make every variant run a == b, hiding a kernel that reads the wrong operand.
 _TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
 _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
 
@@ -263,15 +291,13 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
         dest_acc=dest_acc,
     )
     if spec_C is None:
-        # addcmul: c is a multiplicand, so it has no pole and no knee, and cat B is gated on
-        # SPECIALS_READY_OPS. The random sweep already covers everything a probe could add.
+        # addcmul: c is a multiplicand, so there is no pole or knee for a probe to reach.
         pytest.skip(
             reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
             "pipeline"
         )
 
-    # Keep the numerator off zero for the dividing ops, so the variant asserts the pole
-    # rather than the 0/0 indeterminate form. See _TERNARY_DIVIDES_BY_C.
+    # Keep the numerator off zero so the variant asserts the pole, not 0/0.
     nonzero = mathop in _TERNARY_DIVIDES_BY_C
     _run_sfpu_ternary(
         formats,
@@ -339,7 +365,6 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
-    # For "mixed" case, use the generated stimuli as-is
 
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
@@ -350,7 +375,7 @@ def test_ttnn_where(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],
@@ -400,8 +425,7 @@ def test_ttnn_where(
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
-# MCW test with dynamic format sweeping like main test
-# Use same input/output format - no mixing
+# MCW test: the main test's format sweep, input format == output format.
 @parametrize(
     formats=input_output_formats(
         [
@@ -422,8 +446,6 @@ def test_ttnn_where_mcw(
     # Multi-tile tensor dimensions (2x2 tiles of 32x32).
     height = 64
     width = 64
-
-    # Generate dtype dynamically based on current input format
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
@@ -453,7 +475,7 @@ def test_ttnn_where_mcw(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],

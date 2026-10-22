@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -26,11 +27,10 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_mapping(dfb::mapping);  // scratch: mapping-page FIFO (consumer)
     DataflowBuffer dfb_in_tiles(dfb::in_tiles);  // input-tile FIFO (consumer)
-    DataflowBuffer dfb_working(dfb::working);  // L1 scratch page (self-loop producer+consumer)
+    Scratchpad<uint8_t> working(scratch::working);  // writer-private L1 scratch page
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
-    dfb_working.reserve_back(1);
-    const uint32_t working_write_addr = dfb_working.get_write_ptr();
+    const auto working_mem = working.local_mem();
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
         dfb_mapping.wait_front(1);
         const uint32_t map_addr = dfb_mapping.get_read_ptr();
@@ -55,15 +55,16 @@ void kernel_main() {
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
-            const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
+            const auto output_mem = working_mem + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
             const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
-            tt_memmove<false, true, false, Tile_size_bytes>(noc, output_addr, input_addr, szbytes);
+            tt_memmove<false, true, false, Tile_size_bytes>(
+                noc, output_mem, CoreLocalMem<uint8_t>(input_addr), szbytes);
         }
         noc.async_write_barrier();
 
         const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
-        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_write_addr, output_noc_addr, Tile_size_bytes);
+        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_mem, output_noc_addr, Tile_size_bytes);
         noc.async_write_barrier();
 
         dfb_mapping.pop_front(1);
@@ -75,5 +76,4 @@ void kernel_main() {
         noc.async_write_barrier();
         dfb_in_tiles.pop_front(1);
     }
-    dfb_working.push_back(1);
 }

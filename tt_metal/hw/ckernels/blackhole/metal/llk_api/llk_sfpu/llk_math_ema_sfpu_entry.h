@@ -7,18 +7,27 @@
 #include <cstdint>
 #include "llk_math_eltwise_ternary_sfpu.h"
 #include "sfpu/ckernel_sfpu_ema.h"
+#include "sanitizer/api.h"
 
 namespace ckernel {
 
-inline void llk_math_ema_sfpu_init() { _llk_math_eltwise_ternary_sfpu_init_<SfpuType::unused>(); }
+inline void llk_math_ema_sfpu_init() {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::unused>();
+}
 
 inline void llk_math_ema_sfpu_load_alpha_beta(std::uint32_t alpha, std::uint32_t beta) {
+    SAN_HOOK(unsupported());
     sfpu::_load_alpha_beta_(alpha, beta);
 }
 
-inline void llk_math_ema_sfpu_clear_previous_output() { sfpu::_clear_previous_output_(); }
+inline void llk_math_ema_sfpu_clear_previous_output() {
+    SAN_HOOK(unsupported());
+    sfpu::_clear_previous_output_();
+}
 
 inline void llk_math_ema_sfpu_tile(std::uint32_t input_dst_index) {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_start_(input_dst_index);
     sfpu::_calculate_ema_tile_();
     _llk_math_eltwise_sfpu_done_();

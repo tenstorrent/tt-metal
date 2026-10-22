@@ -197,13 +197,14 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init
 }
 
 // Initialize for single face transpose
-template <bool is_32bit = false>
+template <bool is_32bit = false, std::uint32_t num_tiles = 3>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_()
 {
     // num_tiles=3: transpose scores(0) + idx(1) + BIAS(2). The bias (tile 2) MUST be math->standard'd too,
     // else the combine's bias round-trip packs a math-layout bias -> 2-period-corrupted sort key (the 256
     // output path never reads bias, so num_tiles=2 was enough there; the >256 combine merge sorts by bias).
-    generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<3, is_32bit>();
+    static_assert(num_tiles == 2 || num_tiles == 3, "step2 transposes scores/indices and optionally bias");
+    generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<num_tiles, is_32bit>();
 }
 
 // copy4rows init/runner.

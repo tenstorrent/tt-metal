@@ -10,6 +10,9 @@
 #include <tuple>
 
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 namespace ttsl::json {
 template <typename T>
@@ -21,6 +24,9 @@ struct from_json_t;
 namespace tt::tt_metal {
 
 class MemoryConfigImpl;
+
+// Defined in experimental/tensor_serialization_support.hpp, which includes this header.
+struct PrepopulatedShardSpecs;
 
 class MemoryConfig final {
 public:
@@ -52,12 +58,14 @@ public:
         "shard_spec",
         "nd_shard_spec",
         "created_with_nd_shard_spec",
-        "per_core_allocation");
+        "per_core_allocation",
+        "range_lockstep_allocation");
     std::tuple<
         const TensorMemoryLayout&,
         const BufferType&,
         const std::optional<ShardSpec>&,
         const std::optional<NdShardSpec>&,
+        const bool&,
         const bool&,
         const bool&>
     attribute_values() const;
@@ -69,12 +77,7 @@ public:
     const MemoryConfigImpl& impl() const;
 
 private:
-    friend MemoryConfig create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout memory_layout,
-        BufferType buffer_type,
-        std::optional<ShardSpec> shard_spec,
-        std::optional<NdShardSpec> nd_shard_spec,
-        bool created_with_nd_shard_spec);
+    friend MemoryConfig create_memory_config_with_prepopulated_shard_specs(PrepopulatedShardSpecs specs);
 
     MemoryConfig(
         TensorMemoryLayout memory_layout,

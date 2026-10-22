@@ -114,7 +114,7 @@ def run(
         torch_grad_tensor,
         torch_input_tensor_a,
         torch_input_tensor_b,
-        rounding_mode if rounding_mode != "None" else None,
+        rounding_mode=rounding_mode if rounding_mode != "None" else None,
     )
 
     grad_tensor = ttnn.from_torch(

@@ -175,6 +175,7 @@ def build_compute_kernel(
     dst_full_sync_en=False,
     math_fidelity=None,
     defines=None,
+    math_approx_mode=None,
 ):
     """kernel_source is a full repo-relative path. compile_time_args is a list of uint32.
     math_fidelity is an optional ttnn.MathFidelity (defaults to the descriptor default when None).
@@ -182,6 +183,8 @@ def build_compute_kernel(
     cfg_kwargs = dict(fp32_dest_acc_en=fp32_dest_acc_en, dst_full_sync_en=dst_full_sync_en)
     if math_fidelity is not None:
         cfg_kwargs["math_fidelity"] = math_fidelity
+    if math_approx_mode is not None:
+        cfg_kwargs["math_approx_mode"] = math_approx_mode
     return ttnn.KernelDescriptor(
         kernel_source=kernel_source,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,

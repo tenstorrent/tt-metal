@@ -9,6 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
 #include <tt-metalium/constants.hpp>
@@ -35,7 +36,8 @@ void kernel_main() {
 
     // The input-shard NoC coordinate tables ride as runtime varargs: noc_x values at vararg
     // indices [0, in_num_cores), noc_y values at [in_num_cores, 2 * in_num_cores).
-    const uint32_t q_start_addr = TensorAccessor(tensor::qkv_in).get_bank_base_address();
+    // Raw: same L1 address on the source cores (no handle form yet).
+    const uint32_t q_start_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::qkv_in));
 
     uint32_t device_batch_offset = 0;
 
@@ -120,8 +122,13 @@ void kernel_main() {
 
             if (num_tiles_read_cur_core == num_tiles_per_core) {
                 cur_core_idx++;
-                qkv_noc_x = get_vararg(cur_core_idx);
-                qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                // After the last tile of the last input core cur_core_idx == in_num_cores: the
+                // coordinate tables have no entry for it and the coordinates are never used again,
+                // so skip the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                if (cur_core_idx < in_num_cores) {
+                    qkv_noc_x = get_vararg(cur_core_idx);
+                    qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                }
                 qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                 num_tiles_read_cur_core = 0;
             }
@@ -174,8 +181,13 @@ void kernel_main() {
 
                 if (num_tiles_read_cur_core == num_tiles_per_core) {
                     cur_core_idx++;
-                    qkv_noc_x = get_vararg(cur_core_idx);
-                    qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                    // After the last tile of the last input core cur_core_idx == in_num_cores: the
+                    // coordinate tables have no entry for it and the coordinates are never used again,
+                    // so skip the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                    if (cur_core_idx < in_num_cores) {
+                        qkv_noc_x = get_vararg(cur_core_idx);
+                        qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
@@ -229,8 +241,13 @@ void kernel_main() {
 
                 if (num_tiles_read_cur_core == num_tiles_per_core) {
                     cur_core_idx++;
-                    qkv_noc_x = get_vararg(cur_core_idx);
-                    qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                    // After the last tile of the last input core cur_core_idx == in_num_cores: the
+                    // coordinate tables have no entry for it and the coordinates are never used again,
+                    // so skip the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                    if (cur_core_idx < in_num_cores) {
+                        qkv_noc_x = get_vararg(cur_core_idx);
+                        qkv_noc_y = get_vararg(in_num_cores + cur_core_idx);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }

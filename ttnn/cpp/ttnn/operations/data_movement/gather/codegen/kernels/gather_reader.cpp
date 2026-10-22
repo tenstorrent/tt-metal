@@ -102,7 +102,18 @@ void kernel_main() {
                             for (uint32_t l = 0; l < face_size; l++) {
                                 const uint32_t global_index = get_value_from_tile(index_l1, count, index_df_size);
 
-                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                // Bound reads to cb_input's allocated Wt_input tiles to prevent
+                                // an out-of-bounds L1 load (#55819). Invalid-index output remains
+                                // unspecified, including reads of logical input padding. Streaming
+                                // instead skips indices that do not match the current chunk.
+                                // The pow2 form folds to a constant at Wt_input == 1, where the compare
+                                // is a measurable fraction of the element loop.
+                                uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                if constexpr ((Wt_input & (Wt_input - 1)) == 0) {
+                                    tile_idx &= (Wt_input - 1);
+                                } else if (tile_idx >= Wt_input) {
+                                    tile_idx = Wt_input - 1;
+                                }
                                 const uint32_t index_in_local_tile = global_index & tile_width_mask;
                                 const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
                                 const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
@@ -133,7 +144,16 @@ void kernel_main() {
                                 // Map global_index to local_index in tiled layout:
                                 // tile_idx = which input tile along W
                                 // index_in_local_tile = position within that tile
-                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                // Bound reads to the allocated input tiles, not the logical axis.
+                                // Invalid-index output remains unspecified (#55819).
+                                // The pow2 form folds to a constant at Wt_input == 1, where the compare
+                                // is a measurable fraction of the element loop.
+                                uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                if constexpr ((Wt_input & (Wt_input - 1)) == 0) {
+                                    tile_idx &= (Wt_input - 1);
+                                } else if (tile_idx >= Wt_input) {
+                                    tile_idx = Wt_input - 1;
+                                }
                                 const uint32_t index_in_local_tile = global_index & tile_width_mask;
                                 const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
                                 const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;

@@ -168,6 +168,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
     matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
     matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
+    matmul/device/factory/matmul_unified_program_factory.cpp
     # reshape_view
     reshape_view/reshape.cpp
     reshape_view/reshape_common.cpp
@@ -192,9 +193,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     tilize_with_val_padding/tilize_with_val_padding.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
     # to_layout (composite host op; no device op / kernels)
     to_layout/to_layout_op.cpp

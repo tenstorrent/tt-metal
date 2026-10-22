@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -25,6 +26,7 @@
 * Input 0 * Input 1 -> SrcB * SrcA
 * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]
 * Output is a matrix block of dimension [rt_dim, ct_dim]
+* Operand tile shapes are read from circular-buffer metadata. The 2x path requires full 32x32 tiles.
 */
 template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_matmul_init(
@@ -46,6 +48,8 @@ inline void llk_math_matmul_init(
     };
     const DataFormat srcB_format = matmul_src_reg_format(operandA_id);
     const DataFormat srcA_format = matmul_src_reg_format(operandB_id);
+    const ckernel::TensorShape src_b_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape src_a_shape = get_operand_tensor_shape(operandB_id);
     LLK_ASSERT(
         is_2x_format(srcA_format) == is_2x_format(srcB_format),
         "SrcA and SrcB must both be 2x formats or both non-2x formats");
@@ -70,9 +74,14 @@ inline void llk_math_matmul_init(
     }
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
     if (src_2x) {
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
+            srcA_format, srcB_format, ct_dim, rt_dim, src_b_shape, src_a_shape);
     } else {
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(ct_dim, rt_dim);
+        LLK_ASSERT(
+            ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
+            "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(
+            srcA_format, srcB_format, ct_dim, rt_dim, src_b_shape, src_a_shape);
     }
 }
 
@@ -94,9 +103,8 @@ inline void llk_math_matmul_init(
 inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const bool deviated =
-        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
-        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
+    const bool deviated = (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
+                          (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
     if (!deviated) {
         return;
     }
@@ -119,7 +127,12 @@ inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint
  * Input 0 = 1 tile -> SrcB reg, Input 1 = 1 tile -> SrcA reg,
  * Output = 1 tile -> Dst reg at specified dst_index
  */
-inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matmul_tile_(dst_index); }
+inline void llk_math_matmul_tile(const std::uint32_t dst_index) {
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_matmul_tile: dst_index exceeds dest capacity");
+    _llk_math_matmul_tile_(dst_index);
+}
 
 /**
  *
@@ -138,5 +151,8 @@ inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matm
  *
  */
 inline void llk_math_matmul_block(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    LLK_ASSERT(
+        (ct_dim * rt_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_matmul_block: ct_dim * rt_dim exceeds dest capacity");
     _llk_math_matmul_block_(ct_dim, rt_dim);
 }

@@ -3,12 +3,23 @@ name: "(Galaxy) Sanity"
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-        default: wormhole_b0
+      # The health suite runs on a scheduled run regardless. These 3 inputs shape a
+      # dispatch only.
+      run-health-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the Galaxy health suite as well as the sanity suite"
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+        description: "Health suite: cover wh_galaxy"
+      blackhole:
+        required: false
+        type: boolean
+        default: false
+        description: "Health suite: cover bh_galaxy"
       platform:
         required: false
         type: choice
@@ -34,12 +45,31 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    # Every 2 hours (UTC)
-    - cron: "0 */2 * * *"
+    - cron: "0 */4 * * *" # every 4 hours, 6 runs a day, the cadence the health suite had
 
-run-name: "(Galaxy) Sanity"
+run-name: >-
+  (Galaxy) Sanity
+  Tests[sanity${{ (github.event_name == 'schedule' || inputs.run-health-tests) && ',health' || '' }}]
 
 jobs:
+  # One place for the wormhole / blackhole -> SKU mapping the health suite needs.
+  select-skus:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/resolve-galaxy-skus
+          sparse-checkout-cone-mode: true
+      - id: skus
+        uses: ./.github/actions/resolve-galaxy-skus
+        with:
+          wormhole: ${{ inputs.wormhole }}
+          blackhole: ${{ inputs.blackhole }}
+          event-name: ${{ github.event_name }}
+
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
@@ -65,3 +95,15 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  # Health suite, from the former "(Galaxy) Health" pipeline. Same plain build as sanity.
+  galaxy-health-test:
+    needs: [check-harbor, select-skus, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-health-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-health-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.select-skus.outputs.enabled-skus }}

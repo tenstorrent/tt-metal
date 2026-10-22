@@ -119,6 +119,7 @@ jobs:
           WHEEL_FILENAME: ${{ env.WHEEL_FILENAME }}
           UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
           PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
+          GIT_SHA: ${{ github.sha }}
           HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
@@ -138,7 +139,14 @@ jobs:
           SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
           SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
           SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
-          SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
+          # Pin to the exact commit this release is built from, never a
+          # branch name. release-models clones tt-metal itself and builds from
+          # source instead of installing the wheel, and the smoke test then
+          # checks the repo out at github.sha into /work, whose cwd wins kernel
+          # resolution. A floating ref lets a commit that lands between the
+          # release commit and the image build put host and JIT'd kernel
+          # sources on different commits (tt-metal#57437 vs run 35939400922).
+          SET+="${TARGET}.args.GIT_REF=${GIT_SHA}"$'\n'
           # RUN steps (apt-get, curl, uv pip) need the proxy too. BuildKit
           # sets these build args in every RUN automatically, no ARG
           # declaration needed.

@@ -17,14 +17,14 @@ class AttentionWeights:
 
 def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> AttentionWeights:
     def load_2d(name):
-        t = state_dict[f"{name}.weight"].T.contiguous()
         return ttnn.as_tensor(
-            t,
+            state_dict[f"{name}.weight"],
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"self_attn.{name}.weight") if tensor_cache_path else None,
+            preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
         )
 
     def load_norm(name):

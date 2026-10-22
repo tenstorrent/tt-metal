@@ -287,7 +287,7 @@ inline bool assert_check(uint32_t stream_id, bool hang) {
     uint32_t debug_assert = NOC_STREAM_READ_REG(stream_id, STREAM_DEBUG_ASSERTIONS_REG_INDEX);
     if (debug_assert > 0 && hang) {
         while (true) {
-        };
+        }
     }
     return debug_assert > 0;
 }

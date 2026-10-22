@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -29,15 +31,15 @@ namespace tt::tt_metal {
 namespace detail {
 
 // Per-fixture-chain shared MeshDevice state. Two distinct instances exist across
-// the file — one for LLKMeshDeviceFixture (all chips), one for
-// LLKMeshDeviceSingleCardFixture (MMIO chips only). Derived variants
+// the file — one for LLKMeshDeviceFixture (up to two MMIO chips), one for
+// LLKMeshDeviceSingleCardFixture (one MMIO chip). Derived variants
 // (LLKMeshDeviceFixtureSlowDispatchOnly, LLKBlackholeSingleCardFixture,
 // LLKQuasarMeshDeviceSingleCardFixture) inherit shared_state() without
 // overriding it, so they reuse their base class's handles.
 struct LLKSharedDevices {
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
     tt::ARCH arch{tt::ARCH::Invalid};
-    uint32_t max_cbs{};
+    uint32_t max_dfbs{};
     bool initialized{false};
 
     void reset() {
@@ -78,7 +80,7 @@ inline void populate_shared_state(LLKSharedDevices& s, const std::vector<ChipId>
     for (auto& [_, device] : id_to_device) {
         s.devices.push_back(std::move(device));
     }
-    s.max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    s.max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
     s.initialized = true;
 }
 
@@ -89,7 +91,7 @@ void apply_shared_state(Fixture& f, const LLKSharedDevices& s) {
     f.slow_dispatch_ = slow_dispatch;
     f.arch_ = s.arch;
     f.devices_ = s.devices;
-    f.max_cbs_ = s.max_cbs;
+    f.max_dfbs_ = s.max_dfbs;
 }
 
 }  // namespace detail
@@ -109,10 +111,7 @@ protected:
 
         // Limit to 2 chips for CI throughput; same rationale as MeshDeviceFixture.
         // Use MMIO (host) chips only — same id source as the single-card LLK fixture.
-        size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices > 2) {
-            num_devices = 2;
-        }
+        size_t num_devices = std::min<size_t>(tt::tt_metal::GetNumAvailableDevices(), 2);
         const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
         std::vector<ChipId> ids(mmio.begin(), mmio.end());
         if (ids.size() > num_devices) {
@@ -156,6 +155,9 @@ protected:
 };
 
 class LLKMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
 protected:
     template <class F>
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
@@ -169,9 +171,8 @@ protected:
         if (s.initialized) {
             return;
         }
-        const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
-        std::vector<ChipId> ids(mmio.begin(), mmio.end());
-        detail::populate_shared_state(s, ids);
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        detail::populate_shared_state(s, {mmio_device_id});
     }
 
     // Per-suite cleanup; keep the static shared state empty at process shutdown.

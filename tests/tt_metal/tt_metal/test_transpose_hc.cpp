@@ -125,7 +125,7 @@ TEST_F(UnitMeshFixture, TransposeHC) {
     SetRuntimeArgs(program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
     SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

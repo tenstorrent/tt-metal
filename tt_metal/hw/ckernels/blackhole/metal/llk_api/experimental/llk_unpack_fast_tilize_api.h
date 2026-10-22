@@ -6,6 +6,7 @@
 
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_fast_tilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK FAST TILIZE SRC A (BH)
@@ -13,16 +14,19 @@
 
 inline void llk_unpack_fast_tilize_init(
     const std::uint32_t operand, std::uint32_t full_dim, std::uint32_t init_unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim, init_unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_tilize_uninit() {
+    SAN_HOOK(unsupported());
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
 
 inline void llk_unpack_fast_tilize_reinit_xdim(const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     _llk_unpack_fast_tilize_reinit_xdim_(unit_dim);
 }
 
@@ -31,6 +35,7 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t tile_index,
     const std::uint32_t unit_dim,
     const std::uint32_t col_start = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t src_format = unpack_src_format[operand_id];

@@ -117,8 +117,9 @@ struct CoreSplit {
 // num_cores from their ordinal, so an ordinal at or above the extra-work core count must never
 // receive a second work unit -- which holds only while gather_assigned_cores() numbers ordinals in
 // the same order the splitter carved the extra-work group, and that order is column-major.
-CoreSplit split_gather_work(IDevice* device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
-    const auto grid = device->compute_with_storage_grid_size();
+CoreSplit split_gather_work(
+    const MeshDevice& device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
+    const auto grid = device.compute_with_storage_grid_size();
     const uint32_t device_cores = static_cast<uint32_t>(grid.x * grid.y);
     const CoreRangeSet candidate = sub_core_grids.has_value()
                                        ? sub_core_grids.value()
@@ -272,7 +273,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
         attributes.index_ht_per_batch};
 
     auto* device = in_t.device();
-    const auto split = split_gather_work(device, attributes.sub_core_grids, geometry.Ht);
+    const auto split = split_gather_work(*device, attributes.sub_core_grids, geometry.Ht);
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
@@ -350,7 +351,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     const uint32_t total_work = geometry.Ht * geometry.Wt_index;
 
     auto* device = in_t.device();
-    const auto split = split_gather_work(device, attributes.sub_core_grids, total_work);
+    const auto split = split_gather_work(*device, attributes.sub_core_grids, total_work);
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
@@ -427,7 +428,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
         attributes.index_ht_per_batch};
 
     auto* device = in_t.device();
-    const auto split = split_gather_work(device, attributes.sub_core_grids, geometry.Wt_index);
+    const auto split = split_gather_work(*device, attributes.sub_core_grids, geometry.Wt_index);
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();

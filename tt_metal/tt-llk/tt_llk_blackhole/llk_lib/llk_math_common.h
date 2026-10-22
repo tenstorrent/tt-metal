@@ -10,7 +10,6 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel::math;
 
@@ -31,9 +30,6 @@ using namespace ckernel::math;
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    // LLK sanitizer hooks
-    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
-
     // SFPU_Fp32_enabled (written below) is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
@@ -77,7 +73,7 @@ inline void _llk_math_reconfig_remap_(const bool remap_enable)
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    }; // Wait for previous packs to finish before claiming all dest
+    } // Wait for previous packs to finish before claiming all dest
 
     // Untilize mode needs dest read access with a stride of 16
     // Following bits are needed for enabling stride of 16
@@ -119,6 +115,30 @@ inline void _llk_math_dest_section_done_()
 }
 
 /**
+ * @brief Clear the acquired DST section from MATH instead of clearing it on PACK release.
+ *
+ * Call immediately after acquiring the section, before any DST writes, and use PACK release without clearing throughout the kernel.
+ * DST writes must stay between acquire and commit; commit drains them before the next acquisition.
+ * Unpack-to-DST must wait for MATH's ready signal; there must be no independent DST writer.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_math_clear_dest_section_()
+{
+    // Startup or the preceding commit has already drained this thread's DST writes.
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+    }
+    // Do not let SFPU writes or an unpack-to-DST ready signal overtake the clear.
+    TTI_STALLWAIT(p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::MATH);
+}
+
+/**
  * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
  *
  * Waits for any in-flight packs to finish, then seeds the MATH_PACK semaphore (max count 1 for SyncFull, 2 for
@@ -133,7 +153,7 @@ inline void _llk_math_pack_sync_init_()
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0)
     {
-    }; // Wait for previous packs to finish before claiming all dest
+    } // Wait for previous packs to finish before claiming all dest
     if constexpr (Dst == DstSync::SyncFull)
     {
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_1);
@@ -165,8 +185,6 @@ inline void _llk_math_pack_sync_init_()
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -201,8 +219,6 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -238,8 +254,6 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(

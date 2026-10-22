@@ -166,7 +166,7 @@ class RunRecord(BaseModel):
     is_regression: Optional[Flag] = Field(None, description="Severity increased vs previous run (Data team).")
     fail_streak: Optional[int] = Field(None, description="Consecutive FAIL/ERROR runs (Data team).")
 
-    tier: Optional[str] = Field(None, description="light / medium / deploy.")
+    tier: Optional[str] = Field(None, description="light / medium / deploy / pre_reboot.")
     tool_version: Optional[str] = Field(None, description="diag tool version.")
     tt_smi_version: Optional[str] = Field(None, description="tt-smi version.")
     tt_kmd_version: Optional[str] = Field(None, description="tt-kmd version (from run wrapper; may be empty).")

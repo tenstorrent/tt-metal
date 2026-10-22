@@ -23,6 +23,12 @@ inline void calculate_lgamma_stirling() {
     constexpr float r0 = 0.0833333333f;   // 1/12
     constexpr float r1 = -0.0027777777f;  // -1/360
 
+    // Two of the log body's constants are bound here and held in LREGs across the loop; as
+    // literals inside the loop they would be re-materialised on every row. Two is what
+    // this loop has room for next to the reciprocal: a third fails to allocate.
+    const sfpi::vFloat log_ln2 = LogPolyNoInit::LN2;
+    const sfpi::vFloat log_d = LogPolyNoInit::D;
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat z = in;
@@ -32,7 +38,7 @@ inline void calculate_lgamma_stirling() {
         v_endif;
 
         // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
-        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
+        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z, log_ln2, log_d) - z + LOG_SQRT_2PI);
 
         // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
         sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
@@ -81,9 +87,7 @@ inline void calculate_lgamma_adjusted(
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         } else {
-            sfpi::vInt exp = sfpi::exexp(in);
-            sfpi::vInt man = sfpi::exman(in);
-            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }
 

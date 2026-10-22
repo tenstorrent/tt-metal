@@ -18,6 +18,7 @@
 #include <vector>
 #include <optional>
 #include "impl/kernels/kernel.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -39,7 +40,7 @@ void RunOneTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     CoreCoord coord = {0, 0};
     std::vector<uint32_t> compile_args{free};
@@ -89,7 +90,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             kernel_names.emplace_back(name);
         }
@@ -101,7 +102,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::ComputeGen2Config{},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -117,7 +118,14 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovementGen1Config{.processor = processor, .noc = noc},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .config_1xx =
+                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = processor,
+                                .noc = noc,
+                            },
+                    },
             });
             kernel_names.emplace_back(name);
         }

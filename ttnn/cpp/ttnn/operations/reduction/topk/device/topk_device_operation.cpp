@@ -189,6 +189,14 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             "TopK stable=true is not supported on {}: the bitonic top-k LLK only implements the stable "
             "network on Wormhole and Blackhole",
             arch);
+        // Stable tie-breaking against caller-supplied labels has no single defined contract:
+        // the comparator and fused engines break ties by the label VALUE, the rank-stamped
+        // engine by arrival POSITION, and they diverge when the labels are not monotonic in
+        // position. Reject the combination until a consumer fixes the contract.
+        TT_FATAL(
+            !tensor_args.indices.has_value(),
+            "TopK stable=true does not support a custom indices_tensor: tie-breaking against "
+            "caller-supplied labels is not defined. Use positional indices (indices_tensor=None).");
     }
 
     {

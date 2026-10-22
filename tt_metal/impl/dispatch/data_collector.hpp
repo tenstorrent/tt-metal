@@ -87,6 +87,15 @@ public:
     void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
     bool IsRealtimeProfilerActive() const;
 
+    // True while a profiler can still consume the per-program metadata recorded during dispatch
+    // (RecordProgramMetadata / RecordProgramSubDevice). Callers on the dispatch path check this
+    // instead of recording unconditionally: the recording costs a mutex and a keyed insert per
+    // program per device, and nothing outside the profiler reads the result. Lock-free so the
+    // check itself stays off the critical path.
+    bool IsProgramMetadataRecordingEnabled() const noexcept {
+        return program_metadata_recording_enabled_.load(std::memory_order_relaxed);
+    }
+
     void DumpData();
 
 private:
@@ -125,6 +134,9 @@ private:
 
     mutable std::mutex realtime_profiler_active_chips_mutex_;
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
+    // Cached "the device profiler is enabled, or a real-time profiler chip is live" predicate.
+    // Written under realtime_profiler_active_chips_mutex_, read lock-free from the dispatch path.
+    std::atomic<bool> program_metadata_recording_enabled_{false};
 };
 
 }  // namespace tt::tt_metal

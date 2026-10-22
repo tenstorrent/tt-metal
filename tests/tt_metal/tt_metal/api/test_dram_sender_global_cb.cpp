@@ -34,6 +34,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 
 #include "device_fixture.hpp"
+#include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/context/metal_context.hpp"
@@ -42,22 +43,7 @@
 
 namespace tt::tt_metal {
 
-class DramSenderGCBFixture : public BlackholeSingleCardFixture {
-protected:
-    void SetUp() override {
-        BlackholeSingleCardFixture::SetUp();
-        if (devices_.empty()) {
-            return;
-        }
-        const auto& hal = MetalContext::instance().hal();
-        if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-            GTEST_SKIP() << "DRAM programmable cores not enabled";
-        }
-        mesh_device_ = devices_[0].get();
-    }
-
-    distributed::MeshDevice* mesh_device_{};
-};
+class DramSenderGCBFixture : public DramSenderFixture {};
 
 // Sender 0's receivers as the physical NOC XY runtime args the smoke sender kernel expects,
 // translated through the device the program will run on.
@@ -139,11 +125,11 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     // green run read as proof.
     bool any_sender_placement_differs = false;
 
-    IDevice* reference_device = mesh_device_->get_devices().front();
+    auto* reference_device = mesh_device_->impl().get_devices().front();
     auto& cluster = MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
     std::vector<uint8_t> sender_state_bytes(sizeof(DramSenderStateBlock) + 2 * sizeof(uint32_t));
 
-    for (IDevice* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         for (uint32_t bank = 0; bank < num_banks; ++bank) {
             const std::vector<CoreCoord> device_senders = mesh_device_->impl().dram_sender_logical_cores(device, bank);
             ASSERT_EQ(device_senders.size(), kSendersPerBank);
@@ -539,7 +525,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
 
         // Kernel-local layout: noc_xy / config / data sit above the arena's GCB zone,
         // i.e. at the same offset as arena.kernel_working_region_base().
-        uint32_t cursor = align_up(drisc_l1_unreserved + DriscL1Arena::kGcbZoneSize);
+        uint32_t cursor = align_up(drisc_l1_unreserved + DriscL1Arena::kSenderStateZoneSize);
         const uint32_t noc_xy_addr = cursor;
         cursor += 2 * sizeof(uint32_t) * kNumReceivers;
         cursor = align_up(cursor);

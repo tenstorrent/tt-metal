@@ -11,6 +11,7 @@
     wh_n150_civ2:
       timeout: 15
   team: runtime
+  budget_type: pr_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
 
 - name: runtime validation smoke cpu-only
@@ -25,4 +26,5 @@
     github_hosted_cpu:
       timeout: 10
   team: runtime
+  budget_type: pr_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar

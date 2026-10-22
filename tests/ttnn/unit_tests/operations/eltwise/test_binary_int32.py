@@ -369,7 +369,7 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
-    x_torch = torch.tensor(
+    x_bits = torch.tensor(
         [
             [
                 19,
@@ -394,27 +394,61 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
         ],
         dtype=torch.int32,
     )
+    y_bits = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
 
-    y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
-    if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_uint32 = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_uint32 = y_torch.to(torch.int64) & 0xFFFFFFFF
-        x_torch = x_uint32.to(torch.int32)
-        y_torch = y_uint32.to(torch.int32)
+    if ttnn_dtype == ttnn.uint32:
+        torch_dtype = torch.uint32
+        x_torch = (x_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+        y_torch = (y_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+    else:
+        torch_dtype = torch.int32
+        x_torch = x_bits
+        y_torch = y_bits
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch_dtype)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
-        tt_out = tt_out.to(torch.int64)
-        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
-        assert torch.equal(tt_out, z_torch_uint64)
-    else:
-        assert torch.equal(tt_out, z_torch)
+    assert torch.equal(tt_out, z_torch)
+
+
+def test_bitwise_right_shift_uint32_out_of_range(device):
+    x_torch = torch.tensor(
+        [[0x80000000, 0xFFFFFFFF, 0x80000001, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF]],
+        dtype=torch.uint32,
+    )
+    y_torch = torch.tensor([[31, 32, 33, 66, 0x80000000, 0xFFFFFFFF]], dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    expected = golden_fn(x_torch, y_torch)
+    assert torch.equal(expected, torch.ones_like(expected))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.bitwise_right_shift(x_tt, y_tt), dtype=torch.uint32)
+
+    assert torch.equal(actual, expected)
+
+
+def test_logical_right_shift_uint32_out_of_range(device):
+    x_torch = torch.tensor(
+        [[0x80000000, 0xFFFFFFFF, 0x80000001, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF]],
+        dtype=torch.uint32,
+    )
+    y_torch = torch.tensor([[31, 32, 33, 66, 0x80000000, 0xFFFFFFFF]], dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.logical_right_shift)
+    expected = golden_fn(x_torch, y_torch)
+    assert torch.equal(expected, torch.tensor([[1, 0, 0, 0, 0, 0]], dtype=torch.uint32))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.logical_right_shift(x_tt, y_tt), dtype=torch.uint32)
+
+    assert torch.equal(actual, expected)
 
 
 @pytest.mark.parametrize(
@@ -431,7 +465,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 def test_logical_right_shift(device, ttnn_function, ttnn_dtype):
-    x_torch = torch.tensor(
+    x_bits = torch.tensor(
         [
             [
                 19,
@@ -456,25 +490,25 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype):
         ],
         dtype=torch.int32,
     )
+    y_bits = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
 
-    y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
-    if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_torch = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_torch = y_torch.to(torch.int64) & 0xFFFFFFFF
+    if ttnn_dtype == ttnn.uint32:
+        torch_dtype = torch.uint32
+        x_torch = (x_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+        y_torch = (y_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+    else:
+        torch_dtype = torch.int32
+        x_torch = x_bits
+        y_torch = y_bits
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch_dtype)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
-        tt_out = tt_out.to(torch.int64)
-        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
-        assert torch.equal(tt_out, z_torch_uint64)
-    else:
-        assert torch.equal(tt_out, z_torch)
+    assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
@@ -666,7 +700,7 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if ttnn_op == ttnn.div:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(output_tensor, torch_output_tensor)
 
@@ -778,7 +812,7 @@ def test_binary_div_int32_full_range(input_shapes, device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_div_int32_optional_output(device):
@@ -795,7 +829,7 @@ def test_div_int32_optional_output(device):
     ttnn.div(input_tensor_a, input_tensor_b, output_tensor=preallocated_tensor)
     output_tensor = ttnn.to_torch(preallocated_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize(
@@ -869,7 +903,7 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     if rounding_mode is not None:
         assert_equal(torch_output_tensor, output_tensor)
     else:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
@@ -923,7 +957,7 @@ def test_div_edge_cases(rounding_mode, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if rounding_mode is None:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
 
@@ -1061,7 +1095,9 @@ def test_div_inf_nan_cases(device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0, allow_nonfinite=True
+    )
 
 
 def test_div_exact_quotient_cases(device):
@@ -1214,7 +1250,7 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_edge_cases(device):
@@ -1258,7 +1294,7 @@ def test_divide_edge_cases(device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_inf_nan_cases(device):
@@ -1286,7 +1322,9 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0, allow_nonfinite=True
+    )
 
 
 def test_binary_scalar_div_int32(device):
@@ -1309,7 +1347,7 @@ def test_binary_scalar_div_int32(device):
     tt_out_trunc = ttnn.to_torch(z_tt_trunc)
     z_torch_trunc = torch.divide(x_torch, y_torch, rounding_mode="trunc")
 
-    assert_with_ulp(tt_out, z_torch, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1.0, allow_nonfinite=True)
     assert torch.equal(z_torch_floor, tt_out_floor)
     assert torch.equal(z_torch_trunc, tt_out_trunc)
 

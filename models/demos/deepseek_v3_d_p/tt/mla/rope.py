@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import NamedTuple, Optional
+
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
@@ -9,6 +11,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnR
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     block_cyclic_reorder,
     create_balanced_chunk_order,
+    llama4_scale_host,
     reorder_tensor_chunks,
 )
 
@@ -122,6 +125,143 @@ def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
     return perm
 
 
+class ChunkMetadata(NamedTuple):
+    """Per-chunk device state a captured trace reads at fixed addresses.
+
+    Fields 0-2 are the original contract and must stay in position: the chunked ops index them, so a
+    plain 3-tuple is still a valid metadata argument and every non-Mistral variant keeps passing one.
+
+    ``llama4_scale`` is Mistral's query-temperature buffer, here because it shares that lifetime --
+    allocated once, refreshed per chunk, read by a replay at a captured address. Advance all of it
+    with write_chunk_metadata. Field 3 is persistent while 0-2 are per-chunk, so iterating or
+    deallocating the whole tuple frees a buffer every later chunk still reads: reach for
+    ``.scalars`` whenever you mean "the per-chunk state".
+    """
+
+    slot_id: ttnn.Tensor
+    actual_start: ttnn.Tensor
+    actual_end: ttnn.Tensor
+    llama4_scale: Optional[ttnn.Tensor] = None
+
+    @property
+    def scalars(self) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """The three per-chunk scalars alone -- safe to iterate, write and deallocate."""
+        return (self.slot_id, self.actual_start, self.actual_end)
+
+
+def write_chunk_metadata(
+    metadata: tuple,
+    values: tuple,
+    *,
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    chunk_size_global: int,
+    sp_axis: int = 0,
+) -> None:
+    """Advance one chunk's metadata scalars and llama4 scale buffer together.
+
+    One function because both are per-chunk state a captured trace reads from fixed addresses, and the
+    scale is silent when stale: the buffer is initialised to ones, so a missed refresh applies no
+    temperature rather than failing, and the traced reference gate cannot see the difference: measured,
+    it moves that gate's asserted layers from 0.989719 to 0.981986, still clear of its 0.96 bar.
+    ``values`` is (slot_id, actual_start, actual_end).
+    """
+    assert len(values) == 3, f"expected 3 values, got {len(values)}"
+    assert len(metadata) >= 3, f"metadata must carry the 3 scalar tensors, got {len(metadata)}"
+    # A caller may still pass a plain 3-tuple (every variant without a query scale does).
+    scalars = metadata.scalars if isinstance(metadata, ChunkMetadata) else tuple(metadata)[:3]
+    for dst, val in zip(scalars, values):
+        host = ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, dst)
+    refresh_llama4_scale(
+        getattr(metadata, "llama4_scale", None), hf_config, mesh_device, values[1], chunk_size_global, sp_axis=sp_axis
+    )
+
+
+def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, sp_axis: int):
+    """(heads, width, shard_dims) for the query-scale buffer.
+
+    The allocator and the per-chunk writer below must agree exactly -- a mismatch surfaces only as a
+    copy_host_to_device_tensor failure at runtime -- so the shape contract is stated once.
+
+    The buffer is [1, 1, S, q_lora_rank]: ttMLA applies the scale to the q_a latent after its norm,
+    not to Q (see ttMLA._q_stem), so it has one head and the latent's width, which is TP-replicated.
+    """
+    del mesh_device  # the q_a latent is TP-replicated, so no dimension depends on the TP split
+    heads_local = 1
+    width = hf_config.q_lora_rank
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    return heads_local, width, shard_dims
+
+
+def _llama4_scale_host_for(
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    kv_actual_isl: int,
+    chunk_size_global: int,
+    sp_axis: int,
+) -> torch.Tensor:
+    """The host query-scale tensor for one chunk offset, in the allocator's shape.
+
+    Shared by the per-chunk writer below and RotarySetup.make_llama4_scale_buffer's populated mode --
+    the seven-argument llama4_scale_host call has to agree in both, and a mismatch surfaces only as a
+    copy_host_to_device_tensor failure at runtime.
+
+    Cast to bf16 BEFORE materializing: llama4_scale_host returns an fp32 stride-0 expand of a [S]
+    vector, so .contiguous() alone would write the whole tensor in fp32 and leave from_torch to
+    convert it -- twice the peak for a value both callers land on device as bf16 anyway. The fp32
+    computation itself is still fp32, which is what its docstring asks for.
+    """
+    rope_scaling = hf_config.rope_scaling
+    sp = mesh_device.shape[sp_axis]
+    heads_local, width, _ = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
+    assert chunk_size_global % sp == 0, f"sp ({sp}) must divide chunk_size_global ({chunk_size_global})"
+    return (
+        llama4_scale_host(
+            kv_actual_isl,
+            sp,
+            chunk_size_global // sp,
+            heads_local,
+            width,
+            rope_scaling["llama_4_scaling_beta"],
+            rope_scaling["original_max_position_embeddings"],
+        )
+        .to(torch.bfloat16)
+        .contiguous()
+    )
+
+
+def refresh_llama4_scale(
+    buf: Optional[ttnn.Tensor],
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    kv_actual_isl: int,
+    chunk_size_global: int,
+    *,
+    sp_axis: int = 0,
+) -> None:
+    """Rewrite the persistent query-scale buffer for one chunk. No-op when ``buf`` is None.
+
+    Must use the same actual_start written to metadata[1]; write_chunk_metadata does both.
+    """
+    if buf is None:
+        return
+    _, _, shard_dims = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
+    host = ttnn.from_torch(
+        _llama4_scale_host_for(hf_config, mesh_device, kv_actual_isl, chunk_size_global, sp_axis),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+    )
+    ttnn.copy_host_to_device_tensor(host, buf)
+
+
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 
@@ -138,6 +278,39 @@ class RotarySetup:
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
         self.use_nope = bool(getattr(hf_config, "mla_use_nope", False))  # Kimi-K3 path: no rope
+
+    def make_llama4_scale_buffer(
+        self, chunk_size_global: int, kv_actual_isl: Optional[int] = None
+    ) -> Optional[ttnn.Tensor]:
+        """Allocate Mistral's persistent query-scale buffer, or None for other variants.
+
+        Here because it is the same kind of object as cos/sin -- position-derived, SP-sharded on the
+        same axis -- but NOT returned in the rope_tensors dict: everything in there is build-once
+        static and this is rewritten every chunk. It belongs to ChunkMetadata. Ones-initialised so an
+        unrefreshed buffer is a no-op rather than garbage.
+
+        ``kv_actual_isl`` returns the buffer already carrying that offset's scale, in one host build
+        rather than ones-then-refresh. Used for the per-offset set the traced path pre-builds (#55126).
+        """
+        rope_scaling = getattr(self.hf_config, "rope_scaling", None) or {}
+        if rope_scaling.get("llama_4_scaling_beta") is None:
+            return None
+        heads_local, width, shard_dims = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.sp_axis)
+        host = (
+            torch.ones(1, heads_local, chunk_size_global, width, dtype=torch.bfloat16)
+            if kv_actual_isl is None
+            else _llama4_scale_host_for(
+                self.hf_config, self.mesh_device, kv_actual_isl, chunk_size_global, self.sp_axis
+            )
+        )
+        return ttnn.from_torch(
+            host,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.mesh_device.shape),
+        )
 
     def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.

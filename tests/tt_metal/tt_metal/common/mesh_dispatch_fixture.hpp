@@ -71,7 +71,7 @@ protected:
     bool slow_dispatch_{};
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     MeshDispatchFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
@@ -149,7 +149,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -165,10 +165,10 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto* device = mesh_device->get_devices()[0];
-        log_info(tt::LogTest, "Running test on device {}.", device->id());
+        const auto device_id = mesh_device->get_device_ids()[0];
+        log_info(tt::LogTest, "Running test on device {}.", device_id);
         run_function();
-        log_info(tt::LogTest, "Finished running test on device {}.", device->id());
+        log_info(tt::LogTest, "Finished running test on device {}.", device_id);
     }
 
     void DetectDispatchMode() {
@@ -182,7 +182,7 @@ protected:
         }
     }
 
-    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+    void init_max_dfbs() { max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers(); }
 };
 
 }  // namespace tt::tt_metal

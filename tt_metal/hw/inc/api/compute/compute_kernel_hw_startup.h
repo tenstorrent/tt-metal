@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include "api/compute/common.h"
+#include "api/compute/common_globals.h"
+#include "sanitizer/api.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 
@@ -57,6 +58,8 @@ namespace ckernel {
 // clang-format on
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
     // lands in SrcB and in1 (icb1) lands in SrcA, so the per-source state below is programmed with the
     // operands swapped. src_order is a template parameter, so reverse (and the selection below) is
@@ -85,6 +88,13 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
+#ifdef COMPUTE_SEMAPHORE_MAX
+    // Seed the compute semaphore (host-baked only when the kernel binds one): Value 0, Max = its capacity.
+    // TODO: once the Quasar compute API is ported to 2.0, move this into compute_semaphore_hw_startup()
+    // (semaphore_compute_impl.h) as an ARCH_QUASAR branch, called from the 2.0 hw_startup, and drop it here.
+    // https://github.com/tenstorrent/tt-metal/issues/60164
+    PACK((ckernel::trisc::t6_semaphore_init(ckernel::trisc::semaphore::PACK_UNPACK, 0, COMPUTE_SEMAPHORE_MAX)));
+#endif
 #endif
 }
 
@@ -100,7 +110,11 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kernel_hw_startup(icb0, icb0, ocb); }
+ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
+    compute_kernel_hw_startup(icb0, icb0, ocb);
+}
 
 // clang-format off
 /**
@@ -109,10 +123,10 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
  * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
- * and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
- * compute_kernel_hw_startup.
+ * and wait; MATH writes dest-acc CFG, drains until those writes have retired,
+ * and only then releases them -- the release is a RISC store, so the drain is
+ * what orders it behind the writes. Safe to call mid-kernel without
+ * re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -141,10 +155,10 @@ ALWI void enable_fp32_dest_acc() {
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
  * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
- * MATH and wait; MATH writes dest-acc CFG and releases them. Every thread
- * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
- * those writes are visible. Safe to call mid-kernel without re-running
- * compute_kernel_hw_startup.
+ * MATH and wait; MATH writes dest-acc CFG, drains until those writes have
+ * retired, and only then releases them -- the release is a RISC store, so the
+ * drain is what orders it behind the writes. Safe to call mid-kernel without
+ * re-running compute_kernel_hw_startup.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.

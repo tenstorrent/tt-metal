@@ -5,9 +5,9 @@
 // Cross-op unpacker-state restore test for `_llk_unpack_tilize_uninit_`.
 //
 // Goal: prove that after a `unpack_tilize` op, `_llk_unpack_tilize_uninit_`
-// restores the SrcA tile-descriptor (num_faces / Y-dim), the unpack config
-// word-0 (tilize_mode etc.), and `Tile_x_dim_cntx0` back to the canonical
-// operand baseline programmed by `configure_unpack_AB` — so that a *following*
+// restores the unpack config word-0 (tilize_mode etc.) and `Tile_x_dim_cntx0`
+// back to the canonical operand baseline programmed by
+// `configure_unpack_AB`, so that a *following*
 // op that uses the SAME operand baseline (and therefore performs NO data-format
 // reconfig) reads correct data.
 //
@@ -23,13 +23,12 @@
 // Run 1: plain `_llk_unpack_A_` datacopy of that tilized tile -> packed to the
 //         result buffer. On a correct build this is an identity copy of the
 //         tilized tile, so the result equals `TilizeGolden(src_A, num_faces)`.
-//         If uninit fails to restore the operand baseline (e.g. leaves the
-//         tile-descriptor Z-dim at a tilize-specific value, or leaves
-//         tilize_mode set), this datacopy is corrupted and the test fails.
+//         If uninit leaves `tilize_mode` set or `Tile_x_dim_cntx0` at a
+//         tilize-specific value, this datacopy is corrupted and the test fails.
 //
-// The `num_faces ∈ {1, 2}` cases specifically exercise the tile-descriptor
-// Z-dim restore (`_llk_unpack_tilize_uninit_` line restoring num_faces) that no
-// existing tilize test covers — every other uninit call site uses num_faces=4.
+// WH restores unpack config word-0 and `Tile_x_dim_cntx0`; BH additionally
+// re-establishes the descriptor Z/X-dim its init wrote. The `num_faces ∈ {1, 2}`
+// cases cover non-4-face operands, which no other tilize test reaches.
 
 #include <algorithm>
 #include <cstdint>
@@ -100,12 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the SrcA operand baseline this op mutated. NOTE: intentionally NO
     // `_llk_unpack_reconfig_data_format_srca_impl_` here, so this uninit is the
     // sole reset of the unpacker state before the next op.
-#ifdef ARCH_WORMHOLE
-    // Wormhole threads face_r_dim so the restore matches a tiny-tile operand baseline.
     _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
-#else
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces);
-#endif
 
     // ---- Run 1: plain datacopy of the tilized tile (same format, no reconfig) ----
     run = 1;

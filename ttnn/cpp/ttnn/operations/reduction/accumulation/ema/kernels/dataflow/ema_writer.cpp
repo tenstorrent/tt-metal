@@ -24,7 +24,7 @@ void kernel_main() {
     // ---------------
     const auto dst_accessor = TensorAccessor(tensor::dst);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_dst(dfb::dst);
 
     // Tile sizes

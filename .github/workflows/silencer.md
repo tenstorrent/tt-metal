@@ -13,6 +13,10 @@ description: |
   each pattern, and opens draft PRs (it cannot build tt-metal locally, and its PRs need a
   maintainer's approval before CI runs anyway). Never merges its own PRs.
 
+  Now supporting auto lock generation: editing this file regenerates silencer.lock.yml
+  automatically via the compile-agentic-workflows pre-commit hook, so contributors no
+  longer need to run `gh aw compile` by hand.
+
 on:
   # Scan twice a day (warnings live in *successful* runs too, so we do not wait
   # for failures the way ci-doctor does), plus on demand. Two explicit cron
@@ -129,20 +133,15 @@ safe-outputs:
       - sanity-tests
       - blackhole-e2e-tests
       - galaxy-profiler-tests
-      - galaxy-multi-user-isolation-tests
-      - galaxy-unit-tests
-      - models-t1-device-perf-tests
-      - galaxy-integration-tests
-      - galaxy-stress-tests
-      - galaxy-e2e-tests
+      - galaxy-tests
       - galaxy-sanity
-      - galaxy-health
-      - t3000-e2e-tests
-      - t3000-integration-tests
+      - models-t1-device-perf-tests
+      - galaxy-stress-tests
+      - t3000-tests
+      - t3000-dispatch-tests
       - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler
-      - t3000-unit-tests
 
       - models-t1-e2e-tests
       - models-t1-unit-tests
@@ -932,7 +931,7 @@ by category is only **where in that run's logs the evidence lives**:
   `build-artifact / Build Release` logs proves **nothing** here: that job never invokes the kernel
   compiler for these files, so the pattern reads as absent whether or not the fix is correct — a
   false-negative proof, which is exactly what went wrong on tenstorrent/tt-metal#52111. A non-gate
-  target like `t3000-unit-tests` is **not** weaker evidence than a gate for this category: it
+  target like `t3000-tests` is **not** weaker evidence than a gate for this category: it
   recompiles the affected kernels through its **own test-execution steps** triggering JIT, which
   has nothing to do with `build-artifact.yaml`.
 - **Categories 3, 5 and 6** (runtime warnings, log spam, over-verbose messages) — in the

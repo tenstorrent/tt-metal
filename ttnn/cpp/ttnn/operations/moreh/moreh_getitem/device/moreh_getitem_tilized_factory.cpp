@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -287,7 +288,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
                          "num_elements_per_alignment",
                          "num_alignment_width",
                      }},
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         });
 
         // ---- Writer kernel ----
@@ -338,7 +339,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
                          "num_elements_per_alignment",
                          "num_alignment_width",
                      }},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
 
         // ---- Work unit (placement) ----
@@ -644,7 +645,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
                      "stick_size",
                      "element_size",
                  }},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -678,7 +679,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
                      "stick_size",
                      "element_size",
                  }},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Work unit (placement) ----

@@ -8,6 +8,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -26,13 +27,13 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterTensixCores) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Execute the program
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 }
 
 // Test stream scratch register APIs on Erisc cores
 TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
     // Check if device has active ethernet cores
-    auto ethernet_cores = this->device().get_devices()[0]->get_active_ethernet_cores(true);
+    auto ethernet_cores = this->device().impl().get_devices()[0]->get_active_ethernet_cores(true);
     if (ethernet_cores.empty()) {
         GTEST_SKIP() << "No active ethernet cores available on this device";
     }
@@ -54,7 +55,7 @@ TEST_F(UnitMeshFixture, StreamScratchRegisterEriscCores) {
         EthernetConfig{.noc = NOC::NOC_0});
 
     // Execute the program
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 }
 
 }  // namespace tt::tt_metal

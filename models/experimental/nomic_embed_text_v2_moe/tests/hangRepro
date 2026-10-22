@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# ttnn.matmul hang, reduced from this port's expert bank w1: 8 experts, B=8 S=512.
+#
+# in0_B == 1 with in1_B == 8 takes ttnn's in0_reuse_in_CB path, where the reader replays
+# num_blocks_inner_dim in0 blocks per extra batch while compute consumes
+# num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim. Equal only while both outer
+# counts are 1. At 4096 tokens per_core_M becomes 2, which splits out_block_w, and every core
+# waits forever in cb_wait_front on in0.
+#
+# Blackhole p300c, 1 chip, 11x10. 3520 tokens passes in under a second; 3552 hangs.
+# Recovery needs tt-smi -r.
+
+import ttnn
+
+d = ttnn.open_device(device_id=0)
+x = ttnn.zeros((1, 1, 4096, 768), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=d)
+w = ttnn.zeros((1, 8, 768, 3072), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=d)
+ttnn.matmul(x, w)           # async: enqueues and returns
+ttnn.synchronize_device(d)  # never returns
+print("completed")

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -54,6 +56,18 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
     const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
+    SAN_HOOK(configure(
+        StateVal<Operand<Exu::Unpack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[unpB_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[unpB_operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(unpA_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(unpB_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces),
+        StateDiscard<std::uint32_t>(unpA_tile_size),
+        StateDiscard<std::uint32_t>(unpB_tile_size)));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
@@ -87,7 +101,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
  *
  * @note Must be called together with llk_math_set_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
  */
-inline void llk_unpack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(); }
+inline void llk_unpack_wait_fp32_dest_acc() {
+    SAN_HOOK(unsupported());
+    _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>();
+}
 
 /**
  * Determine whether the unpacker must be reconfigured when switching operands, i.e. whether the
@@ -122,6 +139,12 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[srca_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[srca_operand_id]),
+        StateDiscard<std::uint32_t>(tile_size),
+        StateDiscard<std::uint32_t>(face_r_dim),
+        StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -146,6 +169,12 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[srcb_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[srcb_operand_id]),
+        StateDiscard<std::uint32_t>(tile_size),
+        StateDiscard<std::uint32_t>(face_r_dim),
+        StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -168,15 +197,16 @@ inline void llk_unpack_reconfig_data_format_srca(
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
-    if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
-        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
-    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+    if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
     } else if (
         get_operand_face_r_dim(old_srca_operand_id) != get_operand_face_r_dim(new_srca_operand_id) ||
         get_operand_num_faces(old_srca_operand_id) != get_operand_num_faces(new_srca_operand_id)) {
+        // A geometry change needs the face geometry reprogrammed, whether or not the format changed too.
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, skip_int8>(
             srca_new_operand);
+    } else if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
+        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srca_new_operand);
     }
 }
 
@@ -198,15 +228,16 @@ inline void llk_unpack_reconfig_data_format_srcb(
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-    if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
-        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
-    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+    if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
     } else if (
         get_operand_face_r_dim(old_srcb_operand_id) != get_operand_face_r_dim(new_srcb_operand_id) ||
         get_operand_num_faces(old_srcb_operand_id) != get_operand_num_faces(new_srcb_operand_id)) {
+        // A geometry change needs the face geometry reprogrammed, whether or not the format changed too.
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, skip_int8>(
             srcb_new_operand);
+    } else if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
+        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(srcb_new_operand);
     }
 }
 
@@ -260,6 +291,7 @@ inline void llk_unpack_reconfig_data_format(
  * @param srca_new_operand New operand id whose tile shape to program srcA for.
  */
 inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
@@ -277,6 +309,7 @@ inline void llk_unpack_reconfig_tile_shape_srca(const std::uint32_t srca_new_ope
  */
 inline void llk_unpack_reconfig_tile_shape_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     const std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
@@ -295,6 +328,7 @@ inline void llk_unpack_reconfig_tile_shape_srca(
  * @param srcb_new_operand New operand id whose tile shape to program srcB for.
  */
 inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
@@ -312,6 +346,7 @@ inline void llk_unpack_reconfig_tile_shape_srcb(const std::uint32_t srcb_new_ope
  */
 inline void llk_unpack_reconfig_tile_shape_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     const std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -325,4 +360,18 @@ inline void llk_unpack_reconfig_tile_shape_srcb(
 /**
  * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.
  */
-inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }
+inline void llk_unpack_set_srcb_dummy_valid() {
+    SAN_HOOK(unsupported());
+    _llk_unpack_set_srcb_dummy_valid_();
+}
+
+/**
+ * Unpack-thread halves of tile_regs_acquire / tile_regs_commit. No-ops on this architecture: its unpack-to-dest path
+ * (_llk_unpack_A_ with unpack_to_dest) synchronizes with math per tile on the UNPACK_TO_DEST semaphore inside the
+ * LLKs, so there is no section-level unpack handshake for these to run. Quasar's unpack-to-dest path gives them a
+ * body.
+ */
+inline void llk_unpack_wait_for_dest_available() {}
+
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {}

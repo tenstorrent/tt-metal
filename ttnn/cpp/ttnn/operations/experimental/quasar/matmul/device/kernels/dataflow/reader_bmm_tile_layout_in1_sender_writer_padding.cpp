@@ -675,4 +675,13 @@ void kernel_main() {
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore only NCRISC read_cmd_buf NOC_CTRL_LO VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED |
+                                      NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
+                                      NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
+#endif
 }

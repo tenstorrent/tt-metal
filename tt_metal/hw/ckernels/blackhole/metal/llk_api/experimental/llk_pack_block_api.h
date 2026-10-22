@@ -7,6 +7,7 @@
 #include "llk_io.h"
 #include "llk_outputs.h"
 #include "experimental/llk_pack_block.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK BLOCK CONTIGUOUS API
@@ -27,6 +28,7 @@
 // called again when only num_tiles changes between pack calls.
 template <bool zero_output = false>
 inline void llk_pack_block_contiguous_mop_config(const std::uint32_t output) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
     _llk_pack_block_contiguous_mop_config_<zero_output>(
         get_output_face_r_dim(output_id), get_output_num_faces(output_id));
@@ -38,6 +40,7 @@ inline void llk_pack_block_contiguous_mop_config(const std::uint32_t output) {
 // num_tiles: number of tiles to pack; the destination tile range must fit within DEST capacity.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_contiguous(std::uint32_t tile_index, std::uint32_t output, std::uint32_t num_tiles) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (num_tiles >= 1 && ((tile_index + num_tiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>())),
         "num_tiles must be at least 1, and the destination tile range must fit within the packer capacity "

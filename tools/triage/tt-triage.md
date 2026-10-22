@@ -50,7 +50,9 @@ If a data provider script fails, all scripts that depend on it will also fail.
 
 A state checker script can only check state (see `check_noc_locations` for an example), or it can perform checks and return data as well (see `check_arc` for an example).
 
-To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing.
+To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing. `log_warning` does the same for something worth noting that is not a failure.
+
+Both come in variants that take the context the check ran against - `log_check_device` / `log_check_location` / `log_check_risc` and the matching `log_warning_*`. Pass the context as those arguments rather than formatting it into the message.
 
 If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception. Critical error means that script cannot advance without that check and that all dependent scripts shouldn't be executed.
 
@@ -87,8 +89,13 @@ You can control the output with two independent flags:
 
 This keeps the default output clean while allowing detailed inspection when needed.
 
+Verbosity is a *display* setting: it governs the console and `--llm-output` reports only.
+A database written with `--sqlite-output-path` always contains every column, whatever `-v`
+the run used, so the detail a `-vv` column would have shown can be queried afterwards
+without re-running triage.
+
 To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
-- `triage_field(serialized_name, serializer, verbose=0)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). The `verbose` parameter controls at which verbosity level the field is shown (0=always, 1=with `-v`, 2=with `-vv`). This controls how the field appears in the visualization.
+- `triage_field(serialized_name, serializer, verbose=0)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). The `verbose` parameter controls at which verbosity level the field is shown (0=always, 1=with `-v`, 2=with `-vv`). This controls how the field appears in the visualization; SQLite output stores the field regardless.
 - `recurse_field(verbose=0)` – This will cause expansion of a field that is tagged as a `@dataclass`, so its internal fields are visualized as part of the parent. The `verbose` parameter controls the minimum verbosity level for this recursion.
   ```python
   @dataclass
