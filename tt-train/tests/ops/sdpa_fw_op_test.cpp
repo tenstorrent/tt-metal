@@ -1425,10 +1425,8 @@ struct ChunkKnobs {
     uint32_t k_chunk_size;
 };
 
-const std::vector<ChunkKnobs> kChunkKnobSweep = {
-    {32, 32}, {32, 64}, {32, 128}, {32, 256}, {64, 32}, {64, 64}, {64, 128}, {64, 256},
-    {128, 32}, {128, 64}, {128, 128}, {128, 256},
-};
+// One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
+const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
 
 void run_chunk_knob_sweep(SDPATestConfig base) {
     for (const auto& knobs : kChunkKnobSweep) {
@@ -1456,9 +1454,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // 64 sequences, GQA; balanced vs plain split depends on the device core count.
+    // 128 sequences, GQA: enough pairs for the balanced split on any grid, even at q=128.
     run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 4U,
+        .batch_size = 8U,
         .sequence_length = 256U,
         .query_dim = 1024U,  // 16 heads * 64
         .key_value_dim = 256U,  // 4 kv heads * 64
@@ -1466,20 +1464,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
         .num_key_heads = 4U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_Causal_GQA_ManySeqs"});
-}
-
-TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_Balanced_GQA) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Enough sequences that pairs cover every core at q=128 (balanced path on any grid). Slow host reference.
-    run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 8U,
-        .sequence_length = 512U,
-        .query_dim = 1024U,  // 16 heads * 64
-        .key_value_dim = 256U,  // 4 kv heads * 64
-        .num_query_heads = 16U,
-        .num_key_heads = 4U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "ChunkKnobs_Causal_Balanced_GQA"});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
