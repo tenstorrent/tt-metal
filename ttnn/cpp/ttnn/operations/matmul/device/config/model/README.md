@@ -7,15 +7,17 @@ lowest predicted time is used. Anything the model doesn't cover keeps today's de
 ## Turning it on
 
 ```
-TTNN_CONFIG_OVERRIDES='{"matmul_model_config": true, "matmul_model_path": "/path/to/model.blob"}'
+TTNN_CONFIG_OVERRIDES='{"matmul_model_config": true}'
 ```
 
 or from Python, before the first matmul:
 
 ```python
-ttnn.CONFIG.matmul_model_path = "/path/to/model.blob"
 ttnn.CONFIG.matmul_model_config = True
 ```
+
+The model ships with ttnn (`matmul_model.blob` in this directory) and `ttnn.CONFIG.matmul_model_path` points at it by
+default. Set `matmul_model_path` to use another blob.
 
 When the flag is off nothing here runs and nothing is loaded. When it is on, the blob is loaded once, lazily, on
 the first matmul the model is eligible for. If it can't be loaded, a warning is logged once and matmul behaves as
@@ -58,15 +60,18 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 3. **Pick.** Candidates are tried in order of prediction; ties keep candidate order. The first one that passes the
    device op's own validation (`validate_on_program_cache_miss`) and the live L1 budget is used. If none passes, or
    none can be scored, the default selection runs.
-4. **Cache.** Picks are cached process-wide, keyed on the call's full signature and the model's sha256. On every
-   hit the cached pick is re-checked against the current L1 budget.
+4. **Cache.** Picks are cached process-wide, keyed on the call's full signature (the model is loaded once per
+   process). On every hit the cached pick is re-checked against the current L1 budget.
 
 A candidate that the device op rejects costs a caught exception and the critical-level log line that every
 `TT_FATAL` writes. Candidates are checked best first, so this happens only when the best-ranked ones are invalid.
 
 ## The model blob
 
-The blob is not checked in. It is produced from the model repository `tt-matmul-predictor`:
+`matmul_model.blob` (12 MB: 3000 GBDT trees of 255 leaves; exempted from the repository's 500 KB file check) is
+installed with ttnn at the same path under the runtime root. Replace it only with a retrained model; the analytic
+constants below must match the model it was trained with. It is produced from the model repository
+`tt-matmul-predictor`:
 
 ```
 mmodel export ...                                                    # the repository's export entry point
@@ -79,7 +84,7 @@ LightGBM model it was exported from. The analytic part (`matmul_model_features.c
 
 ## Tests
 
-- **`unit_tests_ttnn`, `GbdtModel.*` and `MatmulModel*.*`.** These need no device. Set `TT_GBDT_PARITY_DIR` and
-  `TT_MATMUL_MODEL_BLOB` to also run the checks against the real model.
-- **`tests/ttnn/unit_tests/operations/matmul/test_matmul_model_config.py`.** This needs a Blackhole device and
-  `TT_MATMUL_MODEL_BLOB`.
+- **`unit_tests_ttnn`, `GbdtModel.*` and `MatmulModel*.*`.** These need no device and score candidates with the
+  shipped model (or `TT_MATMUL_MODEL_BLOB`). Set `TT_GBDT_PARITY_DIR` to also check the evaluator against LightGBM.
+- **`tests/ttnn/unit_tests/operations/matmul/test_matmul_model_config.py`.** This needs a Blackhole device; it uses
+  the shipped model (or `TT_MATMUL_MODEL_BLOB`).

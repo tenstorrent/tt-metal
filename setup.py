@@ -351,6 +351,8 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
+            # The matmul config model (ttnn.CONFIG.matmul_model_config) loads it at runtime
+            "ttnn/operations/matmul/device/config/model/matmul_model.blob",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",

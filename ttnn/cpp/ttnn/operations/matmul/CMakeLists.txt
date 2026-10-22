@@ -47,6 +47,13 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul
         COMPONENT ttnn-runtime
 )
+# The matmul config model blob (device/config/model/README.md), at the same path under the runtime root as in the repo
+install(
+    FILES
+        device/config/model/matmul_model.blob
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul/device/config/model
+    COMPONENT ttnn-runtime
+)
 install(TARGETS ttnn_op_matmul LIBRARY COMPONENT tar)
 
 # Python bindings for this op are registered directly on the shared `ttnn`

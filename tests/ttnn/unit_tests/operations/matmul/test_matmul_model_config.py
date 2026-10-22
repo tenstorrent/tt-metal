@@ -4,9 +4,8 @@
 
 """The opt-in matmul config model (ttnn.CONFIG.matmul_model_config, #57884).
 
-Needs a Blackhole device. The tests that turn the model on also need the model blob, which is not checked in: set
-TT_MATMUL_MODEL_BLOB to its path (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md); without it they are
-skipped.
+Needs a Blackhole device. The tests that turn the model on use the blob that ships with ttnn (the default
+ttnn.CONFIG.matmul_model_path), or TT_MATMUL_MODEL_BLOB when set; they are skipped if the blob is missing.
 """
 
 import os
@@ -18,15 +17,15 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-MODEL_BLOB = os.environ.get("TT_MATMUL_MODEL_BLOB")
+MODEL_BLOB = os.environ.get("TT_MATMUL_MODEL_BLOB") or str(ttnn.CONFIG.matmul_model_path)
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the matmul config model covers Blackhole only")
 
 
 @pytest.fixture
 def model_on():
-    if MODEL_BLOB is None:
-        pytest.skip("TT_MATMUL_MODEL_BLOB not set")
+    if not os.path.isfile(MODEL_BLOB):
+        pytest.skip(f"no model blob at {MODEL_BLOB}")
     with ttnn.manage_config("matmul_model_path", MODEL_BLOB), ttnn.manage_config("matmul_model_config", True):
         yield
 

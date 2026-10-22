@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <thread>
@@ -82,14 +83,24 @@ TEST(MatmulModelSelector, LoadFailuresAreReportedNotThrown) {
     EXPECT_NE(error, "");
 }
 
-// With the real model (not checked in; see the README): set TT_MATMUL_MODEL_BLOB to the blob.
+// The real model: TT_MATMUL_MODEL_BLOB, else the blob shipped in the repo (under TT_METAL_HOME, or relative to the
+// repo root the tests run from)
+std::filesystem::path model_blob_path() {
+    if (const char* path = std::getenv("TT_MATMUL_MODEL_BLOB")) {
+        return path;
+    }
+    const char* home = std::getenv("TT_METAL_HOME");
+    return std::filesystem::path(home != nullptr ? home : ".") /
+           "ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.blob";
+}
+
 TEST(MatmulModelSelector, ScoresCandidatesWithTheModel) {
-    const char* path = std::getenv("TT_MATMUL_MODEL_BLOB");
-    if (path == nullptr) {
-        GTEST_SKIP() << "TT_MATMUL_MODEL_BLOB not set";
+    const std::filesystem::path path = model_blob_path();
+    if (!std::filesystem::exists(path)) {
+        GTEST_SKIP() << "no model blob at " << path;
     }
     std::string error;
-    const auto model = ConfigModel::load_file(path, error);
+    const auto model = ConfigModel::load_file(path.string(), error);
     ASSERT_NE(model, nullptr) << error;
     EXPECT_EQ(model->sha256().size(), 64u);
     MatmulDesc p = desc(32, 128, 128);
