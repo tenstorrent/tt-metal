@@ -29,6 +29,7 @@ constexpr auto ids_args = TensorAccessorArgs<0>();
 constexpr auto route_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
 constexpr uint32_t ROW = 4 * K;  // a joint routing row: K ids, K weights (uint16)
 constexpr uint32_t PT = __PT__;  // routing rows per page (router_topk: 32)
+constexpr uint32_t G0 = __OWN__ ? 0 : ME * S;  // my first token's routing row: the chip's own rows, or the replicated
 static_assert(K % 2 == 0);
 
 FORCE_INLINE uint32_t links(uint32_t s) { return (s & 15) + (s >> 4); }
@@ -54,9 +55,9 @@ void kernel_main() {
         return;
     }
     // (a DRAM read keeps its source's 64 B alignment in L1: a row at an odd 32 B of its page lands 32 B into its slot)
-    auto so = [&](uint32_t t) { return ((ME * S + t) % PT * ROW) & 63u; };
+    auto so = [&](uint32_t t) { return ((G0 + t) % PT * ROW) & 63u; };
     for (uint32_t t = t0; t < t1; ++t) {
-        const uint32_t g = ME * S + t;
+        const uint32_t g = G0 + t;
         noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS + so(t), ROW);
     }
     noc_async_read_barrier();
@@ -143,12 +144,14 @@ def dispatch_prep_prepare(
     torus=(False, False),
     rows=(8, 9),
     tokens_per_page=1,
+    own_routing=False,
     copy=True,
     row_mates=False,
     mates_axis=1,
 ):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
-    joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
+    joint_routing [N S, 2 K] uint16 row-major (replicated; own_routing: only this chip's [S, 2 K] - the routing
+    all-to-all's input, nothing replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
     row-major, route [1, 1, 1, RW S] uint32 (RW = route_words(N); outputs written in place). Cores (logical): n_route route cores on row
     rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1].
     copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None).
@@ -202,6 +205,7 @@ def dispatch_prep_prepare(
                 .replace("__E__", str(E))
                 .replace("__CHIPS__", chips_of)
                 .replace("__PT__", str(tokens_per_page))
+                .replace("__OWN__", "1" if own_routing else "0")
                 .replace("__NOROUTE__", "1" if os.environ.get("DPREP_PROBE") == "noroute" else "0")
             )
             copy_src = _COPY.replace("__NOCOPY__", "1" if os.environ.get("DPREP_PROBE") == "nocopy" else "0")

@@ -1807,3 +1807,48 @@ routing: all pass, combine worst per-token rel err 2.43e-3. test_closeout_flat: 
 pass. test_closeout_plans passes (CANNOT_FIT unchanged but for K2.7 16384, which is no longer planned).
 Still not fitting (fp32 sums over <= 16 accumulators): 4x4 at 16384 GLM-5.3, M3, V4.1-Flash; the LoudBox stage 2x4 at
 16384 GLM-5.3, GLM-5.3-Flash, M3, V4.1-Flash, and K2.7 at 5120. K3 on the 2x4 stage: 112 experts a chip > 64.
+
+### Routing all-to-all + local planner (2026-10-22, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G; combine_rf/routing_a2a.py)
+Why: the head's routing all-gather gives every chip the whole mesh's routing, and the planner scans all of it (N S K
+entries a chip) though only ~1/N points at its experts. Only "every entry that points at my experts" has to cross
+chips; the combine's n_local / want / n_ret (my home tokens) and the dispatch's route words come from my own top-k.
+Built: `routing_a2a_planner_prepare` (+ `routing_a2a_reserve`: its global semaphores, before any per-call L1;
+`routing_a2a_sizes`: pure sizing). One program a chip: M = min(8, EPC, A) planner cores (BRISC) + the fabric port
+cores (BRISC). Planner core q owns accumulators q, q + M, ... (their home tokens): counts its entries per global
+expert (local memory), one exchange of per-destination totals between planner cores, then writes its entries sorted
+by expert straight into the packet buffer of the port core that serves each destination (destination d on the port
+of its first hop, link d % L). Port cores send EXACTLY one packet per (source, destination) - empty ones too - as a
+direct 2D unicast (plain writes, the last a fused write + increment of the destination's arrival counter; my own
+chip's packet a local write + increment). Receivers: a DRAM slot per source, double-buffered by the call's parity;
+arrival counters per parity (wait N, subtract N). Then each planner core takes a contiguous expert range balanced by
+the call's rows, counts its entries per (expert, token), prefixes, and writes each entry's row (token index, table)
+directly; core 0 writes counts / regions / plan words 0..31 and 600 / 601 (want rows go straight to the plan by their
+owners). An entry: token (11 bits) | local expert (6) | gate weight bf16 bits without the sign (15) - weights >= 0.
+dispatch_prep gained `own_routing=True`: route words from the chip's own [S, 2 K] rows (no replicated rows).
+The fused harness: `FC.routing_exchange` "a2a" (default) / "gather" (the deterministic combine, per-direction ports
+and home-major rows keep the gather path).
+Bit-exact (scratch_routing_a2a.py): counts, regions, plan, token index and table (rows below plan[600]) vs the current
+multi-core planner and its host model, and the route words vs the replicated path - K3 and GLM-5.3 at the Galaxy 8x4
+per-chip load (160 / 512 home tokens, 28 / 8 experts a chip), uniform, Zipf spread and packed 1.2: 12 / 12, on all 8
+chips, two calls each (both parities). Fused close-out test (test_flat_combine_closeout) on the new tables: GLM-5.3
+and K3 at 5120 and 16384, all three routings pass (flat PCC >= 0.9984, combine worst per-token rel err <= 2.4e-3).
+Time per call (us, slowest / median chip, 8 calls queued, device profiler; today = fabric_all_gather of the joint rows
++ combine_plan on 32 cores):
+| case | today: gather + planner | all-to-all + local planner |
+| K3 5120 uniform / spread / packed | 75.8 / 74.4 / 86.5 | 59.5 / 90.5 / 147.3 |
+| K3 16384 uniform / spread / packed | 119.1 / 123.6 / 172.7 | 142.2 / 243.6 / 419.0 |
+| GLM-5.3 5120 uniform / spread / packed | 64.2 / 61.1 / 62.7 | 46.5 / 83.6 / 84.0 |
+| GLM-5.3 16384 uniform / spread / packed | 90.3 / 93.7 / 114.1 | 98.2 / 231.4 / 231.9 |
+What bounds it: (1) the RISC: ~40 cycles an entry to count, ~55 to place (about 25 instructions at IPC ~0.5; the L1
+data cache, enabled for these kernels with set_l1_data_cache, gave ~10%; skipping the stores ~15%); 8 cores is about
+right (4: 95 us, 2: 166 us, 16: no gain - per-(source, slice) run overhead doubles). (2) Skew: a hot expert's rows
+all go to one planner core (expert granularity) - the 2-2.5x losses under Zipf. (3) Launch skew between chips
+(~16-37 us here) shows up as arrival waits, as it does for any exchange. On this 2 x 4 the old path is cheap: its
+planner scans N S K = 8 x S x K entries; on an 8x4 it scans 4x more (K3 5120: 81,920 entries a chip) and the snake
+gather crosses 31 chips, while the new path's per-chip work stays S K (plus N x M header runs per core) - a Galaxy
+estimate is ~300 us today vs ~70 us new (uniform, K3 5120), not measured.
+Sizes (host only, test_routing_a2a_sizes, rows_cap = 2 S K + 32 EPC): every close-out model on 8x4 and 4x4 at both
+chunks fits - worst K3 4x4 16384: planner core 748 KB L1, port core 456 KB, slots 2 MB DRAM; local counters <= 2.8 KB.
+Left: hot experts split over planner cores (by token residue, with a per-(expert, token block) exchange); the NCRISC
+(or the TRISCs, for the pure-L1 count / place passes) on the planner cores; merging into the head program; the
+K3 token-split block still gathers.

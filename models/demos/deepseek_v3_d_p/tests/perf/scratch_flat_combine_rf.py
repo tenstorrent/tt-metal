@@ -21,6 +21,7 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
+from ttnn.bringup.combine_rf.routing_a2a import routing_a2a_planner_prepare, routing_a2a_reserve
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
 from ttnn.bringup.combine_rf.sparse_combine_l1 import route
 from ttnn.bringup.combine_rf.sparse_combine_rf import (
@@ -80,6 +81,10 @@ class FC:
     routings: tuple = ("uniform",)
     plan_cores: int = 32
     token_major: bool = True
+    # the device tables from: "a2a" (routing_a2a - each chip's own routing, an all-to-all of the entries that point at
+    # each chip's experts, the planner on local data) or "gather" (combine_plan on the replicated routing; also what
+    # the deterministic combine and home-major rows use)
+    routing_exchange: str = "a2a"
     layout: object = None  # the flat layout (FlatLayoutOptions / preset dict; None: the plan's defaults)
     closeout: bool = False  # a close-out case (closeout_cfg): the plan's defaults are checked
     combine_mode: str = None  # combine_auto's mode ("ports apart" / "acc_on_ports"); None: its choice
@@ -399,6 +404,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     )
     DEVPLAN, DET, PER_DIR_PORTS, L1 = c.devplan, c.det, c.per_dir_ports, c.l1
     assert not DEVPLAN or L1, "the device planner needs the L1 hand-off (l1)"
+    RX = DEVPLAN and c.routing_exchange == "a2a" and not DET and not PER_DIR_PORTS and c.token_major
+    rx_res = routing_a2a_reserve(mesh_device, L=L) if RX else None  # (its persistent L1: before the arena's sizing)
     # the arena: every worker core, zero at creation, kept for the test (the combine's state lives in it). It takes all
     # the L1 the allocator has left (the combine sizes its rings from it), less a reserve for the programs' static CBs
     # (the flat expert's non-arena CBs, below the arena: its plan's static_l1_bytes) and the L1 tensors allocated after
@@ -470,30 +477,57 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             mesh_mapper=rep,
         )
         luts, nps = port_luts(mesh_device, L, per_direction=PER_DIR_PORTS)
-        planner = combine_planner_prepare(
-            mesh_device,
-            S=S,
-            K=K,
-            EPC=EPC,
-            A=n_acc,
-            L=L,
-            port_luts=luts,
-            n_ports=nps,
-            rows_cap=rows_cap,
-            cores=[(i % 8, i // 8) for i in range(c.plan_cores)],
-            # (the deterministic combine order: the flat's schedule parameters; det off: the arrival-order sums)
-            det=dict(
-                rps=plan["sched_rps"],
-                max_e=plan["sched_max_e"],
-                gu_nreg=plan["sched_gu_nreg"],
-                pin=1,
-                pin_ratio=str(op.layout.pin_ratio),
+        if RX:  # each chip's own routing ([S / 32, 32 x 2 K] uint16: router_topk's joint rows), exchanged on device
+            wb = gates.view(torch.int16).to(torch.int64) & 0xFFFF
+            joint = torch.cat([ids.to(torch.int64), wb], -1).reshape(R, C, S // 32, 32 * 2 * K).to(torch.int32)
+            own_t = ttnn.from_torch(
+                joint,
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1)),
             )
-            if DET
-            else None,
-            token_major=c.token_major,  # (False: an expert's rows by home, then token)
-        )
-        pl = planner(ids_t, w_t)
+            planner = routing_a2a_planner_prepare(
+                mesh_device,
+                S=S,
+                K=K,
+                EPC=EPC,
+                A=n_acc,
+                L=L,
+                port_luts=luts,
+                n_ports=nps,
+                rows_cap=rows_cap,
+                tokens_per_page=32,
+                reserved=rx_res,
+            )
+            pl = planner(own_t)
+            logger.info(f"{routing}: device tables from the routing all-to-all ({planner.M} planner cores)")
+        else:
+            planner = combine_planner_prepare(
+                mesh_device,
+                S=S,
+                K=K,
+                EPC=EPC,
+                A=n_acc,
+                L=L,
+                port_luts=luts,
+                n_ports=nps,
+                rows_cap=rows_cap,
+                cores=[(i % 8, i // 8) for i in range(c.plan_cores)],
+                # (the deterministic combine order: the flat's schedule parameters; det off: the arrival-order sums)
+                det=dict(
+                    rps=plan["sched_rps"],
+                    max_e=plan["sched_max_e"],
+                    gu_nreg=plan["sched_gu_nreg"],
+                    pin=1,
+                    pin_ratio=str(op.layout.pin_ratio),
+                )
+                if DET
+                else None,
+                token_major=c.token_major,  # (False: an expert's rows by home, then token)
+            )
+            pl = planner(ids_t, w_t)
         ttnn.synchronize_device(mesh_device)
         # x: the gathered tokens (every chip's S, replicated); flat row r reads x row token_index[r]
         x_host = (torch.randn(N * S, H) * 0.3).to(torch.bfloat16)
