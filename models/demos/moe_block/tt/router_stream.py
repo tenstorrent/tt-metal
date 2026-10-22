@@ -143,14 +143,14 @@ constexpr uint32_t EM = rows_::em_of(ET);
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
 // a score tile's top-K keys: the fp32 score with its low mantissa bits (EM) replaced by the expert id (the uint16 id
-// tile four DEST tiles on): ttnn.topk's fused keys at fp32 - 9 bits instead of bf16, raw INT32 words
+// tile two DEST tiles on): ttnn.topk's fused keys at fp32 - 9 bits instead of bf16, raw INT32 words
 template <uint32_t M>
 inline void rt_key() {
     TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = M;
     for (int i = 0; i < 32; i++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 256);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 128);
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // the id (the high half of a uint16 in 32-bit DEST: junk)
         TTI_SFPOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
         TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // the score's low bits cleared
@@ -172,8 +172,8 @@ void kernel_main() {
         cb_wait_front(XR, G * KBR);
         cb_wait_front(WR, KBR * ET);
         PACK((llk_pack_reconfig_l1_acc(kb > 0 ? 1 : 0)));
-        for (uint32_t e0 = 0; e0 < ET; e0 += 2) {  // (logits^T [e0 .. e0 + re) x [G token tiles]: W_r^T x x^T)
-            const uint32_t re = ET - e0 < 2 ? ET - e0 : 2;
+        for (uint32_t e0 = 0; e0 < ET; ++e0) {  // (logits^T [e0] x [G token tiles]: W_r^T x x^T; half-sync DEST: the
+            constexpr uint32_t re = 1;           // packs of one block under the next block's math)
             matmul_block_init(WR, XR, 1, G, re, KBR);
             tile_regs_acquire();
             for (uint32_t kk = 0; kk < KBR; ++kk) matmul_block(WR, XR, e0 * KBR + kk, kk * G, 0, true, G, re, KBR);
@@ -206,8 +206,8 @@ void kernel_main() {
         cb_reserve_back(SC, ET);
         cb_wait_front(IDX, ET);
         pack_reconfig_data_format(HOLD);
-        for (uint32_t i0 = 0; i0 < ET; i0 += 4) {  // (4 score tiles a pass: their id tiles in DEST 4 .. 7)
-            const uint32_t n = ET - i0 < 4 ? ET - i0 : 4;
+        for (uint32_t i0 = 0; i0 < ET; i0 += 2) {  // (2 score tiles a pass: their id tiles in DEST 2 .. 3)
+            const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
             tile_regs_acquire();
             reconfig_data_format(HOLD, ARRF);
             add_init(HOLD, ARRF);
@@ -228,7 +228,7 @@ void kernel_main() {
                 // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key)
                 reconfig_data_format_srca(BIAS, IDX);
                 copy_init(IDX);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(IDX, i0 + j, 4 + j);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(IDX, i0 + j, 2 + j);
                 for (uint32_t j = 0; j < n; ++j) MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rt_key<EM>, j, VectorMode::RC_custom)));
             }
             tile_regs_commit();
@@ -255,7 +255,7 @@ void kernel_main() {
             const bool odd = t + 1 == ET;  // (a last tile alone: against the running top K, a full round)
             const bool fold = t > 0 && !odd;  // (a pair after the first: its run folded into the running top K)
             if (odd) {
-                copy_dest_values<DataFormat::Int32>(4, 0);
+                copy_dest_values<DataFormat::Int32>(2, 0);
                 copy_tile(SC, t, 1);
             } else {
                 copy_tile(SC, t, 0);
@@ -273,11 +273,11 @@ void kernel_main() {
                       // one bitonic merge (max on top) + rebuild of K
                 ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
                 ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, false);
-                copy_dest_values<DataFormat::Int32>(4, 0);
+                copy_dest_values<DataFormat::Int32>(2, 0);
                 ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
                 ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
             }
-            if (t + 2 < ET) copy_dest_values<DataFormat::Int32>(0, 4);  // (parked in DEST tile 4)
+            if (t + 2 < ET) copy_dest_values<DataFormat::Int32>(0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
         }
         tile_regs_commit();
         cb_reserve_back(BEST, 1);
@@ -537,33 +537,41 @@ class RouterStream:
         self.RB, self.KT, self.ET, self.K = CR // G, H // G // 32, E // 32, K
         assert len(cores) >= self.RB and E % 32 == 0 and K % 2 == 0 and 4 * K <= 64
         self.cores = cores[: self.RB]
-        self.KBR = max(d for d in range(1, 5) if self.KT % d == 0)
         self.scale_bits = struct.unpack("<I", struct.pack("<f", route_scale))[0]
         self.prio_first = prio_first
         self.fidelity = fidelity  # (the port sends the logits ahead of the x gather: GLM-type)
         self.nv = xg.nv
         ET, RB = self.ET, self.RB
+        self.arena, self.base, abytes = arena
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
-        off, o = {}, 0
-        for k, v in [
-            ("xr", 2 * G * self.KBR * 2048),
-            ("wr", 2 * self.KBR * ET * 2048),
-            ("hold", G * ET * 4096),
-            ("arr", (G - 1) * ET * 4096),
-            ("bias", ET * 4096),
-            ("sc", ET * 4096),
-            ("idx", ET * 2048),
-            ("best", 4096),
-            ("finc", 16 * 8),
-            ("psync", 16 * 2),
-            ("out", 32 * 4 * K),
-            ("words", 64),
-        ]:
-            off[k], o = o, al(o + v)
-        self.off, self.bytes = off, o
+
+        def layout(kbr):
+            off, o = {}, 0
+            for k, v in [
+                ("xr", 2 * G * kbr * 2048),
+                ("wr", 2 * kbr * ET * 2048),
+                ("hold", G * ET * 4096),
+                ("arr", (G - 1) * ET * 4096),
+                ("bias", ET * 4096),
+                ("sc", ET * 4096),
+                ("idx", ET * 2048),
+                ("best", 4096),
+                ("finc", 16 * 8),
+                ("psync", 16 * 2),
+                ("out", 32 * 4 * K),
+                ("words", 64),
+            ]:
+                off[k], o = o, al(o + v)
+            return off, o
+
+        # the K block: the largest <= 4 tiles dividing the chip's K whose buffers fit (8: no faster, measured - the
+        # matmul is bound by its unpack / math, not by the blocks' L1-accumulated packs)
+        kbrs = [d for d in range(1, 5) if self.KT % d == 0]
+        fit = [d for d in kbrs if layout(d)[1] <= abytes]
+        self.KBR = max(fit) if fit else 1
+        self.off, self.bytes = off, o = layout(self.KBR)
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         self.crs = crs
-        self.arena, self.base, abytes = arena
         assert o <= abytes, f"router cores need {o} B of the arena's {abytes}"
         # the ports' buffers (in the arena's range there): per port the sub-blocks of its units x cores
         nlink = -(-RB // xg.nv)
@@ -782,7 +790,7 @@ class RouterStream:
         # router 25 us shorter
         comp.math_fidelity = self.fidelity
         comp.fp32_dest_acc_en = True
-        comp.dst_full_sync_en = True
+        comp.dst_full_sync_en = False  # (half-sync: a block's packs under the next block's math)
         comp.math_approx_mode = False
         modes = [ttnn.UnpackToDestMode.Default] * 64
         modes[SC] = modes[BEST] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the scores: fp32 into DEST, unrounded)
