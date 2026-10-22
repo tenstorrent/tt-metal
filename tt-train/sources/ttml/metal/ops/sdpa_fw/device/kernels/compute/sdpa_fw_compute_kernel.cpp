@@ -29,11 +29,6 @@
 #include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
 
-// How to read this kernel: the reader kernel pushes Q, K and V tiles into circular buffers (CBs);
-// this kernel waits for them (cb_wait_front), computes in the DST register file between
-// tile_regs_acquire and tile_regs_release, packs results into CBs (cb_reserve_back + pack_tile +
-// cb_push_back) and releases inputs (cb_pop_front). The writer drains cb_output / cb_intermediates.
-//
 // Work unit: one Q chunk = Sq_chunk_t query tile-rows of one batch/head. The chunk walks K/V in
 // steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and P@V for all its rows.
 
