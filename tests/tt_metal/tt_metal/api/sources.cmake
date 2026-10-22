@@ -38,7 +38,6 @@ set(UNIT_TESTS_API_SOURCES
     test_filesystem_utils.cpp
     test_simulator_target_devices.cpp
     test_tt_memory.cpp
-    test_profiler_histogram.cpp
     test_graph_tracking.cpp
     test_cb_statistics.cpp
     test_buffer_region.cpp
@@ -51,6 +50,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
+    test_profiler_histogram.cpp
     test_global_circular_buffers.cpp
     test_cross_node_dfb.cpp
     test_prefetcher_pipe.cpp
