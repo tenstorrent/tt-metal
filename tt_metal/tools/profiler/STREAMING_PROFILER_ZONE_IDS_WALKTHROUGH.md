@@ -88,7 +88,7 @@ struct ZoneColorMeta {
     uint32_t color;  // 0xRRGGBB
 };
 
-// tt_metal/tools/profiler/kernel_profiler_streaming.hpp
+// tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp
 #define DeviceZoneScopedNC(name, color) DeviceZoneScopedWith(::tt::debug_event::ZoneColorMeta{name, color})
 ```
 
@@ -366,7 +366,7 @@ modified again; every process rebases its own in-memory copy.
 
 ## 9. Load: the image gets a block
 
-When the program is launched, the host reads each kernel ELF (`ll_api::memory`) and gives it the next free block of
+When the program is launched, the host reads each kernel ELF (`llrt::get_risc_binary`) and gives it the next free block of
 the process's id space, starting from 0.
 
 **How many ids an image needs.** Every site emitted exactly one byte into `.tt_observability_event_ids` (step 3), so the
