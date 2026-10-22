@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Galaxy-projected whole-head time from a LoudBox (2x4, TP line of 4) fused-head profile.
 
-usage: python galaxy_projection.py <profile_log_device.csv> glm|k3
+usage: python galaxy_projection.py <profile_log_device.csv> glm|k3 [logits_first 0|1 - default: the model's current]
 
 The LoudBox's TP axis is a line: the x all-gather and the SE reduce-scatter each bind on an end link carrying 3 units
 (u: one shard / one owner block - 640 rows a mesh row; GLM 1.31 MB, K3 2.29 MB at 2 links x 23.6 GB/s). The Galaxy's
@@ -81,21 +81,22 @@ def zones(path):
     return out
 
 
-def project(path, model):
+def project(path, model, logits_first=None):
     u = U[model]
+    after = not logits_first if logits_first is not None else LOGITS_AFTER_GATHER[model]
     res = []
     for dev, e in zones(path).items():
         gu, ds = e["SE-GU"], e["SE-DOWNRS"]
         front = max(gu - 1.5 * u * E_GATHER, GU_ALONE[model])
         se = front + (ds - gu) - 1.5 * u
-        shift = (gu - front) if LOGITS_AFTER_GATHER[model] else 0.0
+        shift = (gu - front) if after else 0.0
         chain = e.get("SE-RPLAN", 0.0) - shift + CHAIN_GROWTH[model]
         res.append((dev, ds, e.get("SE-RPLAN", 0.0), se, chain))
     return res
 
 
 if __name__ == "__main__":
-    res = project(sys.argv[1], sys.argv[2])
+    res = project(sys.argv[1], sys.argv[2], bool(int(sys.argv[3])) if len(sys.argv) > 3 else None)
     for dev, ds, rp, se, ch in res:
         print(f"dev {dev}: LoudBox SE end {ds:6.1f} planner end {rp:6.1f} | Galaxy SE {se:6.1f} chain {ch:6.1f}")
     print(

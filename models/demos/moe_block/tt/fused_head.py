@@ -202,12 +202,12 @@ class HeadSE:
 @dataclass(frozen=True)
 class RouterSpec:
     """The fused head's router chain: E experts, top K, the routed scale; logits_first: the ports send the logits
-    ahead of the x gather (GLM-type), else after it (K3)."""
+    ahead of the x gather, else after it; None: the head's choice (HeadSE3.logits_priority)."""
 
     E: int
     K: int
     route_scale: float = 1.0
-    logits_first: bool = True
+    logits_first: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -375,7 +375,7 @@ class HeadSE3:
                 K=router.K,
                 route_scale=router.route_scale,
                 cores=free,
-                prio_first=router.logits_first,
+                prio_first=self.logits_priority(router, latent),
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 16 * GX * GY,
             )
@@ -478,6 +478,17 @@ class HeadSE3:
             topology=Topology.Ring if self._ring() else Topology.Linear,
             num_links=self.num_links,
         )
+
+    def logits_priority(self, router, latent):
+        """The ports' logits-vs-x-gather priority. From the Galaxy projections (tests/galaxy_projection.py) and the
+        LoudBox runs: on a TP ring the gather is 1.5 shards a link direction and has slack under gate / up, and the
+        routing chain is what binds - logits first (K3 Galaxy-projected 466 us vs 505 x first; GLM's chain binds on
+        both). On a line the gather is 3 shards on the end links: with a latent all-to-all also on the ports during
+        the gather (K3) the logits delay the SE path more than they shorten the chain (509 vs 527 us measured) - x
+        first; without one (GLM) logits first."""
+        if router.logits_first is not None:
+            return router.logits_first
+        return self._ring() or not latent
 
     def upload_router(self, w_router, bias):
         self.rw = self.router.upload(w_router, bias)

@@ -250,8 +250,8 @@ def _router_specs():
 
     # (GLM-type: the logits ahead of the x gather; K3: after it)
     return {
-        "glm": RouterSpec(E=288, K=8, route_scale=2.5, logits_first=True),
-        "k3": RouterSpec(E=448, K=16, logits_first=False),
+        "glm": RouterSpec(E=288, K=8, route_scale=2.5),  # (the logits' priority: the head's choice)
+        "k3": RouterSpec(E=448, K=16),
     }
 
 

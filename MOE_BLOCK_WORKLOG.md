@@ -681,3 +681,24 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   port); header 384 B + ~40 (GLM) / ~80 (K3) 4-byte entries. Planner: pre-exchange +4 us (3 N NoC writes), post-arrival
   22 -> ~29 (2 N DRAM reads, N x M source loops), the slowest of 8 TP groups +9: ~+20 us in all.
 - Tried: the L1 data cache on the planner's post-arrival passes: phases unchanged (reverted).
+
+### Lever 2 again (Galaxy view): the router matmul on helper cores - built, measured, reverted
+- Built: each router core's G token tiles split NR = 2 here / NH = 2 on a helper (the 4 ports' and the watcher's idle
+  TRISCs): the helper's x forwarded by the router core's BRISC (staged by its NCRISC), W_r^T multicast to the helpers'
+  column from each K block's sender (prefetched from DRAM up front), helper flow control by polled consumed counts (3
+  slots), the helper's fp32 partials pulled into the router core's HOLD before their hand-offs. Bit-exact routing /
+  plans / prep, picks unchanged.
+- Router matmul 57-65 -> 45 us, but the x gather slowed 10-25 us (the helpers' L1 / NoC traffic on the port cores
+  under the gather) and the SE path with it: GLM 300 us (272-278 without), Galaxy-projected 312 (299). Reverted; the
+  W prefetch alone (each sender's blocks read up front): router matmul unchanged (60-63) - also reverted.
+- The router matmul's floor here is its own cores' compute + the column multicast; not the binding piece once the
+  ports' cost is counted.
+
+### Logits-vs-gather priority: the head's choice (RouterSpec.logits_first=None)
+- HeadSE3.logits_priority: logits first on a TP ring (Galaxy: the gather is 1.5 shards a direction with slack under
+  gate / up; the routing chain binds - K3 Galaxy-projected 466 us logits-first vs 505 x-first, from the LoudBox
+  profiles of both priorities); on a line logits first unless a latent all-to-all shares the ports during the gather
+  (K3 on the LoudBox: x first, 509 vs 527 measured). Explicit True / False still override.
+- Galaxy floors in tests/galaxy_projection.py (ring link loads per direction, HiFi2 compute at peak, the routing
+  chain's per-step minimums): GLM 91 us (links), K3 170 (links ~ compute 166). Projected / floor: GLM ~3.3x (chain),
+  K3 2.74x with logits first on the ring.
