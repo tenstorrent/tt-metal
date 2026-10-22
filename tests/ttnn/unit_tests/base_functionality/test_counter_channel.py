@@ -17,8 +17,6 @@ owner in tt-metal/ttnn (Python workload) and the connector in C++
 
 import os
 
-import pytest
-
 import ttnn
 
 
@@ -80,7 +78,7 @@ def test_owner_to_connector_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def test_owner_cannot_consume():
+def test_owner_cannot_consume(expect_error):
     """inject() is owner-only; try_consume_all() / pending() are
     connector-only. Calling on the wrong role raises RuntimeError."""
     shm_name = "/tt_counter_channel_smoke_roles"
@@ -89,14 +87,14 @@ def test_owner_cannot_consume():
     owner = ttnn.InterProcessCounterChannel(shm_name)
     connector = ttnn.InterProcessCounterChannel.connect(shm_name)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "requires a connector instance"):
         owner.try_consume_all()
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "requires a connector instance"):
         owner.pending()
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "requires a connector instance"):
         owner.had_clean_prior_shutdown()
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "requires a owner instance"):
         connector.inject(1)
 
     connector.shutdown()
@@ -192,7 +190,7 @@ def test_double_shutdown_is_noop():
     owner2.shutdown()
 
 
-def test_owner_eexist_when_stale_segment_present():
+def test_owner_eexist_when_stale_segment_present(expect_error):
     """If a segment with the same name already exists, the owner
     ctor refuses to recycle silently — caller is responsible for
     explicit cleanup of stale segments from crashed prior runs."""
@@ -200,7 +198,7 @@ def test_owner_eexist_when_stale_segment_present():
     _unlink_if_exists(shm_name)
 
     owner_a = ttnn.InterProcessCounterChannel(shm_name)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "O_EXCL"):
         ttnn.InterProcessCounterChannel(shm_name)
     owner_a.shutdown()
 
@@ -210,11 +208,11 @@ def test_owner_eexist_when_stale_segment_present():
 # ---------------------------------------------------------------------------
 
 
-def test_connector_times_out_when_owner_absent():
+def test_connector_times_out_when_owner_absent(expect_error):
     """connect() polls /dev/shm with a deadline; if no owner exports
     within connect_timeout_ms it raises RuntimeError."""
     shm_name = "/tt_counter_channel_smoke_timeout"
     _unlink_if_exists(shm_name)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "timed out after 200 ms"):
         ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=200)
