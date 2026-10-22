@@ -243,19 +243,26 @@ def gate_command(task: dict, tasks: dict | None = None) -> str:
 
 
 PROFILER_VARS = re.compile(
-    r"\b(TT_METAL_(DEVICE_PROFILER|PROFILER_\w+)|BRINGUP_PROFILE_OPS|BRINGUP_FULL_PREFILL)=\S+\s*"
+    r"\b(TT_METAL_(DEVICE_PROFILER|PROFILER_\w+)|BRINGUP_PROFILE_OPS|BRINGUP_FULL_PREFILL|BRINGUP_PROFILER)=\S+\s*"
 )
+
+
+DEVICE_PROFILER_VARS = re.compile(r"\bTT_METAL_(DEVICE_PROFILER|PROFILER_\w+)=\S+\s*")
 
 
 def with_clean_wall(cmd: str) -> str:
     """F114: a profiled test_profile.py run is preceded by the same run with the device profiler off
     (BRINGUP_PROFILE_WALL=1: warm wall time only), so chunk_wall_ms never includes the profiler's instrumentation or
-    buffer dumps; the profiled run then reports its own wall as chunk_wall_ms_profiled (BRINGUP_WALL_CLEAN=1)."""
+    buffer dumps; the profiled run then reports its own wall as chunk_wall_ms_profiled (BRINGUP_WALL_CLEAN=1).
+    F155: the profiled run measures with the real-time profiler, so the device profiler's variables are dropped from
+    it too (ledgers written before F155 carry them), unless the segment asks for the device profiler
+    (BRINGUP_PROFILER=device, perf.profiler: device in ledger_gen)."""
     out = []
     for seg in cmd.split("&&"):
         s = seg.strip()
-        if "test_profile.py" in s and "TT_METAL_DEVICE_PROFILER=1" in s and "BRINGUP_WALL_CLEAN" not in s:
-            out += [f"BRINGUP_PROFILE_WALL=1 {PROFILER_VARS.sub('', s)}", f"BRINGUP_WALL_CLEAN=1 {s}"]
+        if "test_profile.py" in s and "BRINGUP_WALL_CLEAN" not in s and "BRINGUP_PROFILE_WALL" not in s:
+            prof = s if "BRINGUP_PROFILER=device" in s else DEVICE_PROFILER_VARS.sub("", s)
+            out += [f"BRINGUP_PROFILE_WALL=1 {PROFILER_VARS.sub('', s)}", f"BRINGUP_WALL_CLEAN=1 {prof}"]
         else:
             out.append(s)
     return " && ".join(out) if len(out) != len(cmd.split("&&")) else cmd

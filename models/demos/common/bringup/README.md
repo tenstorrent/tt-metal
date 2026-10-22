@@ -119,8 +119,18 @@ A pick has no gate before or after its agent. The agent makes the change behind 
 gate's frozen tests once; at the first failure it stops (nothing is profiled while a frozen test fails). The
 orchestrator then measures the change off (`ab.env`) and on (`ab.change`), both set explicitly: every frozen test, the
 ladder at `ab_rungs` (default: the gate's rung and the last rung) and one plain profile. It writes `table.md` and waits.
-`decide --accept` runs the gate and commits; `--reject` reverts the task's files (REJECTED counts as done). Per-op
-profiling runs on the representative layers only (`BRINGUP_PROFILE_LAYERS` picks others).
+`decide --accept` runs the gate and commits; `--reject` reverts the task's files (REJECTED counts as done).
+
+Device time (F155, owner 2026-10-22): the framework measures it with the program real-time profiler everywhere (the
+profile, its per-op mode, the op report, the A/B profile). The dispatcher streams each program's start and end to the
+host; sections and op calls are device-operation id ranges charged after the run, so nothing syncs and nothing is
+built with the device profiler. One profiled run gives the sections, the per-op rows of every layer
+(`BRINGUP_PROFILE_LAYERS` narrows them) and the pipelined timeline. A program's time is its start to end at dispatch,
+so a program that waits inside (a CCL waiting for its neighbour) is charged the wait. The device profiler (kernel time
+only; a sync per section, per-op mode on the representative layers) stays for cross-checks: spec `perf.profiler:
+device`, or `BRINGUP_PROFILER=device` with `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+TT_METAL_PROFILER_CPP_POST_PROCESS=1` for one run. If the real-time profiler is not active, the profile fails; it never
+falls back.
 
 ```yaml
 - id: P.3

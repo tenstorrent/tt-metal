@@ -363,9 +363,11 @@ Never:
   (never a number; the gate refuses one) plus the profile with a time threshold below the X.1 baseline); perf tasks do
   not void the plan approval;
 - brief a perf pick to measure anything beyond the e2e chunk time and the changed section's time, before and after,
-  from the plain profile (minutes). Per-op mode (BRINGUP_PROFILE_OPS) syncs after every ttnn call, about a minute per
-  layer: it runs on the representative layers only, never the whole model (Xing P.3: a per-op before/after over 40
-  layers ran 40 minutes for a change to the experts, and was then killed by the agent's task time limit);
+  from the plain profile (minutes). The framework measures device time with the program real-time profiler (F155,
+  owner 2026-10-22): no syncs, so the per-op rows (BRINGUP_PROFILE_OPS) of every layer come from the same run as the
+  sections. Never brief an agent to use the device profiler's per-op mode, which syncs after every ttnn call (about a
+  minute per layer; Xing P.3: 40 layers ran 40 minutes and hit the agent's time limit); it stays only for a
+  deliberate cross-check of kernel time (perf.profiler: device);
 - run device measurements for a perf pick by hand. Every perf task gets an `ab` switch in tasks.yaml (`ab: {env:
   {<VAR>: <old value>}}`, the old path; optional `ab_rungs`). After its agent (which stops at the first frozen-test
   failure), the orchestrator itself produces the on/off table (frozen tests, ladder at `last` and the full-target

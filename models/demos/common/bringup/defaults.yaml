@@ -61,11 +61,14 @@ contract:
   pad_token: 4294967295    # 0xFFFFFFFF, what the engine sends past actual_end
 
 perf:
-  op_profile: false        # per-op breakdown (representative layers only)
+  op_profile: false        # per-op breakdown (every layer on rt; representative layers on the device profiler)
   ab_mode: quick           # F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
                            # prefix, every layer vs the golden, clean wall); full (frozen tests, ladder rungs,
                            # profile). Quick picks' full gates run once, merged, before the final task (X.3)
   full_prefill: false      # the full-target warm prefill in the profile
+  profiler: rt             # F155 (owner): device time from the program real-time profiler (dispatch start to end per
+                           # program, no syncs); device = the device profiler (kernel time only, a sync per section,
+                           # op mode on representative layers), for cross-checks only
 
 intake:
   accuracy_tokens: 2048    # tokens the HF sanity scores for its accuracy floor
