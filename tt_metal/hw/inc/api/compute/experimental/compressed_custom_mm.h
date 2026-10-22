@@ -14,7 +14,7 @@
 #include "experimental/llk_unpack_AB_compressed_custom_mm_api.h"
 #endif
 #if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
-#include "experimental/llk_pack_custom_mm.h"
+#include "experimental/llk_pack_custom_mm_api.h"
 #endif
 namespace ckernel {
 
@@ -45,7 +45,7 @@ namespace ckernel {
  * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id        | Output CB; with dense_packing its configured pack format sizes the dense stride        | uint32_t | 0 to 31                               | True                  |
  * | ct_dim           | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
@@ -71,7 +71,7 @@ ALWI void compressed_custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 // clang-format off
@@ -98,7 +98,7 @@ ALWI void compressed_custom_mm_block_init(
  * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
- * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
+ * | out_cb_id      | Output CB; with dense_packing its configured pack format sizes the dense stride        | uint32_t | 0 to 31                               | True                  |
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
@@ -110,7 +110,7 @@ ALWI void compressed_custom_mm_block_init_short(
     // NOTE: split_acc is accepted but NOT forwarded (see compressed_custom_mm_block_init).
     MATH((llk_math_compressed_custom_mm_init<transpose, false /* split_acc */, dense_packing>(in0_cb_id, in1_cb_id)));
 
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((llk_pack_custom_mm_init<dense_packing>(out_cb_id)));
 }
 
 // clang-format off
@@ -242,18 +242,19 @@ ALWI void compressed_custom_mm_block_math(
 // clang-format off
 /**
  * Uninitializes the custom_mm_block operation, must be called after the final custom_mm_block call in a sequence and before initializing another operation.
- *
+ * With dense_packing it restores the packer's default 64-row tile stride, sized from the output CB's configured pack format.
  *
  * Return value: None
  *
  * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
  * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
  * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | out_cb_id             | The same output CB that was passed to the init; its configured pack format sets the restored stride    | uint32_t | 0 to 31                      | True                  |
  */
 // clang-format on
 template <bool dense_packing = false>
-ALWI void compressed_custom_mm_block_uninit() {
-    PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));
+ALWI void compressed_custom_mm_block_uninit(const std::uint32_t out_cb_id) {
+    PACK((llk_pack_custom_mm_uninit<dense_packing>(out_cb_id)));
 }
 
 #endif  // ARCH_BLACKHOLE
