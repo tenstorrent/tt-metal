@@ -65,6 +65,7 @@ void reset_state(std::uint32_t& counter)
     // move to the other slot, and zero the new slot to prevent retriggering.
     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
     commit_store(brisc_counter, counter);
+    host_signal::write(host_signal::BRISC_COUNTER_SLOT, counter);
 }
 
 int main()
@@ -82,6 +83,7 @@ int main()
     // the firmware is in the polling loop before it issues any command. Uses
     // commit_store (store + spin-readback) for a hard visibility guarantee.
     commit_store(brisc_counter, BRISC_BOOT_READY_SENTINEL);
+    host_signal::write(host_signal::BRISC_COUNTER_SLOT, BRISC_BOOT_READY_SENTINEL);
 
 #ifdef ARCH_WORMHOLE
     // Array for keeping last known addresses of _start symbol in kernel ELF, for T[0-2]
@@ -123,6 +125,10 @@ int main()
                 commit_store(mailbox_math, ckernel::RESET_VAL);
                 commit_store(mailbox_unpack, ckernel::RESET_VAL);
                 commit_store(mailbox_pack, ckernel::RESET_VAL);
+                for (std::uint32_t slot = 0; slot < 3; ++slot)
+                {
+                    host_signal::write(slot, ckernel::RESET_VAL);
+                }
 
                 commit_store(profiler_barrier, 0U);
                 commit_store(profiler_barrier + 1, 0U);
@@ -134,10 +140,11 @@ int main()
                 // The counter bank registers, when the launch counts a zone.
                 llk_perf::configure_from_brisc();
 
-                clear_trisc_soft_reset();
-
+                // Acknowledge before the release: these stores and readbacks would otherwise run during the TRISCs' startup.
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+
+                clear_trisc_soft_reset();
                 break;
 
             case BriscCommandState::RESET_TRISCS:
@@ -151,8 +158,17 @@ int main()
                 break;
         }
 
-        // Wait for 1us before polling again
-        ckernel::wait(ARCH_CYCLE_MICRO_SECOND);
+#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
+        constexpr std::uint32_t poll_period_us = 1;
+#else
+        constexpr std::uint32_t poll_period_us = 100;
+#endif
+        // Poll about every 100 us and spin on NOPs in between: each poll is an L1 read and a wall clock wait reads its
+        // registers over the debug register bus, and both change the timing of the kernel under test.
+        for (std::uint32_t i = 0; i < poll_period_us * ARCH_CYCLE_MICRO_SECOND; ++i)
+        {
+            asm volatile("nop");
+        }
     }
 }
 
