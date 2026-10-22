@@ -1577,7 +1577,20 @@ void kernel_main() {
                 logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
             const uint32_t end_seq_tile =
                 source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
-            const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k) {
+            // Chain overlap (M8). The chain protocol allows one outstanding chunk per link: a member signals
+            // "ready" and the upstream writes. Signalling at the start of a piece (after forwarding the previous
+            // one) made the chain a bucket brigade, every hop idle while its neighbours moved, and the M6 profile
+            // measured its pace at 25-28 us per piece against ~13 us for a core fetching from DRAM on its own. Now
+            // a member pushes piece p, then, if the page for p+1 is already free, reserves it and signals ready
+            // for p+1 BEFORE forwarding p, so the upstream's write of p+1 overlaps this core's forward of p. The
+            // armed page and signal carry to the next stream_piece call; nothing is armed after the iteration's
+            // last piece (the pooled fetches and the dummy pushes reserve pages themselves). Fetchers (injectors
+            // and the standalone two-head cores) only gain the early reserve.
+            bool k_armed = false;
+            bool v_armed = false;
+            uint32_t k_armed_addr = 0;
+            uint32_t v_armed_addr = 0;
+            const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k, bool has_next) {
                 const uint32_t nk = nq / q_heads_per_k;
                 const uint32_t nv = nq / q_heads_per_v;
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
@@ -1587,12 +1600,23 @@ void kernel_main() {
                 const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
                 // Chain scope keys: the query head for MHA chains, the KV head for grouped ones (as the dense loop).
                 const uint32_t k_head = gqa_grouped_kv ? nk : nq;
+                const bool k_rx = k_chain.should_receive(k_head);
+                const bool v_rx = v_chain.should_receive(nv);
                 CircularBuffer cb_k(cb_k_in);
-                cb_k.reserve_back(k_chunk_tiles);
-                const uint32_t k_addr = cb_k.get_write_ptr();
-                if (k_chain.should_receive(k_head)) {
-                    SOL_ZONE("RD_CHAIN_RX");  // member: ready signal, then the wait for the injector's forward
-                    k_chain.receive(noc);
+                uint32_t k_addr;
+                if (k_armed) {
+                    k_addr = k_armed_addr;
+                    k_armed = false;
+                } else {
+                    cb_k.reserve_back(k_chunk_tiles);
+                    k_addr = cb_k.get_write_ptr();
+                    if (k_rx) {
+                        k_chain.signal_ready(noc);
+                    }
+                }
+                if (k_rx) {
+                    SOL_ZONE("RD_CHAIN_RX");  // member: the wait for the upstream write (the ready signal went early)
+                    k_chain.wait_data();
                 } else if (source_is_local) {
                     SOL_ZONE("RD_FETCH_K");
                     fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
@@ -1600,50 +1624,88 @@ void kernel_main() {
                     SOL_ZONE("RD_FETCH_K");
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
+                // Push before the forward: the forward only reads the page, its NoC write is flushed inside
+                // forward(), and the page is not reused before piece p+2's reserve. Then arm p+1 if its page is free.
+                cb_k.push_back(k_chunk_tiles);
+                if (has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
+                    cb_k.reserve_back(k_chunk_tiles);
+                    k_armed_addr = cb_k.get_write_ptr();
+                    k_armed = true;
+                    if (k_rx) {
+                        k_chain.signal_ready(noc);
+                    }
+                }
                 if (k_chain.should_forward(k_head, 0)) {
-                    SOL_ZONE("RD_CHAIN_TX");  // injector: the wait for every member's ready signal, then the write
+                    SOL_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
-                cb_k.push_back(k_chunk_tiles);
                 const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 CircularBuffer cb_v(cb_v_in);
-                cb_v.reserve_back(v_cb_entry_tiles);
-                const uint32_t v_addr = cb_v.get_write_ptr();
-                if (v_chain.should_receive(nv)) {
-                    v_chain.receive(noc);
+                uint32_t v_addr;
+                if (v_armed) {
+                    v_addr = v_armed_addr;
+                    v_armed = false;
+                } else {
+                    cb_v.reserve_back(v_cb_entry_tiles);
+                    v_addr = cb_v.get_write_ptr();
+                    if (v_rx) {
+                        v_chain.signal_ready(noc);
+                    }
+                }
+                if (v_rx) {
+                    v_chain.wait_data();
                 } else if (source_is_local) {
                     fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 } else {
                     fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 }
+                cb_v.push_back(v_cb_entry_tiles);
+                if (has_next && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
+                    cb_v.reserve_back(v_cb_entry_tiles);
+                    v_armed_addr = cb_v.get_write_ptr();
+                    v_armed = true;
+                    if (v_rx) {
+                        v_chain.signal_ready(noc);
+                    }
+                }
                 if (v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
                 }
-                cb_v.push_back(v_cb_entry_tiles);
                 KV_chunks_processed_in_iter++;
             };
             {
                 SOL_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
-                for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-                    if (!chunked_kv_chunk_is_live<
-                            kv_pad_rotation_enabled,
-                            chunked_enabled,
-                            kv_local_padded_Nt,
-                            chunk_size_t,
-                            kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, causal_end_nt)) {
-                        continue;
-                    }
-                    for (uint32_t i0 = 0; i0 < n_res;) {
-                        uint32_t i1 = i0;
-                        while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
-                            ++i1;
+                // Two passes over the same (piece, head group) order: a count first, so each streamed piece knows
+                // whether another follows in this iteration (the lookahead arms the next page), then the stream.
+                uint32_t n_pieces = 0;
+                uint32_t j = 0;
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                        if (!chunked_kv_chunk_is_live<
+                                kv_pad_rotation_enabled,
+                                chunked_enabled,
+                                kv_local_padded_Nt,
+                                chunk_size_t,
+                                kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, causal_end_nt)) {
+                            continue;
                         }
-                        const bool union_kept =
-                            k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
-                        if (union_kept) {
-                            stream_piece(res_nb[i0], res_nq[i0], k);
+                        for (uint32_t i0 = 0; i0 < n_res;) {
+                            uint32_t i1 = i0;
+                            while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                                ++i1;
+                            }
+                            const bool union_kept =
+                                k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
+                            if (union_kept) {
+                                if (pass == 0) {
+                                    ++n_pieces;
+                                } else {
+                                    ++j;
+                                    stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                }
+                            }
+                            i0 = i1;
                         }
-                        i0 = i1;
                     }
                 }
             }

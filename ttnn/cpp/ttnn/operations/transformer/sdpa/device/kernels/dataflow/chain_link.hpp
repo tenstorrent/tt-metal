@@ -184,11 +184,22 @@ public:
      * Protocol: signal sender that we're ready, then wait for data.
      */
     void receive(Noc noc) const {
-        Semaphore<> receiver_sem(receiver_sem_id_);
-        receiver_sem.set(INVALID);
-        Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1);
-        receiver_sem.wait(VALID);
+        signal_ready(noc);
+        wait_data();
     }
+
+    /**
+     * The two halves of receive(), for a receiver that wants the upstream write of the NEXT chunk to overlap its
+     * own forward of the current one: signal_ready() as soon as the next CB page is free (the upstream may then
+     * write it at any time), wait_data() when the chunk is needed. Exactly one chunk may be outstanding per
+     * link (one valid flag), so signal_ready() must not be called again before the matching wait_data().
+     */
+    void signal_ready(Noc noc) const {
+        Semaphore<>(receiver_sem_id_).set(INVALID);
+        Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1);
+    }
+
+    void wait_data() const { Semaphore<>(receiver_sem_id_).wait(VALID); }
 
     /**
      * Forward data to downstream link(s) using default chunk size.
