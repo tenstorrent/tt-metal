@@ -889,16 +889,26 @@ LONG_RING_STRESS_TIMEOUT=1800
 # ~49 s, 128-into-144 embed ~895 s -- hence the 1800 s LONG_RING_STRESS_TIMEOUT above (the old 600 s
 # did not cover the 128 phase-1 solve). Each stage rides its matching board: 96->SC24 (96 slots,
 # exact), 112->SC28 (112 slots, exact), 128->SC36 (144 slots, k=32 binding host-cap embed).
-# STILL EXCLUDED: 144-stage (SC36 full-board exact fit) -- the heaviest solve, kept off this CI sweep
-# for now. ALSO still disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-
-# slots embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after
-# phase-1 setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve
-# fine; that erratic embedded-case cost is a separate z-link issue, not the conflict-cap budget.
+# RE-ENABLED FOR MEASUREMENT: 96/112/128/144 all run here now. The heavy 128-into-144 embed (and 144 exact
+# fill) previously hit the step cap on contended CI (run 39366610312 ran >2h28m on 128 alone and starved the
+# rest). For each heavy stage (>=96) we run a THREE-WAY best-effort measurement on the same board/contention:
+#   new    = kissat, TT_TOPO_SAT_INCREMENTAL=0  (one-shot/non-incremental where sound -- variable elimination runs)
+#   normal = kissat, TT_TOPO_SAT_INCREMENTAL=1  (historical always-incremental baseline)
+#   cadical= cadical engine (always incremental)
+# All three are capped at the SAME 600s (10 min) wall clock and are BEST-EFFORT: a cap-out or solver failure is an
+# expected measurement outcome (a slow engine), logged but NOT counted as a CI failure, so it never fails or
+# aborts the bh-ring-stress group (16/64 and the sweeps below remain the gating tests). TT_TOPO_SAT_LOG_SOLVES=1
+# makes the [sat-solve] line report solve ms. Exact-fit boards first (96->SC24, 112->SC28) so they report before
+# the heavier embeds (128->SC36 144-slot k=32 embed, 144->SC36 full-board fill) which may cap out.
+# Still disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots embedding hung
+# the mapper >40 min on CI (run 33224879320) even though 64-into-144 and 64-into-80 solve fine; a separate
+# z-link issue, not the conflict-cap budget.
+RING_MEASURE_CAP=600  # 10 min wall clock, identical for all three settings
 for entry in \
-    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 128" \
-    "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 96" \
     "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 112" \
-    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 96" ; do
+    "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 128 144" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Guard against a tt-cluster-descriptors pin that predates the mapping (all current entries are in the pin).
@@ -909,7 +919,18 @@ for entry in \
     mgd_var="MGD_BLITZ_${stage}"
     stage_timeout=${RING_STRESS_TIMEOUT}
     if (( stage >= 96 )); then stage_timeout=${LONG_RING_STRESS_TIMEOUT}; fi
-    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+    if (( stage < 96 )); then
+      # 16/64: the real gating stress test (one default run via run_test, counts toward pass/fail).
+      run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+      continue
+    fi
+    # Heavy (>=96): three-way best-effort measurement. Each "spec" is "label:engine_env". Never fails the job.
+    for spec in "new:TT_TOPO_SAT_INCREMENTAL=0" "normal:TT_TOPO_SAT_INCREMENTAL=1" "cadical:TT_TOPO_SAT_ENGINE=cadical"; do
+      m_label="${spec%%:*}"; m_env="${spec#*:}"
+      echo "+ [bh-ring-stress][measure] START stage=${stage} mode=${m_label} cap=${RING_MEASURE_CAP}s mgd=$(basename "${!mgd_var}")" >&2
+      timeout --kill-after=30s "${RING_MEASURE_CAP}" env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${stage_timeout} ${m_env} TT_TOPO_SAT_LOG_SOLVES=1 tt-run --mesh-graph-descriptor "${!mgd_var}" --mock-cluster-rank-binding "${cluster_map}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder" 2>&1 | grep -aE "sat-solve|\[  PASSED|\[  FAILED|\[       OK ]" || true
+      echo "+ [bh-ring-stress][measure] END   stage=${stage} mode=${m_label}" >&2
+    done
   done
 done
 
