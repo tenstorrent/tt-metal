@@ -8,18 +8,43 @@ For each step the host copies the packed upload; the derive program runs eagerly
 Every derived buffer is read back from every chip of the row and compared bit for bit with the host values
 (test_spec_inputs_host.py's expectations: TtMiMoModel.prepare_decode_inputs_host, kv.owned_positions / owner_mask,
 serial_positions, the MTP's plan_mtp / mtp_cache_position inputs). With the decode RoPE tables, the draft's table
-rows at the derived indices must equal the host cos / sin it used to upload."""
+rows at the derived indices must equal the host cos / sin it used to upload.
+
+test_spec_chain_tp8: the chain and drafts steps (tt/spec_chain.py, kernels/spec_chain.cpp) against their host mirror
+(reference/spec_chain.py, itself checked against the host plan in test_spec_chain_host.py) bit for bit, eager and
+replayed from one capture: the draft's packed upload they write and the result page, for passes of one request with
+every accepted count, around the ring's wrap and at the context limit, an idle chain row, and a host-written upload."""
 
 from types import SimpleNamespace
+
+import random
 
 import pytest
 import torch
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import SPEC_SLOTS, DraftSource, plan_mtp
+from models.experimental.mimo_v2_6_flash.reference.sample_verify import NO_TOKEN, OUT_WORDS
+from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
+    ACCEPT_WORDS,
+    DRAFTS_AT,
+    RESULT_WORDS,
+    chain_row,
+    chain_step,
+    drafts_step,
+)
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    MAX_DRAFTS,
+    SPEC_SLOTS,
+    DraftSource,
+    draft_source,
+    plan_mtp,
+    plan_verify_passes,
+)
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_verify
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes, model_path
 from models.experimental.mimo_v2_6_flash.tests.test_spec_inputs_host import (
+    REP,
     B,
     mtp_host_values,
     random_positions,
@@ -29,6 +54,7 @@ from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
 from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
+from models.experimental.mimo_v2_6_flash.tt.spec_chain import SpecChain
 from models.experimental.mimo_v2_6_flash.tt.spec_inputs import SpecInputs
 
 MAX_SEQ_LEN = 4096
@@ -157,3 +183,101 @@ def test_spec_inputs_tp8(mesh_device, rope_tables):
                         same(row, chips(uploaded)[0], f"draft {k} RoPE row {p}")
                         row.deallocate(True)
                         uploaded.deallocate(True)
+
+
+def words_of(t):
+    """A replicated row-major tensor's values on every chip, as uint32 words (int64)."""
+    return [(ttnn.to_torch(d).reshape(-1).to(torch.int64) & 0xFFFFFFFF).tolist() for d in ttnn.get_device_tensors(t)]
+
+
+def upload_words(plan, words, t):
+    """Copy uint32 ``words`` into the replicated row-major uint32 tensor ``t``."""
+    host = torch.tensor([w - (1 << 32) if w >= 1 << 31 else w for w in words], dtype=torch.int32).reshape(1, -1)
+    rep = plan.replicate()
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), t
+    )
+
+
+def accept_page(count, tokens):
+    """SampleVerify's output page with group 0 committing ``tokens`` (count words), the other groups unused."""
+    words = []
+    for g in range(ACCEPT_WORDS // OUT_WORDS):
+        n, toks = (count, tokens) if g == 0 else (0, [])
+        out = [n] + list(toks) + [NO_TOKEN] * (1 + MAX_DRAFTS - len(toks))
+        words += out + [0] * (OUT_WORDS - len(out))
+    return words
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_spec_chain_tp8(mesh_device):
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    spec = SpecInputs(plan, B, REP)
+
+    def u32(n):
+        return ttnn.from_torch(
+            torch.zeros(1, n, dtype=torch.int32),
+            device=mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    accept, argmax, heads = u32(ACCEPT_WORDS), u32(B), [u32(B) for _ in range(MAX_DRAFTS)]
+    chain = SpecChain(plan, spec, accept, argmax, heads)
+
+    def run():
+        chain.chain()
+        chain.drafts()
+
+    replay = replayed(mesh, run)
+    rng = random.Random(0)
+    cases = []  # (verify pass, chain row or None, accept words)
+    for bonus in (1, 255, 256, 257, 511, 512, MAX_SEQ_LEN - 1 - MAX_DRAFTS, MAX_SEQ_LEN - 2):
+        for n in range(MAX_DRAFTS + 1):
+            for m in range(1, n + 2):
+                if bonus - m < 0:
+                    continue
+                toks = [rng.randrange(152576) for _ in range(n + 1)]
+                (vp,) = plan_verify_passes([(3, toks, list(range(bonus - m, bonus - m + n + 1)), n)])
+                committed = [rng.randrange(152576) for _ in range(m)]
+                row = chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)
+                cases.append((vp, row, accept_page(m, committed)))
+    (two,) = plan_verify_passes([(0, [1, 2], [40, 41], 1), (1, [3], [90], 0)])
+    cases.append((two, None, accept_page(2, [5, 6])))
+    for k, (vp, row, acc) in enumerate(cases):
+        tok = torch.zeros(B, dtype=torch.int32)
+        pos = torch.full((B,), -1, dtype=torch.int32)
+        tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+        pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+        chain_t = None if row is None else torch.tensor(row, dtype=torch.int32)
+        ids = [rng.randrange(152576) for _ in range(B)]
+        head_rows = [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+        verify_upload = (spec.verify_host(tok, pos, chain_t), spec.verify_packed)
+        want_mtp, header = chain_step(pack_verify(tok, pos, chain_t).tolist(), acc, ids)
+        want_result = header + drafts_step(want_mtp, head_rows)
+        assert len(want_result) == RESULT_WORDS
+        for runner in (run, replay):
+            ttnn.copy_host_to_device_tensor(*verify_upload)
+            upload_words(plan, acc, accept)
+            upload_words(plan, ids, argmax)
+            for h, words in zip(heads, head_rows):
+                upload_words(plan, words, h)
+            runner()
+            for c, got in enumerate(words_of(spec.mtp_packed)):
+                assert got == [w & 0xFFFFFFFF for w in want_mtp], f"case {k} chip {c}: draft upload"
+            for c, got in enumerate(words_of(chain.result)):
+                assert got == want_result, f"case {k} chip {c}: result page\n{got}\n{want_result}"
+
+    # A host-written upload (a host-planned draft): the drafts step finds its anchor alone.
+    host_plan = plan_mtp(DraftSource(row=0, slots=[2]), [700, -1, -1, -1], 1)
+    ttnn.copy_host_to_device_tensor(spec.mtp_host([0, 0, 9, 0], host_plan), spec.mtp_packed)
+    head_rows = [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+    for h, words in zip(heads, head_rows):
+        upload_words(plan, words, h)
+    chain.drafts()
+    got = words_of(chain.result)[0]
+    assert got[DRAFTS_AT : DRAFTS_AT + 1 + MAX_DRAFTS] == [2] + [r[2] for r in head_rows]

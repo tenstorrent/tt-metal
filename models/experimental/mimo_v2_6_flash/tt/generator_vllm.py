@@ -50,12 +50,19 @@ plugin's argmax ids when every request of the step is greedy. A step with a samp
 decides from ``max_device_top_k`` and ``supports_device_top_p_without_top_k``, and sends no penalties, logprobs,
 grammar or token filters there): the plugin sends the requests' temperature / top_k / top_p and the uniforms it drew
 from their generators, the device runs the plugin's accept walk on each slot's candidates, and the step returns each
-request's committed tokens and count, 128 bytes per pass. Otherwise the verify returns its logits and the plugin walks
-acceptance on the host with each request's own sampling (temperature, top-p, penalties, ...). Either way sampled
-requests speculate losslessly. A verify and a draft each copy one packed int32 tensor of their tokens and positions
-(plus the RoPE cos / sin when there are no device RoPE tables); their traces derive every other input from it on
-device (tt/spec_inputs.py). A step that verifies nothing decodes as above, a sampled request's on the sampled decode
-trace.
+request's committed tokens and count. Otherwise the verify returns its logits and the plugin walks acceptance on the
+host with each request's own sampling (temperature, top-p, penalties, ...). Either way sampled requests speculate
+losslessly. A verify and a draft each copy one packed int32 tensor of their tokens and positions (plus the RoPE cos /
+sin when there are no device RoPE tables); their traces derive every other input from it on device
+(tt/spec_inputs.py). A step that verifies nothing decodes as above, a sampled request's on the sampled decode trace.
+
+The draft is chained behind the verify (tt/spec_chain.py, reference/spec_chain.py): an argmax_ids verify accepts on
+device too, every request greedy (its committed tokens are the plugin's greedy walk over the ids), and on a lane that
+speculates the host enqueues, without waiting, the verify trace, the accept trace (SampleVerify, then the chain step,
+which writes the MTP draft's inputs from the accepted count and committed tokens on device) and the MTP draft trace,
+then reads one 320-byte result page per pass: the argmax ids or the committed tokens and count, and the drafts.
+propose_draft_tokens returns those drafts when the plugin committed what the device did; it drafts from the host plan
+after a plain decode step, a logits verify, without the decode RoPE tables, or when the commits differ.
 """
 
 import math
@@ -71,6 +78,7 @@ import ttnn
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from ..reference.sample_verify import commit_pass, pass_inputs
+from ..reference.spec_chain import chain_row, chained_draft
 from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource, draft_source, plan_mtp, plan_verify_passes
 from .attention import page_table_width
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
@@ -105,6 +113,12 @@ DEVICE_ROPE_MAX_LEN = 131072
 # plugin's model-owned drafter contract (module docstring).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
 MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
+# MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
+# argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
+SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1"
+# MIMO_SPEC_CHAIN_CHECK=1 (debug): every draft returned from the chain is drafted again from the host plan (the same
+# MTP inputs, rewriting the same ring entries) and compared; mismatches are logged (``chain_stats``).
+SPEC_CHAIN_CHECK = os.environ.get("MIMO_SPEC_CHAIN_CHECK") == "1"
 
 
 def _model_path(hf_config):
@@ -136,7 +150,8 @@ class MiMoV2ForCausalLM:
         "supports_device_penalties": False,
         "supports_device_logprobs": False,
         # The MTP drafter (spec_plan, propose_draft_tokens): it keeps the target hidden on device, so it needs no
-        # hidden feed. A verify is read back before the step returns (no async speculative decode).
+        # hidden feed. A verify, with the draft chained behind it, is read back before the step returns (no async
+        # speculative decode).
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose",),
         "output_tokens_per_step": 1,
@@ -176,6 +191,13 @@ class MiMoV2ForCausalLM:
         # Per lane: where the last step left its one request's committed tokens (reference.spec_decode.DraftSource),
         # None when that step ran no request or several; propose_draft_tokens drafts from it.
         self.spec_sources = [None] * self.dp
+        # Per lane: the draft its last verify chained on device for that request (reference.spec_chain.ChainedDraft),
+        # None when it chained none; propose_draft_tokens returns it when the plugin committed what the device did.
+        self.chained = [None] * self.dp
+        self.chain_check = SPEC_CHAIN_CHECK
+        # Drafts returned from the chain and drafted from the host plan; with chain_check, chained drafts checked
+        # against the host plan's and the mismatches.
+        self.chain_stats = {"chained": 0, "host": 0, "checked": 0, "mismatched": 0}
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -432,6 +454,7 @@ class MiMoV2ForCausalLM:
                 # A lane taking a prompt drafts again only after a decode step of one request; its MTP ring starts
                 # empty for the new request.
                 self.spec_sources[lane] = None
+                self.chained[lane] = None
                 if self.models[lane].mtp is not None:
                     self.models[lane].mtp.reset()
         # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
@@ -583,6 +606,7 @@ class MiMoV2ForCausalLM:
                 raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
         handles = []
         self.spec_sources = [None] * self.dp
+        self.chained = [None] * self.dp
         for lane, model in enumerate(self.models):
             first = lane * self.per_lane
             last = min(first + self.per_lane, rows)
@@ -662,8 +686,18 @@ class MiMoV2ForCausalLM:
         With "fused_sample" each pass's acceptance runs on device right after it (VerifySampler; its inputs from
         reference.sample_verify.pass_inputs) and the verify returns accepted_token_ids [B, 1 + K] int32 (each row's
         committed tokens, -1 past its count) and accepted_counts [B] int32 in [1, 1 + K]; a row without a position (a
-        gap) commits token 0 with count 1, what its argmax_ids answer commits. ``spec_sampling`` (``_check_spec_sampling``) carries the sampled rows'
-        parameters and the uniforms the plugin drew; None: every row greedy."""
+        gap) commits token 0 with count 1, what its argmax_ids answer commits. ``spec_sampling``
+        (``_check_spec_sampling``) carries the sampled rows' parameters and the uniforms the plugin drew; None: every
+        row greedy.
+
+        An argmax_ids verify runs the same accept trace, every request greedy (its committed tokens are the plugin's
+        greedy walk over the ids), so both modes read one result page per pass (tt/spec_chain.py): the argmax ids of
+        the pass's slots, its accept page. On a lane whose step is one request in one pass (its DraftSource), with the
+        decode RoPE tables, the accept trace's chain step also writes the MTP draft's inputs from what the device
+        committed, and the draft trace is enqueued right behind it (``mtp.enqueue_chained``), before the host reads:
+        the page then carries the drafts, kept in ``chained`` for propose_draft_tokens. The draft is declined on
+        device when the bonus position reaches max_seq_len - K. MIMO_SPEC_CHAIN=0: no chain, and an argmax_ids verify
+        reads the verify's greedy tokens. A logits verify chains nothing."""
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         t0 = time.perf_counter()
@@ -673,6 +707,7 @@ class MiMoV2ForCausalLM:
         if any(model.verify_trace is None for model in self.models):
             raise RuntimeError("a verify before warmup_model_decode captured the verify traces (MIMO_SPEC_DECODE=mtp)")
         fused = spec_mode == "fused_sample"
+        accept = fused or (spec_mode == "argmax_ids" and SPEC_CHAIN)  # the pass's accept trace and result page
         if spec_sampling is not None and not fused:
             raise ValueError(f"spec_sampling is only valid with spec_mode 'fused_sample', got {spec_mode!r}")
         tables = self._layer_tables(page_table, page_tables_per_layer)
@@ -690,8 +725,10 @@ class MiMoV2ForCausalLM:
             committed = torch.full(tokens.shape, -1, dtype=torch.int32)
             committed[:, 0] = 0
             accepted_counts = torch.ones(rows, dtype=torch.int32)
-        lanes = []
-        for lane in range(self.dp):
+        # The next verify writes the bonus and K drafts at positions bonus .. bonus + K: the chain drafts below that.
+        limit = self.max_seq_len - max(tokens.shape[1] - 1, 1)
+        lanes, chains = [], []
+        for lane, model in enumerate(self.models):
             first, last = lane * self.per_lane, min((lane + 1) * self.per_lane, rows)
             active = [
                 (r, tokens[r].tolist(), positions[r].tolist(), int(counts[r]))
@@ -700,36 +737,70 @@ class MiMoV2ForCausalLM:
             ]
             passes = plan_verify_passes(active)
             lanes.append(passes)
-            self.spec_sources[lane] = draft_source(passes)
+            source = self.spec_sources[lane] = draft_source(passes)
+            # A draft source runs one pass: its chain row goes with it.
+            chained = accept and SPEC_CHAIN and source is not None and model.mtp is not None
+            chained = chained and model.rope_tables is not None
+            chains.append(chain_row(model.max_batch, source, limit) if chained else None)
             # The decode trace's resident tokens and positions are stale now: the plugin reloads after a verify.
             self.decode_positions[lane] = None
-        waited = 0.0
+        self.chained = [None] * self.dp
+        waited = draft_wait = 0.0
         for k in range(max(map(len, lanes))):
             pending = []
             for lane, p in enumerate(lanes):
                 if k >= len(p):
                     continue
-                handle = self._enqueue_verify_pass(lane, p[k], tables)
-                if fused:
-                    model = self.models[lane]
-                    model.verify_accept_enqueue(model.verify_sampler.host_inputs(*pass_inputs(p[k], spec_sampling)))
-                pending.append((lane, p[k], handle))
-            for lane, vp, handle in pending:
+                model = self.models[lane]
+                handle = self._enqueue_verify_pass(lane, p[k], tables, chains[lane])
+                event = None
+                if accept:
+                    model.verify_accept_enqueue(*pass_inputs(p[k], spec_sampling))
+                    if chains[lane] is not None:
+                        # MIMO_VLLM_TIMING splits the wait at the accept trace's end: verify vs chained draft.
+                        event = ttnn.record_event(model.mesh_device, 0) if TIMING else None
+                        model.mtp.enqueue_chained()
+                pending.append((lane, p[k], handle, event))
+            for lane, vp, handle, event in pending:
+                model = self.models[lane]
                 t = time.perf_counter()
-                if fused:
-                    accepted = self.models[lane].verify_sampler.read()
-                    waited += time.perf_counter() - t
-                    commit_pass(vp, accepted, committed, accepted_counts)
+                if accept:
+                    if event is not None:
+                        ttnn.event_synchronize(event)
+                        waited += time.perf_counter() - t
+                        t = time.perf_counter()
+                    result = model.spec_chain.read()
+                    if event is not None:
+                        draft_wait += time.perf_counter() - t
+                    else:
+                        waited += time.perf_counter() - t
+                    if chains[lane] is not None:
+                        self.chained[lane] = chained_draft(result, self.spec_sources[lane], vp.positions)
+                    if fused:
+                        model.verify_sampler.tally(result.accept)
+                        commit_pass(vp, result.accept, committed, accepted_counts)
+                    else:
+                        for s, row, col in vp.answers:
+                            argmax[row, col] = int(result.argmax[s])
                     continue
-                out = self.models[lane].read_next_tokens(handle)
-                rows = self.models[lane].decode_read_rows(handle) if logits is not None else None
+                out = model.read_next_tokens(handle)
+                rows = model.decode_read_rows(handle) if logits is not None else None
                 waited += time.perf_counter() - t
                 for s, row, col in vp.answers:
                     argmax[row, col] = int(out[s])
                     if rows is not None:
                         logits[row, col] = rows[s]
         if TIMING:
-            self._spec_timing("verify", t0, waited, sum(map(len, lanes)), self._verify_tables_s)
+            chained = sum(c is not None for c in chains)
+            self._spec_timing(
+                "verify",
+                t0,
+                waited,
+                sum(map(len, lanes)),
+                self._verify_tables_s,
+                draft_wait=draft_wait,
+                chained=chained,
+            )
         if fused:
             self._log_fused()
             return VerifyOutput(spec_mode="fused_sample", accepted_token_ids=committed, accepted_counts=accepted_counts)
@@ -798,7 +869,8 @@ class MiMoV2ForCausalLM:
             buffers[shape] = torch.zeros(*shape, self.gen.cfg.vocab_size, dtype=torch.float32)
         return buffers[shape]
 
-    def _enqueue_verify_pass(self, lane, vp, tables):
+    def _enqueue_verify_pass(self, lane, vp, tables, chain=None):
+        """``chain``: the pass's chain row (reference.spec_chain.chain_row), None when no draft chains behind it."""
         model = self.models[lane]
         tok = torch.zeros(model.max_batch, dtype=torch.int32)
         pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
@@ -812,11 +884,15 @@ class MiMoV2ForCausalLM:
                 by_row[row] = self._group_rows(tables, row)
         model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
         self._verify_tables_s += time.perf_counter() - t
-        return model.verify_enqueue(tok, pos)
+        return model.verify_enqueue(tok, pos, None if chain is None else torch.tensor(chain, dtype=torch.int32))
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
-        """Drafts for the next step: the MTP layer drafts for each lane whose last step ran one request
-        (reference.spec_decode.plan_mtp), from that step's resident final hidden; every other row offers none."""
+        """Drafts for the next step: the MTP layer drafts for each lane whose last step ran one request, from that
+        step's resident final hidden; every other row offers none. After a verify that chained the lane's draft on
+        device (``_verify``), the drafts are already on the host: they are returned when the plugin committed what the
+        device committed (the row's count, tokens and positions). Otherwise (a plain decode step, a logits verify, no
+        decode RoPE tables, MIMO_SPEC_CHAIN=0, a draft the device declined at max_seq_len - K that ``num_drafts``
+        allows, or a different commit) the MTP drafts now from the host plan (reference.spec_decode.plan_mtp)."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
         t0 = time.perf_counter()
@@ -826,45 +902,81 @@ class MiMoV2ForCausalLM:
         rows = committed_tokens.shape[0]
         drafts = torch.zeros(rows, num_drafts, dtype=torch.int32)
         valid = torch.zeros(rows, dtype=torch.int32)
-        jobs, inputs_s = [], 0.0
+        jobs, inputs_s, hits = [], 0.0, 0
         for lane, source in enumerate(self.spec_sources):
-            mtp = self.models[lane].mtp
+            mtp, chained = self.models[lane].mtp, self.chained[lane]
             if source is None or mtp is None or source.row >= rows or not 1 <= num_drafts <= MAX_DRAFTS:
                 continue
             r, m = source.row, int(counts[source.row])
             # The next verify writes the bonus token and the drafts at positions bonus .. bonus + num_drafts.
             if int(committed_positions[r, m - 1]) + num_drafts >= self.max_seq_len:
                 continue
+            hit = chained is not None and chained.row == r
+            hit = hit and chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
+            if hit:
+                drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
+                valid[r] = num_drafts
+                hits += 1
+                if not self.chain_check:
+                    continue
             plan = plan_mtp(source, committed_positions[r].tolist(), m)
             slot_tokens = [0] * SPEC_SLOTS
             for c in range(m):
                 slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
             mtp.enqueue(slot_tokens, plan)
             inputs_s += mtp.last_inputs_s
-            jobs.append((lane, r, plan.anchor))
+            jobs.append((lane, r, plan.anchor, hit))
         waited = 0.0
-        for lane, r, anchor in jobs:
+        for lane, r, anchor, hit in jobs:
             t = time.perf_counter()
-            drafts[r] = torch.tensor(self.models[lane].mtp.read_drafts(anchor)[:num_drafts], dtype=torch.int32)
+            host = torch.tensor(self.models[lane].mtp.read_drafts(anchor)[:num_drafts], dtype=torch.int32)
             waited += time.perf_counter() - t
+            if hit:
+                self._check_chained(lane, drafts[r], host)
+                continue
+            drafts[r] = host
             valid[r] = num_drafts
+        planned = sum(not hit for *_, hit in jobs)
+        self.chain_stats["chained"] += hits
+        self.chain_stats["host"] += planned
         self.spec_sources = [None] * self.dp
+        self.chained = [None] * self.dp
         if TIMING:
-            self._spec_timing("propose", t0, waited, len(jobs), inputs_s)
+            self._spec_timing("propose", t0, waited, planned, inputs_s, chained=hits)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
-    def _spec_timing(self, kind, t0, waited, count, part=0.0):
-        """Every 128 verifies: per verify step, the mean host time and the time blocked reading back (the device's
-        share) of the verify and of the MTP draft, the time from a verify's return to the draft (the plugin's accept
-        walk), and the gap from a draft's return to the next verify (the plugin's commit and vLLM's scheduling and
-        output). ``count``: the verify's passes or the lanes drafted."""
+    def _check_chained(self, lane, chained, host):
+        """MIMO_SPEC_CHAIN_CHECK: a draft returned from the chain against the host plan's draft of the same commit."""
+        stats = self.chain_stats
+        stats["checked"] += 1
+        if not torch.equal(chained, host):
+            stats["mismatched"] += 1
+            logger.warning(
+                f"MiMo spec chain check: lane {lane}: chained drafts {chained.tolist()}, host {host.tolist()}"
+            )
+        if stats["checked"] % 64 == 0:
+            logger.info(
+                f"MiMo spec chain check: {stats['checked']} chained drafts checked, {stats['mismatched']} differ"
+            )
+
+    def _spec_timing(self, kind, t0, waited, count, part=0.0, draft_wait=0.0, chained=0):
+        """Every 128 verifies: per verify step, the mean host time of the verify (its enqueues: page tables, uploads,
+        the verify, accept and chained draft traces) and its time blocked reading back, split at the accept trace's
+        end on a lane that chained its draft (the verify's device share, then the draft's); the plugin's accept walk
+        (from the verify's return to propose_draft_tokens); propose_draft_tokens' host time (with the host plan's
+        inputs) and its time blocked on host-planned drafts; and the gap from its return to the next verify (the
+        plugin's commit and vLLM's scheduling and output). ``count``: the verify's passes or the lanes the propose
+        drafted from the host plan; ``chained``: the lanes whose draft the verify chained, or the propose returned."""
         now = time.perf_counter()
         stats = getattr(self, "_spec_timing_stats", None) or {
             "verifies": 0,
             "passes": 0,
+            "chained": 0,
+            "hits": 0,
             "drafts": 0,
             "verify_host": 0.0,
             "verify_wait": 0.0,
+            "draft_wait": 0.0,
             "propose_host": 0.0,
             "propose_wait": 0.0,
             "verify_tables": 0.0,
@@ -883,8 +995,10 @@ class MiMoV2ForCausalLM:
                 stats["gaps"] += 1
             stats["verifies"] += 1
             stats["passes"] += count
-            stats["verify_host"] += now - t0 - waited
+            stats["chained"] += chained
+            stats["verify_host"] += now - t0 - waited - draft_wait
             stats["verify_wait"] += waited
+            stats["draft_wait"] += draft_wait
             stats["verify_tables"] += part
             stats["verified"] = now
         else:
@@ -893,6 +1007,7 @@ class MiMoV2ForCausalLM:
                 stats["accepts"] += 1
                 stats["verified"] = None
             stats["drafts"] += count
+            stats["hits"] += chained
             stats["propose_host"] += now - t0 - waited
             stats["propose_wait"] += waited
             stats["draft_inputs"] += part
@@ -905,9 +1020,11 @@ class MiMoV2ForCausalLM:
 
             logger.info(
                 f"MiMo vLLM timing: spec {n} verifies in {1e3 * (now - stats['since']):.0f} ms "
-                f"({1e3 * (now - stats['since']) / n:.2f} ms/step), {stats['passes']} passes, {stats['drafts']} lane "
-                f"drafts; per step: verify host {ms('verify_host')} (tables {ms('verify_tables')}) + wait {ms('verify_wait')} ms, accept "
-                f"{ms('accept', stats['accepts'])} ms, draft host {ms('propose_host')} (inputs {ms('draft_inputs')}) + wait {ms('propose_wait')} ms, "
+                f"({1e3 * (now - stats['since']) / n:.2f} ms/step), {stats['passes']} passes, {stats['chained']} lane "
+                f"drafts chained on device ({stats['hits']} returned), {stats['drafts']} host-planned; per step: "
+                f"verify host {ms('verify_host')} (tables {ms('verify_tables')}) + wait {ms('verify_wait')} ms, "
+                f"chained draft wait {ms('draft_wait')} ms, accept walk {ms('accept', stats['accepts'])} ms, "
+                f"propose host {ms('propose_host')} (inputs {ms('draft_inputs')}) + wait {ms('propose_wait')} ms, "
                 f"gap {ms('gap', stats['gaps'])} ms"
             )
             stats = None

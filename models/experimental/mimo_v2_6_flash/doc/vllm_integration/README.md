@@ -212,7 +212,7 @@ vllm serve ... --no-async-scheduling \
   the embedding of the committed token; two steps on the last slot feed the layer its own output (vLLM's MTP
   proposer with one layer). Its KV cache is a ring of 256 positions, addressed at 256 + t % 256 with RoPE at t.
 - **Inputs** (`reference/spec_inputs.py`, `tt/spec_inputs.py`): a verify and a draft each copy one packed int32
-  tensor (tokens and positions; the draft's ring cache positions and RoPE indices computed on the host) instead of
+  tensor (tokens and positions, the verify's chain row; the draft's ring cache positions and RoPE indices) instead of
   13-14 tiny tensors; a short program at the start of each trace writes the trace's input buffers from it (owned
   positions, owner and token masks, serial positions, RoPE index). Without device RoPE tables (contexts past 128K)
   the verify also copies its 4 cos / sin and the draft its 6.
@@ -220,23 +220,53 @@ vllm serve ... --no-async-scheduling \
   `reference/sample_verify.py`): after each verify pass a small trace runs DeviceSampler's SampleScan and
   SampleChipMerge over the pass's slots (each with its request's temperature / top_k / top_p), the row all_gather,
   and SampleVerify on one core: per request, the plugin's point-mass accept walk with the uniforms the plugin drew
-  from the request's generator (`spec_sampling`), greedy requests on the verify's argmax ids. The step reads 128 bytes
-  per pass (each request's committed tokens and count) instead of 4 x 152k fp32 logits, and the host walks nothing.
-  Exact where the slot's 256 candidates hold the nucleus (the decode sampler's condition); otherwise the request is
-  accepted on its candidates and counted (`MiMo vLLM fused accept` log line, every 1024 fused verifies).
+  from the request's generator (`spec_sampling`), greedy requests on the verify's argmax ids. The host reads each
+  request's committed tokens and count instead of 4 x 152k fp32 logits, and walks nothing. Exact where the slot's 256
+  candidates hold the nucleus (the decode sampler's condition); otherwise the request is accepted on its candidates
+  and counted (`MiMo vLLM fused accept` log line, every 1024 fused verifies). The sampled slots' parameters are copied
+  only when they change (`VerifySampler.stage`), so a greedy pass copies its 256-byte control page alone.
+- **Draft chained behind the verify** (`tt/spec_chain.py`, `kernels/spec_chain.cpp`, host mirror
+  `reference/spec_chain.py`). An `argmax_ids` verify runs the same accept trace, every request greedy: its committed
+  tokens are exactly the plugin's greedy walk over the ids. The accept trace ends with the chain step (one core):
+  from SampleVerify's page and the verify upload's chain row (the source's slots and the position limit, packed by
+  the host with the verify's tokens and positions) it writes the MTP draft's packed upload as `pack_mtp(plan_mtp(...))`
+  would from the plugin's commit (the fill over the committed tokens, the anchor at the last one, the ring cache
+  positions and RoPE indices), and the header of the pass's result page (the accept page, the argmax ids, the
+  anchor). On a lane that speculates the host enqueues, without waiting, verify, accept and the MTP draft trace, which
+  ends with the drafts step (the anchor's three drafts into the result page), then reads that page: 320 bytes per
+  pass, one read, where the step used to read the verify, walk, plan and upload the draft, and read the drafts.
+  `propose_draft_tokens` returns the drafts already read when the plugin's commit (count, tokens, positions) is the
+  device's; it drafts from the host plan as before after a plain decode step, a `logits` verify, without the decode
+  RoPE tables (contexts past 128K: the draft's cos / sin are host uploads), at the context end (the chain declines when
+  the bonus reaches max_seq_len - K; a narrower propose that still fits drafts from the host plan), or on a differing
+  commit. The anchor needs no gather: the fill pass runs the MTP layer on every committed slot's own hidden row (the
+  verify's final-norm buffer), and the anchor is the one slot the chain gives step positions. `MIMO_SPEC_CHAIN=0`
+  restores the unchained flow (an `argmax_ids` verify then runs no accept step); `MIMO_SPEC_CHAIN_CHECK=1` drafts every
+  chained draft again from the host plan and logs differences. `MIMO_VLLM_TIMING=1` splits the verify's wait at the
+  accept trace's end (the verify's device share, then the chained draft's) and counts chained and host-planned drafts.
+  Every buffer the chain reads or writes is persistent (accept page, `mtp_packed`, the MTP heads' token rows, the
+  result page), so a later chain program that derives the next verify's inputs on device, with the host reading one
+  step behind, can read them.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
-  `tests/test_spec_inputs_tp8.py` (one Galaxy row): the device programs against the same values, eager and traced.
+  `tests/test_spec_inputs_tp8.py` (one Galaxy row): the device programs against the same values, eager and traced,
+  and the chain and drafts steps bit for bit against their mirror. `tests/test_spec_chain_host.py` (no device): the
+  chain's mirror against the host plan (every accepted count, the ring's wrap, the context limit) and after the accept
+  kernel's greedy mirror; `tests/test_spec_chain_adapter_host.py` (no device, needs vllm-tt-plugin): the adapter's
+  verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks).
   `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
   semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
   and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
   `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
   greedy tokens, and its first verifies agree across modes (logits argmax, greedy and sampled fused_sample against the
-  plugin's walk); logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
+  plugin's walk); every propose after a verify returns the chained drafts, the first ones equal to the host plan's;
+  logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
   kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
-  ~128 decode tokens draft from less context); async scheduling; more than one speculating request per lane (16 / 32
+  ~128 decode tokens draft from less context); async scheduling (a chain program writing the next verify's inputs
+  from the result on device, the host one step behind); the accept step's SampleScan on all-greedy passes (only
+  SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
   verify rows exceed the 4-user kernels); the 3-layer MTP chain; the trace region size with both extra traces.
 
 ## Not done

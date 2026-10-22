@@ -6,7 +6,8 @@ of these programs).
 
 A verify step and an MTP draft each copy one int32 tensor to the device; a small program at the start of the verify
 (draft) trace writes the trace's existing input buffers in place from it, before the captured step reads them. The
-captured step is unchanged: it reads the same buffers, with the same values, as when the host copied each one.
+captured step is unchanged: it reads the same buffers, with the same values, as when the host copied each one. A
+draft chained behind a verify (tt/spec_chain.py) copies nothing: the chain step writes ``mtp_packed`` on device.
 
 Every tensor here is persistent and made before any trace capture (TtMiMoModel.setup_mtp): the derive programs read
 the constants on every replay, and a buffer allocated after a capture can sit where that trace's replays write. The
@@ -46,9 +47,10 @@ class SpecInputs:
         self.ones = kv_lib.replicated(plan, torch.ones(max_batch, dtype=torch.int32), ttnn.int32)
 
     # ------------------------------------------------------------------ host
-    def verify_host(self, tokens, positions):
-        """The host tensor a verify copies into ``verify_packed``: tokens, positions [B] (-1 an idle slot)."""
-        return kv_lib.replicated(self.plan, pack_verify(tokens, positions), ttnn.int32, device=False)
+    def verify_host(self, tokens, positions, chain=None):
+        """The host tensor a verify copies into ``verify_packed``: tokens, positions [B] (-1 an idle slot), and the
+        chain row (reference.spec_chain.chain_row; None: idle), which the accept trace's chain step reads."""
+        return kv_lib.replicated(self.plan, pack_verify(tokens, positions, chain), ttnn.int32, device=False)
 
     def mtp_host(self, tokens=None, plan=None):
         """The host tensor a draft copies into ``mtp_packed`` (reference.spec_inputs.pack_mtp; None: idle)."""

@@ -15,6 +15,11 @@ fused_sample (acceptance on device, tt/verify_sampler.py): with every row greedy
 commits, and with the request sampled (temperature 1, top_p 0.95) and given uniforms it must commit what the plugin's
 host walk (vllm_tt_plugin.spec_accept.accept_speculated_tokens) commits on the logits verify's logits with the same
 uniforms, unless the device flagged the request's candidates truncated.
+
+The drafts are chained behind the verify on device (tt/spec_chain.py): with the decode RoPE tables every propose after
+a verify must return the drafts the verify's result page carried (only the first, after the plain step, is drafted
+from the host plan), and the first ones are drafted again from the host plan (MIMO_SPEC_CHAIN_CHECK) and must be the
+same tokens. Without the tables every draft is host-planned.
 """
 
 import time
@@ -202,6 +207,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, monkeypatch):
             accepted_counts=torch.ones(rows, dtype=torch.int32),
         )
         committed = accept_greedy(out.argmax_ids[spec_row].tolist(), drafts, MAX_DRAFTS)
+        model.chain_check = len(counts) < LOGITS_CHECKS  # the next propose checks the chained drafts
         if len(counts) < LOGITS_CHECKS:
             assert logits_argmax.tolist() == out.argmax_ids[spec_row].tolist(), "logits verify disagrees with ids"
             count = int(fused_greedy.accepted_counts[spec_row])
@@ -212,11 +218,20 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, monkeypatch):
     spec_s = time.perf_counter() - t0 - check_s
 
     n = prompt.numel() + STEPS
+    stats = model.chain_stats
+    logger.info(f"MTP spec decode chain: {stats}")
+    assert stats["mismatched"] == 0, "a chained draft differs from the host plan's"
+    if device_rope:
+        assert stats["host"] == 1 and stats["chained"] == len(counts) - 1, "a propose after a verify drafted again"
+        assert stats["checked"] == LOGITS_CHECKS
+    else:
+        assert stats["chained"] == 0 and stats["host"] == len(counts)
     logger.info(
         f"MTP spec decode: mean accepted {sum(counts) / len(counts):.2f} over {len(counts)} verifies "
         f"(histogram {[counts.count(m) for m in range(1, MAX_DRAFTS + 2)]}); "
         f"{1e3 * plain_s / STEPS:.1f} ms/token plain, {1e3 * spec_s / (len(seq) - prompt.numel() - 1):.1f} ms/token "
-        "speculative (host-driven, sync reads); sampled fused checks differing on truncated candidates: "
+        "speculative (drafts chained behind the verify, one read per verify); sampled fused checks differing on "
+        "truncated candidates: "
         f"{len(fused_mismatch)} of {LOGITS_CHECKS}"
     )
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)

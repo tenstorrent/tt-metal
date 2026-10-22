@@ -10,7 +10,9 @@ A speculative step used to copy 13-14 tiny replicated tensors to the device per 
 time each on a Galaxy row, most of a step's host time). It now copies one int32 tensor, row-major [rows * B]: B-wide
 rows, one after another (B = max_batch).
 
-Verify: rows (tokens, positions). Inside the verify trace, before the decode step:
+Verify: rows (tokens, positions, chain). The chain row is the accept trace's, not the verify step's: what the chain
+step needs to draft behind the pass on device (reference/spec_chain.py), zeros when no draft chains behind it. Inside
+the verify trace, before the decode step:
 
 * tokens: row 0, as uint32 (the bits: token ids are non-negative);
 * cur_pos: row 1;
@@ -27,7 +29,8 @@ MTP draft: rows (tokens, fill, step2, step3 cache positions, then the fill, step
 (reference.spec_decode.plan_mtp) and the ring cache positions (mtp_cache_position) are a few integers of host
 arithmetic; what cost host time was building and copying a tensor for each. Inside the draft trace: tokens as
 uint32, the cache positions as they are, serial fill positions min(fill, slot_cap_j), and the RoPE indices (the
-true positions clamped at 0, as the host cos / sin were) as uint32 for the device RoPE tables.
+true positions clamped at 0, as the host cos / sin were) as uint32 for the device RoPE tables. A draft chained behind
+a verify (reference/spec_chain.py) finds this upload already written on device, by the accept trace's chain step.
 
 The RoPE cos / sin themselves stay host inputs when the device tables do not exist (contexts past the tables' limit):
 a verify then also copies its four, a draft its six.
@@ -39,7 +42,7 @@ from .spec_decode import SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
-VERIFY_ROWS = 2  # tokens, positions
+VERIFY_ROWS = 3  # tokens, positions, the chain row (reference/spec_chain.py)
 MTP_ROWS = 7  # tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices
 
 
@@ -64,11 +67,16 @@ def slot_caps(max_batch, slots=SPEC_SLOTS):
 
 
 # ---------------------------------------------------------------------- uploads
-def pack_verify(tokens, positions):
-    """tokens, positions [B] (-1 an idle slot) -> int32 [2 * B]."""
+def pack_verify(tokens, positions, chain=None):
+    """tokens, positions [B] (-1 an idle slot), ``chain`` the chain row's B values (reference.spec_chain.chain_row;
+    None: zeros, no draft chains behind the pass) -> int32 [VERIFY_ROWS * B]."""
     assert tokens.numel() == positions.numel()
     assert int(positions.min()) >= -1, "positions are >= -1 (-1 an idle slot)"
-    return torch.cat((tokens.reshape(-1).to(torch.int32), positions.reshape(-1).to(torch.int32)))
+    chain = torch.zeros(positions.numel(), dtype=torch.int32) if chain is None else torch.as_tensor(chain)
+    assert chain.numel() == positions.numel()
+    return torch.cat(
+        (tokens.reshape(-1).to(torch.int32), positions.reshape(-1).to(torch.int32), chain.reshape(-1).to(torch.int32))
+    )
 
 
 def pack_mtp(max_batch, tokens=None, plan=None):
@@ -98,9 +106,10 @@ def tile_padded(t):
 
 
 def derive_verify(packed, own_cap, own_col, caps, rope):
-    """One chip's verify inputs from the upload ``packed`` int32 [2 * B]; ``own_cap`` int32 [B] and ``own_col``
-    bf16 [1, 1, B, 1] that chip's rows of owned_slot_caps / owned_slot_columns, ``caps`` slot_caps. Tile-layout
-    outputs (``mask``, ``owner_mask``) come back padded to whole tiles. Returns {name: tensor}."""
+    """One chip's verify inputs from the upload ``packed`` int32 [VERIFY_ROWS * B] (the chain row is not read);
+    ``own_cap`` int32 [B] and ``own_col`` bf16 [1, 1, B, 1] that chip's rows of owned_slot_caps / owned_slot_columns,
+    ``caps`` slot_caps. Tile-layout outputs (``mask``, ``owner_mask``) come back padded to whole tiles. Returns
+    {name: tensor}."""
     b = packed.numel() // VERIFY_ROWS
     pos = packed[b : 2 * b]
     out = {

@@ -12,10 +12,13 @@ One traced program per replica drafts MAX_DRAFTS tokens for the one request of t
 * two steps on the anchor slot alone, each taking the layer's own normed output and the previous draft (on device),
   for drafts 2 and 3.
 
-A draft copies one packed int32 tensor (tt/spec_inputs.py): the program starts by writing its token and position
-inputs from it. The committed tokens are uploaded, not taken from the last step's greedy tokens on device: they are
-the greedy tokens only when the plugin accepted greedily (a logits verify or a host-sampled step commits the plugin's
-own samples). With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables) the cos / sin are rows of the tables
+The program starts by writing its token and position inputs from one packed int32 tensor (tt/spec_inputs.py), and
+ends with the drafts step (tt/spec_chain.py), which writes the anchor slot's three drafts into the result page the
+host reads. Behind a verify whose acceptance ran on device the accept trace's chain step wrote that tensor on device,
+from the committed tokens and count the accept step left there (``enqueue_chained``: nothing is copied). After a plain
+decode step, a logits verify (the plugin samples on the host), or when the plugin committed other tokens than the
+device did, the host plans the draft and copies the tensor (``enqueue``).
+With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables) the cos / sin are rows of the tables
 at the uploaded positions, as in decode; without them (long contexts) the draft also copies its six cos / sin.
 
 The layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
@@ -36,6 +39,7 @@ from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_table_row
 from .common import as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .spec_chain import SpecChain
 
 
 class TtMiMoMTP:
@@ -76,7 +80,9 @@ class TtMiMoMTP:
         self.trace = None
 
     def setup_cache(self):
-        """The ring KV cache, its page table and the greedy heads: persistent, made before any trace capture."""
+        """The ring KV cache, its page table, the greedy heads and the replica's SpecChain (its result page):
+        persistent, made before any trace capture, after TtMiMoModel.setup_vllm_kv_cache (the verify's GreedyHead and
+        VerifySampler, which the chain reads)."""
         m = self.model
         assert self.kv_cache is None and m.decode_users is not None and m.decode_users >= SPEC_SLOTS
         row, blocks = mtp_table_row(m.block_size)
@@ -91,6 +97,9 @@ class TtMiMoMTP:
             mesh_mapper=self.plan.replicate(),
         )
         self.heads = [GreedyHead(self.plan, m.vocab_local, m.decode_users, m.max_batch) for _ in range(MAX_DRAFTS)]
+        assert m.verify_sampler is not None and m.greedy_head is not None, "the chain reads the verify's buffers"
+        heads = [h.next_tokens for h in self.heads]
+        m.spec_chain = SpecChain(self.plan, m.spec_inputs, m.verify_sampler.out, m.greedy_head.next_tokens, heads)
 
     def reset(self):
         """Zero the ring (a new request's prompt): its attention reads no K / V of an earlier request."""
@@ -153,9 +162,9 @@ class TtMiMoMTP:
         return pairs, made
 
     def _body(self, inputs):
-        """The draft program: its inputs written from the packed upload, then the three passes. ``inputs``: tokens,
-        fill, SPEC_SLOTS serial fill positions, step2, step3, then the RoPE inputs (three table indices, or the
-        three passes' host cos / sin)."""
+        """The draft program: its inputs written from the packed upload, the three passes, then the drafts step (the
+        anchor's drafts into the result page). ``inputs``: tokens, fill, SPEC_SLOTS serial fill positions, step2,
+        step3, then the RoPE inputs (three table indices, or the three passes' host cos / sin)."""
         tokens, fill, *rest = inputs
         serial = list(rest[:SPEC_SLOTS])
         step2, step3, *rope = rest[SPEC_SLOTS:]
@@ -171,6 +180,7 @@ class TtMiMoMTP:
         h3.deallocate(True)
         for t in made:
             t.deallocate(True)
+        self.model.spec_chain.drafts()
 
     # ------------------------------------------------------------------ host
     def _rope_host(self, plan=None):
@@ -239,6 +249,16 @@ class TtMiMoMTP:
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
+    def enqueue_chained(self):
+        """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
+        the packed upload's buffer from the pass's accepted count and committed tokens, so nothing is copied. Needs the
+        decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
+        assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
+        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+
     def read_drafts(self, anchor):
-        """The drafts of the anchor slot (blocks until the draft program finished)."""
-        return [int(self.plan.to_torch_replicated(h.next_tokens).reshape(-1)[anchor]) for h in self.heads]
+        """The drafts of the anchor slot, from the result page the drafts step wrote (blocks until it finished)."""
+        result = self.model.spec_chain.read()
+        if result.draft_anchor != anchor:
+            raise RuntimeError(f"the draft ran at slot {result.draft_anchor}, the host planned slot {anchor}")
+        return result.drafts
