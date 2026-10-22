@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // MM-8 port of quasar_idma: iDMA copies from a CCE through command buffer 0, one cce_idma_copy launch per leg, each
-// with a host wall-clock deadline. Every leg must ack and land the right data. Remote operands use the host-verified
-// mode, so the kernel never loads a remote address.
+// with a host wall-clock deadline. Every leg must ack and land the right data, with the guards before and after the
+// destination intact. Remote operands use the host-verified mode, so the kernel never loads a remote address. The
+// Strided1D cases port IDMA_1D_Strided with 64 B elements; the Strided1DSubLine cases use upstream's 8 B elements.
+// RemoteTl1KernelVerified is RemoteTl1 in the kernel-verified mode; its first run hung with no status (MM-8 probe).
 
 #include <gtest/gtest.h>
 
@@ -44,8 +46,29 @@ inline constexpr uint64_t kDestinationOffset = 0x8000;
 inline constexpr uint64_t kReadbackOffset = 0x10000;
 // Above DRAM UNRESERVED in the target view.
 inline constexpr uint64_t kGddrDataOffset = 0x10000;
+inline constexpr uint32_t kLeadingGuardTag = 0x800;
+// Strided cases: line-sized elements, every other line of the source.
+inline constexpr uint32_t kStridedElementBytes = 64;
+inline constexpr uint32_t kStridedElements = 10;
+inline constexpr uint32_t kStridedSourceStrideBytes = 128;
+// Sub-line strided cases: upstream IDMA_1D_Strided's every other 8 B element.
+inline constexpr uint32_t kSubLineElementBytes = 8;
+inline constexpr uint32_t kSubLineSourceStrideBytes = 16;
 
-enum class IdmaCase : uint32_t { OwnTl1, MaxPacket, SiblingTl1, LocalGddr, LocalGddr1, RemoteTl1, RemoteGddr };
+enum class IdmaCase : uint32_t {
+    OwnTl1,
+    MaxPacket,
+    SiblingTl1,
+    LocalGddr,
+    LocalGddr1,
+    RemoteTl1,
+    RemoteGddr,
+    RemoteTl1KernelVerified,
+    Strided1D,
+    Strided1DLocalGddr,
+    Strided1DSubLine,
+    Strided1DSubLineLocalGddr,
+};
 
 std::string idma_case_label(IdmaCase idma_case) {
     switch (idma_case) {
@@ -56,6 +79,11 @@ std::string idma_case_label(IdmaCase idma_case) {
         case IdmaCase::LocalGddr1: return "LocalGddr1";
         case IdmaCase::RemoteTl1: return "RemoteTl1";
         case IdmaCase::RemoteGddr: return "RemoteGddr";
+        case IdmaCase::RemoteTl1KernelVerified: return "RemoteTl1KernelVerified";
+        case IdmaCase::Strided1D: return "Strided1D";
+        case IdmaCase::Strided1DLocalGddr: return "Strided1DLocalGddr";
+        case IdmaCase::Strided1DSubLine: return "Strided1DSubLine";
+        case IdmaCase::Strided1DSubLineLocalGddr: return "Strided1DSubLineLocalGddr";
     }
     return "Unknown";
 }
@@ -70,11 +98,17 @@ std::vector<IdmaCase> all_idma_cases() {
         IdmaCase::LocalGddr,
         IdmaCase::LocalGddr1,
         IdmaCase::RemoteTl1,
-        IdmaCase::RemoteGddr};
+        IdmaCase::RemoteGddr,
+        IdmaCase::Strided1D,
+        IdmaCase::Strided1DLocalGddr,
+        IdmaCase::Strided1DSubLine,
+        IdmaCase::Strided1DSubLineLocalGddr,
+        IdmaCase::RemoteTl1KernelVerified};
 }
 
 bool is_remote_case(IdmaCase idma_case) {
-    return idma_case == IdmaCase::RemoteTl1 || idma_case == IdmaCase::RemoteGddr;
+    return idma_case == IdmaCase::RemoteTl1 || idma_case == IdmaCase::RemoteGddr ||
+           idma_case == IdmaCase::RemoteTl1KernelVerified;
 }
 
 inline constexpr uint32_t kRemoteSourceCce = 1;
@@ -168,7 +202,30 @@ struct IdmaLeg {
     Endpoint source;
     Endpoint destination;
     uint32_t len_bytes = kCopyBytes;
+    uint32_t num_elements = 1;
+    uint32_t source_stride_bytes = 0;
 };
+
+// Element i of a strided leg is len_bytes at source + i * source_stride_bytes; a plain leg has one element.
+uint32_t source_bytes_of(const IdmaLeg& leg) {
+    return (leg.num_elements - 1) * leg.source_stride_bytes + leg.len_bytes;
+}
+
+std::vector<uint32_t> gathered_elements(const IdmaLeg& leg, const std::vector<uint32_t>& source_words) {
+    const uint32_t element_words = leg.len_bytes / sizeof(uint32_t);
+    std::vector<uint32_t> words;
+    for (uint32_t element = 0; element < leg.num_elements; ++element) {
+        const uint32_t first_word = element * leg.source_stride_bytes / sizeof(uint32_t);
+        words.insert(words.end(), source_words.begin() + first_word, source_words.begin() + first_word + element_words);
+    }
+    return words;
+}
+
+Endpoint leading_guard_of(const Endpoint& destination) {
+    Endpoint guard = destination;
+    guard.offset -= kGuardBytes;
+    return guard;
+}
 
 // MIM-407: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
 uint32_t gddr_backend_for(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
@@ -226,11 +283,12 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
             return write_and_read_legs(0, gddr_endpoint(view, view_offset), backend, abi::kModeIdmaCopy);
         }
         case IdmaCase::RemoteTl1:
+        case IdmaCase::RemoteTl1KernelVerified:
             return write_and_read_legs(
                 kRemoteSourceCce,
                 sram_spa_endpoint(kRemoteDestinationCce, tl1_remote_landing(kRemoteSourceCce, kCopyHart)),
                 abi::kBackendD2d,
-                abi::kModeIdmaCopyHostVerified);
+                idma_case == IdmaCase::RemoteTl1 ? abi::kModeIdmaCopyHostVerified : abi::kModeIdmaCopy);
         case IdmaCase::RemoteGddr:
             return write_and_read_legs(
                 kRemoteSourceCce,
@@ -238,6 +296,25 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
                     base_dram_view_for_mimir(soc, kRemoteDestinationMimir), dram_unreserved + kGddrDataOffset),
                 abi::kBackendD2d,
                 abi::kModeIdmaCopyHostVerified);
+        case IdmaCase::Strided1D:
+        case IdmaCase::Strided1DLocalGddr:
+        case IdmaCase::Strided1DSubLine:
+        case IdmaCase::Strided1DSubLineLocalGddr: {
+            const bool sub_line =
+                idma_case == IdmaCase::Strided1DSubLine || idma_case == IdmaCase::Strided1DSubLineLocalGddr;
+            const bool from_gddr =
+                idma_case == IdmaCase::Strided1DLocalGddr || idma_case == IdmaCase::Strided1DSubLineLocalGddr;
+            return {IdmaLeg{
+                .name = "gather",
+                .mode = abi::kModeIdmaStrided,
+                .backend_vc = abi::kBackendFromRemote,
+                .source = from_gddr ? gddr_endpoint(local_dram_view_for_cce(soc, 0), dram_unreserved + kGddrDataOffset)
+                                    : own_source,
+                .destination = own_destination,
+                .len_bytes = sub_line ? kSubLineElementBytes : kStridedElementBytes,
+                .num_elements = kStridedElements,
+                .source_stride_bytes = sub_line ? kSubLineSourceStrideBytes : kStridedSourceStrideBytes}};
+        }
     }
     return {};
 }
@@ -303,6 +380,8 @@ std::vector<uint32_t> kernel_args(
     args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination.offset);
     args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination.offset >> 32);
     args[abi::kArgExpectedXor] = expected_xor;
+    args[abi::kArgNumElements] = leg.num_elements;
+    args[abi::kArgSourceStrideBytes] = leg.source_stride_bytes;
     return args;
 }
 
@@ -332,6 +411,7 @@ std::string mode_name(uint32_t mode) {
     switch (mode) {
         case abi::kModeIdmaCopy: return "IdmaCopy";
         case abi::kModeIdmaCopyHostVerified: return "IdmaCopyHostVerified";
+        case abi::kModeIdmaStrided: return "IdmaStrided";
     }
     return fmt::format("unknown_mode_{}", mode);
 }
@@ -339,12 +419,14 @@ std::string mode_name(uint32_t mode) {
 std::string status_detail(const std::vector<uint32_t>& status) {
     const uint32_t flags = status[abi::kStatusFlags];
     return fmt::format(
-        "kernel code {} flags [vc_space {} acked {} landed {}], last poll {} {}, cycles vc_space {} ack {} data {}, "
-        "kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})",
+        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
+        "{} "
+        "ack {} data {}, kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})",
         code_name(status[abi::kStatusCode]),
         (flags & abi::kFlagVcSpace) != 0,
         (flags & abi::kFlagAcked) != 0,
         (flags & abi::kFlagLanded) != 0,
+        status[abi::kStatusElementsIssued],
         poll_name(status[abi::kStatusLastPoll]),
         status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
         status[abi::kStatusVcSpaceCycles],
@@ -357,32 +439,38 @@ std::string status_detail(const std::vector<uint32_t>& status) {
 }
 
 // Runs one leg and checks it: the kernel reports success, the host reads the expected data (re-reading the first
-// mismatch after kRecheckDelay before calling it wrong), and the guard after it is intact. Returns false when the host
-// deadline passed, after which nothing else may run in this session (MIM-601).
+// mismatch after kRecheckDelay before calling it wrong), and the guards before and after it are intact. Returns false
+// when the host deadline passed, after which nothing else may run in this session (MIM-601).
 bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
-    const uint32_t num_words = leg.len_bytes / sizeof(uint32_t);
+    const uint32_t num_words = leg.num_elements * leg.len_bytes / sizeof(uint32_t);
     const uint64_t status_offset = tl1_done_block(kCopyHart);
     TT_FATAL(status_offset % abi::kLineBytes == 0, "status line 0x{:x} is not 64 B aligned", status_offset);
 
     const uint32_t seed = mimir_test_seed() ^ (tag * 0x9E3779B9u);
-    const std::vector<uint32_t> expected = make_pattern(MimirPattern::Prng, num_words, leg.source.offset, seed);
+    const std::vector<uint32_t> source_words =
+        make_pattern(MimirPattern::Prng, source_bytes_of(leg) / sizeof(uint32_t), leg.source.offset, seed);
+    const std::vector<uint32_t> expected = gathered_elements(leg, source_words);
     const std::vector<uint32_t> guard = make_guard(tag);
+    const std::vector<uint32_t> leading_guard = make_guard(kLeadingGuardTag + tag);
     std::vector<uint32_t> poison_and_guard = make_seed_pattern(tag, num_words);
     poison_and_guard.insert(poison_and_guard.end(), guard.begin(), guard.end());
-    write_endpoint(device, soc, leg.source, expected);
+    write_endpoint(device, soc, leg.source, source_words);
     write_endpoint(device, soc, leg.destination, poison_and_guard);
+    write_endpoint(device, soc, leading_guard_of(leg.destination), leading_guard);
     write_cce_tl1(device, leg.cce_index, status_offset, std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
 
     const CoreCoord translated_core = translated_dram_core(soc, leg.cce_index);
     const std::string label = fmt::format(
-        "{} on CCE{} hart {}: {} backend VC {} {} B, {} -> {}",
+        "{} on CCE{} hart {}: {} backend VC {} {} x {} B (source stride {} B), {} -> {}",
         leg.name,
         leg.cce_index,
         kCopyHart,
         mode_name(leg.mode),
         leg.backend_vc,
+        leg.num_elements,
         leg.len_bytes,
+        leg.source_stride_bytes,
         endpoint_label(soc, leg.cce_index, leg.source),
         endpoint_label(soc, leg.cce_index, leg.destination));
     record_leg(leg.name, "source", endpoint_label(soc, leg.cce_index, leg.source));
@@ -392,7 +480,13 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
         "core",
         fmt::format(
             "CCE{} hart {} translated ({}, {})", leg.cce_index, kCopyHart, translated_core.x, translated_core.y));
-    record_leg(leg.name, "length", std::to_string(leg.len_bytes));
+    record_leg(
+        leg.name,
+        "length",
+        leg.num_elements == 1
+            ? std::to_string(leg.len_bytes)
+            : fmt::format(
+                  "{} elements of {} B, source stride {} B", leg.num_elements, leg.len_bytes, leg.source_stride_bytes));
     record_leg(
         leg.name,
         "alignment",
@@ -426,6 +520,7 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
     log_info(tt::LogTest, "MM8 iDMA {}: {}", label, detail);
     const uint32_t success_code = leg.mode == abi::kModeIdmaCopyHostVerified ? abi::kCodeAcked : abi::kCodeLanded;
     EXPECT_EQ(status[abi::kStatusCode], success_code) << label << ": " << detail;
+    EXPECT_EQ(status[abi::kStatusElementsIssued], leg.num_elements) << label << ": " << detail;
     EXPECT_TRUE(compare_with_recheck(
         "iDMA " + label,
         leg.name,
@@ -434,8 +529,10 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
             return read_endpoint(device, soc, leg.destination, byte_offset, bytes);
         }))
         << detail;
-    EXPECT_EQ(read_endpoint(device, soc, leg.destination, leg.len_bytes, abi::kLineBytes), guard)
+    EXPECT_EQ(read_endpoint(device, soc, leg.destination, num_words * sizeof(uint32_t), abi::kLineBytes), guard)
         << label << ": guard after the destination was overwritten";
+    EXPECT_EQ(read_endpoint(device, soc, leading_guard_of(leg.destination), 0, kGuardBytes), leading_guard)
+        << label << ": guard before the destination was overwritten";
     return true;
 }
 

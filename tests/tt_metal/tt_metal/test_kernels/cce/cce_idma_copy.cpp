@@ -6,13 +6,14 @@
 // bounded poll of the destination data (MIM-628: done fires on accept). The status line is written only after the data
 // poll (MIM-560), through the uncached alias. In kModeIdmaCopyHostVerified the kernel loads no remote operand: when the
 // destination is its own TL1 it polls the XOR of the destination against kArgExpectedXor, otherwise there is no data
-// poll; the host checks the data.
+// poll; the host checks the data. kModeIdmaStrided issues one command per element from address generator 0.
 
 #include "cce_idma_copy_abi.h"
 #include "cce_test_common.h"
 #include "dev_mem_map.h"
 #include "experimental/cce_gddr.h"
 #include "internal/tt-2xx/quasar/noc_cmd_buf_common.h"
+#include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include "risc_common.h"
 
@@ -20,6 +21,7 @@ namespace abi = cce_idma_copy_abi;
 using cce_test::arg_u64;
 using cce_test::DataCheck;
 using cce_test::poll_bounded;
+using overlay::ADDRGEN_0;
 using overlay::CMDBUF_0;
 
 static_assert(abi::kMaxBytesInPacket == NOC_OVERLAY_MAX_BYTES_IN_PACKET);
@@ -48,12 +50,27 @@ static bool resolve_operand(uint32_t kind, uint32_t selector, uint64_t offset, O
     }
 }
 
-static bool data_landed(const Operand& source, const Operand& destination, uint32_t num_words, DataCheck& check) {
-    return cce_test::words_match(
-        reinterpret_cast<const volatile uint32_t*>(source.check_address),
-        reinterpret_cast<const volatile uint32_t*>(destination.check_address),
-        num_words,
-        check);
+// Element i of the source, at source + i * source_stride_bytes, against element i of the destination, at destination +
+// i * len_bytes; `check` numbers the destination words.
+static bool data_landed(
+    const Operand& source,
+    const Operand& destination,
+    uint32_t len_bytes,
+    uint32_t num_elements,
+    uint32_t source_stride_bytes,
+    DataCheck& check) {
+    check = DataCheck{};
+    const uint32_t element_words = len_bytes / sizeof(uint32_t);
+    for (uint32_t element = 0; element < num_elements; ++element) {
+        const volatile uint32_t* source_words = reinterpret_cast<const volatile uint32_t*>(
+            source.check_address + static_cast<uint64_t>(element) * source_stride_bytes);
+        const volatile uint32_t* destination_words = reinterpret_cast<const volatile uint32_t*>(
+            destination.check_address + static_cast<uint64_t>(element) * len_bytes);
+        for (uint32_t word = 0; word < element_words; ++word) {
+            check.record(element * element_words + word, destination_words[word], source_words[word]);
+        }
+    }
+    return check.mismatched_words == 0;
 }
 
 // XOR of the destination words against the host's XOR of the source; on a mismatch, `check` holds the two XORs.
@@ -69,8 +86,26 @@ static bool destination_xor_matches(
     return check.mismatched_words == 0;
 }
 
-static void program_copy(uint32_t backend_vc, uint32_t len_bytes, const Operand& source, const Operand& destination) {
+// In strided mode address generator 0 supplies every command's addresses (upstream idma_1d_strided_example.cpp), so
+// the command buffer gets no source or destination.
+static void program_copy(
+    uint32_t backend_vc,
+    uint32_t len_bytes,
+    const Operand& source,
+    const Operand& destination,
+    bool strided,
+    uint32_t num_elements,
+    uint32_t source_stride_bytes) {
     overlay::reset_cmdbuf<CMDBUF_0>();
+    if (strided) {
+        overlay::reset_addrgen<ADDRGEN_0>();
+        overlay::setup_src_base_start_addrgen<ADDRGEN_0>(source.command_address);
+        overlay::setup_src_inner_loop_addrgen<ADDRGEN_0>(
+            source_stride_bytes, static_cast<uint64_t>(num_elements) * source_stride_bytes);
+        overlay::setup_dest_base_start_addrgen<ADDRGEN_0>(destination.command_address);
+        overlay::setup_dest_inner_loop_addrgen<ADDRGEN_0>(
+            len_bytes, static_cast<uint64_t>(num_elements) * len_bytes + 1);
+    }
     overlay::idma_setup_as_copy_cmdbuf<CMDBUF_0>(/*wrapping=*/false);
     overlay::setup_ongoing_cmdbuf<CMDBUF_0>({});
     overlay::setup_wrapping_vcs_cmdbuf<CMDBUF_0>(
@@ -78,8 +113,10 @@ static void program_copy(uint32_t backend_vc, uint32_t len_bytes, const Operand&
         {.start = overlay::CMDBUF_WR_RESP_VC, .end = overlay::CMDBUF_WR_RESP_VC});
     overlay::setup_trids_cmdbuf<CMDBUF_0>(abi::kTrid);
     overlay::setup_max_bytes_in_packet_cmdbuf<CMDBUF_0>(NOC_OVERLAY_MAX_BYTES_IN_PACKET);
-    overlay::set_src_cmdbuf<CMDBUF_0>(source.command_address);
-    overlay::set_dest_cmdbuf<CMDBUF_0>(destination.command_address);
+    if (!strided) {
+        overlay::set_src_cmdbuf<CMDBUF_0>(source.command_address);
+        overlay::set_dest_cmdbuf<CMDBUF_0>(destination.command_address);
+    }
     overlay::set_len_cmdbuf<CMDBUF_0>(len_bytes);
 }
 
@@ -90,6 +127,9 @@ void kernel_main() {
     const uint32_t len_bytes = get_arg_val<uint32_t>(abi::kArgLenBytes);
     const uint64_t budget_cycles = arg_u64(abi::kArgPollBudgetLo, abi::kArgPollBudgetHi);
     const bool host_verified = mode == abi::kModeIdmaCopyHostVerified;
+    const bool strided = mode == abi::kModeIdmaStrided;
+    const uint32_t num_elements = get_arg_val<uint32_t>(abi::kArgNumElements);
+    const uint32_t source_stride_bytes = get_arg_val<uint32_t>(abi::kArgSourceStrideBytes);
 
     const uint32_t success_code = host_verified ? abi::kCodeAcked : abi::kCodeLanded;
     uint32_t code = success_code;
@@ -97,6 +137,7 @@ void kernel_main() {
     uint32_t vc_space_cycles = 0;
     uint32_t ack_cycles = 0;
     uint32_t data_cycles = 0;
+    uint32_t elements_issued = 0;
     uint32_t last_poll = abi::kPollNone;
     bool last_poll_ready = false;
     DataCheck check;
@@ -114,8 +155,12 @@ void kernel_main() {
                                     get_arg_val<uint32_t>(abi::kArgDstSelector),
                                     arg_u64(abi::kArgDstOffsetLo, abi::kArgDstOffsetHi),
                                     destination);
+    const bool elements_valid =
+        strided ? num_elements != 0 && num_elements <= abi::kMaxElements && source_stride_bytes % 4 == 0
+                : num_elements == 1;
     const bool args_valid = operands_known && budget_cycles != 0 && len_bytes != 0 && len_bytes % 4 == 0 &&
-                            len_bytes <= abi::kMaxBytesInPacket && (mode == abi::kModeIdmaCopy || host_verified);
+                            len_bytes <= abi::kMaxBytesInPacket && elements_valid &&
+                            (mode == abi::kModeIdmaCopy || host_verified || strided);
 
     if (!args_valid) {
         code = abi::kCodeBadArgs;
@@ -131,16 +176,28 @@ void kernel_main() {
             last_poll_ready = poll_bounded(ready, budget_cycles, cycles_spent);
             return last_poll_ready;
         };
-        program_copy(backend_vc, len_bytes, source, destination);
+        program_copy(backend_vc, len_bytes, source, destination, strided, num_elements, source_stride_bytes);
 
-        if (!run_poll(
+        bool vc_space_ready = true;
+        for (uint32_t element = 0; element < num_elements && vc_space_ready; ++element) {
+            uint32_t element_vc_space_cycles = 0;
+            vc_space_ready = run_poll(
                 abi::kPollVcSpace,
                 [backend_vc] { return overlay::idma_free_space_cmdbuf<CMDBUF_0>(backend_vc) != 0; },
-                vc_space_cycles)) {
+                element_vc_space_cycles);
+            vc_space_cycles += element_vc_space_cycles;
+            if (vc_space_ready) {
+                if (strided) {
+                    overlay::push_both_addrgen<ADDRGEN_0>();
+                }
+                overlay::issue_cmdbuf<CMDBUF_0>();
+                elements_issued++;
+            }
+        }
+        if (!vc_space_ready) {
             record_timeout(abi::kCodeVcSpaceTimeout);
         } else {
             flags |= abi::kFlagVcSpace;
-            overlay::issue_cmdbuf<CMDBUF_0>();
             if (run_poll(abi::kPollAck, [] { return overlay::idma_acked_cmdbuf<CMDBUF_0>(abi::kTrid); }, ack_cycles)) {
                 flags |= abi::kFlagAcked;
             } else {
@@ -148,14 +205,16 @@ void kernel_main() {
             }
         }
 
-        const uint32_t num_words = len_bytes / sizeof(uint32_t);
+        const uint32_t num_words = num_elements * len_bytes / sizeof(uint32_t);
         const uint32_t expected_xor = get_arg_val<uint32_t>(abi::kArgExpectedXor);
         if (!host_verified || destination_kind == abi::kKindOwnTl1) {
             if (run_poll(
                     abi::kPollData,
-                    [host_verified, &source, &destination, num_words, expected_xor, &check] {
-                        return host_verified ? destination_xor_matches(destination, num_words, expected_xor, check)
-                                             : data_landed(source, destination, num_words, check);
+                    [&] {
+                        return host_verified
+                                   ? destination_xor_matches(destination, num_words, expected_xor, check)
+                                   : data_landed(
+                                         source, destination, len_bytes, num_elements, source_stride_bytes, check);
                     },
                     data_cycles)) {
                 flags |= abi::kFlagLanded;
@@ -177,6 +236,7 @@ void kernel_main() {
     status[abi::kStatusDataCycles] = data_cycles;
     status[abi::kStatusLastPoll] = last_poll;
     status[abi::kStatusLastPollReady] = last_poll_ready ? 1 : 0;
+    status[abi::kStatusElementsIssued] = elements_issued;
     asm volatile("fence w, w" ::: "memory");
     status[abi::kStatusMagic] = abi::kDoneMagic;
 }
