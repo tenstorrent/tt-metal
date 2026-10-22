@@ -4,8 +4,10 @@
 
 // MM-8 port of data_movement/dram_unary (D2): a reader hart copies GDDR into a TL1 staging ring and a writer hart on
 // the same CCE copies it back out to GDDR, both with SPA loads and stores, in one Program. Chunks pass between the
-// harts through two DRAM-core semaphores read and written through the uncached alias. The host seeds the source, waits
-// for both status lines with a wall-clock deadline, and checks the destination and the staging ring.
+// harts through two DRAM-core semaphores read and written through the uncached alias. The host seeds the source and
+// fills both semaphore words with a nonzero value, waits for both status lines with a wall-clock deadline, and checks
+// the destination, the staging ring, the guards on both sides of each, and the semaphores: both harts must resolve the
+// runtime's semaphore addresses, see them initialised to 0 at launch, and leave them at the chunk count.
 
 #include <gtest/gtest.h>
 
@@ -21,6 +23,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -53,6 +56,9 @@ inline constexpr std::chrono::seconds kHostDeadline = kNumChunks * 2 * kPollBudg
 // Above DRAM UNRESERVED in the CCE's local view.
 inline constexpr uint64_t kSourceViewOffset = 0x10000;
 inline constexpr uint64_t kDestinationViewOffset = 0x20000;
+// Written to both semaphore words before launch; the runtime must overwrite it with the initial value 0.
+inline constexpr uint32_t kSemaphorePrefill = 0x5E3A5E3Au;
+inline constexpr uint32_t kLeadingGuardTag = 0x800;
 
 static_assert(kChunkBytes % abi::kLineBytes == 0 && kChunkBytes <= abi::kMaxChunkBytes);
 static_assert(kNumSlots <= abi::kMaxSlots && kNumChunks <= abi::kMaxChunks);
@@ -131,9 +137,8 @@ std::vector<uint32_t> kernel_args(
     return args;
 }
 
-// The reader and writer launches, with the two DRAM-core semaphores (initial value 0) created on the CCE in `program`.
-std::vector<CceKernelLaunch> create_semaphores_and_launches(
-    IDevice* device, Program& program, const DramUnaryLayout& layout) {
+// Creates the two DRAM-core semaphores (initial value 0) on the CCE in `program`.
+SemaphoreIds create_semaphores(IDevice* device, Program& program, const DramUnaryLayout& layout) {
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), layout.cce_index);
     const CoreRange core_range(logical_core, logical_core);
     std::vector<uint32_t> semaphore_ids;
@@ -146,6 +151,10 @@ std::vector<CceKernelLaunch> create_semaphores_and_launches(
         "semaphore ids {} and {} are not one line apart",
         semaphores.filled,
         semaphores.drained);
+    return semaphores;
+}
+
+std::vector<CceKernelLaunch> launches_for(const DramUnaryLayout& layout, const SemaphoreIds& semaphores) {
     return {
         CceKernelLaunch{
             .cce_index = layout.cce_index,
@@ -157,6 +166,27 @@ std::vector<CceKernelLaunch> create_semaphores_and_launches(
             .kernel_path = kWriterKernel,
             .runtime_args = kernel_args(layout, semaphores, tl1_done_block(kWriterHart)),
             .hart = kWriterHart}};
+}
+
+// Where the runtime writes the semaphore's initial value at launch (ProgramImpl::init_semaphores). Valid once the
+// Program's offsets are finalized.
+uint64_t semaphore_tl1_offset(Program& program, uint32_t semaphore_id) {
+    const Hal& hal = MetalContext::instance().hal();
+    const uint32_t dram_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
+    return hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG) +
+           program.impl().get_program_config(dram_index).sem_offset +
+           static_cast<uint64_t>(semaphore_id) * hal.get_alignment(HalMemType::L1);
+}
+
+uint32_t read_semaphore(IDevice* device, uint32_t cce_index, uint64_t tl1_offset) {
+    return read_cce_tl1(
+               MetalContext::instance().get_cluster(),
+               device->id(),
+               cce_index,
+               tl1_offset,
+               sizeof(uint32_t),
+               Tl1Range::WholeTl1)
+        .front();
 }
 
 std::string code_name(uint32_t code) {
@@ -244,13 +274,17 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         make_pattern(MimirPattern::Prng, kTotalBytes / sizeof(uint32_t), layout.source_chiplet_offset, seed);
     const std::vector<uint32_t> destination_guard = make_guard(2 * cce_index);
     const std::vector<uint32_t> staging_guard = make_guard(2 * cce_index + 1);
+    const std::vector<uint32_t> destination_leading_guard = make_guard(kLeadingGuardTag + 2 * cce_index);
+    const std::vector<uint32_t> staging_leading_guard = make_guard(kLeadingGuardTag + 2 * cce_index + 1);
     std::vector<uint32_t> destination_fill = make_seed_pattern(2 * cce_index, kTotalBytes / sizeof(uint32_t));
     destination_fill.insert(destination_fill.end(), destination_guard.begin(), destination_guard.end());
     std::vector<uint32_t> staging_fill = make_seed_pattern(2 * cce_index + 1, kStagingBytes / sizeof(uint32_t));
     staging_fill.insert(staging_fill.end(), staging_guard.begin(), staging_guard.end());
     write_dram_view(device, soc, layout.view, layout.source_view_offset, source);
     write_dram_view(device, soc, layout.view, layout.destination_view_offset, destination_fill);
+    write_dram_view(device, soc, layout.view, layout.destination_view_offset - kGuardBytes, destination_leading_guard);
     write_cce_tl1(device, cce_index, layout.staging_offset, staging_fill);
+    write_cce_tl1(device, cce_index, layout.staging_offset - kGuardBytes, staging_leading_guard);
     for (const uint32_t hart : {kReaderHart, kWriterHart}) {
         write_cce_tl1(
             device, cce_index, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
@@ -295,15 +329,39 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     }
 
     Program program = CreateProgram();
-    const std::vector<CceKernelLaunch> launches = create_semaphores_and_launches(device, program, layout);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_cce_kernels_with_deadline(
+    const SemaphoreIds semaphores = create_semaphores(device, program, layout);
+    const std::vector<CceKernelLaunch> launches = launches_for(layout, semaphores);
+    add_cce_kernels(device, program, launches);
+    detail::CompileProgram(device, program, /*force_slow_dispatch=*/true);
+    program.impl().finalize_offsets(device);
+    const uint64_t filled_offset = semaphore_tl1_offset(program, semaphores.filled);
+    const uint64_t drained_offset = semaphore_tl1_offset(program, semaphores.drained);
+    for (const uint64_t semaphore_offset : {filled_offset, drained_offset}) {
+        write_cce_tl1(
+            MetalContext::instance().get_cluster(),
+            device->id(),
+            cce_index,
+            semaphore_offset,
+            {kSemaphorePrefill},
+            Tl1Range::WholeTl1);
+    }
+    const std::optional<std::vector<std::vector<uint32_t>>> statuses = launch_and_wait_for_statuses(
         device, program, launches, {abi::kReaderDoneMagic, abi::kWriterDoneMagic}, abi::kStatusWords, kHostDeadline);
     if (!statuses.has_value()) {
+        const std::vector<uint32_t> reader_line =
+            read_cce_tl1(device, cce_index, tl1_done_block(kReaderHart), abi::kStatusWords * sizeof(uint32_t));
+        const std::vector<uint32_t> writer_line =
+            read_cce_tl1(device, cce_index, tl1_done_block(kWriterHart), abi::kStatusWords * sizeof(uint32_t));
         const std::string timeout = fmt::format(
-            "no status after {} s (host deadline): reader magic 0x{:08x}, writer magic 0x{:08x}",
+            "no status after {} s (host deadline): reader magic 0x{:08x} ({}); writer magic 0x{:08x} ({}); semaphores "
+            "now filled 0x{:x} drained 0x{:x}",
             kHostDeadline.count(),
-            read_status_magic(device, cce_index, kReaderHart),
-            read_status_magic(device, cce_index, kWriterHart));
+            reader_line[abi::kStatusMagic],
+            status_detail(reader_line),
+            writer_line[abi::kStatusMagic],
+            status_detail(writer_line),
+            read_semaphore(device, cce_index, filled_offset),
+            read_semaphore(device, cce_index, drained_offset));
         record_leg("reader", "status", timeout);
         record_leg("writer", "status", timeout);
         ADD_FAILURE() << label << ": " << timeout << kFreshSessionNote;
@@ -325,10 +383,14 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     EXPECT_EQ(reader_status[abi::kStatusFilledAtStart], 0u) << label << ": filled was not 0 at launch";
     EXPECT_EQ(reader_status[abi::kStatusDrainedAtStart], 0u) << label << ": drained was not 0 at launch";
     EXPECT_EQ(writer_status[abi::kStatusDrainedAtStart], 0u) << label << ": drained was not 0 at launch";
-    EXPECT_EQ(reader_status[abi::kStatusFilledSemaphoreAddress], writer_status[abi::kStatusFilledSemaphoreAddress])
-        << label << ": the harts resolved different filled semaphores";
-    EXPECT_EQ(reader_status[abi::kStatusDrainedSemaphoreAddress], writer_status[abi::kStatusDrainedSemaphoreAddress])
-        << label << ": the harts resolved different drained semaphores";
+    for (const auto& [hart_name, status] : {std::pair{"reader", &reader_status}, std::pair{"writer", &writer_status}}) {
+        EXPECT_EQ((*status)[abi::kStatusFilledSemaphoreAddress], static_cast<uint32_t>(filled_offset))
+            << label << ": the " << hart_name << " resolved filled away from the runtime's semaphore";
+        EXPECT_EQ((*status)[abi::kStatusDrainedSemaphoreAddress], static_cast<uint32_t>(drained_offset))
+            << label << ": the " << hart_name << " resolved drained away from the runtime's semaphore";
+    }
+    EXPECT_EQ(read_semaphore(device, cce_index, filled_offset), kNumChunks) << label << ": filled after the run";
+    EXPECT_EQ(read_semaphore(device, cce_index, drained_offset), kNumChunks) << label << ": drained after the run";
     EXPECT_TRUE(compare_with_recheck(
         "dram_unary " + label + " destination",
         "writer",
@@ -339,10 +401,17 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         << writer_detail;
     EXPECT_EQ(read_destination(device, layout, kTotalBytes, abi::kLineBytes), destination_guard)
         << label << ": guard after the destination was overwritten";
+    std::vector<uint32_t> destination_leading;
+    read_dram_view(
+        device, soc, layout.view, layout.destination_view_offset - kGuardBytes, kGuardBytes, destination_leading);
+    EXPECT_EQ(destination_leading, destination_leading_guard)
+        << label << ": guard before the destination was overwritten";
     const std::vector<uint32_t> staging = read_cce_tl1(device, cce_index, layout.staging_offset, kStagingBytes);
     EXPECT_TRUE(compare_words(label + " staging ring", expected_staging(source), staging)) << reader_detail;
     EXPECT_EQ(read_cce_tl1(device, cce_index, layout.staging_offset + kStagingBytes, abi::kLineBytes), staging_guard)
         << label << ": guard after the staging ring was overwritten";
+    EXPECT_EQ(read_cce_tl1(device, cce_index, layout.staging_offset - kGuardBytes, kGuardBytes), staging_leading_guard)
+        << label << ": guard before the staging ring was overwritten";
 }
 
 INSTANTIATE_TEST_SUITE_P(MM8, MimirDmDramUnary, ::testing::Range(0u, kMaxCces), cce_param_name);
