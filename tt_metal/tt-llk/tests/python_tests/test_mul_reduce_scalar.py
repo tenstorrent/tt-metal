@@ -18,7 +18,12 @@ Kernel B is held at 1.0 (matching the on-silicon gtest and the
 ``sum(A)``. Coverage: bf16 (num_tiles up to 8, the DEST half-sync capacity)
 plus native fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32
 tile (num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny
-tiles" — mirroring the on-silicon MulReduceScalarTinyTile gtest suite.
+tiles" (mirroring the on-silicon MulReduceScalarTinyTile gtest suite), plus
+1x32 to 8x32 tiles with short faces, which the gtest does not cover.
+
+Before the measured op, the kernel unpacks POISON_TILES full tiles of 100.0
+into both SrcA and SrcB banks. With a short face, the reduce adds those stale
+rows unless the unpacker zeroes them, so the golden check fails.
 """
 
 import pytest
