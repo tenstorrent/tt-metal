@@ -14,14 +14,10 @@
 #include "ckernel_sfpu_logsigmoid_bf16_finite_reciprocal.h"
 #include "ckernel_sfpu_logsigmoid_bf16_abs_exp_correction_core.h"
 namespace ckernel::sfpu::bf16::logsigmoid {
+// The call loads every constant it reads, as stock's reads none its init sets. Wormhole's
+// reciprocal still reads its Newton constant from Prgm0.
 template <typename Config>
-inline void init_abs_exp_correction() {
-    sfpi::vConstFloatPrgm0 = Config::kMultiplier;
-    sfpi::vConstFloatPrgm1 =
-        Config::kExpCoefficients[Config::kExpDegree] * ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree);
-    sfpi::vConstFloatPrgm2 = Config::kExpCoefficients[Config::kExpDegree - 1] *
-                             ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree - 1);
-}
+inline void init_abs_exp_correction() {}
 template <typename Config, int Iterations = 32>
 inline void calculate_abs_exp_correction() {
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
@@ -29,7 +25,7 @@ inline void calculate_abs_exp_correction() {
     auto exp = [](sfpi::vFloat x) {
         constexpr bool split_scale_bias = false;
         {
-            sfpi::vFloat multiplier = sfpi::vConstFloatPrgm0;
+            sfpi::vFloat multiplier = Config::kMultiplier;
             return ttpoly::logsigmoid::correction_exp_leaf<
                 Config::kExpDegree,
                 false,
@@ -37,12 +33,14 @@ inline void calculate_abs_exp_correction() {
                 true,
                 Config::kResidualFold,
                 true,
-                split_scale_bias>(x, multiplier, 127.0f, Config::kExpCoefficients);
+                split_scale_bias,
+                sfpi::vFloat,
+                true>(x, multiplier, 127.0f, Config::kExpCoefficients);
         }
     };
     auto reciprocal = [](sfpi::vFloat x) {
-        return ttpoly::logsigmoid::correction_finite_reciprocal(
-            x, [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); });
+        auto iteration = [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); };
+        return ttpoly::logsigmoid::correction_finite_reciprocal<decltype(iteration), true>(x, iteration);
     };
 #pragma GCC unroll 32
     for (int row = 0; row < Iterations; ++row) {
