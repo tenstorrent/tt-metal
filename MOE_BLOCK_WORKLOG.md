@@ -570,6 +570,8 @@ Next: the routing gather (needs SP-axis ports) + planner + prep in the program (
 | logits straight to their owners (no relay chain); routing exchange store-and-forward through the ports | 284-302 | 517-537 |
 | planner on 10 instances (eae243c76ba) | 279.0 | 510.8 |
 | top-K: pairs of score tiles to K-runs + bitonic folds, fp32 keys (top-K 35 -> 14 / 55 -> 20 us) | 273.5-274.3 | 511.0-511.4 |
+| logits port units in the hand-off order (bug fix); router matmul half-sync DEST | 267.5-271.5 | 512.8-515.5 |
+| **dispatch prep in the program: route words + owned rows (now included)** | 271.9-273.0 | 509.7-510.6 |
 | floor (TP-link bytes) / 1.5x target | 180 / 270 | 330 / 495 |
 Everything is in the one program now except dispatch prep (route words + owners' rows into the dispatch buffer).
 - Routing exchange + planner (tt/routing_stream.py): routing_a2a's planner runs on the 5 router cores' BRISC after
@@ -621,3 +623,41 @@ Everything is in the one program now except dispatch prep (route words + owners'
 - Whole head: GLM 273.5-274.3 us (279.0 before), K3 511.0-511.4 (510.8: K3's top-K was not on its critical path -
   its routing chain waits for the x gather's rows). Target 270 / 495.
 - Tried and dropped: the fold in a second DEST window (topk's LLK addresses DEST absolutely - window 0 only).
+
+### Bug: the logits port sent sub-blocks before they were written (fixed, 667094a21e1)
+The port sends unit u of a router core once that core's word counts u + 1 hand-offs; its units were nearest-first per
+direction (`_dests`) while the cores hand off farthest-first: with two owners in one direction the port could send
+the far owner's slot before the core had written it. Masked in the tests by identical repeated inputs (the slot held
+the previous call's identical data). Both orders are now farthest-first.
+
+### Lever 2 (1.5x push): the router matmul - data first, then more cores (not done)
+- Measured what bounds the router matmul (GLM, 5 router cores, 56-65 us): no W DRAM reads (multicast of garbage):
+  unchanged; no x reads either: unchanged; LoFi instead of HiFi3: 47-58 (only -10); K blocks of 8 instead of 4 (half
+  the L1-accumulated packs): unchanged; no in1 transpose: unchanged. Per tile-matmul ~60-66 cycles at HiFi3 (48 ideal),
+  ~55 at LoFi: unpack + math bound, ~75% of the FPU - only more cores would cut it.
+- Kept: half-sync DEST (a block's packs overlap the next block's math): GLM 63-69 -> 57-65 us, K3 156-161 -> 138-151.
+- Not built (yet): the port / watcher cores' TRISCs as helpers. The data says it does not pay now: K3's logits leave
+  the ports only after their x gather (the x-first priority), so a faster K3 router changes nothing (its RLWAIT ends
+  ~230-245 either way); GLM's chain would start ~25 us earlier, but GLM's end is now the reduce-scatter's tail on the
+  even chips (DOWNRS max ~266-269 with prep) as much as the planner (~265-270). Cost: no NCRISC handshake on the
+  helpers (their data movers are the ports' loops) -> a sender-polled multicast + TRISC-side CB signalling, and a
+  second hop for the helpers' hand-offs. Revisit if the routing chain binds alone again.
+
+### Lever 3 (1.5x push): dispatch prep in the program (tt/prep_stream.py, se_engine3 prep; RoutingSpec(prep=True))
+dispatch_prep's two outputs, made inside the head (the whole-head numbers include them from here on):
+- Route words: every owned token's route word (sparse_all_gather_2d's format: destination chips, X/Y-first order,
+  link; one word a token up to 16 chips, two beyond) computed on the router cores' compute UNPACK thread (idle after
+  the top-K) from the joint rows in L1, written by the router BRISC after its planner (128 B a core). Bit-exact vs
+  combine_rf/dispatch_prep's route kernel run on the head's joint rows (both models). Mock Galaxy: both axes wrapped,
+  two words a token at 32 chips.
+- Owned rows: the dispatch buffer [N S, W] row-major (W: H for GLM - x; the latent for K3), this chip's slots me S ..:
+  - GLM: x own (resident, never overlaid) - each owned row tile's K steps untilized by the holding core's compute
+    (pack_untilize from a CB view over x own, read pointer moved per unit), written row-major by its NCRISC (32 rows
+    a unit, 1 KB each). Bit-exact.
+  - K3: the latent blocks (mine in LAT, the arrivals in LATZ) untilized the same way (the arrivals' units after the
+    NCRISC's latent-ready push); the tile-layout latent output is no longer written. PCC 0.99994 vs the host.
+  - Placement: one prep op right after the core's last down pass. Spread over the passes it delayed them (GLM
+    282-286 us); at the end of the op list it delayed the reduce-scatter's tail fins (283). GLM's x own sits on 2
+    columns (the x families' owner subsets): 6 cores carry all its units (~10 us each).
+- Whole head with prep: GLM 271.9 / 272.9 us (268.5 before the owned rows), K3 509.7-510.6 (511-515 before: the
+  latent's tile writes are gone). Targets 270 / 495.

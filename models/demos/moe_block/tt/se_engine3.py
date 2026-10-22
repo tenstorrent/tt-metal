@@ -34,6 +34,7 @@ XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
 RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12)  # (down + reduce-scatter CBs)
 LAT_CB = 13  # (the latent block [MT][LWMAX], bf16)
+PREP_CB = dict(pu=14, po=15, lrdy=16)  # (dispatch prep: the units' source view, the untilized rows, latent ready)
 ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
 
 _BRISC = r"""
@@ -211,6 +212,9 @@ constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset(
 #ifdef SE_LAT
 constexpr auto l_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
 #endif
+#ifdef SE_PREP
+constexpr auto p_args = TensorAccessorArgs<SE_PREP_CT0>();  // (the dispatch buffer [N S, W] row-major)
+#endif
 constexpr uint32_t CB_WIN = 1, CB_OUT = 4, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
 constexpr uint32_t NPD1 = NPD ? NPD : 1, NSD1 = NSD ? NSD : 1;  // (no down: 0, never divided by)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i)); }
@@ -293,7 +297,11 @@ void kernel_main() {
     const uint32_t LT = get_arg_val<uint32_t>(L0 + 5), lc0 = get_arg_val<uint32_t>(L0 + 6), llw = get_arg_val<uint32_t>(L0 + 7);
     const uint32_t lp = get_arg_val<uint32_t>(L0 + 8), lorow = get_arg_val<uint32_t>(L0 + 9);
     const auto lg = TensorAccessor(l_args, get_arg_val<uint32_t>(L0 + 10), 2048);
+#ifdef SE_PREP
+    bool lown = true, lin = lnr == 0 || lnsrc == 0;  // (dispatch prep: the compute untilizes my rows' latent)
+#else
     bool lown = lnr == 0, lin = lnr == 0 || lnsrc == 0;
+#endif
     auto lwrite = [&](uint32_t src, uint32_t q) {  // (rows lr0 .. of a [MT][LWMAX] block, chip q's columns)
         for (uint32_t i = 0; i < lnr; ++i)
             for (uint32_t t = 0; t < llw; ++t)
@@ -302,7 +310,19 @@ void kernel_main() {
 #else
     bool lown = true, lin = true;
 #endif
-    while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount || !lown || !lin) {
+#ifdef SE_PREP  // (dispatch prep: per unit the dispatch buffer's row, byte offset in it, bytes a row)
+#ifdef SE_LAT
+    const uint32_t P0 = f0 + 6 + 11;
+#else
+    const uint32_t P0 = f0 + 6;
+#endif
+    const uint32_t pnu = get_arg_val<uint32_t>(P0);
+    const auto pg = TensorAccessor(p_args, get_arg_val<uint32_t>(P0 + 1), SE_PREP_ROW);
+#else
+    constexpr uint32_t pnu = 0;
+#endif
+    uint32_t pu = 0;
+    while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount || !lown || !lin || pu < pnu) {
         invalidate_l1_cache();
 #ifdef SE_LAT
         if (!lown && cb_pages_available_at_front(SE_LAT, MT * SE_LWMAX)) {
@@ -310,8 +330,23 @@ void kernel_main() {
             lown = true;
         }
         if (!lin && *lctr >= lnsrc) {
+#ifdef SE_PREP
+            cb_reserve_back(SE_LRDY, 1);  // (the compute's prep may untilize the arrivals)
+            cb_push_back(SE_LRDY, 1);
+#else
             for (uint32_t sl = 0; sl < lnsrc; ++sl) lwrite(lzone + sl * MT * SE_LWMAX * 2048, sl < lp ? sl : sl + 1);
+#endif
             lin = true;
+        }
+#endif
+#ifdef SE_PREP
+        if (pu < pnu && cb_pages_available_at_front(SE_PO, SE_PREP_FULL)) {  // a prep unit's 32 rows to the buffer
+            const uint32_t src = get_read_ptr(SE_PO), q = P0 + 2 + 3 * pu;
+            const uint32_t row = get_arg_val<uint32_t>(q), co = get_arg_val<uint32_t>(q + 1), nb = get_arg_val<uint32_t>(q + 2);
+            for (uint32_t i = 0; i < 32; ++i) noc_async_write(src + i * SE_PREP_FULL * 64, pg.get_noc_addr(row + i) + co, nb);
+            noc_async_writes_flushed();  // (PO may be refilled once they left L1; the kernel's last barrier acks them)
+            cb_pop_front(SE_PO, SE_PREP_FULL);
+            ++pu;
         }
 #endif
         if (af < naf) {
@@ -415,6 +450,9 @@ _COMPUTE = r"""
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
+#ifdef SE_PREP
+#include "api/compute/pack_untilize.h"
+#endif
 #include "tools/profiler/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
@@ -568,6 +606,41 @@ void kernel_main() {
             } else if (kind == 1) {
                 cb_reserve_back(SE_FINC, 1);
                 cb_push_back(SE_FINC, 1);
+#ifdef SE_PREP
+            } else if (kind == 3) {
+                // dispatch prep: my rows of the chip's owned tokens (x own / the latent) untilized into PO, a unit (n
+                // tiles of one row tile, contiguous in L1 at PU + off) at a time; the NCRISC writes PO's rows into
+                // the dispatch buffer. After the last pass: under the reduce-scatter's waits for arrivals.
+                DeviceZoneScopedN("SE-PREP");
+                const uint32_t nu = get_arg_val<uint32_t>(idx);
+                uint32_t pu0 = 0;
+                UNPACK((pu0 = get_local_cb_interface(SE_PU).fifo_rd_ptr));
+                bool lrdy = false;
+                if (nu) {
+                    reconfig_data_format_srca(SE_PU);  // (the last pass left srcA at the weights' format)
+                    pack_reconfig_data_format(SE_PO);
+                    pack_untilize_init<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, SE_PO);
+                }
+                for (uint32_t u = 0; u < nu; ++u) {
+                    const uint32_t off = get_arg_val<uint32_t>(idx + 1 + 2 * u), fl = get_arg_val<uint32_t>(idx + 2 + 2 * u);
+                    const uint32_t n = fl & 0xFFFF;
+#ifdef SE_LRDY
+                    if ((fl >> 16) && !lrdy) {  // (a unit of the latent's arrivals: once they all landed)
+                        cb_wait_front(SE_LRDY, 1);
+                        lrdy = true;
+                    }
+#endif
+                    cb_reserve_back(SE_PO, SE_PREP_FULL);
+                    for (uint32_t c = 0; c * SE_PREP_BCT < n; ++c) {
+                        UNPACK((get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0 + (off + c * SE_PREP_BCT * 2048) / 16));
+                        pack_untilize_block<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, 1, SE_PO, c);
+                    }
+                    cb_push_back(SE_PO, SE_PREP_FULL);
+                }
+                if (nu) pack_untilize_uninit(SE_PO);
+                UNPACK((get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0));
+                (void)lrdy;
+#endif
             } else {
                 const uint32_t e6 = et0 + 6 * idx, cnt = get_arg_val<uint32_t>(e6), mode = get_arg_val<uint32_t>(e6 + 1);
                 const uint32_t sf = get_arg_val<uint32_t>(e6 + 2), sb = get_arg_val<uint32_t>(e6 + 3);
@@ -689,8 +762,11 @@ class SeEngine3:
         down=True,
         rs=None,
         latent=None,
+        prep=False,
     ):
-        """latent (tiles): K3's latent down on the gathered x - the chip's column slice [H, latent tiles], extra plain
+        """prep: the dispatch prep's owned rows (pieces(prep=...)): x own's rows of the chip's owned tokens (or, with a
+        latent, their latent) untilized by the compute after its last pass, written row-major by the NCRISC.
+        latent (tiles): K3's latent down on the gathered x - the chip's column slice [H, latent tiles], extra plain
         passes after gate / up (fp32 partials between shards, bf16 out) - and its all-to-all to the owners (with rs).
         rs (se_rs.RsPlan): down + the SE reduce-scatter in this program (tiling, schedule; the ports are the
         gather's movers) - y is then this chip's reduced block. down False: no down here - h [rows, I] goes to DRAM (y) for the down + reduce-scatter stage.
@@ -766,6 +842,10 @@ class SeEngine3:
         )
         nown = max((nf // self.S0 if c in self.fam0 else 0) + (nf // self.S1 if c in self.fam1 else 0) for c in cols)
         self.xown_t = self.NCH * nown * MT * self.KB
+        # dispatch prep: a unit = one row tile's run of x own (a K step: KB tiles) or of a latent block (LWMAX)
+        self.prep = prep
+        self.PFULL = self.LWMAX if latent else self.KB
+        self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
         off, o = {}, 0
         rsr = self._rs_regions() if rs is not None else []
@@ -788,6 +868,7 @@ class SeEngine3:
             ]
             + rsr
             + ([("lat", MT * self.LWMAX * 2048), ("latz", (shards - 1) * MT * self.LWMAX * 2048)] if latent else [])
+            + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", 64)] if latent else []) if prep else [])
         ):
             off[k], o = o, al(o + v)
         if ovl:
@@ -915,6 +996,7 @@ class SeEngine3:
         rs_mbox=0,
         rs_arr=(0, 0),
         la=None,
+        prep=None,
     ):
         """(CBs, kernels, semaphores) of the engine on one chip (the kernel_lib families attached by the caller via
         attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). shard_order: this
@@ -957,6 +1039,18 @@ class SeEngine3:
                 cb(RS_CB[k], k, z[k], ttnn.bfloat16, 16)
         if self.LT:
             cb(LAT_CB, "lat", MT * self.LWMAX * 2048, ttnn.bfloat16, 2048)
+        if prep is not None:
+            assert self.prep and self.rs is not None, "dispatch prep: built with prep=True, after the reduce-scatter"
+            pk = "lat" if self.LT else "xown"
+            pend = (
+                off["latz"] + (self.shards - 1) * MT * self.LWMAX * 2048
+                if self.LT
+                else off["xown"] + self.xown_t * 2048
+            )
+            cb(PREP_CB["pu"], pk, pend - off[pk], ttnn.bfloat16, 2048)
+            cb(PREP_CB["po"], "po", 2 * self.PFULL * 2048, ttnn.bfloat16, 2048)
+            if self.LT:
+                cb(PREP_CB["lrdy"], "lrdy", 64, ttnn.bfloat16, 16)
         cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -1014,6 +1108,7 @@ class SeEngine3:
                     + tail
                     + self._rs_ncrisc(rs_pos, rs_arr, c, cy)
                     + self._la_ncrisc(rs_pos, la, c, cy)
+                    + (self._prep_ncrisc(rs_pos, prep, c, cy) if prep is not None else [])
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -1064,6 +1159,15 @@ class SeEngine3:
             assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
             nd += f"#define SE_LAT {LAT_CB}\n#define SE_NGU {self.NGU}\n#define SE_LWMAX {self.LWMAX}\n"
             nd += f"#define G_LT {len(so) * self.LT}\n"
+        if prep is not None:
+            nd += "#define SE_PREP\n" + "".join(
+                f"#define SE_{k.upper()} {v}\n" for k, v in PREP_CB.items() if k != "lrdy"
+            )
+            nd += f"#define SE_PREP_FULL {self.PFULL}\n#define SE_PREP_BCT {self.PBCT}\n"
+            nd += f"#define SE_PREP_ROW {int(prep['xbuf'].buffer_aligned_page_size())}\n"
+            nd += f"#define SE_PREP_CT0 {len(nct + w_ct + y_ct) + (len(ttnn.TensorAccessorArgs(la['out']).get_compile_time_args()) if self.LT else 0)}\n"
+            if self.LT:
+                nd += f"#define SE_LRDY {PREP_CB['lrdy']}\n"
         self.brisc = ttnn.KernelDescriptor(
             kernel_source=nd + _probes() + _BRISC,
             source_type=st,
@@ -1081,7 +1185,8 @@ class SeEngine3:
                 compile_time_args=nct
                 + w_ct
                 + y_ct
-                + (list(ttnn.TensorAccessorArgs(la["out"]).get_compile_time_args()) if self.LT else []),
+                + (list(ttnn.TensorAccessorArgs(la["out"]).get_compile_time_args()) if self.LT else [])
+                + (list(ttnn.TensorAccessorArgs(prep["xbuf"]).get_compile_time_args()) if prep is not None else []),
                 runtime_args=n_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_1),
             ),
@@ -1102,13 +1207,11 @@ class SeEngine3:
             c_rt = ttnn.RuntimeArgs()
             for c in cols:
                 for cy in range(GY):
-                    c_rt[cx0 + c][cy] = (
-                        list(wg)
-                        + list(wd)
-                        + list(self.h0)
-                        + [self.HT]  # (+ the h column offsets)
-                        + (self.rs.compute_args(rs_pos, c, cy) if self.rs is not None else [])
-                    )
+                    pre = list(wg) + list(wd) + list(self.h0) + [self.HT]  # (+ the h column offsets)
+                    ra = self.rs.compute_args(rs_pos, c, cy) if self.rs is not None else []
+                    if prep is not None:
+                        ra = self._prep_compute(ra, len(pre), rs_pos, prep, c, cy)
+                    c_rt[cx0 + c][cy] = pre + ra
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,  # noqa
@@ -1194,6 +1297,70 @@ class SeEngine3:
             cy * self.MT + r0 - p * RB if nr else 0,
             int(la["out"].buffer_address()),
         ]
+
+    def prep_units(self, p, prep, cx, cy):
+        """Dispatch prep's units on core (cx, cy) of chip position p: [(source offset in the PU view, tiles, latent
+        arrival?, dispatch buffer row, byte offset in the row)] - one row tile's run of x own (a K step) or of a latent
+        block (mine, then each source chip's slice), for the chip's owned rows (block p)."""
+        MT, KB, G = self.MT, self.KB, self.shards
+        RBo = self.rows // 32 // G  # (owned row tiles)
+        row0 = prep["me"] * RBo * 32
+        out = []
+        if self.LT:
+            r0, nr = self.la_rows(cy, p)
+            lz = self.off["latz"] - self.off["lat"]
+            lorow = cy * MT + r0 - p * (self.CR // G)
+            for i in range(nr):
+                rr, n = (r0 + i) * self.LWMAX * 2048, self.lw[cx]
+                out.append((rr, n, 0, row0 + (lorow + i) * 32, (p * self.LT + self.l0[cx]) * 64))
+                for sl in range(G - 1):
+                    q = sl if sl < p else sl + 1
+                    out.append(
+                        (
+                            lz + sl * MT * self.LWMAX * 2048 + rr,
+                            n,
+                            1,
+                            row0 + (lorow + i) * 32,
+                            (q * self.LT + self.l0[cx]) * 64,
+                        )
+                    )
+            return out
+        so = prep["shard_order"]
+        sps = self.NSG // len(so)
+        rank = {q: k for k, q in enumerate(so)}
+        nf = self.NSG // 2
+        n0 = nf // self.S0 if cx in self.fam0 else 0
+        nown = n0 + (nf // self.S1 if cx in self.fam1 else 0)
+        for R in range(p * RBo, (p + 1) * RBo):
+            m, lr = divmod(R, self.CR)
+            if lr // MT != cy:
+                continue
+            r = lr % MT
+            for j in range(len(so) * sps):  # (global K step j: K tiles j KB ..)
+                pos = rank[j // sps] * sps + j % sps
+                col, f, _ = self.owner(pos)
+                if col != cx:
+                    continue
+                h = pos // 2
+                slot = n0 + h // self.S1 if f else h // self.S0
+                out.append((((m * nown + slot) * MT + r) * KB * 2048, KB, 0, row0 + (R - p * RBo) * 32, j * KB * 64))
+        return out
+
+    def _prep_compute(self, ra, n_pre, p, prep, cx, cy):
+        """The RS compute tables with the prep op (kind 3) right after the last pass (under the reduce-scatter's waits
+        for arrivals; spread over the passes it delayed them: 282-286 us vs 272-273, at the end it delayed the tail's
+        fins: 283) and its units ([n] + (offset, tiles | latent << 16)) at the end."""
+        nops = ra[0]
+        ops, rest = ra[1 : 1 + nops], ra[1 + nops :]
+        last = max(i for i, o in enumerate(ops) if o & 0xFF == 0)
+        base = n_pre + 1 + nops + 1 + len(rest)
+        us = self.prep_units(p, prep, cx, cy)
+        ops = ops[: last + 1] + [3 | (base << 8)] + ops[last + 1 :]
+        return [nops + 1] + ops + rest + [len(us)] + [v for o, n, lat, _, _ in us for v in (o, n | (lat << 16))]
+
+    def _prep_ncrisc(self, p, prep, cx, cy):
+        us = self.prep_units(p, prep, cx, cy)
+        return [len(us), int(prep["xbuf"].buffer_address())] + [v for _, n, _, row, co in us for v in (row, co, n * 64)]
 
     def _rs_ncrisc(self, p, arr, cx, cy):
         """The NCRISC's arrival credits (per direction, slot order: thresholds) and the fin sub-block's y map."""

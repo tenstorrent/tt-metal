@@ -121,6 +121,30 @@ class _LazyR(dict):
 ROUTING = _LazyR()
 
 
+def _check_xbuf(head, xs, w_l, rows, name):
+    """Dispatch prep's owned rows in the program: each chip's slots me S .. of the dispatch buffer [N S, W] vs its owned
+    rows of x_full (bit for bit) or of x_full @ W_latent_down^T (K3: PCC)."""
+    S = rows // C
+    outs = [ttnn.to_torch(t).float().reshape(R * C * S, -1) for t in ttnn.get_device_tensors(head.outputs["xbuf"])]
+    worst = 1.0
+    for d in range(R * C):
+        r, c = divmod(d, C)
+        p = head.xg.chips[(r, c)]["rings"][0]["p"]
+        xf = torch.cat([xs[r * C + cc] for cc in range(C)], dim=1)[p * S : (p + 1) * S]
+        got = outs[d][d * S : (d + 1) * S]
+        if w_l is None:
+            exp = xf.to(torch.bfloat16).float()
+            bad = (got != exp).any(dim=1).nonzero().flatten()
+            assert bad.numel() == 0, f"{name} chip {d} owned rows: {bad.numel()} rows differ, first {bad[:8].tolist()}"
+        else:
+            worst = min(worst, pcc(got, xf @ w_l.T))
+    if w_l is None:
+        logger.info(f"HSE3 {name} dispatch rows (x): all {R * C} chips bit-exact")
+    else:
+        logger.info(f"HSE3 {name} dispatch rows (latent): PCC min {worst:.5f}")
+        assert worst > 0.999, worst
+
+
 def _check_route(head, rows, name):
     """The head's route words (dispatch prep in the program) vs combine_rf/dispatch_prep's route kernel run on the
     head's own joint rows, bit for bit."""
@@ -631,8 +655,10 @@ def test_head_se3(mesh_device, device_params):
         us, y = _time(mesh_device, lambda: head.run(xt, w))
         if head.router is not None:
             _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
-        if head.latent:
+        if head.latent and "xbuf" not in head.outputs:
             _check_latent(head, xs, w_l, rows, name)
+        if "xbuf" in head.outputs:
+            _check_xbuf(head, xs, w_l, rows, name)
         if head.routing is not None:
             _check_plan(head, rows, name)
             if "route" in head.outputs:

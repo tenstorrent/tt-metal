@@ -307,6 +307,7 @@ class HeadSE3:
                     down=self.rs_mode != "mrs",
                     rs=self.plan,
                     latent=latent // 32 // G if latent else None,
+                    prep=bool(routing is not None and routing.prep and self.plan is not None),
                 )
                 break
             except ValueError as err:
@@ -492,7 +493,17 @@ class HeadSE3:
                 if self.router.prep is not None:
                     from ttnn.bringup.combine_rf.sparse_all_gather_2d import route_words
 
-                    rw = route_words(self.mesh.get_num_devices())
+                    N = self.mesh.get_num_devices()
+                    rw = route_words(N)
+                    # the dispatch buffer [N S, W] row-major (W: the latent's width, else H): the program writes this
+                    # chip's slots me S .. (its owned rows); the dispatch fills the rest
+                    self.outputs["xbuf"] = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, N * self.rows // G, self.latent or self.H]),
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        self.mesh,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
                     self.outputs["route"] = ttnn.allocate_tensor_on_device(
                         ttnn.Shape([1, 1, 1, rw * self.rows // G]),
                         ttnn.uint32,
@@ -585,6 +596,15 @@ class HeadSE3:
                     ports=self.xg.port_cores(coord),
                     xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
+                    prep=(
+                        dict(
+                            xbuf=self.outputs["xbuf"],
+                            me=coord[0] * tuple(self.mesh.shape)[1] + coord[1],
+                            shard_order=self.xg.order(coord)[0],
+                        )
+                        if "xbuf" in self.outputs
+                        else None
+                    ),
                     **rse,
                 )
                 prog.cbs, prog.semaphores = c0 + c1, sems
