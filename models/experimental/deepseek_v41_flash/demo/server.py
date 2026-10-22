@@ -23,14 +23,17 @@ or ``POST /v1/sessions/<user>/cancel``, and every running turn stops on the live
 
 What V4.1 imposes on the serving side:
 
-* Users. ``--num-users`` sessions stay open at once, each with its own ring and window slot and its own rows of the
-  compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
-  ``num_users * max_context``). A step decodes one user, and switching users costs no device work: the step's packet
+* Users. ``--num-users`` sessions (64 by default) stay open at once, each with its own ring and window slot and its
+  own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
+  ``num_users * max_context``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
+  or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
   names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   Speculative decode is single-user.
-* Context. ``--max-context`` is 1048576 tokens by default (prompt + reply). Past
+* Context. ``--max-context`` is 204800 tokens by default (prompt + reply), which is what lets 64 users' compressed
+  KV fit in device DRAM; the model handles 1048576, for fewer users (``--num-users`` x ``--max-context`` is what
+  the pools hold unless ``--total-context`` says otherwise). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
   most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
@@ -39,7 +42,7 @@ What V4.1 imposes on the serving side:
 Run it (ttnn venv, from the repo root; 32-chip Galaxy for the prefill model)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
-    python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port 8000 --num-users 8 --debug
+    python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port 8000 --debug
 
 Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/demo/client.py``)::
 
@@ -88,7 +91,10 @@ from models.experimental.deepseek_v4_flash.tt.system_config import load_system_c
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-_MAX_CONTEXT = 1048576  # default --max-context (prompt + reply)
+_NUM_USERS = 64  # default --num-users
+# Default --max-context (prompt + reply). The layer-20 pool costs ~1.25 KiB per token per user on each chip of
+# stages 4-7, so 64 users at 1048576 tokens would not fit; at this context they take ~16 GB of the ~17 GB free.
+_MAX_CONTEXT = 204800
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -344,7 +350,7 @@ def parse_args(argv: list[str] | None = None):
         model_dir=str(DEFAULT_MODEL_DIR),
         model_id=os.environ.get("DEEPSEEK_V4_MODEL_ID", "deepseek-v4.1-flash"),
         num_layers=None,
-        num_users=1,
+        num_users=_NUM_USERS,
         max_context=_MAX_CONTEXT,
         total_context=None,
         # None means "no reply cap": a request runs until EOS or the context is full.

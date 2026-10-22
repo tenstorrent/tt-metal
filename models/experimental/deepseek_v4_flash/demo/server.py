@@ -42,18 +42,25 @@ own decode layout.
 
 **Users & KV cache.** ``--num-users`` paged KV-cache sessions (8 by default) are claimed
 at startup -- one captured trace, one block pool holding ``--total-context`` tokens
-across everyone -- and then handed out a turn at a time, so ``--num-users`` is the number
-of requests that can generate at once. Raising it costs little memory (a session's
-sliding ring is bounded by ``sliding_window``, and the compressed blocks come from the
-shared budget). The users' steps are pipelined through the stages rather than batched, so
-up to one user per stage adds throughput at little cost to each reply; past that the
-stages are full and the users share their rate. A slot holds a warm cache, so a request is given the slot whose stored
-conversation its ``messages`` continue -- then only the new turn's tokens are fed --
-falling back to an empty slot, or to the least recently used one, which is re-prefilled
-from the request. The OpenAI ``user`` field only labels who last held a slot: clients
-that send one identifier for all their traffic, or none, still run in parallel.
+across everyone -- and then handed out a turn at a time: ``--num-users`` is the number of
+slot ids, i.e. conversations kept warm on the device. Raising it costs little memory beyond
+the shared budget (a session's sliding ring is bounded by ``sliding_window``). Of those, at
+most ``--max-running`` (8 by default) turns generate at once; a request beyond that keeps its
+slot and waits in a first-come-first-served run queue. The users' steps are pipelined through
+the stages rather than batched, so up to one user per stage adds throughput at little cost to
+each reply; past that the stages are full and the users share their rate. A slot is *running*,
+*queued*, *parked* (the turn is done, its KV stays in the slot's device DRAM) or *empty*; a
+conversation can also be in *host* RAM (``--host-users`` of them in at most ``--host-cache-gb``),
+copied there when its slot is emptied. A request is given the slot or host copy whose stored
+conversation its ``messages`` continue -- then only the new turn's tokens are fed, after a host
+copy is written back into a slot -- falling back to an empty slot. A parked slot keeps its
+conversation for as long as it can: only when no slot is empty is the one idle longest taken
+for a new request, and only once it has been idle ``--slot-idle-timeout`` seconds (300 by
+default) since its last request; its conversation then moves to host RAM. Otherwise the request
+gets a 429. Clients that send one ``user`` identifier for all their traffic, or none, still run
+in parallel.
 
-**Concurrency.** Up to ``--num-users`` turns generate at once, their steps in the
+**Concurrency.** Up to ``--max-running`` turns generate at once, their steps in the
 stage pipeline together, as ``tests/decode/test_multi_user_paged_decode_demo.py`` runs
 its users: every decoding turn has one step in flight, and its next step is seated,
 posted and packed as soon as the previous one's token is back, so with as many users as
@@ -150,6 +157,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -658,66 +666,169 @@ class _Streamer:
         return len(text) - len(text.rstrip("\n"))
 
 
+@dataclass(eq=False)
+class _HostConversation:
+    """A conversation whose device slot another request needed, kept in host RAM: what its
+    :class:`UserSession` held, plus ``snapshot``, the model's host copy of its KV
+    (``DeepSeekV41Model.export_session``). A request that continues it gets it copied back into a slot."""
+
+    owner: str | None
+    messages: list[dict]
+    tokens: list[int]
+    marks: list[tuple[int, int, int | None]]
+    pending_id: int | None
+    next_render: int
+    thinking_mode: str
+    reasoning_effort: str | None
+    system_prompt: str | None
+    snapshot: object
+    stored_at: float
+
+
+@dataclass(eq=False)
+class _Lease:
+    """A slot claimed for one turn by :meth:`_SlotPool.acquire`. ``previous`` held the slot before; ``restore`` is a
+    host conversation the turn continues, which the scheduler copies into the slot before admitting it."""
+
+    slot: int
+    previous: str | None
+    restore: _HostConversation | None
+
+
 class _SlotPool:
-    """The KV-cache slots, handed out per *request* rather than per ``user`` key.
+    """The KV-cache slots (``--num-users`` of them, each a slot id with its own KV session) and the
+    conversations they hold, in these states:
 
-    ``user`` in the OpenAI API is a stable end-user identifier: a client may send one
-    value for all of its traffic, or none at all. Tying a slot to it would make every
-    request from such a client queue behind the previous one, so a slot is instead
-    claimed for the duration of a turn and released afterwards, and any request can use
-    any slot that is not busy.
+    * **running**: the slot's turn holds one of the ``max_running`` seats and is generating;
+    * **queued**: the slot is claimed for a turn waiting, first come first served, for a seat
+      (:meth:`wait_to_run`);
+    * **parked**: the slot holds a finished turn's conversation, its KV still in device DRAM, so a
+      request continuing it feeds only its new turn. It keeps it until a request needs a slot when none
+      is empty and it has been idle for ``idle_timeout`` seconds (see below);
+    * **empty**: the slot holds no conversation;
+    * **host**: a conversation whose slot was emptied, its KV copied to host RAM
+      (:class:`_HostConversation`). A request continuing it is given an empty slot and the KV copied
+      back rather than re-prefilled. At most ``host_users`` conversations and ``host_bytes`` bytes are
+      kept, the least recently stored dropped past either; ``host_users=0`` turns the tier off.
 
-    Which free slot matters, because a slot holds a warm KV cache. :meth:`acquire`
-    prefers, in order:
+    A slot is claimed for the duration of a turn and released afterwards, and any request can use
+    any slot that is not claimed. :meth:`acquire` prefers, in order:
 
-    1. a slot whose stored conversation is a prefix of this request's history -- the
-       follow-up case, where the cache already holds everything but the new turn and
-       only the new tokens are fed;
-    2. a slot with no conversation at all, which costs nobody their cache;
-    3. the least recently used slot, whose conversation is then dropped and the request
-       re-prefilled from its own messages.
+    1. the longest stored conversation that is a prefix of this request's history,
+       parked or in host RAM (parked on a tie) -- the follow-up case, where the cache
+       already holds everything but the new turn and only the new tokens are fed;
+    2. an empty slot, which costs nobody their cache;
+    3. with no empty slot, the parked slot idle longest (since its last request finished), once that
+       is at least ``idle_timeout`` seconds (0: never).
 
-    When every slot is busy the caller waits: the turns in flight are bounded by
-    ``--max-new-tokens``, so a slot always comes back.
+    Otherwise :meth:`acquire` raises a 429, and every parked conversation stays where it is. A slot
+    taken over is emptied by the scheduler, its conversation offloaded to host RAM first
+    (:meth:`_Scheduler._offload`), as are parked slots when the shared block pool cannot fit a turn
+    (:meth:`_Scheduler._make_room`).
     """
 
-    def __init__(self, engine: ChatEngine):
+    def __init__(
+        self,
+        engine: ChatEngine,
+        host_users: int = 0,
+        host_bytes: int = 0,
+        max_running: int = 0,
+        idle_timeout: float = 0.0,
+    ):
         self.engine = engine
+        self.idle_timeout = idle_timeout
         self._cv = threading.Condition()
         self._busy = [False] * len(engine.users)
         self.owner: list[str | None] = [None] * len(engine.users)
         self._used_at = [0.0] * len(engine.users)
         self._closing = False
+        self.max_running = min(max_running, len(engine.users)) if max_running > 0 else len(engine.users)
+        self._queue: deque[int] = deque()  # slots waiting for a seat, oldest first
+        self._running: set[int] = set()
+        self.host_users = host_users
+        self.host_bytes = host_bytes
+        self.host: list[_HostConversation] = []
 
     def __len__(self) -> int:
         return len(self._busy)
 
     # -- claiming --------------------------------------------------------------- #
-    def acquire(self, user_key: str, messages: list[dict]) -> int:
-        """Claim a slot for one turn, waiting if they are all busy."""
-        t0 = time.perf_counter()
+    def acquire(self, user_key: str, messages: list[dict]) -> _Lease:
+        """Claim a slot for one turn; a 429 when every slot is claimed or holds another user's conversation."""
         with self._cv:
-            while True:
-                if self._closing:
-                    raise RequestError(503, "server is shutting down", "server_error")
-                slot = self._pick(messages)
-                if slot is not None:
-                    break
-                # logger.debug(
-                #     f"user {user_key!r} waiting for a KV slot: all {len(self._busy)} busy "
-                #     f"({', '.join(str(o) for o in self.owner)})"
-                # )
-                self._cv.wait(timeout=1.0)
+            if self._closing:
+                raise RequestError(503, "server is shutting down", "server_error")
+            picked = self._pick(messages)
+            if picked is None:
+                free = [i for i, busy in enumerate(self._busy) if not busy]
+                when = ""
+                if free and self.idle_timeout > 0:
+                    wait = self.idle_timeout - (time.time() - min(self._used_at[i] for i in free))
+                    when = f"; the longest-idle parked slot can be taken in {max(wait, 0):.0f}s"
+                raise RequestError(
+                    429,
+                    f"all {len(self._busy)} KV slots are in use ({len(self._running)} running, "
+                    f"{len(self._queue)} queued, {len(free)} parked{when}); retry later, or free a "
+                    f"slot with DELETE /v1/sessions/<user>",
+                    "rate_limit_error",
+                )
+            slot, restore = picked
+            if restore is not None:
+                self.host.remove(restore)
+            user = self.engine.users[slot]
+            if user.pos and not _continues(messages, user.messages):
+                logger.info(
+                    f"user {user_key!r}: no empty slot, taking slot {slot} from {self.owner[slot]!r} "
+                    f"(idle {time.time() - self._used_at[slot]:.0f}s, {user.pos} tokens)"
+                )
             self._busy[slot] = True
             previous, self.owner[slot] = self.owner[slot], user_key
             self._used_at[slot] = time.time()
-        waited = time.perf_counter() - t0
         # logger.debug(
         #     f"user {user_key!r} -> slot {slot} (sid {self.engine.users[slot].sid}, "
-        #     f"{self._reason(slot, previous, user_key, messages)}"
-        #     f"{f', waited {waited:.2f}s' if waited > 0.01 else ''})"
+        #     f"{self._reason(slot, previous, user_key, messages)})"
         # )
-        return slot
+        return _Lease(slot, previous, restore)
+
+    def wait_to_run(self, slot: int, give_up) -> bool:
+        """Queue claimed ``slot`` for one of the ``max_running`` seats and wait, first come first served;
+        returns whether it got one (``False`` once ``give_up()`` is true). Hand the seat back with
+        :meth:`finish_run`."""
+        with self._cv:
+            self._queue.append(slot)
+            try:
+                while True:
+                    if self._closing:
+                        raise RequestError(503, "server is shutting down", "server_error")
+                    if self._queue[0] == slot and len(self._running) < self.max_running:
+                        self._running.add(slot)
+                        return True
+                    if give_up():
+                        return False
+                    self._cv.wait(timeout=0.5)
+            finally:
+                self._queue.remove(slot)
+                self._cv.notify_all()
+
+    def finish_run(self, slot: int) -> None:
+        with self._cv:
+            self._running.discard(slot)
+            self._cv.notify_all()
+
+    def claim_parked(self, exclude: int) -> tuple[int, str | None] | None:
+        """Claim the least recently used parked slot other than ``exclude``, for the scheduler to offload;
+        ``(slot, owner)``, or ``None`` when there is none. Give it back with :meth:`release`."""
+        with self._cv:
+            parked = [
+                i
+                for i, user in enumerate(self.engine.users)
+                if not self._busy[i] and i != exclude and user.pos and not self._closing
+            ]
+            if not parked:
+                return None
+            slot = min(parked, key=lambda i: self._used_at[i])
+            self._busy[slot] = True
+            return slot, self.owner[slot]
 
     def reserve(self, slot: int) -> None:
         """Claim one specific slot, waiting for its turn to finish (used by a reset)."""
@@ -728,10 +839,13 @@ class _SlotPool:
                 raise RequestError(503, "server is shutting down", "server_error")
             self._busy[slot] = True
 
-    def release(self, slot: int) -> None:
+    def release(self, slot: int, vacated: bool = False) -> None:
+        """Give back a claimed slot; ``vacated``: its conversation has gone (offloaded and reset), so it has no owner."""
         with self._cv:
             self._busy[slot] = False
             self._used_at[slot] = time.time()
+            if vacated:
+                self.owner[slot] = None
             self._cv.notify_all()
 
     def close(self) -> None:
@@ -739,24 +853,82 @@ class _SlotPool:
             self._closing = True
             self._cv.notify_all()
 
-    def _pick(self, messages: list[dict]) -> int | None:
+    def _pick(self, messages: list[dict]) -> tuple[int, _HostConversation | None] | None:
+        """``(slot, host conversation to copy into it or None)``, or ``None`` when no slot may be taken."""
         free = [i for i, busy in enumerate(self._busy) if not busy]
         if not free:
             return None
-        # 1. The longest stored conversation this request continues.
+        # 1. The longest stored conversation this request continues, parked or in host RAM.
         best, best_len = None, 0
         for i in free:
             stored = self.engine.users[i].messages
             if len(stored) > best_len and _continues(messages, stored):
                 best, best_len = i, len(stored)
+        restore = None
+        for conv in self.host:
+            if len(conv.messages) > best_len and _continues(messages, conv.messages):
+                restore, best_len = conv, len(conv.messages)
         if best is not None:
-            return best
+            return best, restore  # a parked prefix of the host conversation is no loss to overwrite
         # 2. A slot holding nothing.
         for i in free:
-            if not self.engine.users[i].messages:
-                return i
-        # 3. The one whose cache has been idle longest.
-        return min(free, key=lambda i: self._used_at[i])
+            if not self.engine.users[i].pos:
+                return i, restore
+        # 3. No slot left: the parked slot idle longest, once it has been idle for idle_timeout.
+        if self.idle_timeout > 0:
+            oldest = min(free, key=lambda i: self._used_at[i])
+            if time.time() - self._used_at[oldest] >= self.idle_timeout:
+                return oldest, restore
+        return None
+
+    # -- host tier -------------------------------------------------------------- #
+    def store(self, conv: _HostConversation) -> None:
+        """Keep ``conv`` in host RAM and drop the least recently stored conversations past ``host_users`` /
+        ``host_bytes`` (``conv`` itself when it alone is over the bytes)."""
+        dropped = []
+        with self._cv:
+            self.host.append(conv)
+            while self.host and (
+                len(self.host) > self.host_users or sum(c.snapshot.nbytes for c in self.host) > self.host_bytes
+            ):
+                oldest = min(self.host, key=lambda c: c.stored_at)
+                self.host.remove(oldest)
+                dropped.append(oldest)
+        for conv in dropped:
+            logger.info(
+                f"user {conv.owner!r}: dropped its {conv.snapshot.pos}-token conversation from host RAM "
+                f"({self.host_summary()}); continuing it re-prefills"
+            )
+
+    def drop_host(self, user_key: str) -> int:
+        """Drop every host conversation ``user_key`` held; returns how many there were."""
+        with self._cv:
+            kept = [c for c in self.host if c.owner != user_key]
+            dropped, self.host = len(self.host) - len(kept), kept
+        return dropped
+
+    def counts(self) -> dict:
+        """How many slots are ``running`` / ``queued`` / ``parked`` / ``empty``, plus ``max_running``."""
+        with self._cv:
+            running, queued = len(self._running), len(self._queue)
+            free = [i for i, busy in enumerate(self._busy) if not busy]
+            parked = sum(1 for i in free if self.engine.users[i].pos)
+            return {
+                "running": running,
+                "queued": queued,
+                "parked": parked,
+                "empty": len(free) - parked,
+                "max_running": self.max_running,
+            }
+
+    def host_usage(self) -> tuple[int, int]:
+        """``(conversations, bytes)`` in host RAM."""
+        with self._cv:
+            return len(self.host), sum(c.snapshot.nbytes for c in self.host)
+
+    def host_summary(self) -> str:
+        count, nbytes = self.host_usage()
+        return f"{count}/{self.host_users} conversations, {nbytes / 2**30:.2f}/{self.host_bytes / 2**30:.0f} GiB"
 
     def _reason(self, slot: int, previous: str | None, user_key: str, messages: list[dict]) -> str:
         user = self.engine.users[slot]
@@ -771,20 +943,50 @@ class _SlotPool:
 
     # -- reporting -------------------------------------------------------------- #
     def rows(self) -> list[dict]:
-        """One row per slot, for ``/v1/sessions`` and the status pane."""
+        """One row per device slot, then one per host conversation (``index`` ``None``, ``host`` its
+        position), for ``/v1/sessions`` and the status pane. ``tier`` is ``running``, ``queued``, ``busy``
+        (claimed for a reset or to be emptied, or about to queue), ``parked``, ``empty`` or ``host``; ``queue``
+        is a queued slot's place in the run queue (0 is next)."""
         with self._cv:
-            busy, owner = list(self._busy), list(self.owner)
+            busy, owner, host = list(self._busy), list(self.owner), list(self.host)
+            running, queue = set(self._running), list(self._queue)
+            queued = set(queue)
+
+        def tier(index: int, user) -> str:
+            if index in running:
+                return "running"
+            if index in queued:
+                return "queued"
+            return "busy" if busy[index] else "parked" if user.pos else "empty"
+
         rows = []
         for index, user in enumerate(self.engine.users):
             rows.append(
                 {
                     "id": owner[index] or "",
                     "index": index,
+                    "tier": tier(index, user),
+                    "queue": queue.index(index) if index in queued else None,
                     "tokens": user.pos,
                     "max_context": self.engine.max_seq,
                     "messages": len(user.messages),
                     "thinking": user.thinking_mode == "thinking",
                     "busy": busy[index],
+                }
+            )
+        for i, conv in enumerate(sorted(host, key=lambda c: c.stored_at, reverse=True)):
+            rows.append(
+                {
+                    "id": conv.owner or "",
+                    "index": None,
+                    "host": i,
+                    "tier": "host",
+                    "tokens": conv.snapshot.pos,
+                    "max_context": self.engine.max_seq,
+                    "messages": len(conv.messages),
+                    "thinking": conv.thinking_mode == "thinking",
+                    "busy": False,
+                    "bytes": conv.snapshot.nbytes,
                 }
             )
         return rows
@@ -1060,6 +1262,8 @@ class _Turn:
     ):
         self.user_key = user_key
         self.slot = slot
+        self.previous_owner: str | None = None  # who held the slot before this turn (see _Lease)
+        self.restore: _HostConversation | None = None  # copied into the slot at admission, then None
         self.body = body
         self.sampler = sampler
         self.max_tokens = max_tokens
@@ -1403,6 +1607,12 @@ class _Scheduler:
             f"{len(user.messages)} stored messages, {len(self._active)} turns already active"
         )
         try:
+            # Before the request's options touch the slot: what it holds is the previous conversation's.
+            if not cut_short and not _continues(turn.body["messages"], user.messages):
+                self._offload(turn.slot, turn.previous_owner)
+            if turn.restore is not None:
+                if self._restore(user, turn):
+                    cut_short = False
             self.server._apply_options(user, turn.body)
             if cut_short and not self._resume(user, turn):
                 user.reset()
@@ -1418,6 +1628,7 @@ class _Scheduler:
                     user._next_render = 0
                     turn.ids = self.server._render_ids(user, include_assistant=True)
                 self._choose_feed(user, turn, continuing)
+            self._make_room(len(turn.ids), turn.slot)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
             if cut_short:
@@ -1629,6 +1840,87 @@ class _Scheduler:
             if grew and self._pool_seen:
                 logger.debug(f"KV pages allocated:  {', '.join(grew)} ({self._pool_summary()})")
             self._pool_seen = usage
+
+    # -- host KV tier ------------------------------------------------------------ #
+    def _offload(self, slot: int, owner: str | None) -> None:
+        """Copy the conversation parked in ``slot`` to host RAM (:meth:`_SlotPool.store`), so a request
+        continuing it later restores it instead of re-prefilling. Leaves the slot as it was."""
+        pool, user = self.server.pool, self.engine.users[slot]
+        # A cut-short slot's cache ends part-way through a prompt, and without every token fed there is no conversation to rebuild.
+        if not pool.host_users or not user.pos or len(user.tokens) != user.pos or slot in self._cut_short:
+            return
+        t0 = time.perf_counter()
+        try:
+            snapshot = self.engine.model.export_session(user.sid)
+        except Exception as e:  # noqa: BLE001 - only the host copy is lost; the conversation re-prefills later
+            logger.warning(f"user {owner!r} (slot {slot}): could not copy the session to host RAM: {e}")
+            return
+        pool.store(
+            _HostConversation(
+                owner=owner,
+                messages=list(user.messages),
+                tokens=list(user.tokens),
+                marks=list(user.marks),
+                pending_id=user.pending_id,
+                next_render=user._next_render,
+                thinking_mode=user.thinking_mode,
+                reasoning_effort=user.reasoning_effort,
+                system_prompt=user.system_prompt,
+                snapshot=snapshot,
+                stored_at=time.time(),
+            )
+        )
+        logger.info(
+            f"user {owner!r} (slot {slot}): {user.pos}-token conversation copied to host RAM in "
+            f"{time.perf_counter() - t0:.2f}s ({snapshot.nbytes / 2**20:.0f} MiB; {pool.host_summary()})"
+        )
+
+    def _restore(self, user: UserSession, turn: _Turn) -> bool:
+        """Copy the host conversation ``turn`` continues into its slot (whose own conversation
+        :meth:`_offload` has already saved); returns whether it did. On failure the slot is left empty
+        and the conversation goes back to host RAM, so the turn re-prefills from its messages."""
+        conv, turn.restore = turn.restore, None
+        t0 = time.perf_counter()
+        user.reset()
+        self._make_room(conv.snapshot.pos, turn.slot)
+        try:
+            self.engine.model.import_session(user.sid, conv.snapshot)
+        except Exception as e:  # noqa: BLE001 - the turn falls back to a re-prefill
+            logger.warning(f"user {turn.user_key!r} (slot {turn.slot}): could not restore from host RAM: {e}")
+            user.reset()
+            self.server.pool.store(conv)
+            return False
+        user.messages = list(conv.messages)
+        user.tokens = list(conv.tokens)
+        user.marks = list(conv.marks)
+        user.pending_id = conv.pending_id
+        user._next_render = conv.next_render
+        user.thinking_mode = conv.thinking_mode
+        user.reasoning_effort = conv.reasoning_effort
+        user.system_prompt = conv.system_prompt
+        user.pos = conv.snapshot.pos
+        logger.info(
+            f"user {turn.user_key!r} (slot {turn.slot}): {user.pos}-token conversation restored from host RAM in "
+            f"{time.perf_counter() - t0:.2f}s ({self.server.pool.host_summary()})"
+        )
+        return True
+
+    def _make_room(self, n_tokens: int, keep: int) -> None:
+        """Free parked slots other than ``keep``, least recently used first (offloading each to host RAM),
+        until the shared block pool has room for ``n_tokens`` more tokens or no parked slot is left."""
+        pool = self.server.pool
+        while n_tokens > self.engine.tokens_left():
+            claimed = pool.claim_parked(exclude=keep)
+            if claimed is None:
+                return
+            slot, owner = claimed
+            try:
+                self._offload(slot, owner)
+                self.engine.users[slot].reset()
+                self._cut_short.discard(slot)
+            finally:
+                pool.release(slot, vacated=True)
+            logger.debug(f"freed parked slot {slot} (user {owner!r}) for {n_tokens} tokens: {self._pool_summary()}")
 
     def _check_capacity(self, user: UserSession, ids: list[int]) -> None:
         engine = self.engine
@@ -2135,10 +2427,10 @@ class GenerationServer:
     :class:`_SlotPool` hands those out a turn at a time, preferring the slot that already
     holds the conversation the request continues.
 
-    Turns run concurrently: an HTTP thread validates the request, claims a slot, hands a
-    :class:`_Turn` to the :class:`_Scheduler` and then does nothing but relay the reply as
-    it arrives, while the scheduler thread interleaves every active turn's decode steps on
-    the device.
+    Turns run concurrently: an HTTP thread validates the request, claims a slot, waits in the
+    run queue for one of the ``--max-running`` seats, hands a :class:`_Turn` to the
+    :class:`_Scheduler` and then does nothing but relay the reply as it arrives, while the
+    scheduler thread interleaves every active turn's decode steps on the device.
     """
 
     def __init__(
@@ -2150,13 +2442,20 @@ class GenerationServer:
         prefiller: _Prefiller | None = None,
         decode_ahead: bool = True,
         temperature: float | None = None,
+        host_users: int = 0,
+        host_bytes: int = 0,
+        max_running: int = 0,
+        slot_idle_timeout: float = 0.0,
     ):
         self.engine = engine
         self.model_id = model_id
         self.temperature = temperature  # for requests that send no ``temperature``
         self.max_body_bytes = max_body_bytes
         self.prefiller = prefiller
-        self.pool = _SlotPool(engine)
+        if host_users and not hasattr(engine.model, "export_session"):
+            logger.info(f"{type(engine.model).__name__} cannot copy a session to host RAM: host KV tier off")
+            host_users = 0
+        self.pool = _SlotPool(engine, host_users, host_bytes, max_running, slot_idle_timeout)
         self._created = int(time.time())
         self.scheduler = _Scheduler(self, prefill_chunk, decode_ahead)
         self._turns: dict[str, _Turn] = {}  # running turns by request id, for cancel()
@@ -2167,7 +2466,7 @@ class GenerationServer:
         self.scheduler.start()
 
     def stop(self) -> None:
-        self.pool.close()  # release anyone waiting for a slot before the threads go
+        self.pool.close()  # release anyone waiting for a seat before the threads go
         self.scheduler.stop()
 
     # -- status ----------------------------------------------------------------- #
@@ -2181,6 +2480,10 @@ class GenerationServer:
                 "slots": len(self.engine.users),
                 "max_seq": self.engine.max_seq,
                 "users": self.pool.rows(),
+                "slot_states": self.pool.counts(),
+                "slot_idle_timeout": self.pool.idle_timeout,
+                "host": dict(zip(("users", "bytes"), self.pool.host_usage())),
+                "host_limits": {"users": self.pool.host_users, "bytes": self.pool.host_bytes},
             }
         )
         return stats
@@ -2190,10 +2493,13 @@ class GenerationServer:
         """Rewind the conversations ``user_key`` last held, and their KV pages.
 
         Reserves each slot first, so it waits for a turn in flight rather than pulling
-        the pages out from under it."""
+        the pages out from under it. Its conversations in host RAM are dropped too."""
+        dropped = self.pool.drop_host(user_key)
+        if dropped:
+            logger.debug(f"reset for {user_key!r}: dropped {dropped} conversation(s) from host RAM")
         slots = self.pool.slots_of(user_key)
         if not slots:
-            logger.debug(f"reset for {user_key!r}: it holds no slot, nothing to do")
+            logger.debug(f"reset for {user_key!r}: it holds no slot")
             return
         for slot in slots:
             self.pool.reserve(slot)
@@ -2306,18 +2612,39 @@ class GenerationServer:
         # A slot is claimed per turn, not per user, so two requests run concurrently even
         # when they carry the same ``user`` (or none). Held until the reply is complete:
         # the turn decodes into this slot's KV session.
-        slot = self.pool.acquire(user_key, messages)
+        lease = self.pool.acquire(user_key, messages)
         request_id = request_id or uuid.uuid4().hex
+        turn = None
+        seated = False
         try:
-            turn = _Turn(user_key, slot, body, sampler, max_tokens)
+            turn = _Turn(user_key, lease.slot, body, sampler, max_tokens)
+            turn.previous_owner, turn.restore = lease.previous, lease.restore
             with self._turns_lock:
                 self._turns[request_id] = turn
+            counts = self.pool.counts()
+            if counts["running"] >= counts["max_running"] or counts["queued"]:
+                logger.info(
+                    f"user {user_key!r} (slot {lease.slot}) queued: {counts['running']}/{counts['max_running']} "
+                    f"running, {counts['queued']} ahead"
+                )
+            seated = self.pool.wait_to_run(
+                lease.slot, lambda: turn.cancelled.is_set() or (client_gone is not None and client_gone())
+            )
+            if not seated:
+                # Given up in the queue: the scheduler retires a cancelled turn at admission without running it.
+                turn.cancelled.set()
             self.scheduler.submit(turn)
             return self._relay(turn, on_chunk, client_gone)
         finally:
+            if seated:
+                self.pool.finish_run(lease.slot)
             with self._turns_lock:
                 self._turns.pop(request_id, None)
-            self.pool.release(slot)
+            # A host conversation the turn never got to restore (rejected or cancelled before admission) stays in host RAM.
+            restore = lease.restore if turn is None else turn.restore
+            if restore is not None:
+                self.pool.store(restore)
+            self.pool.release(lease.slot)
 
     @staticmethod
     def _relay(turn: _Turn, on_chunk, client_gone=None) -> dict:
@@ -2605,6 +2932,8 @@ class _Handler(BaseHTTPRequestHandler):
                         "status": "ok",
                         "model": self.api.model_id,
                         "sessions": len(self.api.engine.users),
+                        "slot_states": self.api.pool.counts(),
+                        "host_sessions": self.api.pool.host_usage()[0],
                         "active_turns": self.api.scheduler.active_turns,
                         "uptime": time.time() - self.api._created,
                     }
@@ -2734,6 +3063,35 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
         default=decode.total_context or None,
         help="total tokens the shared block pool holds across all users "
         "(default: --num-users x --max-context, i.e. every user can fill its context)",
+    )
+    p.add_argument(
+        "--max-running",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_MAX_RUNNING", 8)),
+        help="turns generating at once (one per pipeline stage keeps every stage busy); further requests "
+        "keep their slot and wait in a first-come-first-served queue. Capped at --num-users",
+    )
+    p.add_argument(
+        "--slot-idle-timeout",
+        type=float,
+        default=float(os.environ.get("DEEPSEEK_V4_SLOT_IDLE_TIMEOUT", 300)),
+        help="seconds a parked slot must have been idle since its last request before a new request may take "
+        "it, and only when no slot is empty; its conversation then moves to host RAM (see --host-users). "
+        "Until then, or with 0 (never take a parked slot), a request finding no empty slot gets a 429",
+    )
+    p.add_argument(
+        "--host-users",
+        type=int,
+        default=int(os.environ.get("DEEPSEEK_V4_HOST_USERS", 32)),
+        help="conversations kept in host RAM once their device slot is needed by another request "
+        "(or its blocks by a longer turn); continuing one copies its KV back instead of re-prefilling. "
+        "0 turns the host tier off (models without session export always have it off)",
+    )
+    p.add_argument(
+        "--host-cache-gb",
+        type=float,
+        default=float(os.environ.get("DEEPSEEK_V4_HOST_CACHE_GB", 32)),
+        help="host RAM (GiB) the --host-users conversations may take; the least recently stored go first",
     )
     p.add_argument(
         "--max-new-tokens",
@@ -2913,6 +3271,14 @@ def check_args(p: argparse.ArgumentParser, args: argparse.Namespace, sys_cfg) ->
             f"--total-context {args.total_context} is below --max-context {args.max_context}: "
             "no user could ever fill its context"
         )
+    if args.max_running < 1:
+        p.error("--max-running must be at least 1")
+    if args.slot_idle_timeout < 0:
+        p.error("--slot-idle-timeout must be non-negative")
+    if args.host_users < 0:
+        p.error("--host-users must be non-negative")
+    if args.host_cache_gb < 0:
+        p.error("--host-cache-gb must be non-negative")
     if not 0 < args.port < 65536:
         p.error("--port must be a TCP port number")
     if args.prefill_chunk < 1:
@@ -3031,6 +3397,10 @@ def serve(
                 prefiller=prefiller,
                 decode_ahead=args.decode_ahead,
                 temperature=args.temperature,
+                host_users=args.host_users,
+                host_bytes=int(args.host_cache_gb * 2**30),
+                max_running=args.max_running,
+                slot_idle_timeout=args.slot_idle_timeout,
             )
             # The scheduler is the only thread that touches the device from here on; the
             # traces it replays were captured by the warmup above, which a pipelined
