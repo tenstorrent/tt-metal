@@ -50,14 +50,16 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
         ProgramSpec spec;
         spec.name = "test_program";
 
-        auto kernel = MakeMinimalGen2DMKernel("kernel");
+        auto producer = MakeMinimalGen2DMKernel("producer");
+        auto consumer = MakeMinimalGen2DMKernel("consumer");
         auto dfb = MakeMinimalDFB("dfb");
 
-        kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, bad_name));
+        producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, bad_name));
+        consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
-        spec.kernels = {kernel};
+        spec.kernels = {producer, consumer};
         spec.dataflow_buffers = {dfb};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
         EXPECT_THAT(
             [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -72,11 +74,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
     ProgramSpec spec;
     spec.name = "test_program";
     auto kernel = MakeMinimalGen2DMKernel("kernel");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, too_long));
-    spec.kernels = {kernel};
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {kernel, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel", "consumer"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -91,17 +95,23 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedLocalAccessorNameForDifferentDFBsFails) 
     spec.name = "test_program";
 
     auto kernel = MakeMinimalGen2DMKernel("kernel");
+    auto dfb0_consumer = MakeMinimalGen2DMKernel("dfb0_consumer");
+    auto dfb1_producer = MakeMinimalGen2DMKernel("dfb1_producer");
     auto dfb0 = MakeMinimalDFB("dfb_0");
     auto dfb1 = MakeMinimalDFB("dfb_1");
 
     // Bind two *different* DFBs with the same accessor_name — illegal
-    // (self-loop sharing requires the same DFB on both bindings).
+    // (self-loop sharing requires the same DFB on both bindings). The other kernels complete each
+    // DFB's producer/consumer pair so collection's endpoint check does not fire first.
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "same_accessor"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "same_accessor"));
+    dfb0_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in0"));
+    dfb1_producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "out1"));
 
-    spec.kernels = {kernel};
+    spec.kernels = {kernel, dfb0_consumer, dfb1_producer};
     spec.dataflow_buffers = {dfb0, dfb1};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel", "dfb0_consumer", "dfb1_producer"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },

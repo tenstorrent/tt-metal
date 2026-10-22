@@ -191,6 +191,9 @@ public:
     // How many pipes the CreatePrefetcherPipesForTensorPrefetcher call that made this one returned.
     uint32_t tensor_prefetcher_factory_num_pipes() const { return tensor_prefetcher_factory_num_pipes_; }
     uint32_t recv_index_base() const { return recv_index_base_; }
+    // The receivers in a DRAM sender's receiver-table order: the sender delivers bank-local shard
+    // recv_index_base() + r to entry r.
+    std::vector<CoreCoord> dram_sender_receiver_table() const;
     DeviceAddr sender_state_drisc_l1_base() const;
     // The DRISC L1 range that sender_state_drisc_l1_base() lies in. Shared with the space, which keeps
     // it for the sender core after the pipe is gone. Null for a worker-sender pipe.

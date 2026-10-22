@@ -13,6 +13,8 @@
 
 namespace tt::tt_fabric {
 
+class FabricBuilderContext;
+
 // Local tensix (relay) connection info for UDM mode
 struct LocalTensixRelayConnectionInfo {
     tt::tt_metal::CoreCoord noc_xy = {0, 0};
@@ -73,6 +75,9 @@ public:
     // Get the connection mask for a specific VC
     virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
 
+    // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
+    virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
+
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -91,7 +96,9 @@ private:
  */
 class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
 public:
+    // builder_context must outlive the adapter.
     StaticSizedChannelConnectionWriterAdapter(
+        const FabricBuilderContext& builder_context,
         FabricStaticSizedChannelsAllocator& allocator,
         tt::tt_fabric::Topology topology,
         eth_chan_directions my_direction);
@@ -123,6 +130,8 @@ public:
     uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const override {
         return downstream_edms_connected_by_vc_mask.at(vc_idx);
     }
+
+    uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
@@ -163,6 +172,12 @@ private:
     // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
     std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
 
+    // Destination router's absolute sender channel for each compact downstream slot.
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_max_receiver_channels>
+        downstream_sender_channel_ids = {};
+
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_max_receiver_channels>
@@ -176,6 +191,7 @@ private:
         builder_config::num_max_receiver_channels>
         downstream_edm_buffer_index_semaphore_addresses = {};
 
+    const FabricBuilderContext& builder_context_;
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;
 

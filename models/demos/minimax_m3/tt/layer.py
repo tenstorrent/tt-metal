@@ -3,7 +3,7 @@
 
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, is_sparse_attention_layer
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -35,6 +35,7 @@ class DecoderLayer:
         ep_seq_len_per_chip=1024,
         sequence_parallel=False,
         cache_layer_idx=None,
+        overlap_shared_expert=True,
     ):
         # layer_idx is global (weights + dense/MoE/sparse selection); cache_layer_idx is the local index
         # for the KV-cache slot (None => single-rank, equal to layer_idx).
@@ -95,6 +96,7 @@ class DecoderLayer:
                 expert_weight_dtype=expert_weight_dtype,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
+                overlap_shared_expert=overlap_shared_expert,
             )
 
         # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =
@@ -105,11 +107,7 @@ class DecoderLayer:
         # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
         # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
         sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
-        if isinstance(sparse_cfg, dict):
-            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
-        else:
-            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
-        is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+        is_sparse = is_sparse_attention_layer(hf_config, layer_idx)
 
         # MSA hyperparams from sparse_attention_config (dict or object); defaults match M3.
         def _sc(name, default):
@@ -200,11 +198,8 @@ class DecoderLayer:
         position_embeddings=None,
         position_idx=None,
         kv_cache=None,
-        user_id=0,
-        batch_size=1,
-        cached_len=0,
         indexed_rope=False,
-        actual_isl=None,
+        chunks=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -226,10 +221,8 @@ class DecoderLayer:
                     rope_mats=position_embeddings,
                     position_idx=position_idx,
                     kv_cache=kv_cache,
-                    user_id=user_id,
-                    batch_size=batch_size,
-                    cached_len=cached_len,
                     indexed_rope=indexed_rope,
+                    chunks=chunks,
                 )
             hidden_states_post_norm.deallocate(True)
 
@@ -247,12 +240,12 @@ class DecoderLayer:
             )
 
             with zone("mlp", COARSE):
-                # actual_isl only reaches the MoE MLP — it drives the gate/dispatch padding config.
-                # The dense layers (0-2) have no router or dispatch, so DenseMLP takes no such argument.
+                # The chunks' real rows drive the MoE gate/dispatch padding config. The dense layers (0-2)
+                # have no router or dispatch, so DenseMLP takes no such argument.
                 hidden_states = (
                     self.mlp(hidden_states_post_norm)
                     if self.is_dense
-                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl, actual_start=cached_len)
+                    else self.mlp(hidden_states_post_norm, chunks=chunks)
                 )
             hidden_states_post_norm.deallocate(True)
 

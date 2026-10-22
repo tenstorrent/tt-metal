@@ -461,9 +461,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto device_id : mesh_device_->get_device_ids()) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+            device_id, syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
 
     // Capture Trace
@@ -484,9 +484,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto device_id : mesh_device_->get_device_ids()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+                device_id, syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (const auto& device_coord : left_col) {
@@ -557,6 +557,30 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     Finish(mesh_device_->mesh_command_queue());
 
     // Cleanup
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
+    // Leaves out all other devices, including remote chips (#60338)
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 0);
+
+    auto mesh_workload = std::make_shared<MeshWorkload>();
+    mesh_workload->add_program(MeshCoordinateRange({0, 0}, {0, 0}), std::move(*programs[0]));
+
+    // Compile workload first
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
+
+    for (int i = 0; i < 100; i++) {
+        mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
     mesh_device_->release_mesh_trace(trace_id);
 }
 

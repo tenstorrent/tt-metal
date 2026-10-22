@@ -245,7 +245,10 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 }

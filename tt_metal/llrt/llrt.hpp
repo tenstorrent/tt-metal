@@ -15,6 +15,7 @@
 #include <tt_stl/span.hpp>
 // clang-format off
 #include "hal.hpp"
+#include "binary_metadata.hpp"
 #include "tt_memory.h"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -32,6 +33,15 @@ namespace tt::llrt {
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
+    const std::string& path,
+    ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
+    const std::function<void(ll_api::memory&)>& update_callback = nullptr);
+
+// Return the host-side metadata harvested from a binary's ELF (op-to-op R/W inference, etc.). Shares the
+// same path-keyed cache and single read path as get_risc_binary: a pure cache hit if the binary was
+// already loaded, otherwise loaded once with LOADING (only consulted on first load; the metadata itself
+// is loading-independent -- it lives in non-alloc ELF sections). The returned reference is stable.
+const ll_api::BinaryMetadata& get_binary_metadata(
     const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     const std::function<void(ll_api::memory&)>& update_callback = nullptr);

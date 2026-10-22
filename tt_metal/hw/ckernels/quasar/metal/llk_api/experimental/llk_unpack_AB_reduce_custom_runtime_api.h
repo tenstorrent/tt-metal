@@ -37,15 +37,11 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
     _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(
-        block_ct_dim,
-        respect_trigger,
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        tensor_shape);
+        block_ct_dim, respect_trigger, bfd_a, bfd_b, tensor_shape);
 }
 
 /**

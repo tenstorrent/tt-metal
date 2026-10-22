@@ -156,6 +156,21 @@ def test_bcast_mixed_interleaved(device, op_name, a_shape, b_shape, bcast):
     _run(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, (a_shape, b_shape), pcc=pcc)
 
 
+# 8 output tiles on each of the 32 Quasar cores, so each core calls the per-row (COL) or per-slab (SCALAR) compute
+# function several times. The tests above give each core about one call. A DataflowBuffer built inside that function
+# drains at every return and hangs. add runs the FPU kernel, multiply the SFPU kernel.
+@pytest.mark.parametrize("op_name", ["add", "multiply"])
+@pytest.mark.parametrize(
+    "a_shape,b_shape",
+    [
+        pytest.param([1, 1, 64 * 32, 4 * 32], [1, 1, 64 * 32, 1], id="COL_B"),  # 2 tile rows per core
+        pytest.param([32, 8, 32, 32], [32, 8, 1, 1], id="SCALAR_B"),  # 8 one-tile slabs per core
+    ],
+)
+def test_bcast_several_calls_per_core(device, op_name, a_shape, b_shape):
+    _run(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, (a_shape, b_shape))
+
+
 # --- Layout generality: the broadcast operand may be sharded, and a/b/out may mix independently --------
 # (per-operand independence). borrow_shards in the DFB factory (binary_ng_metal_v2_factory.cpp) is
 # ALL-OR-NOTHING across a/b/out: is_native_L1_sharding (binary_ng_utils.cpp) returns false immediately

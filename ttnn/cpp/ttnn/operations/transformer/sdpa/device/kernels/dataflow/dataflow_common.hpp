@@ -967,9 +967,10 @@ void generate_causal_sliding_window_mask(
                     // K tile is completely outside all sliding windows
                     mask_type = MaskType::FULLY_MASKED;
                 } else {
-                    // K tile overlaps with sliding windows, but we need to check if it's fully contained
+                    // A tile needs no mask only when every query row can attend to every key.
+                    // Use the intersection of the rows' windows, not their union at the leading edge.
                     bool k_tile_fully_contained =
-                        ((int32_t)k_tile_start >= min_window_start) &&
+                        ((int32_t)k_tile_start >= max_window_start) &&
                         ((int32_t)k_tile_end < min_window_end);  // fully contained within the window
                     if (k_tile_fully_contained) {
                         mask_type = MaskType::FULLY_ALLOWED;
@@ -1783,7 +1784,12 @@ void generate_mask(
         uint32_t q_low_idx = offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
         uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
-        for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+        // Non-causal legacy compute consumes every K chunk, including those
+        // beyond this Q chunk. Produce the same number of masks or it waits
+        // forever for the first missing mask. Causal compute stops at Q's end.
+        const uint32_t mask_k_end =
+            is_causal ? q_high_idx : (unpadded_Sk_mask_0 + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+        for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < mask_k_end; ++k_chunk) {
             const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
             const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
             // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ

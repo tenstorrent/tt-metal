@@ -39,7 +39,9 @@ def _single_core_program(kernel_source, descriptor_type):
                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
                 compile_time_args=[],
                 runtime_args=runtime_args,
-                config=ttnn.ReaderConfigDescriptor(),
+                # BRISC avoids Wormhole's 16 KiB NCRISC code limit so oversized
+                # kernels reach the aggregate kernel-config-buffer check.
+                config=ttnn.WriterConfigDescriptor(),
             )
         ],
         semaphores=[],

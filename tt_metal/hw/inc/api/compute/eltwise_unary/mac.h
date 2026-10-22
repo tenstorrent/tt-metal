@@ -35,6 +35,18 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_mac,
+        (APPROX, DST_ACCUM_MODE, data_format, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        idst2,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -45,6 +57,7 @@ ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst
         idst2,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**

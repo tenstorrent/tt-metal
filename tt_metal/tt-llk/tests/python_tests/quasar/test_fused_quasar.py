@@ -15,6 +15,7 @@ case_configs = collect_fuser_cases(yaml_files)
 @skip_for_blackhole
 @skip_for_wormhole
 @skip_for_coverage
+@pytest.mark.quasar
 @pytest.mark.parametrize("case_name", case_configs)
 def test_fuser(
     case_name,

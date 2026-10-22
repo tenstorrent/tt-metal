@@ -13,6 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/validation_helpers.hpp"
+#include "internal/local_mem/address_access.h"
 
 // This reader shares one source across four modes, so its runtime-arg schema is the union of every
 // path's names (see the factory). Each path declares the arg names it does NOT own as
@@ -55,10 +56,11 @@ void kernel_main() {
     // both caches and sees the NoC-written ids directly -- this is what the old DataflowBuffer::get_write_ptr()
     // did for this path. Plain base on WH/BH (the alias is Quasar-only, and CPU/NoC are coherent there).
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Raw address needed: the uncached alias is address arithmetic outside the handle's L1 window.
     volatile tt_l1_ptr int* batch_ids = reinterpret_cast<volatile tt_l1_ptr int*>(
-        static_cast<uintptr_t>(batch.get_base_address()) + MEM_L1_UNCACHED_BASE);
+        local_mem::detail::AddressAccess::address(batch.local_mem()) + MEM_L1_UNCACHED_BASE);
 #else
-    volatile tt_l1_ptr int* batch_ids = reinterpret_cast<volatile tt_l1_ptr int*>(batch.get_base_address());
+    volatile tt_l1_ptr int* batch_ids = &batch.local_mem()[0];
 #endif
 
     // Stage the b uint32 batch ids into the scratchpad, then index them back below via batch_ids. The

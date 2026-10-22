@@ -13,8 +13,8 @@ import sys
 SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 # Headless audit sessions run unattended in auto mode, and their agents (workflow agents inherit the session's
-# permission rules) must never build, run tests, touch a card, or change the audited tree: execution belongs to
-# exec_tier.py, which runs its commands itself. Deny rules are checked before auto mode's classifier, and match any
+# permission rules) must never build, run tests, touch a card, or change the audited tree: the audit is static.
+# Deny rules are checked before auto mode's classifier, and match any
 # subcommand of a compound command. They match the command text only, so this is a guard, not a sandbox.
 _DENY_CMDS = [
     "make",
@@ -144,6 +144,24 @@ def findings_of(out, batch):
 
 def key_of(f):
     return f"{f['file']}:{f['line']}"
+
+
+def recheck_key(f):
+    """One recheck entry per finding, not per line: a line can hold several findings (a second defect, a sibling
+    lead), and a verdict reached on one of them must not settle the others."""
+    return f"{key_of(f)}#{hashlib.sha1(f['summary'].encode()).hexdigest()[:10]}"
+
+
+def recheck_entry(rc, f):
+    """This finding's recheck entry. An entry keyed by line alone (from an older run) applies only to the finding
+    whose claim it stored."""
+    e = rc.get(recheck_key(f))
+    if e is None:
+        e = rc.get(key_of(f))
+        stored = (e or {}).get("finding") or {}
+        if stored.get("summary") != f.get("summary"):
+            e = None
+    return e
 
 
 def seeded_order(items, seed, key):

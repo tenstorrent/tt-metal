@@ -39,10 +39,10 @@
 
 #include "socket_service_common.hpp"
 #include "tensor/tensor_ops.hpp"
-#include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
-#include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -461,7 +461,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     per_shard_spec_ = device_tensor_.tensor_spec();
 
     // Each device may resolve a different free service core; record it per coord.
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
     const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
@@ -821,15 +821,13 @@ H2DStreamService::~H2DStreamService() {
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
         // dispatch to drain, or a later instance finds the service core occupied.
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (mesh_device_) {
+            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.wait_done(d, core);
             }
-        }
 
-        if (mesh_device_) {
             for (const auto& [coord, addr] : termination_addrs_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);

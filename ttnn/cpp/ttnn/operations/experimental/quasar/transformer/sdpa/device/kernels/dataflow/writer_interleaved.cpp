@@ -11,6 +11,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
@@ -83,19 +84,14 @@ void kernel_main() {
     constexpr auto dfb_mask_in = dfb::out;  // placeholder; writer generates no mask on this path
 #endif
 #ifdef USE_WINDOWED_MASK
-    constexpr auto dfb_cu_window_in = dfb::cu_window_seqlens;
+    Scratchpad<volatile uint32_t> cu_window(scratch::cu_window_seqlens);
 #else
-    constexpr auto dfb_cu_window_in = dfb::out;  // placeholder; windowed generation disabled
+    constexpr uint32_t cu_window = 0;  // placeholder; windowed generation disabled
 #endif
 #ifdef FLEXIBLE_CHUNKED
     constexpr auto dfb_chunk_start_idx = dfb::chunk_start_idx_writer;
 #else
     constexpr auto dfb_chunk_start_idx = dfb::out;  // placeholder; chunk-start tensor path inactive
-#endif
-#ifdef WINDOWED_Q_OFFSET_TENSOR
-    // Dedicated 1-tile DFB for the per-device Q-offset tensor (self-loop; only referenced behind this
-    // gate, so no placeholder alias is needed).
-    constexpr auto dfb_windowed_q_offset = dfb::windowed_q_offset;
 #endif
 
     constexpr uint32_t tile_bytes = get_tile_size(dfb_out);
@@ -130,28 +126,25 @@ void kernel_main() {
 
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
     // Q chunk from it (so the reader streams Q/K/V only). cu_window_seqlens is bound only in windowed
-    // mode, so gate its TensorAccessor + DFB at the preprocessor level.
+    // mode, so gate its TensorAccessor + Scratchpad at the preprocessor level.
 #ifdef USE_WINDOWED_MASK
     {
         const auto cu_window_reader = TensorAccessor(tensor::cu_window_seqlens);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(dfb_cu_window_in);
-        DataflowBuffer dfb_cu(dfb_cu_window_in);
-        dfb_cu.reserve_back(1);
-        noc.async_read(
-            cu_window_reader, CoreLocalMem<uint32_t>(dfb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
+        // CAUTION: the read size is the whole scratchpad. That equals the former DFB's entry size only
+        // because the host sizes the scratchpad as a single entry (cu_window_num_entries = 1 in the
+        // program factory); if it ever holds more than one entry, size this read from the entry instead.
+        noc.async_read(cu_window_reader, cu_window, cu_window.size_in_bytes(), {.page_id = 0}, {});
         noc.async_read_barrier();
-        // Per-device Q origin, if supplied as a tensor: lands in its own dedicated DFB (every other DFB
-        // here has a producer/consumer contract with another kernel that a writer-side reserve would
-        // break). Its value overrides the scalar q_tok_offset.
+        // Per-device Q origin, if supplied as a tensor: lands in the writer's own Scratchpad. Its value
+        // overrides the scalar q_tok_offset.
 #ifdef WINDOWED_Q_OFFSET_TENSOR
         {
             const auto q_offset_reader = TensorAccessor(tensor::windowed_q_offset);
-            DataflowBuffer dfb_off(dfb_windowed_q_offset);
-            dfb_off.reserve_back(1);
-            const uint32_t off_ptr = dfb_off.get_write_ptr();
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+            Scratchpad<volatile uint32_t> q_offset(scratch::windowed_q_offset);
+            noc.async_read(q_offset_reader, q_offset, 4, {.page_id = 0}, {});
             noc.async_read_barrier();
-            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+            auto lock = q_offset.scoped_lock(0, 1);
+            q_tok_offset = q_offset[0];
         }
 #endif
         // Watcher-build guard for the offset contract the host cannot check in the tensor form: the
@@ -160,7 +153,6 @@ void kernel_main() {
         ASSERT(
             q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
             (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
-        dfb_cu.push_back(1);
     }
 #endif
 
@@ -219,8 +211,9 @@ void kernel_main() {
             // would still compile the discarded body). valid_Skt derived from the unpadded K length.
             constexpr uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-            windowed_generate_if_enabled<use_windowed_mask, dfb_mask_in, dfb_cu_window_in>(
+            windowed_generate_if_enabled<use_windowed_mask, dfb_mask_in>(
                 noc,
+                cu_window,
                 q_chunk,
                 Sq_chunk_t,
                 Sk_chunk_t,

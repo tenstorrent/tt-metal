@@ -93,6 +93,7 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.tt.moe import shared_overlap  # noqa: E402
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
@@ -109,10 +110,6 @@ def _raise_nproc_limit():
         except (ValueError, OSError) as e:
             print(f"[zone-prof] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
 
-
-# MSA layers pick the top-16 of 128-token blocks; topk_large_indices aborts with fewer than 16 blocks,
-# so a chunk must cover at least this many tokens. Keep in sync with tt/attention/msa.py.
-MSA_MIN_TOKENS = 16 * 128  # 2048
 
 # sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
 FIRST_SPARSE_LAYER = 3
@@ -145,8 +142,9 @@ def plan(chunk: int, cache: int):
     chunks (the runtime fills the cache one chunk at a time, so a partial prefix is not reachable),
     and `total` is the cache capacity the KV cache must be allocated for.
     """
-    assert chunk % 1024 == 0, f"chunk ({chunk}) must be a multiple of 1024 (MSA needs S%1024==0)"
-    assert chunk >= MSA_MIN_TOKENS, f"chunk ({chunk}) below the MSA floor {MSA_MIN_TOKENS}"
+    # Whole 128-token MSA blocks per SP rank (SP <= 8). A cold chunk below the 2048-token top-k window reads
+    # the KV cache, so there is no 2048 floor.
+    assert chunk > 0 and chunk % 1024 == 0, f"chunk ({chunk}) must be a positive multiple of 1024"
     n_prefix = cache // chunk
     cache_aligned = n_prefix * chunk
     n_chunks = n_prefix + 1
@@ -412,6 +410,7 @@ def main():
     finally:
         # Sub-mesh first: closing the parent runs a final profiler read on the parent's command queue,
         # and MeshDevice::close then refuses to close a mesh whose child still holds an in-use queue.
+        shared_overlap.release_all()
         for sub in galaxy.get_submeshes():
             ttnn.close_mesh_device(sub)
         ttnn.close_mesh_device(galaxy)

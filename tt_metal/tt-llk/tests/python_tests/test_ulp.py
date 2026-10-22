@@ -188,6 +188,31 @@ def test_the_value_order_agrees_with_the_sweep_enumerators_key():
     assert ulp_distance(run[:-1], run[1:], flush_subnormals=False).tolist() == [1] * 63
 
 
+def test_a_16bit_walk_skips_its_offset_before_striding():
+    """`offset` counts in-range values, not strided samples, on every format: the
+    float32 walk jumps to it before striding, and the 16-bit enumeration must too.
+    Applied after the stride, offset 1 at stride 2 picked values 2, 4, 6 for 1, 3, 5."""
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+
+    every = _enumerate_representable(DataFormat.Float16_b, 1.0, 2.0)
+    picked = _enumerate_representable(
+        DataFormat.Float16_b, 1.0, 2.0, 3, offset=1, stride=2
+    )
+    assert picked.tolist() == every[1:7:2].tolist()
+
+
+@pytest.mark.parametrize("stride", [0, -1])
+def test_a_sweep_stride_must_be_positive(stride):
+    """Zero divides by zero in the float32 walk and a negative stride gives a negative
+    sample count, so the spec refuses both where they are written."""
+    from helpers.stimuli_generator import StimuliSpec
+
+    with _refuses("stride must be positive"):
+        StimuliSpec.ulp_sweep(low=-1.0, high=1.0, stride=stride)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The zero neighbourhood: signed zeros, subnormals, the flush
 # ─────────────────────────────────────────────────────────────────────────────
@@ -965,12 +990,18 @@ def test_the_floor_covers_every_lane_of_an_all_zero_golden():
     assert is_valid.tolist() == [True, True, False]
 
 
-def test_no_lane_is_reported_as_rescued_when_it_was_in_budget_anyway():
-    golden = _t([100.0, 1e-8], torch.float32)
-    _, _, rescued = ulp_elementwise_valid(
-        golden, golden.clone(), 4, near_zero_atol=1e-7
-    )
-    assert not bool(rescued.any())
+def test_every_floor_covered_lane_is_reported_covered_even_within_budget():
+    """The third return is the set of lanes the floor *judges*, not the ones it had to
+    save: a lane in the band and within atol is reported covered whether or not it was
+    also within the step budget. The emitter derives a floored row's budget from the
+    lanes outside the floor, so a reader that ranked a covered lane within budget would
+    read a step more than the row records -- 135 floored cells showed no headroom that
+    way. A lane outside the band is never covered, in budget or not."""
+    golden = _t([100.0, 1e-8, 50.0], torch.float32)
+    result = golden.clone()
+    result[2] = 50.00001  # outside the band, 3 steps
+    _, _, covered = ulp_elementwise_valid(golden, result, 4, near_zero_atol=1e-7)
+    assert covered.tolist() == [False, True, False]
 
 
 def test_the_near_zero_band_is_bounded_absolutely_as_well_as_relatively():

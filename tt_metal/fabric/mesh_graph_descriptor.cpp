@@ -128,11 +128,14 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
-    if (topology_types[0] == proto::TorusTopology::RING) {
+    // A RING on an axis of extent <= 2 has no distinct wrap edge: wrapping would make N == S (or E == W) and
+    // emit the same neighbor twice, doubling the channel demand between the two chips. Gate it the same way
+    // MeshGraph::get_valid_connections does so the axis keeps ordinary LINE links.
+    if (topology_types[0] == proto::TorusTopology::RING && is_genuine_torus_axis(static_cast<int32_t>(mesh_shape[0]))) {
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
-    if (topology_types[1] == proto::TorusTopology::RING) {
+    if (topology_types[1] == proto::TorusTopology::RING && is_genuine_torus_axis(static_cast<int32_t>(mesh_shape[1]))) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
     }

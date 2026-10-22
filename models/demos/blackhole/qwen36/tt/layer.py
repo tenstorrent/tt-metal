@@ -176,12 +176,39 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        gdn_recurrent=False,
+        gdn_seed=False,
+        decode_cfg=False,
+        alias_kv_write=False,
+        spec_verify_mode=False,
+        spec_page_table=None,
+        spec_user_page_table=None,
+        n_users=1,
+        state_blk_idx=None,
+        conv_sel=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
-        _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
+        # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
+        # until capture_verify_trace allocates them.
+        # n_users / state_blk_idx / conv_sel: multi-user speculative verify. Bucket rows are n_users
+        # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
+        # [n_users, T, C] and reads each user's initial state / conv window through the shared device
+        # selectors state_blk_idx / conv_sel; full attention groups the SDPA and the aliased KV write
+        # per user (spec_n_users, spec_user_page_table).
+        # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
+        # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
+        # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
+        # kernels — which stream the weights ONCE per 32-row M-tile instead of re-blocking them for a
+        # padded prefill tile. The only thing that does not follow automatically is the norm: PREFILL
+        # norms leave the activation K-sharded for a fused AGMM that a <=TILE input never takes, so the
+        # decode matmuls would receive a dim/tp tensor. Mode.DECODE gathers PRE-norm and hands them the
+        # full-dim activation they expect. This is the weight-load amortization that makes verifying
+        # K+1 tokens cost ~one decode step instead of ~K+1.
+        _norm_mode = Mode.DECODE if (decode_cfg or mode != "prefill") else Mode.PREFILL
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -223,14 +250,45 @@ class Qwen36DecoderLayer:
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
+                    # alias_kv_write: the B rows are not independent users (spec verify's candidates
+                    # as pseudo-users), so the KV write cannot be one batched call — see
+                    # TPAttention._write_kv_aliased.
+                    # spec_verify_mode/spec_page_table: additionally fold those rows into ONE SDPA
+                    # batch row so the KV cache is read once per layer (same place).
                     attn_output = self.attention.forward_decode(
-                        attn_input, position_tensor, cos, sin, page_table=page_table
+                        attn_input,
+                        position_tensor,
+                        cos,
+                        sin,
+                        page_table=page_table,
+                        alias_kv_write=alias_kv_write,
+                        spec_verify_mode=spec_verify_mode,
+                        spec_page_table=spec_page_table,
+                        spec_n_users=n_users,
+                        spec_user_page_table=spec_user_page_table,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    if gdn_collect:
+                    if gdn_recurrent and gdn_seed:
+                        # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
+                        # against the durable state and without the deferred-commit selectors.
+                        attn_output = self.attention.forward_seed_recurrent(
+                            attn_input, valid_len, pre_gathered=decode_cfg, n_users=n_users
+                        )
+                    elif gdn_recurrent:
+                        # Hybrid spec-decode verify: advance GDN recurrently (bit-exact to decode)
+                        # over valid_len tokens while the rest of the stack runs batched.
+                        attn_output = self.attention.forward_verify_recurrent(
+                            attn_input,
+                            valid_len,
+                            pre_gathered=decode_cfg,
+                            n_users=n_users,
+                            state_blk_idx=state_blk_idx,
+                            conv_sel=conv_sel,
+                        )
+                    elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for
                         # assembly into row u of the batched buffers (finalize_pending later).
                         attn_output = self.attention.forward_prefill_collect(

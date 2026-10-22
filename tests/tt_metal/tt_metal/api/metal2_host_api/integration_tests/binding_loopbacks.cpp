@@ -388,7 +388,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 //
 // Pipeline (compute-only; no DFB / DM consumer):
 //   Compute kernel (TRISC) — constructs LocalTensorAccessor (token ctor) and a second via the legacy
-//       base-address ctor; PACK writes {base_address, get_unsafe_ptr, &operator[], legacy-ctor base}
+//       base-address ctor; PACK writes {base_address, &*local_mem(), &operator[], legacy-ctor &operator[]}
 //       into a host-known L1 report buffer (named RTA). All four should equal the bound tensor's
 //       address. Host reads the report via ReadFromDeviceL1 after LaunchProgram.
 //
@@ -442,8 +442,8 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     ASSERT_EQ(reported.size(), kNumReportWords);
 
     const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
-    EXPECT_EQ(reported[0], expected_address) << "get_bank_base_address mismatch";
-    EXPECT_EQ(reported[1], expected_address) << "get_unsafe_ptr mismatch";
+    EXPECT_EQ(reported[0], expected_address) << "local_mem() base address mismatch";
+    EXPECT_EQ(reported[1], expected_address) << "&*local_mem() mismatch";
     EXPECT_EQ(reported[2], expected_address) << "&operator[] mismatch";
     EXPECT_EQ(reported[3], expected_address) << "legacy base-address ctor mismatch";
 }
