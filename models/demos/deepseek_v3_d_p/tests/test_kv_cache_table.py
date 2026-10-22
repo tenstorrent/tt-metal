@@ -12,7 +12,11 @@ from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -530,7 +534,7 @@ def test_dflash_kv_cache_mock(
         logger.info(f"[dflash] {name}: {num_kv_heads} head configs verified over {seq_len} tokens")
 
 
-def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16):
+def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16, sp_axis=0):
     """A block-cyclic cache gathered to host as [slots, 1, seq_len_cache, D] in SHARD-MAJOR order.
 
     The sparse (DSA) caches are striped across SP*TP, so tp-coord is NOT a replica to index with
@@ -539,12 +543,19 @@ def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16):
     order the address table addresses. The singleton dim 1 is kept so callers keep their [:, :, a:b, :]
     slicing. Dense (TP-replicated) caches must NOT use this -- take tp column 0 instead.
     """
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
+    # ConcatMesh2dToTensor(dims=(2, 1)): mesh axis 0 concatenates on seq, mesh axis 1 on dim 1. Linear chip
+    # order is row-major on the mesh at sp_axis=0 and column-major at sp_axis=1.
+    n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
     composed = ttnn.to_torch(
         tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
     ).to(dtype)
-    local = composed.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat([composed[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1)
+    local = composed.shape[2] // n0  # per-chip rows = seq_len_cache / (sp*tp)
+    chips = (
+        [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
+        if sp_axis == 0
+        else [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
+    )
+    flat = torch.cat([composed[:, a1, a0 * local : (a0 + 1) * local] for a0, a1 in chips], dim=1)
     return flat.unsqueeze(1)
 
 
@@ -823,10 +834,18 @@ def test_glm53_tp_sharded_kv_cache_mock(
 # merged 2-config kimi table (config 0 = KVPE, config 1 = index) with tp_axis=None, and reads every
 # 32-token chunk back. test_glm53_tp_sharded_kv_cache_mock above covers the tp_axis=1 layout.
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,device_params,sp_axis",
     [
-        pytest.param((2, 4), fabric2d_device_params(), id="fabric2d-2x4"),
-        pytest.param((8, 4), torus_xy_device_params(), id="torus-xy-8x4"),
+        pytest.param((2, 4), fabric2d_device_params(), 0, id="fabric2d-2x4"),
+        pytest.param((8, 4), torus_xy_device_params(), 0, id="torus-xy-8x4"),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -840,6 +859,7 @@ def test_glm53_kv_cache_table(
     variant,
     config_only,
     device_params,
+    sp_axis,
 ):
     """Readback test for the standard (SP-only) GLM-5.3 merged KVPE + indexer KV chunk address table.
 
@@ -849,8 +869,7 @@ def test_glm53_kv_cache_table(
     config = config_only
     topology = per_axis_topology(device_params["fabric_config"])
 
-    sp_axis = 0
-    tp_axis = 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     config.max_seq_len = seq_len
     logger.info(
@@ -984,7 +1003,7 @@ def test_glm53_kv_cache_table(
     )
 
     # --- readback the index cache (config 1, bfp8 TILE) ---
-    index_kbuf_torch = _shard_major_host(index_kbuf, mesh_device)[:1]
+    index_kbuf_torch = _shard_major_host(index_kbuf, mesh_device, sp_axis=sp_axis)[:1]
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, index_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -995,7 +1014,7 @@ def test_glm53_kv_cache_table(
     logger.info(f"[glm53] index-cache (config {INDEX_CONFIG_ID}) readback verified over {seq_len} tokens")
 
     # --- readback the MLA KVPE cache (config 0, bf16 ROW_MAJOR) ---
-    tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device)[:1]
+    tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device, sp_axis=sp_axis)[:1]
     kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
