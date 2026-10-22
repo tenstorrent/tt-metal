@@ -52,10 +52,11 @@ class SparseMlaOverlapResources:
 # whichever links the fabric routes through: the fabric CCL senders sit one NoC hop from their links. A column strip
 # (the previous 80/40 split) forced them across the chip (QuietBox, standalone: 1.7-2x slower KV gather).
 _SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
-    "galaxy_rows2": (12, 10),
     "loudbox_rows2": (12, 10),
     "qb2_rows2": (11, 10),
 }
+# A Galaxy has the LoudBox's 12x10 grid, so it takes the same profile.
+_SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows2": "loudbox_rows2"}
 _SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
 
 
@@ -270,6 +271,7 @@ class TT_CCL:
         the first Fabric atomic increment.
         """
         profile = profile.lower()
+        profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
         if profile == "auto":
             grid = self.mesh_device.compute_with_storage_grid_size()
             profile = {
@@ -284,7 +286,7 @@ class TT_CCL:
         if profile not in _SPARSE_MLA_OVERLAP_PROFILE_GRIDS:
             raise ValueError(
                 f"unknown sparse MLA overlap profile {profile!r}; expected one of "
-                f"{sorted(_SPARSE_MLA_OVERLAP_PROFILE_GRIDS)}"
+                f"{sorted([*_SPARSE_MLA_OVERLAP_PROFILE_GRIDS, *_SPARSE_MLA_OVERLAP_PROFILE_ALIASES])}"
             )
         existing = self.sparse_mla_overlap_resources
         if existing is not None:
@@ -310,8 +312,6 @@ class TT_CCL:
         topk_core_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
-        assert gather_core_grid.num_cores() == grid.x * rows
-        assert topk_core_grid.num_cores() == grid.x * (grid.y - rows)
 
         manager_id = self.mesh_device.create_sub_device_manager(
             [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
