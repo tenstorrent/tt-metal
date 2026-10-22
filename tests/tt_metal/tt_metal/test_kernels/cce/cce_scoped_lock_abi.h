@@ -37,9 +37,10 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo =
 // and sets published. The consumer acquires the lock, releases it, and reads every probe word through the cache again:
 // locked lines must miss and read NEW, unlocked lines hit OLD.
 // kModeFlushOnRelease: the producer holds the lock. It reads every probe word through the cache, acquires the lock,
-// stores NEW to every probe word through the cache, releases the lock, polls the locked lines, discards every probe
-// line from its caches and sets published. The consumer reads every probe word through the uncached alias: locked
-// lines must read NEW in TL1, unlocked lines OLD.
+// stores NEW to every probe word through the cache, releases the lock, reads the locked lines once
+// (kFlagLandedAtFirstRead if they hold NEW), polls them, discards every probe line from its caches and sets published.
+// The consumer reads every probe word through the uncached alias: locked lines must read NEW in TL1, unlocked lines
+// OLD.
 inline constexpr uint32_t kModeInvalidateOnAcquire = 0, kModeFlushOnRelease = 1;
 
 // Consumer result lines, written through the uncached alias: word l of a line is line l's probe word.
@@ -60,7 +61,7 @@ inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusFlags = 2, k
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
 inline constexpr uint32_t kProducerDoneMagic = 0x5C0FE0DEu, kConsumerDoneMagic = 0x5C0C50DEu,
                           kStatusPoison = 0xBADD0E00u;
-inline constexpr uint32_t kFlagPeerSignalled = 1u << 0, kFlagLanded = 1u << 1;
+inline constexpr uint32_t kFlagPeerSignalled = 1u << 0, kFlagLanded = 1u << 1, kFlagLandedAtFirstRead = 1u << 2;
 // kPollPeer: the wait for the other hart's flag. kPollData: the producer's poll of the locked lines through the
 // uncached alias after the release flush (kModeFlushOnRelease).
 inline constexpr uint32_t kPollNone = 0, kPollPeer = 1, kPollData = 2;

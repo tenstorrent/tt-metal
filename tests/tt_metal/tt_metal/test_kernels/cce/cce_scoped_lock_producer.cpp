@@ -4,10 +4,10 @@
 
 // Scoped-lock cache ops, producer hart (MM-8 port of the test_scoped_lock_cache CLM rows). It stores NEW to the probe
 // words for the consumer hart on the same CCE: through the uncached alias in kModeInvalidateOnAcquire, through the
-// cache under the lock in kModeFlushOnRelease. In kModeFlushOnRelease it then polls the locked lines through the
-// uncached alias, which shows the release flush reached TL1, and discards the probe lines from L1 D$ and L2, so the
-// unlocked lines' dirty NEW never reaches TL1. Then `fence w, w` and the published flag. Flags and the status line go
-// through the uncached alias.
+// cache under the lock in kModeFlushOnRelease. In kModeFlushOnRelease it then reads the locked lines once and polls
+// them through the uncached alias, which shows the release flush reached TL1, and discards the probe lines from L1 D$
+// and L2, so the unlocked lines' dirty NEW never reaches TL1. Then `fence w, w` and the published flag. Flags and the
+// status line go through the uncached alias.
 
 #include "cce_scoped_lock_abi.h"
 #include "cce_test_common.h"
@@ -90,6 +90,9 @@ void kernel_main() {
             cached_probe[line * abi::kWordsPerLine] = abi::kNewBase + line;
         }
         scoped_lock_release_cache_ops(lock_address, lock_bytes);
+        if (new_values_visible(own_tl1_words(region_offset), lock_first_line, lock_num_lines, check)) {
+            flags |= abi::kFlagLandedAtFirstRead;
+        }
 
         last_poll = abi::kPollData;
         last_poll_ready = poll_bounded(
