@@ -237,7 +237,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             buffer_index = it->second;
         }
         if (auto& group = group_buffer_index[key]; group.has_value()) {
-            buffer_index = *group;
+            buffer_index = group;
         } else {
             if (!buffer_index.has_value()) {
                 // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
@@ -247,7 +247,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
                 buffer_index = buffers.size() - 1;
             }
-            group = *buffer_index;
+            group = buffer_index;
         }
         buffer_to_index.emplace(buffer_address, *buffer_index);
         const uint64_t shard_buffer_offset = buffers[*buffer_index].offset;
