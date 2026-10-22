@@ -245,13 +245,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    // The subblock counts describe one output block, and each core computes num_blocks_h_dim *
-    // num_blocks_w_dim blocks per batch. All output blocks are of the same size because
-    // matmul validation requires per_core_M and per_core_N to be multiples of out_block_h and out_block_w,
-    // so there is no smaller last block to handle.
-    const uint16_t out_num_tiles = static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h *
-        num_blocks_h_dim * num_blocks_w_dim);
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint16_t out_num_tiles =
+        static_cast<uint16_t>(batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles);
     dfb_out.wait_front(out_num_tiles);
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);
