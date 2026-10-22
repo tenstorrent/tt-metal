@@ -241,8 +241,8 @@ def test_softsign(device):
     abs_input = input_tensor.abs().float()
     # Deep-subnormal band: unambiguous FTZ to 0 on every architecture.
     near_max = abs_input > ftz_threshold
-    if ttnn.device.is_wormhole_b0(device):
-        # Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
         # flushes to 0; it is checked as the BF16 pack stores it.
         expected = golden[near_max]
         tiny = torch.finfo(torch.bfloat16).tiny

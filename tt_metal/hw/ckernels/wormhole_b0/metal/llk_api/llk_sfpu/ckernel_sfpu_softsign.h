@@ -38,14 +38,11 @@ void init_softsign_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void init_softsign() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        if (bf16_dest_softsign()) {
-            init_softsign_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_softsign_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
