@@ -29,6 +29,7 @@ from .ulp_domains import (
     Problem,
     TableError,
     check_domains,
+    largest_figure,
     usable_budget_ceiling,
 )
 
@@ -145,8 +146,9 @@ class BudgetKey:
 
     def matches(self, query: "BudgetKey") -> bool:
         """Whether this key covers *query*; an unset query dimension matches only a
-        wildcard. Spelled out, with `_values` cached: this is `validate_registry`'s hot
-        loop, and a generator over `zip` here costs that host test 1.3 s."""
+        wildcard. Spelled out, with `_values` cached: this is `validate_contracts`' hot
+        loop (via `resolve_variant`), and a generator over `zip` here costs that host
+        test 1.3 s."""
         a, i, o, d, r = self._values
         qa, qi, qo, qd, qr = query._values
         return (
@@ -291,7 +293,7 @@ class Row:
         """A list row is gated at its largest figure when every figure is within the
         output's ceiling, and on tolerance otherwise."""
         if self.domains:
-            figure = max(d.ulp for d in self.domains if d.ulp is not None)
+            figure = largest_figure(self.domains)
             gated = figure <= usable_budget_ceiling(self.output)
             return AccuracyContract(
                 metric=Metric.ULP if gated else Metric.TOLERANCE,

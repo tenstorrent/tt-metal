@@ -183,5 +183,10 @@ def test_a_malformed_entry_is_refused(low, high, ulp, problem):
         Domain(low, high, ulp)
 
 
+def test_a_null_entry_is_held_to_the_largest_figure_of_its_list():
+    """The one rule the sweep, ``diff`` and ``headroom`` read a null entry by."""
+    assert largest_figure((Domain(-INF, 0, 2), Domain(0, 1), Domain(1, INF, 7))) == 7
+
+
 def test_the_ceilings_are_the_rtol_they_replace():
     assert [usable_budget_ceiling(fmt) for fmt in ULP_FORMATS] == [6.0, 51.0, 419430.0]

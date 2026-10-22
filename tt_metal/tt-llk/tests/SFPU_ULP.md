@@ -100,8 +100,9 @@ fp16 subnormals the pack does not reproduce.
 4. **Read what it wrote.** Every row records what was measured, and a figure *is* the
    gate, with no headroom over it; a row's `note` is for people. The shapes:
 
-   - `domains: [{low: L, high: H, ulp: U}, …]` — every cell the sweep drives: one list
-     over the whole swept range ("Where an op holds its figure", below). An entry within
+   - `domains: [{low: L, high: H, ulp: U}, …]` — every swept cell with a per-element
+     figure (a cell the sweep cannot measure, or where no entry would carry a figure,
+     gets one of the plain rows below): one list over the whole swept range ("Where an op holds its figure", below). An entry within
      the output's usable ceiling is gated at exactly `U` steps; one past it is measured,
      not gated, and the headroom report holds it to its figure; one with no `ulp` has too
      few ranked lanes to draw an edge on.
@@ -128,7 +129,7 @@ fp16 subnormals the pack does not reproduce.
 5. **Gate on it.** Re-run without `--ulp-emit`, then the host guards:
 
    ```bash
-   pytest test_sfpu_accuracy_budget.py test_ulp*.py -q
+   pytest test_ulp_budget_diff.py ../hardware_free/accuracy -q  # from python_tests
    ```
 
 ## The rules the table enforces
