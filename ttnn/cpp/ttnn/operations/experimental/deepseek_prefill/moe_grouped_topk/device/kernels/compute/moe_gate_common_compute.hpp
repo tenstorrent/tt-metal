@@ -32,7 +32,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 // Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus, see the LLK header). Only
-// Blackhole ships it; elsewhere apply_score_func_add_bias keeps the stock softplus / sqrt / add sequence.
+// Blackhole ships it; elsewhere activate_add_bias_tile keeps the stock softplus / sqrt / add sequence.
 // Gated on the arch, not on the header being found, so a missing header breaks the Blackhole build
 // instead of silently falling back to the stock bf16 softplus.
 #if defined(ARCH_BLACKHOLE)
@@ -133,6 +133,51 @@ ALWI void gate_topk_rebuild(uint32_t idst, bool ascending, int m_iter, int k, in
         GATE_TOPK_TIE_ORDER>(idst, ascending, m_iter, k, logk, skip_second);
 }
 
+// The selected router affinity activation, in place over DEST tile idst, with the stock SFPU ops.
+template <uint32_t score_func>
+ALWI void activate_tile(uint32_t idst) {
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
+        constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
+        constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
+        softplus_tile_init();
+        softplus_tile(idst, const_1_fp32, const_1_fp32, const_20_fp32);
+        sqrt_tile_init();
+        sqrt_tile(idst);
+    } else {
+        sigmoid_tile_init();
+        sigmoid_tile(idst);
+    }
+}
+
+// Init for activate_add_bias_tile, once per pass rather than per tile. Only the fused SFPU routine has
+// one: copy_init / copy_tile program ADDR_MOD_0/2/3 and leave its ADDR_MOD_7, SFPU config and sqrt
+// constants alone. The stock sequence re-inits every op per tile (softplus and sqrt share registers).
+template <uint32_t score_func>
+ALWI void activate_add_bias_init() {
+#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        moe_gate_sqrt_softplus_add_bias_tile_init();
+    }
+#endif
+}
+
+// Activation over DEST tile idst_score and score + bias over idst_key (which holds the bias). The bias
+// add runs on the SFPU in full fp32. sqrt(softplus) on Blackhole: one fused pass with an fp32-accurate
+// softplus (see the LLK header).
+template <uint32_t score_func>
+ALWI void activate_add_bias_tile(uint32_t idst_score, uint32_t idst_key) {
+#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
+    if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
+        moe_gate_sqrt_softplus_add_bias_tile(idst_score, idst_key);
+        return;
+    }
+#endif
+    activate_tile<score_func>(idst_score);
+    add_binary_tile_init();
+    add_binary_tile(idst_score, idst_key, idst_key);
+}
+
 // Applies the selected router affinity activation to each logits tile. The output CB (historically
 // "sigmoid" scores) holds the unbiased activated scores that the writer later gathers for the weights.
 template <uint32_t score_func>
@@ -147,18 +192,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         // copy tile from scores cb to destination register 0
         copy_init(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
-        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
-            // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
-            constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
-            constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
-            softplus_tile_init();
-            softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
-            sqrt_tile_init();
-            sqrt_tile(0);
-        } else {
-            sigmoid_tile_init();
-            sigmoid_tile(0);
-        }
+        activate_tile<score_func>(0);
         tile_regs_commit();
         cb_in_scores.pop_front(1);
 
@@ -189,6 +223,10 @@ void apply_score_func_add_bias(
     CircularBuffer cb_activated_scores(cb_activated_scores_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
     CircularBuffer cb_biased_dump(cb_biased_dump_id);
+    // DEST tiles: the logits, overwritten by the activated score, and the bias, overwritten by the key.
+    constexpr uint32_t dst_score = 0;
+    constexpr uint32_t dst_key = 1;
+    activate_add_bias_init<score_func>();
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_scores.wait_front(1);
         cb_in_bias.wait_front(1);
@@ -196,34 +234,11 @@ void apply_score_func_add_bias(
         // Reconfigure the unpacker for the input (a prior top-k iteration may have left it on UInt16).
         reconfig_data_format_srca(cb_in_scores_id);
         copy_init(cb_in_scores_id);
-        copy_tile(cb_in_scores_id, 0, 0);
+        copy_tile(cb_in_scores_id, 0, dst_score);
         reconfig_data_format_srca(cb_in_scores_id, cb_in_bias_id);
         copy_init(cb_in_bias_id);
-        copy_tile(cb_in_bias_id, 0, 1);
-#ifdef MOE_GATE_FUSED_SQRT_SOFTPLUS
-        if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
-            // sqrt(softplus(x)) (beta=1, threshold=20, as torch) with an fp32-accurate softplus, and the bias
-            // add, in one SFPU pass.
-            moe_gate_sqrt_softplus_add_bias_tile_init();
-            moe_gate_sqrt_softplus_add_bias_tile(0, 1);
-        } else
-#endif
-        {
-            if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
-                // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
-                constexpr uint32_t const_1_fp32 = 0x3F800000;   // 1.0f -> beta and beta_reciprocal
-                constexpr uint32_t const_20_fp32 = 0x41A00000;  // 20.0f -> threshold
-                softplus_tile_init();
-                softplus_tile(0, const_1_fp32, const_1_fp32, const_20_fp32);
-                sqrt_tile_init();
-                sqrt_tile(0);
-            } else {
-                sigmoid_tile_init();
-                sigmoid_tile(0);
-            }
-            add_binary_tile_init();
-            add_binary_tile(0, 1, 1);
-        }
+        copy_tile(cb_in_bias_id, 0, dst_key);
+        activate_add_bias_tile<score_func>(dst_score, dst_key);
         tile_regs_commit();
         cb_in_scores.pop_front(1);
         cb_in_bias.pop_front(1);
@@ -235,10 +250,10 @@ void apply_score_func_add_bias(
         }
         tile_regs_wait();
         pack_reconfig_data_format(cb_activated_scores_id);
-        pack_tile(0, cb_activated_scores_id);
-        pack_tile(1, cb_biased_scores_id);
+        pack_tile(dst_score, cb_activated_scores_id);
+        pack_tile(dst_key, cb_biased_scores_id);
         if constexpr (dump_biased) {
-            pack_tile(1, cb_biased_dump_id);
+            pack_tile(dst_key, cb_biased_dump_id);
         }
         tile_regs_release();
         cb_activated_scores.push_back(1);
@@ -326,22 +341,25 @@ void sum_top_experts_per_group(
     uint32_t summed_experts_per_group) {
     CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
+    // DEST tiles: the running sum and the next summand.
+    constexpr uint32_t dst_sum = 0;
+    constexpr uint32_t dst_summand = 1;
     cb_top_experts_per_group.wait_front(summed_experts_per_group);
 
     cb_group_summed_scores.reserve_back(1);
     tile_regs_acquire();
     reconfig_data_format_srca(cb_top_experts_per_group_id);
     copy_init(cb_top_experts_per_group_id);
-    copy_tile(cb_top_experts_per_group_id, 0, 0);
+    copy_tile(cb_top_experts_per_group_id, 0, dst_sum);
     for (uint32_t i = 1; i < summed_experts_per_group; i++) {
-        copy_tile(cb_top_experts_per_group_id, i, 1);
+        copy_tile(cb_top_experts_per_group_id, i, dst_summand);
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+        add_binary_tile(dst_sum, dst_summand, dst_sum);
     }
     tile_regs_commit();
     tile_regs_wait();
     pack_reconfig_data_format(cb_group_summed_scores_id);
-    pack_tile(0, cb_group_summed_scores_id);
+    pack_tile(dst_sum, cb_group_summed_scores_id);
     tile_regs_release();
 
     cb_group_summed_scores.push_back(1);
