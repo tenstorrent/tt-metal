@@ -323,6 +323,10 @@ void kernel_main() {
             // extra outstanding block legal.
             if (out_pending) {
                 MaybeDeviceZoneScope("writer_out_drain");
+                // The issue loop stops waiting at the first padding row, but compute still packs
+                // every row of the block. Wait for all of them, or the phase-alias release below
+                // can let peers scatter into SRAM this core's packer is still writing.
+                out_buf.wait_front(out_pending);
                 noc.async_write_barrier();
                 out_buf.pop_front(out_pending);
                 out_pending = 0;
@@ -592,6 +596,7 @@ void kernel_main() {
     }
 
     if (out_pending) {
+        out_buf.wait_front(out_pending);
         noc.async_write_barrier();
         out_buf.pop_front(out_pending);
     }
