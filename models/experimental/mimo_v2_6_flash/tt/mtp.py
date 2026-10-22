@@ -15,8 +15,9 @@ One traced program per replica drafts MAX_DRAFTS tokens for the one request of t
 A draft copies one packed int32 tensor (tt/spec_inputs.py): the program starts by writing its token and position
 inputs from it. The committed tokens are uploaded, not taken from the last step's greedy tokens on device: they are
 the greedy tokens only when the plugin accepted greedily (a logits verify or a host-sampled step commits the plugin's
-own samples). With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables) the cos / sin are rows of the tables
-at the uploaded positions, as in decode; without them (long contexts) the draft also copies its six cos / sin.
+own samples). With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables, at every context length) the cos / sin
+are rows of the tables at the uploaded positions, as in decode; without them (MIMO_DEVICE_ROPE=0) the draft also copies
+its six cos / sin.
 
 The layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its
@@ -144,10 +145,7 @@ class TtMiMoMTP:
             return [tuple(rope[2 * k : 2 * k + 2]) for k in range(3)], []
         pairs, made = [], []
         for idx in rope:
-            pair = []
-            for t in m.rope_tables[:2]:
-                row = ttnn.embedding(idx, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-                pair.append(ttnn.reshape(row, (1, 1, m.max_batch, t.shape[-1])))
+            pair = m.rope_table_rows(idx, m.rope_tables[:2])
             pairs.append(tuple(pair))
             made += pair
         return pairs, made

@@ -66,7 +66,7 @@ What changed:
   `max_device_top_k` 1, no device penalties or logprobs): the vLLM-mode trace takes its greedy token from GreedyHead
   (the lowest id on ties, like the host's argmax) and writes it into the next step's token input, so a steady step is
   one trace replay per lane with no copies (the RoPE cos / sin come from device tables at the trace's own positions,
-  `setup_decode_rope_tables`, up to 128K context) and a non-blocking token read. Any non-greedy row, penalties,
+  `setup_decode_rope_tables`; see "Device RoPE tables") and a non-blocking token read. Any non-greedy row, penalties,
   logprobs (plugin capability `supports_device_logprobs`, new) or structured output send that step to host sampling,
   which reloads the inputs.
 - **Prefill batches**: a lane's first chunks of one padded length (<= 512) run as one pass
@@ -137,6 +137,27 @@ Under vLLM each global layer keeps both copies of its KV head on a chip pair (th
 between the pair by slot parity): a prefix-cached block can be reused by a request in a slot of either parity.
 Decode still splits the attention by slot. The cost is 1M x 4 users no longer fitting at once; the 6 GB pool
 holds about 1.27M tokens per lane.
+
+## Device RoPE tables
+
+Decode, the verify and the MTP draft read their RoPE cos / sin as rows of device tables at their own position inputs
+(`TtMiMoModel.setup_decode_rope_tables` / `rope_table_rows`, `ttnn.embedding` over a uint32 position row), so no step
+uploads cos / sin, at any context length. MiMo needs four tables: cos and sin for the SWA theta (the 39 SWA layers and
+the MTP layer) and for the global theta (9 global layers), RoPE on 64 of the 192 head dims. Each row is the host's
+`decode_host_inputs` value of that position (`rope.partial_rope_table`, the same fp32 products and cos / sin, the same
+bf16 conversion), so device and host cos / sin are bitwise equal and greedy output does not change.
+
+Until this change the tables were made only up to 128K context: whole 192-wide rows, which at 1M cost
+1M x 4 x 192 x 2 bytes = 1.61 GB per chip, against ~34.0 GB per chip of which the weights take 23.7-24.2 GB, the KV
+pool 6 GB (`MIMO_KV_GB_PER_CHIP`; one 1M request is 3.2 GB of it) and the trace region 1 GB. Nothing else limits the
+row count (`ttnn.embedding` reads one 128 / 384-byte row-major page per position). Past 128K the tables now keep only
+the 64 rotated dims (`compact`, `ROPE_TABLE_FULL_WIDTH_MAX_LEN` in generator_vllm.py) and each read appends the
+constant 1 / 0 tail of the other 128 dims with one `ttnn.concat` (a persistent tile per value): 537 MB per chip at 1M
+(67 MB at 128K, where the whole-row tables of 201 MB are kept). The tables run `ROPE_TABLE_MARGIN` (32) rows past
+`max_seq_len - 1`, so a position derived on device a few steps ahead of the host never indexes past them.
+`MIMO_DEVICE_ROPE=0` uploads the cos / sin every step instead. `tests/test_rope_tables_host.py` checks the rows
+against the host cos / sin bit for bit (every position to 1M, both thetas, whole and compact);
+`tests/test_spec_inputs_tp8.py` checks the device rows against the host-uploaded cos / sin.
 
 ## Trace safety
 
@@ -214,7 +235,7 @@ vllm serve ... --no-async-scheduling \
 - **Inputs** (`reference/spec_inputs.py`, `tt/spec_inputs.py`): a verify and a draft each copy one packed int32
   tensor (tokens and positions; the draft's ring cache positions and RoPE indices computed on the host) instead of
   13-14 tiny tensors; a short program at the start of each trace writes the trace's input buffers from it (owned
-  positions, owner and token masks, serial positions, RoPE index). Without device RoPE tables (contexts past 128K)
+  positions, owner and token masks, serial positions, RoPE index). With `MIMO_DEVICE_ROPE=0` (no device RoPE tables)
   the verify also copies its 4 cos / sin and the draft its 6.
 - **Acceptance on device** (`fused_sample`, `tt/verify_sampler.py`, `kernels/sample_verify.cpp`, host mirror
   `reference/sample_verify.py`): after each verify pass a small trace runs DeviceSampler's SampleScan and
@@ -243,6 +264,6 @@ vllm serve ... --no-async-scheduling \
 
 - Slot parity of chunked prefill (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
-- A 1M-token prompt, and the 1M server on the c16 branch (decode RoPE tables are off past 128K context).
+- A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
 - Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).
 - Tracing later prefill chunks and chunks longer than 512 tokens.

@@ -10,9 +10,12 @@ We permute the first 64 rows of every Q/K head in the weights from HF order to i
 dims, so the op is the identity there. Q.K is unchanged by a permutation applied to both, so
 attention scores match HF exactly.
 
-cos/sin are computed on the host for the positions in use, like HF (fp32, then bf16), and uploaded:
-per decode step that is 32 rows; per prefill, the prompt's rows. There are no ``max_seq_len``-sized
-device tables, which at 1M context would cost ~3 GB per chip for the two thetas.
+cos/sin are computed on the host for the positions in use, like HF (fp32, then bf16): per prefill, the prompt's
+rows, uploaded. Decode, a speculative verify and an MTP draft instead read rows of device tables of every position
+(TtMiMoModel.setup_decode_rope_tables, ``partial_rope_table``) at their own position inputs, so a step uploads no
+cos/sin; with MIMO_DEVICE_ROPE=0 they copy ``decode_host_inputs`` (32 rows) every step. Past 128K context the tables
+keep only the ``rope_dim`` rotated dims of a row (``compact``) and the step appends the constant 1 / 0 of the other
+dims: 4 x 64 x 2 bytes per position, 537 MB per chip at 1M instead of 1.61 GB for whole 192-wide rows.
 """
 
 import torch
@@ -43,6 +46,38 @@ def partial_rope_cos_sin(positions, head_dim, rope_dim, theta):
     cos[:, :rope_dim] = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
     sin[:, :rope_dim] = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
     return cos, sin
+
+
+def partial_rope_table(num_positions, head_dim, rope_dim, theta, width=None, batch=32):
+    """cos/sin [num_positions, width] (fp32) of positions 0 .. num_positions - 1: the first ``width`` dims (default
+    ``head_dim``: whole rows; ``rope_dim``: the rotated dims, the rest being the constant 1 / 0) of
+    ``partial_rope_cos_sin``, called on ``batch`` positions at a time: the call ``decode_host_inputs`` makes for one
+    decode step of ``batch`` slots. torch's CPU sin / cos of a value can differ in the last fp32 bit with the size of
+    the tensor it is computed in (vector grouping, thread split): one call over all 32K or 128K positions, as these
+    tables were made before, left 1-9% of the rows a bit off the per-step values on an arm64 host (equal after bf16
+    rounding there, but not by construction). In the host's own call shape each row is computed exactly as in a decode
+    step, whatever the step's other positions (tests/test_rope_tables_host.py). ~1.3 s per 1M positions."""
+    width = head_dim if width is None else width
+    assert rope_dim <= width <= head_dim
+    cos = torch.empty(num_positions, width)
+    sin = torch.empty(num_positions, width)
+    for start in range(0, num_positions, batch):
+        c, s = partial_rope_cos_sin(torch.arange(start, start + batch), head_dim, rope_dim, theta)
+        n = min(batch, num_positions - start)
+        cos[start : start + n] = c[:n, :width]
+        sin[start : start + n] = s[:n, :width]
+    return cos, sin
+
+
+def rope_table_rows(cos_table, sin_table, positions, head_dim):
+    """Torch mirror of TtMiMoModel.rope_table_rows: rows ``positions`` of the tables, a compact table's (narrower than
+    ``head_dim``) followed by the 1 (cos) / 0 (sin) of the dims it leaves out. [n, head_dim] each."""
+    out = []
+    for table, tail in ((cos_table, 1.0), (sin_table, 0.0)):
+        rows = table[positions]
+        pad = torch.full((rows.shape[0], head_dim - rows.shape[1]), tail, dtype=rows.dtype)
+        out.append(torch.cat((rows, pad), dim=-1))
+    return out
 
 
 class MiMoRotarySetup(RotarySetup):
