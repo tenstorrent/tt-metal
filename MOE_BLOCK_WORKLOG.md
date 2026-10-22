@@ -758,3 +758,31 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 | K3 (router cores, x first) | 488 | 381 (SE 380, chain 381) | 2.24x of 170 | 520 / 501 |
 - With the launch skew out, the routing chain no longer stands above the SE path: the two meet (GLM 168 / 168, K3
   380 / 381 Galaxy-projected).
+
+### Router on the engine: the K3 pick drop solved (the hand-offs ran ahead of the engine's partials)
+- Localized with an in-call capture (debug, not kept): the router NCRISC copied HOLD and the logits arrival zone to
+  DRAM at the top-K's done wait (before the planner overlays them). Every chip's HOLD was right (1e-3); p0's
+  arrivals from all three sources were wrong in owner 0's expert tile 3 (rows 16-17 and 25 + j, tokens 0-15) -
+  small integers (planner counts). Owner 0 is the lowest HOLD entry, inside the planner's second overlay region.
+- Cause: in engine mode the compute skips its matmul and waits RDY (cb_wait_front: the UNPACK thread only); the
+  hand-off pushes (FINC) are the PACK thread's - nothing held it, so the BRISC handed HOLD to the ports at the start,
+  before the engine's partials landed. HOLD then held the last call's partials (the same input every call: right by
+  luck) except where the last call's planner overlay wrote - K3's tile 3 of owner 0; GLM's overlay misses its HOLD.
+- Fix: the NCRISC sets word 112 after the engine's count, PACK waits on it (router_stream). K3: max abs score error
+  1.6e-3 (was 0.70), picks 99.45% (= the router cores' path). GLM picks unchanged (99.30%).
+- Not the cause (tested): a cross-call race on the arrival zone - a parity double-buffered zone (per-RISC call
+  counts) changed nothing; reverted: a source cannot start its next call before every receiver summed this call's
+  arrivals (its planner needs their routing packets, sent after the sum). Kept: the zone above the planner's overlay
+  (a source's next-call partials may land while this chip's planner still runs).
+- The cost: GLM's earlier 168 us (Galaxy-projected from the mesh's last launch) came from the early hand-offs; A/B
+  with the PACK wait off: 168 us, on: 193-196 - the chain binds at 193-196 (SE path 162-166).
+- K3 (logits-first profile measured): from the mesh's last launch / each row's / eager, Galaxy-projected:
+| K3 (us) | mesh last launch | row last launch | eager |
+|---|---|---|---|
+| router cores, x first (was the default) | 385 (SE 379, chain 385) | 464 | 499 |
+| router cores, logits first | 365 (SE 365, chain 359) | 443 | 507 |
+| engine, x first | 380 (SE 380, chain 358) | 423 | 461 |
+| engine, logits first (new default) | 366-367 (SE 366, chain 290-294) | 367-376 | 397-434 |
+- Plan choices: router_on_engine True for every plan; logits_priority True with the router on the engine (also on
+  the line). K3 LoudBox 504 us from the mesh's last launch (524 eager), Galaxy-projected 366 us = 2.15x of 170: the
+  SE path binds by ~75 us over the chain. GLM 193-196 us = 2.12-2.15x of 91: the chain binds (SE 162).

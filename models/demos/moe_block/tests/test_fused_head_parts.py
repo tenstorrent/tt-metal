@@ -248,10 +248,13 @@ def _check_latent(head, xs, w_l, rows, name):
 def _router_specs():
     from models.demos.moe_block.tt.fused_head import RouterSpec
 
-    # (GLM-type: the logits ahead of the x gather; K3: after it)
+    # (GLM-type: the logits ahead of the x gather; K3: after it) - the head's choices unless the test overrides them
+    # (HSE3_ON_ENGINE / HSE3_LOGITS_FIRST = 0 | 1: the RouterSpec fields, for A/B runs)
+    o = lambda k: None if os.environ.get(k) is None else bool(int(os.environ[k]))  # noqa: E731
+    kw = dict(on_engine=o("HSE3_ON_ENGINE"), logits_first=o("HSE3_LOGITS_FIRST"))
     return {
-        "glm": RouterSpec(E=288, K=8, route_scale=2.5),  # (the logits' priority: the head's choice)
-        "k3": RouterSpec(E=448, K=16),
+        "glm": RouterSpec(E=288, K=8, route_scale=2.5, **kw),
+        "k3": RouterSpec(E=448, K=16, **kw),
     }
 
 

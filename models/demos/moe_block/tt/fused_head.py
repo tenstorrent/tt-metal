@@ -489,11 +489,12 @@ class HeadSE3:
     def router_on_engine(self, router, latent):
         """Where the logits' matmul runs. From the Galaxy projections (tests/galaxy_projection.py): on the engine's cores
         at the start every chip's routing chain starts ~25 us earlier (GLM: Galaxy-projected 265-273 us vs 296-299),
-        the SE path ~15 us later - the chain binds there, so on. With a latent (K3) off: its picks drop 99.45 ->
-        99.10% that way (not fidelity, chunking, accumulation or a race - unexplained), and its SE path pays 44 us."""
+        the SE path ~15 us later - the chain binds there, so on. K3 too (from the mesh's last launch / each row's /
+        eager, logits first: 367 / 367 / 397 us vs 365 / 443 / 507 on the router cores; x first 380 / 423 / 461 vs
+        385 / 464 / 499) - the same picks (99.45%)."""
         if router.on_engine is not None:
             return router.on_engine
-        return not latent
+        return True
 
     def logits_priority(self, router, latent):
         """The ports' logits-vs-x-gather priority. From the Galaxy projections (tests/galaxy_projection.py) and the
@@ -501,10 +502,11 @@ class HeadSE3:
         routing chain is what binds - logits first (K3 Galaxy-projected 466 us vs 505 x first; GLM's chain binds on
         both). On a line the gather is 3 shards on the end links: with a latent all-to-all also on the ports during
         the gather (K3) the logits delay the SE path more than they shorten the chain (509 vs 527 us measured) - x
-        first; without one (GLM) logits first."""
+        first; without one (GLM) logits first. With the logits' matmul on the engine (router_on_engine) logits first
+        on a line too (K3 Galaxy-projected 367 us vs 380 x first from the mesh's last launch, 397 vs 461 eager)."""
         if router.logits_first is not None:
             return router.logits_first
-        return self._ring() or not latent
+        return self._ring() or not latent or self.router_on_engine(router, latent)
 
     def upload_router(self, w_router, bias):
         self.rw = self.router.upload(w_router, bias)

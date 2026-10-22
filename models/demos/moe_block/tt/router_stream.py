@@ -73,6 +73,10 @@ void kernel_main() {
         noc_async_atomic_barrier();
         cb_reserve_back(RDY, 1);
         cb_push_back(RDY, 1);
+        // (and word 112 for the compute's PACK thread: the RDY wait holds only UNPACK, and PACK's hand-off pushes
+        // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's
+        // planner overlay in it, K3's picks 99.10%)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
     }
 #else
     // W_r^T is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
@@ -181,7 +185,13 @@ void kernel_main() {
     pack_reconfig_data_format(HOLD);
 #ifdef RT_ENG
     // (the matmul below is the router cores' own path: off here)
-    cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY)
+    cb_wait_front(12, 1);  // (the engine's partial logits are in my HOLD: RDY - UNPACK; PACK on word 112)
+    PACK(({
+        volatile uint32_t* hw = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(1 + get_arg_val<uint32_t>(0) + G) + 112);
+        while (*hw == 0) {
+        }
+        *hw = 0;  // (re-arm)
+    }));
     if (false)
 #endif
     {
@@ -600,8 +610,10 @@ class RouterStream:
                 ("xr", 2 * G * kbr * 2048),
                 ("wr", 2 * kbr * ET * 2048),
                 ("hold", G * ET * 4096),
-                ("arr", (G - 1) * ET * 4096),
                 ("bias", ET * 4096),
+                # (above the planner's overlay - everything below the bias: another chip's partials for the next call
+                # may land while this chip's planner of this call still runs - launch skew)
+                ("arr", (G - 1) * ET * 4096),
                 ("sc", ET * 4096),
                 ("idx", ET * 2048),
                 ("best", 4096),

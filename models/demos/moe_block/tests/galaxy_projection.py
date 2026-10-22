@@ -30,7 +30,7 @@ U = {"glm": 28.0, "k3": 49.0}  # (us: one unit at 47 GB/s)
 E_GATHER = 1.3  # (the fused gather's time over its link floor, measured on the line)
 GU_ALONE = {"glm": 60.0, "k3": 250.0}  # (gate/up (+ K3's latent) compute alone: engine-alone / fused minimum)
 CHAIN_GROWTH = {"glm": 20.0, "k3": 20.0}
-LOGITS_AFTER_GATHER = {"glm": False, "k3": True}
+LOGITS_AFTER_GATHER = {"glm": False, "k3": False}
 FREQ = 1350.0
 
 
