@@ -30,13 +30,9 @@ struct EphemeralAllocationMetadata {
         // There are multiple ranges because per core L1 regions are not in lockstep but program-local resources
         // spanning multiple cores must share the same address. To enable this, program-local resource address is the
         // maximum address amongst all of its target cores This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
-
-        // Base address of the program-local allocation across the core_range.
-        // This needs to be set after all persistent L1 allocations are accounted for.
         //
-        // See persistent_l1_arena.hpp for more information about L1 address space allocation
-        uint64_t base_address = 0;
+        // When allocating, l1_regions is always non-empty as it is initialized by `prepare_ephemeral_allocation`.
+        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
@@ -70,7 +66,7 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 // Also sets the base address of all the regions.
 //
 // side-effect:
-//  - updates regions' base address.
+//  - starts each region that has no allocations at its base address.
 //  - "seal" persistent_l1 to prevent collision between address spaces during `allocate_ephemeral_memory`.
 void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 

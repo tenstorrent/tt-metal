@@ -12,9 +12,10 @@
 namespace tt::tt_metal::detail {
 
 void EphemeralAllocationMetadata::LockstepAllocationRegion::mark_address(uint64_t address, uint64_t size) {
-    if (this->l1_regions.empty()) {
-        this->l1_regions.emplace_back(this->base_address, this->base_address);
-    }
+    TT_FATAL(
+        !this->l1_regions.empty(),
+        "Base address of core range {} is unknown. Call prepare_ephemeral_allocation() before allocating.",
+        this->core_range.str());
     auto& last_region = this->l1_regions.back();
     if (address < last_region.second) {
         TT_THROW(
@@ -54,7 +55,18 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
             }
             seals.emplace(core, persistent_l1.seal(CoreRangeSet(CoreRange(core))));
         }
-        region.base_address = persistent_l1.high_water_mark(cores);
+        const uint64_t base_address = persistent_l1.high_water_mark(cores);
+        if (region.l1_regions.empty()) {
+            region.l1_regions.emplace_back(base_address, base_address);
+        } else {
+            // sanity check, failing means persistent L1 space has grown since last time we checked.
+            TT_ASSERT(
+                base_address <= region.l1_regions.front().first,
+                "Persistent L1 on core range {} grew to {}, above its program-local allocations starting at {}",
+                region.core_range.str(),
+                base_address,
+                region.l1_regions.front().first);
+        }
     }
 }
 
@@ -71,8 +83,11 @@ DeviceAddr allocate_ephemeral_memory(
             it != regions.end(),
             "Internal error: core range {} was not registered before allocation",
             core_range.str());
-        const uint64_t region_end = it->l1_regions.empty() ? 0 : it->l1_regions.back().second;
-        computed_addr = std::max({computed_addr, it->base_address, region_end});
+        TT_FATAL(
+            !it->l1_regions.empty(),
+            "Base address of core range {} is unknown. Call prepare_ephemeral_allocation() before allocating.",
+            core_range.str());
+        computed_addr = std::max(computed_addr, it->l1_regions.back().second);
     }
     computed_addr = align(computed_addr, alignment);
     for (const CoreRange& core_range : cores.ranges()) {
