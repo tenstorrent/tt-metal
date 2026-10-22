@@ -47,7 +47,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     const auto tile = input_tensor.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
-    const bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
+    // transpose_tile takes the unpack-to-dest path for a 32-bit dest format, so the kernel must be
+    // built with both a 32-bit destination and UnpackToDestEn.
+    const bool fp32_dest_acc_en =
+        src0_cb_data_format == tt::DataFormat::Float32 || src0_cb_data_format == tt::DataFormat::Int32;
 
     const auto shard_spec = input_tensor.shard_spec().value();
     const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -139,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
-    if (src0_cb_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
