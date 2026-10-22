@@ -44,8 +44,7 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // and SrcB banks, then releases its DEST section with no reduce. The unpackers
 // must zero the SrcA rows that a short face leaves stale, or the reduce sums
 // the stale rows.
-static constexpr std::uint32_t POISON_TILES      = 2;
-static constexpr std::uint32_t POISON_TILE_BYTES = 2 * DEFAULT_TENSOR_SHAPE.total_tensor_size(); // bf16
+static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -77,14 +76,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DEFAULT_TENSOR_SHAPE.total_num_faces());
 
     // Poison op (see the file header).
+    const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
     _llk_unpack_AB_init_<BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, ckernel::Transpose::None);
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
-        const std::uint32_t poison = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * POISON_TILE_BYTES);
+        const std::uint32_t poison = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes);
         _llk_unpack_AB_<BroadcastType::NONE>(poison, poison);
     }
-    _llk_unpack_reconfig_tile_shape_srca_(0 /* tile_size */, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
-    _llk_unpack_reconfig_tile_shape_srcb_(0 /* tile_size */, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
+    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
+    _llk_unpack_reconfig_tile_shape_srcb_(0 /*tile_size*/, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
 
     // mul_reduce_scalar_init: unpack A and B, no broadcast/transpose.
     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
@@ -136,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Poison op (see the file header).
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
+        DEFAULT_TENSOR_SHAPE, 0 /*acc_to_dest*/);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
@@ -146,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             DST_SYNC,
             is_fp32_dest_acc_en,
             MATH_FIDELITY,
-            EltwiseBinaryReuseDestType::NONE>(DEFAULT_TENSOR_SHAPE, i, true /* clear_fp32_dst_acc */);
+            EltwiseBinaryReuseDestType::NONE>(DEFAULT_TENSOR_SHAPE, i, true /*clear_fp32_dst_acc*/);
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 

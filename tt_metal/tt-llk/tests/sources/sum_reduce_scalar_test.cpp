@@ -52,11 +52,10 @@ static constexpr std::uint32_t DST_INDEX = 0;
 
 // Before the measured op, a poison op unpacks POISON_TILES full 32x32 tiles of
 // 100.0, stored after the input tiles in buffer_A, into every row of both SrcA
-// and SrcB banks, then releases its DEST section with no reduce. The unpackers
-// must zero the SrcA rows that a short face leaves stale, or the reduce sums
-// the stale rows.
-static constexpr std::uint32_t POISON_TILES      = 2;
-static constexpr std::uint32_t POISON_TILE_BYTES = 2 * DEFAULT_TENSOR_SHAPE.total_tensor_size(); // bf16
+// banks, then releases its DEST section with no reduce. SrcB holds zeros,
+// because unpack A zeroes it. The unpacker must zero the SrcA rows that a
+// short face leaves stale, or the reduce sums the stale rows.
+static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -90,25 +89,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DEFAULT_TENSOR_SHAPE.total_num_faces());
 
     // Poison op (see the file header).
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+    const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * POISON_TILE_BYTES), formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_reconfig_tile_shape_srca_(0 /* tile_size */, tensor_shape.face_r_dim, num_faces);
-    _llk_unpack_reconfig_tile_shape_srcb_(0 /* tile_size */, tensor_shape.face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
 
     // sum_reduce_scalar_init -> copy_tile_to_dst_init_short: unpack A only,
     // no broadcast/transpose (datacopy A2D source path).
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     // Copy phase: stream A[i] into SrcA for each tile (MATH moves it into DEST[i]).
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 
