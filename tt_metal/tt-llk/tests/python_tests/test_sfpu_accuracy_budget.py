@@ -1010,25 +1010,26 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, five transcendentals whose *best*
-#: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
-#: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
-#: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
-#: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
-#: #51128, Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma
-#: #52278.
+#: whose per-format tolerances moved into the table, and three transcendentals whose
+#: *best* cell is still past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b)
+#: once the near-zero floor the emitter grants (up to 1e-3) is applied -- the
+#: measurements are on their rows, not repeated here to drift. Softplus answers 0 below
+#: x = -5, a 0.0065 cut-off a 1e-3 floor cannot cover; Digamma and Lgamma are wrong for
+#: negative and small positive x. Recorded, not fixed; tracked: Digamma #51128, Softplus
+#: #51866 (input clamps, under #52178) and Lgamma #55356.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
-#: variant, some of their cells are inside the ceiling, and the rest fall
-#: through to tolerance.
+#: Erfc and Polygamma left this set with the claim applied to the ranking, the
+#: Dest-capacity rule and the emitted floor: each has cells inside the ceiling now and
+#: the rest fall through to tolerance, like Sign, Heaviside, GeluTanh, Tanhshrink,
+#: Xielu, I1 and SfpuElwmul. Expm1Cw stays: its only gateable cells were Float16 at
+#: dest_acc=No, where it answers the golden's overflow stand-in negated (-130560 for
+#: 130560, -131008 for 131008: #54770), the op's sign flip and not the Dest's overflow.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.Erfc,
-        MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
@@ -2093,7 +2094,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         ApproximationMode.Yes,
         None,
     ): 2,
-    (MathOperation.Digamma, None, None, None, None): 20,
+    (MathOperation.Digamma, None, None, None, None): 6,
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
@@ -2111,8 +2112,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
     (MathOperation.I1, None, None, None, None): 18,
-    (MathOperation.Lgamma, None, None, None, None): 19,
-    (MathOperation.Polygamma, None, None, None, None): 50,
+    (MathOperation.Lgamma, None, None, None, None): 3,
+    (MathOperation.Polygamma, None, None, None, None): 15,
     (MathOperation.Rpow, None, None, None, None): 20,
 }
 
@@ -2185,9 +2186,10 @@ def _acknowledges(key, cell) -> bool:
 
 #: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
 #: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
-#: grids, so a hole can only open where it keeps a block verbatim (a floor row) and the
-#: sweep's format set then grows -- the cell is measured, resolves to the global default,
-#: and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+#: grids, so a hole can only open where it keeps a block verbatim (an op-wide
+#: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
+#: resolves to the global default, and nothing holds it. A cell listed here is a
+#: decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {}
 
 

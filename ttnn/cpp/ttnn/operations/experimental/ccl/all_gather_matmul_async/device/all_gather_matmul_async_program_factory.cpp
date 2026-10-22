@@ -24,7 +24,6 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     Tensor& matmul_output_tensor,
 
     /* All Gather Params */
-    IDevice* /*target_device*/,
     const MeshCoordinate& target_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -167,9 +166,6 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
 
     for (const auto& mesh_coord : tensor_coords.coords()) {
         const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-        auto* mesh_device = tensor_args.input_tensor.device();
-        IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : tensor_args.input_tensor.device();
-
         uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
             tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async_attributes.cluster_axis);
 
@@ -193,7 +189,6 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
             tensor_args.weight_tensor,
             tensor_return_value[1],
 
-            target_device,
             mesh_coord,
             forward_coord,
             backward_coord,

@@ -30,6 +30,8 @@ inline bool bf16_dest_hardmish() {
     return false;
 #endif
 }
+// Each call records replay slots 0-13, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
 inline void calculate_hardmish_bf16() {
     ckernel::sfpu::bf16::hardmish::calculate_simple_forward<ckernel::sfpu::HardmishBf16Config, ITERATIONS>();

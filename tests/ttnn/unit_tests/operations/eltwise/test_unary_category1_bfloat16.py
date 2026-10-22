@@ -835,7 +835,10 @@ def test_hardmish_bf16_unflushed_zero_and_subnormal_inputs(device):
 def test_hardmish_bf16_bfloat8_b(device):
     """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
     BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
-    bfloat8_b unary cases require.
+    bfloat8_b unary cases require. Over every finite BF16 exponent, each output must also be within one bfloat8_b
+    step of the BF16 call's for the same stored input, packed to bfloat8_b (two in a block that holds an infinity
+    or NaN), and of its class (infinity, NaN, zero): the op packs DEST to Bfp8_b, and the typecast rounds and
+    sets a block's exponent its own way.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):
@@ -850,6 +853,38 @@ def test_hardmish_bf16_bfloat8_b(device):
     golden = ttnn.get_golden_function(ttnn.hardmish)(stored).to(torch.float64)
     pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
     assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+    # Every finite BF16 exponent and +-0, one exponent to each 16-value face row, so Bfp8_b keeps each value
+    # to 7 bits under its own exponent.
+    words = torch.arange(1 << 16, dtype=torch.int32)
+    exponent = (words >> 7) & 0xFF
+    zeros = torch.tensor([0x0000] * 256 + [0x8000] * 256, dtype=torch.int32)
+    words = torch.cat([words[(exponent > 0) & (exponent < 0xFF)], zeros])
+    x = words.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.bfloat16)
+    tt_stored = ttnn.from_torch(stored, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.hardmish(tt_x)).to(torch.float32).flatten()
+    expected = ttnn.to_torch(ttnn.typecast(ttnn.hardmish(tt_stored), ttnn.bfloat8_b)).to(torch.float32).flatten()
+    # One step of a Bfp8_b block: its 16 values share the largest one's exponent and keep 7 bits under it.
+    finite = torch.isfinite(actual) & torch.isfinite(expected)
+    magnitude = torch.where(finite, torch.maximum(actual.abs(), expected.abs()), torch.zeros_like(actual))
+    block = magnitude.reshape(-1, 16).amax(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.exp2(torch.floor(torch.log2(block.clamp_min(torch.finfo(torch.float32).tiny))) - 6)
+    # A block that also holds an infinity or NaN: the op's pack and the typecast set its exponent apart, and
+    # its finite values land up to two steps apart (polygamma's overflow binade, BH job 142644).
+    special = (~finite).reshape(-1, 16).any(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.where(special, 2 * step, step)
+    # Infinity, NaN and zero keep their class exactly; a finite value may round one step apart.
+    same = (
+        (actual == expected)
+        | (torch.isnan(actual) & torch.isnan(expected))
+        | (finite & ((actual == 0) == (expected == 0)) & ((actual - expected).abs() <= step))
+    )
+    assert same.all(), (
+        f"{int((~same).sum())} bfloat8_b outputs are more than one bfloat8_b step from the BF16 call's on the same "
+        "stored input; first at "
+        f"{stored.flatten()[~same][0].item()!r}: {actual[~same][0].item()!r}, BF16 call {expected[~same][0].item()!r}"
+    )
 
 
 def test_hardmish_bf16_nonfinite_inputs(device):
@@ -926,11 +961,15 @@ def test_hardmish_bf16_exhaustive_inputs(device):
     ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
     # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
     ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    listed = torch.zeros_like(ok)
     for word, ranges in STOCK.get(board, {}).items():
         value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
         for first, last in ranges:
-            ok |= (bits >= first) & (bits <= last) & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
+            lanes = (bits >= first) & (bits <= last)
+            listed |= lanes
+            ok |= lanes & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
     for first, last in SKIP:
+        listed |= (bits >= first) & (bits <= last)
         ok |= (bits >= first) & (bits <= last)
     assert ok.all(), (
         f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
