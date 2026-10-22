@@ -18,8 +18,9 @@ host reads. Behind a verify whose acceptance ran on device the accept trace's ch
 from the committed tokens and count the accept step left there (``enqueue_chained``: nothing is copied). After a plain
 decode step, a logits verify (the plugin samples on the host), or when the plugin committed other tokens than the
 device did, the host plans the draft and copies the tensor (``enqueue``).
-With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables) the cos / sin are rows of the tables
-at the uploaded positions, as in decode; without them (long contexts) the draft also copies its six cos / sin.
+With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables, at every context length) the cos / sin are rows
+of the tables at the uploaded positions, as in decode; without them (MIMO_DEVICE_ROPE=0) the draft also copies its six
+cos / sin.
 
 The layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its
@@ -153,10 +154,7 @@ class TtMiMoMTP:
             return [tuple(rope[2 * k : 2 * k + 2]) for k in range(3)], []
         pairs, made = [], []
         for idx in rope:
-            pair = []
-            for t in m.rope_tables[:2]:
-                row = ttnn.embedding(idx, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-                pair.append(ttnn.reshape(row, (1, 1, m.max_batch, t.shape[-1])))
+            pair = m.rope_table_rows(idx, m.rope_tables[:2])
             pairs.append(tuple(pair))
             made += pair
         return pairs, made

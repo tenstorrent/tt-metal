@@ -33,8 +33,8 @@ position)). With ``sample_on_device_mode`` the plugin samples on device unless a
 (a top_k past its candidates, pure temperature sampling without top_p or top_k, penalties, logprobs or structured
 output send the whole batch to host sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
 ``supports_async_decode``): a steady step copies nothing (the trace reads its RoPE
-cos / sin from device tables at its own positions; past 128K context it copies those of the adapter's own position
-counter), and its tokens are read back without blocking. Prefill runs
+cos / sin from device tables at its own positions, at every context length; with MIMO_DEVICE_ROPE=0 it copies those
+of the adapter's own position counter), and its tokens are read back without blocking. Prefill runs
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
@@ -53,7 +53,7 @@ from their generators, the device runs the plugin's accept walk on each slot's c
 request's committed tokens and count. Otherwise the verify returns its logits and the plugin walks acceptance on the
 host with each request's own sampling (temperature, top-p, penalties, ...). Either way sampled requests speculate
 losslessly. A verify and a draft each copy one packed int32 tensor of their tokens and positions (plus the RoPE cos /
-sin when there are no device RoPE tables); their traces derive every other input from it on device
+sin with MIMO_DEVICE_ROPE=0); their traces derive every other input from it on device
 (tt/spec_inputs.py). A step that verifies nothing decodes as above, a sampled request's on the sampled decode trace.
 
 The draft is chained behind the verify (tt/spec_chain.py, reference/spec_chain.py): an argmax_ids verify accepts on
@@ -62,7 +62,7 @@ speculates the host enqueues, without waiting, the verify trace, the accept trac
 which writes the MTP draft's inputs from the accepted count and committed tokens on device) and the MTP draft trace,
 then reads one 320-byte result page per pass: the argmax ids or the committed tokens and count, and the drafts.
 propose_draft_tokens returns those drafts when the plugin committed what the device did; it drafts from the host plan
-after a plain decode step, a logits verify, without the decode RoPE tables, or when the commits differ.
+after a plain decode step, a logits verify, without the decode RoPE tables (MIMO_DEVICE_ROPE=0), or when the commits differ.
 """
 
 import math
@@ -105,10 +105,12 @@ SAMPLER_CHECK = os.environ.get("MIMO_SAMPLER_CHECK") == "1"
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
 PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
-# Decode reads its RoPE cos / sin from device tables (TtMiMoModel.setup_decode_rope_tables) up to this context
-# (1M would cost 1.6 GB per chip); MIMO_DEVICE_ROPE=0 uploads them every step instead.
+# Decode, verify and MTP draft steps read their RoPE cos / sin from device tables of every position
+# (TtMiMoModel.setup_decode_rope_tables); MIMO_DEVICE_ROPE=0 uploads them every step instead.
 DEVICE_ROPE = os.environ.get("MIMO_DEVICE_ROPE", "1") == "1"
-DEVICE_ROPE_MAX_LEN = 131072
+# Up to this context the tables hold whole 192-wide rows (201 MB per chip at 128K); past it only the 64 rotated dims
+# (``compact``: 537 MB per chip at 1M instead of 1.61 GB), each read appending the constant 1 / 0 of the other dims.
+ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
 # MIMO_SPEC_DECODE=mtp: load the MTP layer (MIMO_MTP_LAYER, default 0, vLLM's MTP proposer's layer) and serve the
 # plugin's model-owned drafter contract (module docstring).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
@@ -347,6 +349,9 @@ class MiMoV2ForCausalLM:
         # vLLM trims its tables to the pool; the padding entries stay 0 (its null block, set_vllm_page_tables).
         table_width = page_table_width(min(math.ceil(self.max_seq_len / block_size), num_blocks))
         self.layer_groups = groups
+        compact_rope = self.max_seq_len > ROPE_TABLE_FULL_WIDTH_MAX_LEN
+        # The replicas' RoPE tables are equal: computed once on the host (~2.5 s at 1M), uploaded to each.
+        rope_host = self.models[0].decode_rope_tables_host(compact_rope) if DEVICE_ROPE else None
         self.kv_caches = []
         for model in self.models:
             buffers, caches = {}, []
@@ -361,13 +366,18 @@ class MiMoV2ForCausalLM:
             model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)
             if model.mtp is not None:
                 model.mtp.setup_cache()
-            if DEVICE_ROPE and self.max_seq_len <= DEVICE_ROPE_MAX_LEN:
-                model.setup_decode_rope_tables()
+            if DEVICE_ROPE:
+                model.setup_decode_rope_tables(compact_rope, rope_host)
             self.kv_caches.append(caches)
         logger.info(
             f"MiMo vLLM KV: {num_blocks} blocks of {block_size} per lane, {len(buffers)} buffers per replica, "
             f"page tables {table_width} wide for groups {sorted(set(groups))}"
         )
+        if rope_host is not None:
+            rows, width = rope_host[0].shape
+            logger.info(
+                f"MiMo vLLM: decode RoPE tables 4 x {rows} x {width} ({4 * rows * width * 2 / 1e6:.0f} MB per chip)"
+            )
         return self.kv_caches
 
     @staticmethod

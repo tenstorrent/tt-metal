@@ -37,9 +37,13 @@ from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import zero_output
 from .mtp import TtMiMoMTP
-from .rope import MiMoRotarySetup, partial_rope_cos_sin
+from .rope import MiMoRotarySetup, partial_rope_table
 from .spec_inputs import SpecInputs
 from .verify_sampler import VerifySampler
+
+# Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
+# verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
+ROPE_TABLE_MARGIN = 32  # one tile
 
 
 def prefill_padded_len(seq_len):
@@ -225,6 +229,7 @@ class TtMiMoModel:
         self.spec_chain = None  # the draft chained behind a verify, and its result page (TtMiMoMTP.setup_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
+        self.rope_table_tails = None  # with compact tables: the 1 / 0 the rows' rotated dims are followed by
         self.decode_users = None
         self.norm_buffers = None
         self.swa_table = None
@@ -852,28 +857,70 @@ class TtMiMoModel:
             *serial_inputs,
         )
 
-    def setup_decode_rope_tables(self):
-        """Device cos / sin tables of every position (both thetas), for decode steps that read the trace's own
-        positions (``rope_pos`` input, advanced by every replay) instead of uploading their cos / sin: a steady step
-        then copies nothing. Each table row is the host's ``decode_host_inputs`` value of that position, so the
-        values are bitwise the same. max_seq_len x 192 x 2 bytes x 4 tables per chip (50 MB at 32K)."""
-        assert self.decode_trace is None, "the tables must exist before the decode capture"
-        positions = torch.arange(self.max_seq_len)
+    def decode_rope_tables_host(self, compact=False):
+        """The torch tables setup_decode_rope_tables uploads: cos / sin of the SWA theta, then of the global theta, over
+        max_seq_len + ROPE_TABLE_MARGIN positions, 192 (``compact``: 64) dims, each row computed in the host's
+        per-step call (rope.partial_rope_table over max_batch positions). The same for every replica of a mesh."""
+        rows = self.max_seq_len + ROPE_TABLE_MARGIN
         tables = []
         for name in ("swa", "full"):
             setup = self.rope_setups[name]
-            cos, sin = partial_rope_cos_sin(positions, setup.head_dim, setup.rope_dim, setup.theta)
-            for t in (cos, sin):
-                tables.append(
-                    ttnn.from_torch(
-                        t,
-                        device=self.mesh_device,
-                        dtype=setup.datatype,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=self.plan.replicate(),
-                    )
+            width = setup.rope_dim if compact else setup.head_dim
+            tables += partial_rope_table(rows, setup.head_dim, setup.rope_dim, setup.theta, width, self.max_batch)
+        return tables
+
+    def setup_decode_rope_tables(self, compact=False, host=None):
+        """Device cos / sin tables of every position (both thetas: cos / sin of the SWA theta, then of the global one),
+        for the decode, verify and MTP draft steps, which read the rows of their own position inputs
+        (``rope_table_rows``) instead of uploading their cos / sin: a steady step then copies nothing. Each row is the
+        host's ``decode_host_inputs`` value of that position (``decode_rope_tables_host``, or ``host`` when the caller
+        made them once for several replicas), so the values are bitwise the same.
+        ``compact``: the tables keep only the rope_dim (64) rotated dims of a row, and each read appends the constant
+        1 / 0 of the other head_dim - rope_dim dims (one concat per table read). Per chip, max_seq_len x 4 tables x
+        192 (64 compact) x 2 bytes: 50 MB at 32K, 201 MB (67 MB) at 128K, 1.61 GB (537 MB) at 1M. The tables run
+        ROPE_TABLE_MARGIN rows past max_seq_len - 1."""
+        assert self.decode_trace is None, "the tables must exist before the decode capture"
+        # Through the class: the device tests call this on a stub of the model's attributes.
+        host = host if host is not None else TtMiMoModel.decode_rope_tables_host(self, compact)
+        setup = self.rope_setups["swa"]
+        assert all((s.head_dim, s.rope_dim) == (setup.head_dim, setup.rope_dim) for s in self.rope_setups.values())
+        width = setup.rope_dim if compact else setup.head_dim
+        assert [tuple(t.shape) for t in host] == [(self.max_seq_len + ROPE_TABLE_MARGIN, width)] * 4
+        rep = self.plan.replicate()
+        self.rope_tables = [
+            ttnn.from_torch(
+                t, device=self.mesh_device, dtype=setup.datatype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+            )
+            for t in host
+        ]
+        self.rope_table_tails = None
+        if compact:
+            shape = (1, 1, self.max_batch, setup.head_dim - setup.rope_dim)
+            self.rope_table_tails = [
+                ttnn.from_torch(
+                    torch.full(shape, value),
+                    device=self.mesh_device,
+                    dtype=setup.datatype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=rep,
                 )
-        self.rope_tables = tables
+                for value in (1.0, 0.0)
+            ]
+
+    def rope_table_rows(self, idx_tt, tables):
+        """The rows of ``tables`` (cos / sin pairs of ``rope_tables``) at the positions ``idx_tt`` (uint32 [1, B]):
+        [1, 1, B, head_dim] tiles, what ``decode_host_inputs`` makes of those positions. The caller frees them.
+        Trace-capturable; with compact tables each row is the table's 64 dims followed by the cos / sin tail."""
+        out = []
+        for k, t in enumerate(tables):
+            row = ttnn.embedding(idx_tt, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            row = ttnn.reshape(row, (1, 1, self.max_batch, t.shape[-1]))
+            if self.rope_table_tails is not None:
+                whole = ttnn.concat([row, self.rope_table_tails[k % 2]], dim=-1)
+                row.deallocate(True)
+                row = whole
+            out.append(row)
+        return out
 
     def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0):
         """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input after the nine
@@ -912,9 +959,7 @@ class TtMiMoModel:
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         made = []
         if rope_pos_tt is not None:
-            for t in self.rope_tables:
-                row = ttnn.embedding(rope_pos_tt, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-                made.append(ttnn.reshape(row, (1, 1, self.max_batch, t.shape[-1])))
+            made = self.rope_table_rows(rope_pos_tt, self.rope_tables)
             cos_swa, sin_swa, cos_full, sin_full = made
         rot_mats = {
             # SWA: the sharded mats plus the raw cos / sin rows (SwaDecodeQkv reads those).
