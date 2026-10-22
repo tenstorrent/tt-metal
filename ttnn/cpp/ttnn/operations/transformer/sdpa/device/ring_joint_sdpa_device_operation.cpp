@@ -554,8 +554,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // M4 static row max: resident mode replaces the running row max with sol_row_max; no other mode (and no
     // non-Sol run: sol_resident_mode is false without the sol tensors) reads it.
     TT_FATAL(
-        tensor_args.sol_row_max.has_value() == tensor_args.sol_resident_mode(args.sol_mode),
-        "sol_row_max is required by sol_mode=resident and rejected otherwise (got {} for sol_mode {})",
+        !tensor_args.sol_row_max.has_value() || tensor_args.sol_resident_mode(args.sol_mode),
+        "sol_row_max is accepted by sol_mode=resident only (got {} for sol_mode {})",
         tensor_args.sol_row_max.has_value() ? "a tensor" : "none",
         args.sol_mode);
     if (tensor_args.sol_enabled()) {

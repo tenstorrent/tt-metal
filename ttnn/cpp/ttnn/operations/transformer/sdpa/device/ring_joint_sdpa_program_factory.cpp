@@ -1126,10 +1126,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-chunk accumulators live in an L1 FIFO (the staging CBs, max_q_per_core + 1 entries deep) for the whole
     // op, so there is no per-chunk DRAM save/restore and the chain streams each shard once per core.
     const bool sol_resident = tensor_args.sol_resident_mode(args.sol_mode);
-    // M4 static row max (resident only; validation ties the tensor to the mode): compute takes each query row's
-    // fixed logit bound from sol_row_max instead of tracking a running max, so the per-step max reduce, alpha exp
-    // and running-sum/output rescale disappear. Flash attention with a fixed m >= true max is exact up to rounding.
+    // M4. sol_static_max: the optional sol_row_max tensor is present (resident only); it is plumbed to the reader
+    // (accessor + address) but no longer used: its a-priori bound was too loose for bf16. sol_frozen_max: resident
+    // mode's max handling (default on): each resident chunk's row max is taken on its first step (the forced block
+    // 0 of piece 0) and frozen, so the per-step max reduce, alpha exp and running-sum/output rescale disappear.
+    // TT_SOL_DYNAMIC_MAX=1 restores the per-step running max (the M3 path) for an A/B (not in the program hash:
+    // set it for the whole process).
     const bool sol_static_max = tensor_args.sol_static_max();
+    const bool sol_frozen_max =
+        sol_resident && !(std::getenv("TT_SOL_DYNAMIC_MAX") && std::string(std::getenv("TT_SOL_DYNAMIC_MAX")) == "1");
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
         // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
@@ -3365,9 +3370,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
         // mode keeps its offsets); compute uses the per-row bound instead of the running max.
         {"sol_static_max", sol_static_max ? 1u : 0u},
-        // The max-slot CB the reader fills from sol_row_max (compute's cb_max_in / cb_stats_in): one producer (the
-        // reader, once per call, at full capacity), one consumer (compute, pops after the final normalization).
-        {"cb_sol_row_max", sol_static_max ? cb_stats_in : cb_kv_pad_derived},
+        // Frozen max (see sol_frozen_max above): compute freezes each slot's max after its first step.
+        {"sol_frozen_max", sol_frozen_max ? 1u : 0u},
         {"cb_k_stage", cb_k_stage},
         {"cb_v_stage", cb_v_stage},
         // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and

@@ -160,7 +160,7 @@ def _run(
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
-        row_max=(mode == "resident"),
+        row_max=False,  # the resident op freezes its max on device (M4); the a-priori bound is unused
     )
     pre.prepare(geo, sink_tokens, scale)
     sol = pre(tq, tk, tv, scale=scale, report_density=True)
@@ -170,7 +170,7 @@ def _run(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=False,
+        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
     )
     ckc = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
@@ -249,7 +249,7 @@ def _run(
         sol_pooled_v=sol["pooled_v"],
         sol_mode=mode,
     )
-    if mode == "resident":
+    if mode == "resident" and sol.get("row_max") is not None:
         sol_kw["sol_row_max"] = sol["row_max"]
     if upload_bias and sol.get("bias") is not None:
         # Use the pre-pass's Python-computed bias instead of the op's on-device generator (sol_bias_gen).
@@ -872,7 +872,7 @@ def test_sol_op_timing(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
             q_chunk_size=qc,
             k_chunk_size=kc,
-            exp_approx_mode=False,
+            exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
         )
         outs = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tq,
@@ -989,7 +989,7 @@ def _run_sequence(
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
-        row_max=(mode == "resident"),
+        row_max=False,  # the resident op freezes its max on device (M4)
     )
     pre.prepare(geo, sink_tokens, scale)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -997,7 +997,7 @@ def _run_sequence(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=False,
+        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
     )
     ckc = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
@@ -1015,7 +1015,7 @@ def _run_sequence(
         sol_kw = dict(
             sol_block_mask=sol["block_mask"], sol_pooled_k=sol["pooled_k"], sol_pooled_v=sol["pooled_v"], sol_mode=mode
         )
-        if mode == "resident":
+        if mode == "resident" and sol.get("row_max") is not None:
             sol_kw["sol_row_max"] = sol["row_max"]
         pk = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
         pv = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)

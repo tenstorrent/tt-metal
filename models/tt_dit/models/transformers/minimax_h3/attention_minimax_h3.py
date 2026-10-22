@@ -514,7 +514,9 @@ class MiniMaxH3Attention(Module):
             compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=False,  # NOTE: False is more correct
+            # False is more correct. SOL_EXP_APPROX=1 switches the ring op's exp to the approximate SFPU mode for
+            # an A/B (the sparse step's cost is now dominated by the exp on the pack thread, 2026-10-22).
+            exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",
         )
 
     # ------------------------------------------------------------------ Sol-Attn
@@ -545,8 +547,9 @@ class MiniMaxH3Attention(Module):
                 mode=self._sol_prepass_mode,
                 # compact / pack / resident generate the pooled-column bias on device: skip the ~87 MB bias write
                 emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
-                # resident (M4) takes a static per-query-row logit bound instead of tracking a running max
-                row_max=self.sol_mode == "resident",
+                # resident (M4) freezes each chunk's running max after its first step on device; the pre-pass's
+                # a-priori per-row bound (row_max=True -> sol_row_max) is accepted by the op but no longer used.
+                row_max=False,
             )
         scale = self.head_dim**-0.5
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
@@ -563,9 +566,8 @@ class MiniMaxH3Attention(Module):
             out.get("bias") is not None and not self._sol_compact_family and self.sol_mode != "resident"
         ):  # compact / pack / resident generate the bias on device and reject a tensor
             kwargs["sol_bias"] = out["bias"]
-        if self.sol_mode == "resident":
-            # M4 static row max: required by resident mode, rejected by every other mode.
-            kwargs["sol_row_max"] = out["row_max"]
+        if self.sol_mode == "resident" and out.get("row_max") is not None:
+            kwargs["sol_row_max"] = out["row_max"]  # optional, resident only (unused since the frozen max)
         if self._sol_compact_family or self.sol_mode == "resident":
             # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
             # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact

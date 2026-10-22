@@ -3721,8 +3721,8 @@ template <
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
     uint32_t stats_cap,
-    // M4: the slot max is a fixed per-row upper bound of the raw logits that the reader loaded into cb_max_in
-    // (sol_row_max), so S2-S4 (row max, alpha, rescale) are skipped and the exp subtracts the slot max directly.
+    // M4: frozen max. A slot's max is set by its first step and never updated, so S2-S4 (row max, alpha, rescale)
+    // run once per slot instead of every step; the exp of every later step subtracts the frozen slot max.
     bool static_max = false>
 static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     const uint8_t* slots,
@@ -3837,9 +3837,22 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
-    // The max the exp of S5 subtracts: the step's new row max (dynamic path) or the static bound (M4).
-    constexpr uint32_t cb_step_max = static_max ? cb_max_in : cb_max_scratch;
-    if constexpr (static_max) {
+    // Frozen max (static_max, M4): a slot's max is the row max of its FIRST step (the forced block 0 of piece 0, so
+    // the sink keys are in it) and never moves again: S2 + the S3 copy run only on a step whose group is entirely
+    // uninitialized (the first step of a head), S4 (alpha, rescale) never. The exp argument then stays within a
+    // few units of the true max, which bf16 represents well, while a later key above the frozen max only makes
+    // its term exceed 1 (no overflow short of ~85 units). A loose a-priori bound (||q|| max||k||, the first M4
+    // attempt) put the arguments at -10 to -20 scaled units, where bf16's absolute resolution on (score - max)
+    // cost 0.001-0.008 of PCC. Dynamic path: S2-S4 every step.
+    uint32_t group_mask = 0;
+    for (uint32_t g = 0; g < n_slots; ++g) {
+        group_mask |= 1u << slots[g];
+    }
+    const bool run_stats = static_max ? (initialized_mask & group_mask) == 0 : true;
+    ASSERT(!static_max || run_stats || (initialized_mask & group_mask) == group_mask);
+    // The max the exp of S5 subtracts: this step's row max (fresh in the scratch) or the slot's frozen max.
+    const uint32_t cb_step_max = run_stats ? cb_max_scratch : cb_max_in;
+    if (!run_stats) {
         CircularBuffer(cb_qkt_im).wait_front(qk_cap);
     } else {
         // ---- S2: row max over the W columns, eltwise-max with the slot's stored max, into cb_max_scratch. ----
@@ -3953,6 +3966,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
         cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
 
         // ---- S4: slot sum and slot out *= alpha, in place (initialized slots only; L1 accumulate is off). ----
+        // (Frozen max: this block only runs with every slot uninitialized, so the loop does nothing there.)
         CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
         for (uint32_t g = 0; g < n_slots; ++g) {
             if (!slot_init(g)) {
@@ -3961,7 +3975,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
             salad_correct_fused<Sq_chunk_t, vDHt, kDst>(
                 cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, slots[g], slots[g], slots[g]);
         }
-    }  // !static_max: S2-S4
+    }  // run_stats: S2-S4
 
     // ---- S5: in-place exp of the scores (sub_exp_block_bcast_cols pattern); the tiles summed into the slot. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
@@ -4126,7 +4140,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     // are drained before the unpack thread leaves the step: post on the pack thread after its last pack, take on the
     // unpack thread here, so the token never outlives the step (see the ordering note above).
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
-    if constexpr (!static_max) {
+    if (run_stats) {
         CircularBuffer(cb_max_scratch).pop_front(stats_cap);
         CircularBuffer(cb_exp_max_diff).pop_front(stats_cap);
     }
@@ -4200,7 +4214,7 @@ template <
     uint32_t sol_resident_slots,
     uint32_t sol_res_block_words,
     uint32_t kv_cb_pages,
-    // M4: the reader loads a fixed per-row max bound (sol_row_max) into cb_max_in; the step skips the running max.
+    // M4: frozen max (each slot's max is its first step's row max; no per-step max / alpha / rescale).
     bool sol_static_max,
     typename MaskCtx>
 void sdpa_ring_resident(
@@ -4309,13 +4323,10 @@ void sdpa_ring_resident(
 
     if (is_first_active_iter) {
         // Fill the slot CBs once, exactly full, write pointers held at the base (sdpa_resident_block_step's state
-        // contract). Their contents are written by each slot's first step. With the static max (M4) the reader
-        // produces cb_max_in instead: it pushes exactly kStatsCap tiles (every slot, used or not) once per call,
-        // and compute only waits for them here and pops them at the end.
-        if constexpr (!sol_static_max) {
-            CircularBuffer(cb_max_in).reserve_back(kStatsCap);
-            cb_push_back_hold_wr_ptr(cb_max_in, kStatsCap);
-        }
+        // contract). Their contents are written by each slot's first step (with the frozen max of M4 the max slot
+        // is written once, by that first step, and read by every later one).
+        CircularBuffer(cb_max_in).reserve_back(kStatsCap);
+        cb_push_back_hold_wr_ptr(cb_max_in, kStatsCap);
         CircularBuffer(cb_sum_in).reserve_back(kStatsCap);
         cb_push_back_hold_wr_ptr(cb_sum_in, kStatsCap);
         CircularBuffer(cb_prev_out).reserve_back(kOutCap);

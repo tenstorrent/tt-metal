@@ -1419,32 +1419,9 @@ void kernel_main() {
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
                 }
-                if constexpr (sol_static_max) {
-                    // M4: each resident chunk's fixed row-max bound (Sq_chunk_t tiles, value in column 0) into its
-                    // slot of the max CB, once per call. The CB is exactly sol_resident_slots x Sq_chunk_t tiles and
-                    // is pushed in full (unused slots hold garbage nobody reads); compute waits for it on its first
-                    // active iteration and pops it after the final normalization, so the next call refills it.
-                    constexpr uint32_t cb_sol_row_max = get_named_compile_time_arg_val("cb_sol_row_max");
-                    constexpr uint32_t res_slots = get_named_compile_time_arg_val("sol_resident_slots");
-                    constexpr uint32_t rm_tile_bytes = get_tile_size(cb_sol_row_max);
-                    constexpr uint32_t rm_cap = res_slots * Sq_chunk_t;
-                    CircularBuffer cb_rm(cb_sol_row_max);
-                    cb_rm.reserve_back(rm_cap);
-                    const uint32_t rm_base = cb_rm.get_write_ptr();
-                    for (uint32_t i = 0; i < n_res; ++i) {
-                        const Slice rm_slice(
-                            0, res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, 1);
-                        fetch_block(
-                            sol_rm_generator,
-                            rm_slice,
-                            q_local_padded_Nt,
-                            cb_sol_row_max,
-                            rm_base + i * Sq_chunk_t * rm_tile_bytes,
-                            rm_tile_bytes,
-                            false);
-                    }
-                    cb_rm.push_back(rm_cap);
-                }
+                // (M4's first form loaded a per-row logit bound from sol_row_max into the max slots here; the frozen
+                // max that replaced it is set by compute from each slot's first step, so the tensor, when given, is
+                // accepted but unused.)
                 q_pushed = true;
             }
             // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time:
