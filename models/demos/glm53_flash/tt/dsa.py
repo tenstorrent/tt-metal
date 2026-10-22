@@ -72,6 +72,46 @@ DSA_FUSED_DEFAULT = "fused" if os.environ.get("GLM53_DSA_FUSED", "0") == "1" els
 DSA_FOLD = os.environ.get("GLM53_DSA_FOLD", "both")
 # prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
 PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
+# The whole-prefix ROW_MAJOR latent copy of the sparse prefill (the sparse_sdpa kv contract), per DSA layer and
+# chunk: "0" (default) = rebuilt from the paged cache every chunk (``TtLatentCache.user_rows_rm``, 8 ms at 1 M per
+# chip, transient); "1" = kept per layer in a persistent arena of the slot's full length and APPENDED with each
+# chunk's rows (``TtLatentCache.prefix_rows_rm``: ~0.5 ms per chunk whatever the prefix; the arena is one
+# ``rows_per_user x 512`` bf16 tensor per DSA layer resident while the prompt is in flight: 11 x 1 GiB at 1 M, which
+# is why the default stays 0, doc: _agents/prefill_ttft/STATUS.md); "auto" = "1" when the arenas of every DSA layer
+# of the config fit ``GLM53_PREFIX_INCREMENTAL_BUDGET_MB`` (default 1024).
+PREFIX_INCREMENTAL = os.environ.get("GLM53_PREFIX_INCREMENTAL", "0")
+PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDGET_MB", "1024"))
+
+
+def prefill_blocks() -> tuple[int, int]:
+    """(score sub-block rows, attention block rows) of the sparse prefill loop (``TtDSA._sparse_rows``).
+    ``GLM53_PREFILL_QBLOCK`` (default 2048; 512 single-user / 256 at 32 users at 1 M for the score block's memory)
+    bounds the scorer's [rows, pools] bf16 block; ``GLM53_PREFILL_ABLOCK`` (default = QBLOCK, the validated per-sub-block form; 2048 batches a slab) the rows of one id
+    expansion + absorbed-query + sparse_sdpa pass (a whole 2048-row slab of a 16 K chunk on 8 rows), i.e. how many
+    score sub-blocks are selected before their attention runs batched. ``ABLOCK <= QBLOCK`` is the per-sub-block
+    form (one attention call per score sub-block, the previous loop)."""
+    qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
+    ab = (
+        int(os.environ.get("GLM53_PREFILL_ABLOCK", "0")) or qb
+    )  # default = the validated per-sub-block form; 2048 batches a slab
+    return qb, ab
+
+
+def sparse_block_plan(r0: int, r1: int, qblock: int, ablock: int) -> list[tuple[int, int, list[tuple[int, int]]]]:
+    """The sparse rows [r0, r1) of a chunk (or slab) as attention blocks of up to ``ablock`` rows, each the union
+    of consecutive score sub-blocks of up to ``qblock`` rows: ``[(a0, a1, [(q0, q1), ...]), ...]``. ``ablock`` is
+    rounded down to a multiple of ``qblock`` (at least one sub-block), so a sub-block never straddles two attention
+    blocks; the ragged last block / sub-block takes what is left. Host ints only (``tests/test_prefill_select_batched.py``).
+    """
+    if r1 <= r0:
+        return []
+    qb = max(TILE, (qblock // TILE) * TILE)
+    ab = max(qb, (ablock // qb) * qb)
+    plan = []
+    for a0 in range(r0, r1, ab):
+        a1 = min(r1, a0 + ab)
+        plan.append((a0, a1, [(q0, min(a1, q0 + qb)) for q0 in range(a0, a1, qb)]))
+    return plan
 
 
 def sparse_decode_enabled() -> bool:
@@ -361,6 +401,10 @@ class TtLatentCache:
             scratch=self.scratch,
             dummy=self.dummy_blocks > 0,
         )
+        # the incremental whole-prefix ROW_MAJOR copy of the sparse prefill (``prefix_rows_rm``): one arena per
+        # layer for the prompt in flight, released by ``release_prefix`` / the next user's prefill
+        self._prefix: _PrefixArena | None = None
+        self.n_dsa_layers = sum(1 for t in cfg.layer_types if t != "linear_attention") if cfg.layer_types else 11
 
     def set_page_table(self, page_table: torch.Tensor):
         """Any [slots, blocks_per_seq] mapping (vLLM-style); every block id must be unique. ``page_table`` is
@@ -497,6 +541,124 @@ class TtLatentCache:
         rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(rows)
         return rm
+
+    # ------------------------------------------------- incremental whole-prefix copy (GLM53_PREFIX_INCREMENTAL)
+    @property
+    def prefix_arena_bytes(self) -> int:
+        """Bytes of one layer's arena: the slot's full length of ROW_MAJOR latent rows (``rows_per_user x L`` bf16)."""
+        return self.rows_per_user * self.latent_dim * 2
+
+    @property
+    def prefix_incremental(self) -> bool:
+        """Whether ``prefix_rows_rm`` keeps the copy across chunks (the ``GLM53_PREFIX_INCREMENTAL`` knob, read at
+        first use: 0 / 1 / auto = every DSA layer's arena fits the budget). The per-chunk form is a 1-slot scratch
+        layout's or any layout's exact equivalent: the arena holds what ``user_rows_rm`` would copy."""
+        if not hasattr(self, "_prefix_incremental"):
+            mode = os.environ.get("GLM53_PREFIX_INCREMENTAL", PREFIX_INCREMENTAL)
+            if mode == "auto":
+                budget = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDGET_MB", PREFIX_INCREMENTAL_BUDGET_MB))
+                self._prefix_incremental = self.n_dsa_layers * self.prefix_arena_bytes <= budget * 2**20
+            elif mode in ("0", "1"):
+                self._prefix_incremental = mode == "1"
+            else:
+                raise ValueError(f"GLM53_PREFIX_INCREMENTAL={mode!r}: expected 0, 1 or auto")
+        return self._prefix_incremental
+
+    def release_prefix(self, user: int | None = None):
+        """Drop the layer's prefix arena (the end of the prompt in flight; ``user`` given = only if it is that
+        user's). The next sparse chunk rebuilds it from the paged cache."""
+        a = self._prefix
+        if a is None or (user is not None and a.user != user):
+            return
+        self._prefix = None
+        if a.rows.is_allocated():
+            ttnn.deallocate(a.rows)
+
+    def prefix_sync(self, user: int, start: int, chunk_c: ttnn.Tensor | None):
+        """Keep the arena consistent with a cache write of ``user``'s rows from ``start`` (``fill``) that bypasses
+        ``prefix_rows_rm`` (``TtDSA.prefill_state``, the traced slot fill): append the chunk's latent ``chunk_c``
+        [1,1,T,L] TILE when it continues the arena's valid prefix, else forget the arena's contents (the next
+        sparse chunk rebuilds them). ``chunk_c=None`` (a device-slot fill: the user is not a host value) releases."""
+        a = self._prefix
+        if a is None:
+            return
+        if chunk_c is None or a.user != user or a.n_valid != start:
+            if chunk_c is None or a.user != user:
+                self.release_prefix()
+            else:
+                a.n_valid = 0  # the rows are stale below ``start``: rebuilt on the next use
+            return
+        self._append_rows(a, chunk_c, start)
+
+    def prefix_rows_rm(self, user: int, start: int, n_chunk: int, chunk_c: ttnn.Tensor | None = None):
+        """The sparse_sdpa kv of a prefill chunk of ``user`` at ``start`` (``n_chunk`` padded rows): the user's
+        ROW_MAJOR latent rows [0, start + n_chunk) as ``(kv, owned)``. ``owned`` = a fresh ``user_rows_rm`` copy the
+        caller deallocates (the default, ``GLM53_PREFIX_INCREMENTAL=0``). Incremental: the layer's persistent arena
+        ``[1,1,rows_per_user,L]`` (not to be deallocated), whose rows [0, start) were appended chunk by chunk and
+        which now receives rows [start, start + n_chunk) from the chunk's own latent ``chunk_c`` [1,1,n_chunk,L]
+        TILE (the tensor ``fill`` wrote into the pages: ``paged_fill_cache`` is a raw tile copy, so its untilize is
+        bit-identical to the pages' untilize) through ``ttnn.experimental.slice_write`` (a ROW_MAJOR region write in
+        place). A chunk that does not continue the arena (another user, a new prompt at 0, a seeded prefix the arena
+        did not see, ``chunk_c`` missing) rebuilds the whole prefix once from the paged cache (``user_rows_rm`` +
+        one region write), after which the chunks append again. The arena's rows past ``start + n_chunk`` are
+        stale and never indexed (every index row is causal, so sparse_sdpa reads below the prefix end only); the
+        kv it hands out is the slot's full length (sparse_sdpa's T is a runtime value).
+
+        With the heads2users layout the owner column appends the user's rows; a non-owner column appends the same
+        chunk latent into its own arena (SPMD: identical ops and shapes), which is as discardable as the slot rows
+        it copied before (its attention result is dropped by ``TtDSA._sparse_attention(owner=...)``)."""
+        n_rows = start + n_chunk
+        if not self.prefix_incremental:
+            return self.user_rows_rm(user, n_rows), True
+        a = self._prefix
+        if a is None or a.user != user:
+            self.release_prefix()
+            rows = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, self.rows_per_user, self.latent_dim]),
+                self.dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            a = self._prefix = _PrefixArena(user=user, rows=rows, n_valid=0)
+        if start == 0:
+            a.n_valid = 0  # a new prompt in this slot: the arena's old rows are dead
+        if a.n_valid == start and chunk_c is not None:
+            self._append_rows(a, chunk_c, start)
+        else:
+            whole = self.user_rows_rm(user, n_rows)  # the rebuild: one whole copy out of the paged cache ...
+            self._write_rows(a, whole, 0)  # ... placed at row 0 of the arena
+            ttnn.deallocate(whole)
+            a.n_valid = n_rows
+        return a.rows, False
+
+    def _append_rows(self, a: "_PrefixArena", chunk_c: ttnn.Tensor, start: int):
+        """Rows [start, start + T) of the arena := the chunk latent ``chunk_c`` [1,1,T,L] TILE (untilized here)."""
+        src = chunk_c if chunk_c.dtype == self.dtype else ttnn.typecast(chunk_c, self.dtype)
+        rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT)
+        if src is not chunk_c:
+            ttnn.deallocate(src)
+        self._write_rows(a, rm, start)
+        ttnn.deallocate(rm)
+        a.n_valid = start + chunk_c.shape[-2]
+
+    def _write_rows(self, a: "_PrefixArena", rm: ttnn.Tensor, row0: int):
+        """ROW_MAJOR rows ``rm`` [1,1,n,L] -> arena rows [row0, row0 + n) in place (``slice_write``: rank 4, bf16,
+        ROW_MAJOR, interleaved output, unit steps, the full last dim; end indices exclusive)."""
+        n = rm.shape[-2]
+        if row0 + n > self.rows_per_user:
+            raise ValueError(f"prefix arena: rows [{row0}, {row0 + n}) exceed the slot length {self.rows_per_user}")
+        ttnn.experimental.slice_write(rm, a.rows, [0, 0, row0, 0], [1, 1, row0 + n, self.latent_dim], [1, 1, 1, 1])
+
+
+@dataclass
+class _PrefixArena:
+    """One DSA layer's persistent ROW_MAJOR latent copy of the prompt in flight (``TtLatentCache.prefix_rows_rm``):
+    ``rows`` [1,1,rows_per_user,L] bf16 holds ``user``'s positions [0, n_valid) in page order."""
+
+    user: int
+    rows: ttnn.Tensor
+    n_valid: int
 
 
 class TtDSA(LightweightModule):
@@ -826,6 +988,7 @@ class TtDSA(LightweightModule):
             raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
         c = self._latent(x)
         cache.fill(c, user, start=start)
+        cache.prefix_sync(user, start, c)  # the incremental prefix copy follows the pages (or forgets them)
         ttnn.deallocate(c)
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
 
@@ -854,6 +1017,8 @@ class TtDSA(LightweightModule):
         ``slab`` (multi-row mesh): ``x`` is THIS mesh row's slab [1,1,T_pad/rows,4096] of the chunk (row r
         holds chunk rows [r*T_pad/rows, (r+1)*T_pad/rows)) and the result is the slab's output only
         (``_prefill_slab``: the sequence-parallel form, no gathered hidden, no reduce-scatter)."""
+        if slot is not None:
+            cache.release_prefix()  # the device-slot fill names its user on device: no arena can follow it
         if slab and self.mesh.rows > 1:
             return self._prefill_slab(x, cache, user, seq_len, start, slot=slot, ring_sel=ring_sel)
         T = x.shape[-2]
@@ -899,61 +1064,20 @@ class TtDSA(LightweightModule):
             if prefix is not None:
                 ttnn.deallocate(prefix)
             self._mark("dense_attention")
+        # sparse rows [split, T) (absolute positions from max(start, 2048)) in score sub-blocks of
+        # GLM53_PREFILL_QBLOCK rows and attention blocks of GLM53_PREFILL_ABLOCK rows (``_sparse_rows``); one
+        # whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every block of the chunk: rebuilt
+        # from the pages, or the layer's arena appended with this chunk's latent (GLM53_PREFIX_INCREMENTAL)
+        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
         ttnn.deallocate(c)
-        # sparse rows [split, T) (absolute positions from max(start, 2048)) in query sub-blocks of
-        # GLM53_PREFILL_QBLOCK rows (default 2048): the prefill scorer emits [rows, pools] bf16 scores (1 GB per
-        # 2048 rows at 1 M positions) that the top-k reads back, so a 32 K-token chunk cannot be scored in one
-        # call; one whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every sub-block of the chunk
-        idx = self.indexer
-        kv_rm = cache.user_rows_rm(user, start + T)
         self._mark("kv_copy")
-        qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
-        o_parts = []
-        for q0 in range(split, T, qb):
-            q1 = min(T, q0 + qb)
-            whole = (q0, q1) == (0, T)
-            x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
-            qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
-            # the scorer form of this sub-block (the custom scorer's query layout: the knob, or a multi-row
-            # superset that would start past the pooled-key allocation)
-            rows_form = idx.prefill_rows_form(
-                cache.index, query_start=start + q0, T=q1 - q0, num_pools_valid=end // idx.P
-            )
-            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
-            if not whole:
-                ttnn.deallocate(x_s)
-                ttnn.deallocate(qr_s)
-            self._mark("index_queries")
-            indices = idx.select(
-                q_i,
-                w_i,
-                cache.index,
-                cache.index.prefill_slot(user),
-                query_start=start + q0,
-                num_pools_valid=end // idx.P,
-                q_rows_form=rows_form,
-            )
-            ttnn.deallocate(q_i)
-            ttnn.deallocate(w_i)
-            if self.on_indices is not None:
-                self.on_indices(start + q0, indices)
-            q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
-            self._mark("absorb_q")
-            o_lat = self._sparse_attention(
-                q_lat, kv_rm, indices, owner=cache.owner_of(user)
-            )  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
-            o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
-            ttnn.deallocate(o_lat)
-            self._mark("sparse_out")
+        o_sparse = self._sparse_rows(x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=split, r1=T)
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
-        ttnn.deallocate(kv_rm)
-        if len(o_parts) == 1:
-            o_sparse = o_parts[0]
-        else:
-            o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,T-split,H*Dv]
-            for part in o_parts:
-                ttnn.deallocate(part)
+        if kv_owned:
+            ttnn.deallocate(kv_rm)
+        if seq_len % cache.block_size:  # a ragged chunk is the prompt's last: the arena has nothing more to serve
+            cache.release_prefix(user)
         if o_dense is None:  # the whole chunk lies in the sparse region
             y = self._o_proj(o_sparse)
             self._mark("out_proj")
@@ -1037,61 +1161,33 @@ class TtDSA(LightweightModule):
             y = self._o_proj(o_dense)
             self._mark("out_proj")
             return y
+        # sparse rows: all T_loc slab rows in score sub-blocks / attention blocks (``_sparse_rows``); on a mixed
+        # chunk the rows below 2048 are scored at the clamped position 2048 (a valid full prefix) and dropped by
+        # the select. The whole-prefix kv: rebuilt from the pages, or the layer's arena appended with the chunk's
+        # gathered latent ``c`` (every row holds the whole chunk; GLM53_PREFIX_INCREMENTAL)
+        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
         ttnn.deallocate(c)
-        # sparse rows: all T_loc slab rows in query sub-blocks (see prefill_forward); on a mixed chunk the rows
-        # below 2048 are scored at the clamped position 2048 (a valid full prefix) and dropped by the select
-        idx = self.indexer
-        # the scorer form: the shared ``indexer_score_dsa`` (its per-row offset r*Sq made a superset of every slab's
-        # true start, the exact per-row bounded top-k; ``select(row_starts=...)``) or the custom scorer's query
-        # layout (GLM53_PREFILL_SCORER=custom: per-row bounds inside the scorer)
-        rows_form = idx.prefill_scorer_custom
-        kv_rm = cache.user_rows_rm(user, start + T)
         self._mark("kv_copy")
-        qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
-        o_parts = []
-        for q0 in range(0, T_loc, qb):
-            q1 = min(T_loc, q0 + qb)
-            whole = (q0, q1) == (0, T_loc)
-            x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
-            qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
-            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
-            if not whole:
-                ttnn.deallocate(x_s)
-                ttnn.deallocate(qr_s)
-            self._mark("index_queries")
-            row_starts = tuple(start + r * T_loc + q0 for r in range(rows))
-            indices = idx.select(
-                q_i,
-                w_i,
-                cache.index,
-                cache.index.prefill_slot(user),
-                query_start=start + q0,
-                num_pools_valid=end // idx.P,
-                q_rows_form=rows_form,
-                row_starts=row_starts,
-                pos_floor=self.sparse_row_start,
-            )
-            ttnn.deallocate(q_i)
-            ttnn.deallocate(w_i)
-            if self.on_indices is not None:
-                self.on_indices(row_starts, indices)
-            q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
-            self._mark("absorb_q")
-            o_lat = self._sparse_attention(
-                q_lat, kv_rm, indices, owner=cache.owner_of(user)
-            )  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
-            o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
-            ttnn.deallocate(o_lat)
-            self._mark("sparse_out")
+        o_sparse = self._sparse_rows(
+            x,
+            q_resid,
+            q,
+            cache,
+            user,
+            kv_rm,
+            start=start,
+            end=end,
+            r0=0,
+            r1=T_loc,
+            row_starts_of=lambda q0: tuple(start + r * T_loc + q0 for r in range(rows)),
+            pos_floor=self.sparse_row_start,
+        )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
-        ttnn.deallocate(kv_rm)
-        if len(o_parts) == 1:
-            o_sparse = o_parts[0]
-        else:
-            o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,T_loc,H*Dv]
-            for part in o_parts:
-                ttnn.deallocate(part)
+        if kv_owned:
+            ttnn.deallocate(kv_rm)
+        if seq_len % cache.block_size:  # a ragged chunk is the prompt's last: the arena has nothing more to serve
+            cache.release_prefix(user)
         if o_dense is None:  # the whole chunk lies in the sparse region
             y = self._o_proj(o_sparse)
             self._mark("out_proj")
@@ -1118,6 +1214,131 @@ class TtDSA(LightweightModule):
         prefix = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, start, self.L])
         ttnn.deallocate(g)
         return prefix
+
+    def _sparse_rows(
+        self,
+        x: ttnn.Tensor,
+        q_resid: ttnn.Tensor,
+        q: ttnn.Tensor,
+        cache: TtLatentCache,
+        user: int,
+        kv_rm: ttnn.Tensor,
+        *,
+        start: int,
+        end: int,
+        r0: int,
+        r1: int,
+        row_starts_of=None,
+        pos_floor: int = 0,
+    ) -> ttnn.Tensor:
+        """The sparse-path attention output [1,1,r1-r0,H*Dv] of chunk (or slab) rows [r0, r1) of ``x`` /
+        ``q_resid`` / ``q`` (all [1,1,T,*] of the chunk; ``x`` is the normalized input, ``q`` the per-head queries)
+        over the whole-prefix ROW_MAJOR latent copy ``kv_rm``, in the two block sizes of ``prefill_blocks``:
+
+        * the index queries ``q_i`` / ``w_i`` of all the rows come from ONE pair of stems (``prefill_linear``'s
+          fixed K blocking makes a row's value independent of the call's row count, the same invariant the
+          chunked-prefill equality rests on), then every score sub-block of ``GLM53_PREFILL_QBLOCK`` rows slices
+          them and runs the scorer + the bounded top-k only (``TtDSAIndexer.select_pools``): the [rows, pools] bf16
+          score block is the memory bound of the loop and lives inside that call;
+        * every attention block of ``GLM53_PREFILL_ABLOCK`` rows (= several sub-blocks) then expands the
+          concatenated pool ids once (``expand_pools``: 6 small launches per block instead of per sub-block, the
+          tail ids / sentinels of the block's rows), absorbs its queries once and runs one ``_sparse_attention``
+          (one column exchange each way, one sparse_sdpa) and one output projection of the latent: the attention
+          work is linear in the rows, so the batching removes launches and fixed costs only, not FLOPs.
+
+        ``row_starts_of(q0)`` (the slab-local form): the per-mesh-row query starts of chunk row ``q0``, handed to
+        the selection and the ``on_indices`` hook (``(row_starts, indices)`` per attention block; the single-row
+        form hands ``(start + a0, indices)``); ``pos_floor`` clamps the dense-position rows of a mixed chunk. The
+        custom scorer's query layout, when a sub-block needs it (``prefill_rows_form`` / GLM53_PREFILL_SCORER=custom),
+        is a transpose of the sub-block's slice (the same values).
+
+        Memory: the attention block's transient peak is ~4 x rows x H_total x L bf16 (the gathered 64-head queries
+        in TILE and ROW_MAJOR, the sparse_sdpa output in both: 274 MB at 2048 rows), against the score sub-block's
+        [rows, pools] block in TILE and ROW_MAJOR (268 MB at 256 rows x 262 K pools, 536 MB at 512): at the 32-user
+        1 M point (QBLOCK 256) the default ABLOCK 2048 adds ~6 MB to the chunk's peak; ABLOCK 1024 halves it."""
+        idx = self.indexer
+        qb, ab = prefill_blocks()
+        n = r1 - r0
+        T = x.shape[-2]
+        whole = (r0, r1) == (0, T)
+        x_s = x if whole else ttnn.slice(x, [0, 0, r0, 0], [1, 1, r1, x.shape[-1]])
+        qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, r0, 0], [1, 1, r1, q_resid.shape[-1]])
+        q_i, w_i = idx.queries_and_weights(x_s, qr_s)  # [1,Hi,n,D], [1,1,n,Hi]: once for every sub-block
+        if not whole:
+            ttnn.deallocate(x_s)
+            ttnn.deallocate(qr_s)
+        self._mark("index_queries")
+        slot = cache.index.prefill_slot(user)
+        n_pools_valid = end // idx.P
+        o_parts = []
+        for a0, a1, subs in sparse_block_plan(r0, r1, qb, ab):
+            pools = []
+            for q0, q1 in subs:
+                one = (q0, q1) == (r0, r1)
+                q_b = q_i if one else ttnn.slice(q_i, [0, 0, q0 - r0, 0], [1, idx.Hi, q1 - r0, idx.D])
+                w_b = w_i if one else ttnn.slice(w_i, [0, 0, q0 - r0, 0], [1, 1, q1 - r0, idx.Hi])
+                row_starts = None if row_starts_of is None else row_starts_of(q0)
+                if row_starts is None:
+                    # the scorer form of this sub-block: the custom scorer's query layout (the knob, or a multi-row
+                    # superset that would start past the pooled-key allocation)
+                    rows_form = idx.prefill_rows_form(
+                        cache.index, query_start=start + q0, T=q1 - q0, num_pools_valid=n_pools_valid
+                    )
+                else:
+                    # the shared ``indexer_score_dsa`` with the exact per-row bounded top-k (``row_starts``), or the
+                    # custom scorer's layout under GLM53_PREFILL_SCORER=custom (per-row bounds inside the scorer)
+                    rows_form = idx.prefill_scorer_custom
+                if rows_form:
+                    q_r = ttnn.transpose(q_b, 1, 2)  # [1,T,Hi,D]: query t's heads as the rows of its tile row
+                    if q_b is not q_i:
+                        ttnn.deallocate(q_b)
+                    q_b = q_r
+                pools.append(
+                    idx.select_pools(
+                        q_b,
+                        w_b,
+                        cache.index,
+                        slot,
+                        query_start=start + q0,
+                        num_pools_valid=n_pools_valid,
+                        q_rows_form=rows_form,
+                        row_starts=row_starts,
+                        pos_floor=pos_floor,
+                    )
+                )  # [1,1,q1-q0,512] ranked pool ids
+                if q_b is not q_i:
+                    ttnn.deallocate(q_b)
+                if w_b is not w_i:
+                    ttnn.deallocate(w_b)
+            if len(pools) == 1:
+                top_p = pools[0]
+            else:
+                top_p = ttnn.concat(pools, dim=-2)  # [1,1,a1-a0,512]: the block's rows in order
+                for p in pools:
+                    ttnn.deallocate(p)
+            row_starts = None if row_starts_of is None else row_starts_of(a0)
+            indices = idx.expand_pools(top_p, query_start=start + a0, row_starts=row_starts, pos_floor=pos_floor)
+            if self.on_indices is not None:
+                self.on_indices(start + a0 if row_starts is None else row_starts, indices)
+            q_a = q if (a0, a1) == (0, T) else ttnn.slice(q, [0, 0, a0, 0], [1, 1, a1, self.H * self.Dq])
+            q_lat = self._absorb_q(q_a)
+            if q_a is not q:
+                ttnn.deallocate(q_a)
+            self._mark("absorb_q")
+            o_lat = self._sparse_attention(
+                q_lat, kv_rm, indices, owner=cache.owner_of(user)
+            )  # [1,H,a1-a0,L] TILE (consumes q_lat, indices)
+            o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,a1-a0,H*Dv]
+            ttnn.deallocate(o_lat)
+            self._mark("sparse_out")
+        ttnn.deallocate(q_i)
+        ttnn.deallocate(w_i)
+        if len(o_parts) == 1:
+            return o_parts[0]
+        o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,n,H*Dv]
+        for part in o_parts:
+            ttnn.deallocate(part)
+        return o_sparse
 
     def _sparse_attention(
         self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor, *, owner: int | None = None

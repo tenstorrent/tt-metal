@@ -560,9 +560,94 @@ class TtDSAIndexer(LightweightModule):
         tail ids are then built per row and uploaded row-sharded (replicated over the columns), so every
         row selects for its own slab with one program. ``pos_floor`` clamps the positions of rows that are
         attended by the dense path anyway (a mixed chunk's superset rows): they then select a valid full
-        pool prefix instead of a short one, and their result is discarded by the caller."""
+        pool prefix instead of a short one, and their result is discarded by the caller.
+
+        The prefill loop of ``TtDSA`` uses the two halves separately (``select_pools`` per score sub-block,
+        ``expand_pools`` once per attention block); this composition is the decode / single-call form."""
         T = q.shape[1] if q_rows_form else q.shape[-2]
         positions = self._row_positions(T, query_start, row_starts, pos_floor)  # host [R, T] int64 (R = rows or 1)
+        top_p = self._rank_pools(
+            q,
+            w,
+            cache,
+            user,
+            T=T,
+            positions=positions,
+            query_start=query_start,
+            num_pools_valid=num_pools_valid,
+            row=row,
+            q_rows_form=q_rows_form,
+            row_starts=row_starts,
+        )
+        tail = self._tail_ids(T, query_start, positions=positions)  # [1,1,T,P-1] uint32 (cached per geometry)
+        if row is not None:
+            tail = ttnn.slice(tail, [0, 0, row, 0], [1, 1, row + 1, self.P - 1])
+            T = 1
+        return self._expand_pools(top_p, tail, T, free_tail=row is not None)
+
+    def select_pools(
+        self,
+        q: ttnn.Tensor,
+        w: ttnn.Tensor,
+        cache: TtIndexCache,
+        user: int,
+        *,
+        query_start: int,
+        num_pools_valid: int,
+        q_rows_form: bool = False,
+        row_starts: tuple[int, ...] | None = None,
+        pos_floor: int = 0,
+    ) -> ttnn.Tensor:
+        """The score + top-k half of ``select`` for a prefill sub-block: the ranked pool ids [1,1,T,512] uint32
+        ROW_MAJOR of the T queries (descending score, each row over its own causal prefix), BEFORE the token
+        expansion. The expansion (``expand_pools``) is linear in the rows and needs no score block, so the caller
+        batches it over several sub-blocks (``TtDSA._sparse_rows``); the score block ([T, pools] bf16, 268 MB per
+        512 rows at 1 M positions) lives only inside this call. Same arguments as ``select`` (no ``row``)."""
+        T = q.shape[1] if q_rows_form else q.shape[-2]
+        positions = self._row_positions(T, query_start, row_starts, pos_floor)
+        return self._rank_pools(
+            q,
+            w,
+            cache,
+            user,
+            T=T,
+            positions=positions,
+            query_start=query_start,
+            num_pools_valid=num_pools_valid,
+            q_rows_form=q_rows_form,
+            row_starts=row_starts,
+        )
+
+    def expand_pools(
+        self, top_p: ttnn.Tensor, *, query_start: int, row_starts: tuple[int, ...] | None = None, pos_floor: int = 0
+    ) -> ttnn.Tensor:
+        """The expansion half of ``select``: ranked pool ids [1,1,T,512] uint32 (consumed; the concatenation of
+        consecutive ``select_pools`` sub-blocks starting at ``query_start``) -> the index rows [1,1,T,W] uint32
+        ROW_MAJOR (4 token ids per pool, the tail ids of each query's incomplete pool, sentinel padding to a
+        multiple of 128). ``row_starts`` / ``pos_floor`` as in ``select`` for the block's first row: the tail ids
+        of row r of the mesh are built from ``max(row_starts[r] + s, pos_floor)``."""
+        T = top_p.shape[-2]
+        positions = self._row_positions(T, query_start, row_starts, pos_floor)
+        tail = self._tail_ids(T, query_start, positions=positions)
+        return self._expand_pools(top_p, tail, T, free_tail=False)
+
+    def _rank_pools(
+        self,
+        q: ttnn.Tensor,
+        w: ttnn.Tensor,
+        cache: TtIndexCache,
+        user: int,
+        *,
+        T: int,
+        positions: torch.Tensor,
+        query_start: int,
+        num_pools_valid: int,
+        row: int | None = None,
+        q_rows_form: bool = False,
+        row_starts: tuple[int, ...] | None = None,
+    ) -> ttnn.Tensor:
+        """Scores + top-512 pools of the T queries: [1,1,T,512] uint32 ROW_MAJOR ranked pool ids ([1,1,1,512] with
+        ``row``). The score block is released here."""
         # Multi-row meshes with the shared scorer: the op treats the mesh rows as sequence-parallel ranks
         # (``seq_shard_axes=[0]``: row r scores with chunk start + r*Sq; the queries are REPLICATED over the
         # tensor-parallel columns). The v1 prefill replicates the prompt over the rows too, so row r >= 1 scores
@@ -587,7 +672,6 @@ class TtDSAIndexer(LightweightModule):
             bounded = bool(extra)
             kv_len = self._kv_len(cache, num_pools_valid, extra * T)
         if q_rows_form:
-            scores = scores_valid = None
             scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")
         else:
@@ -608,23 +692,24 @@ class TtDSAIndexer(LightweightModule):
             )  # [1,1,T,pools_per_user] bf16, -inf where not visible
             self._mark("index_score")
             # The op scores the allocated width (pools_per_user, the KV pool size: 262 176 at 1 M positions); only
-            # the first kv_len columns can be selected, so the untilize + expansion + top-k work on that prefix
-            # and scale with the user's context rather than the pool size.
-            scores_valid = scores
+            # the first kv_len columns can be selected, so the expansion + top-k work on that prefix and scale with
+            # the user's context rather than the pool size. The crop and the layout change are ONE pass
+            # (``untilize_with_unpadding``, end indices inclusive): the former ``ttnn.slice`` + ``to_layout`` pair
+            # moved the [T, kv_len] block twice (two 268 MB copies per 512-row sub-block at 1 M); pure data
+            # movement either way, bit-identical.
             if kv_len < scores.shape[-1]:
-                scores_valid = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
-            scores_rm = ttnn.to_layout(scores_valid, ttnn.ROW_MAJOR_LAYOUT)
-        tail = self._tail_ids(T, query_start, positions=positions)  # [1,1,T,P-1] uint32 (cached per geometry)
+                scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
+            else:
+                scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(scores)
         row_slice = None
         if row is not None:
             row_slice = ttnn.slice(scores_rm, [0, 0, row, 0], [1, 1, row + 1, scores_rm.shape[-1]])
-            tail = ttnn.slice(tail, [0, 0, row, 0], [1, 1, row + 1, self.P - 1])
-            T = 1
         self._mark("score_untilize")
         # Every query handed here must see >= index_topk pooled tokens (prefill rows >= 2048, decode positions
         # > 2050): then the top-k block is a full valid prefix and sparse_sdpa, which reads a row up to its
         # FIRST sentinel, sees the appended tail ids. Shorter contexts belong to the dense path (TtDSA).
-        k_eff, k_pools = self.cfg.index_topk, self.cfg.index_select_pools
+        k_pools = self.cfg.index_select_pools
         assert kv_len >= k_pools, f"sparse selection needs >= {k_pools} scored pools, got {kv_len}"
         # top-512 POOLS over the pool scores (a 4x-expanded token-level top-2048 selects the same whole
         # pools, at 4x the top-k width plus a single-core repeat_interleave of the row: 10.6 ms vs 1.2 ms
@@ -636,6 +721,14 @@ class TtDSAIndexer(LightweightModule):
                 scores_rm if row_slice is None else row_slice, k=k_pools, valid_length=kv_len
             )  # [1,1,T,512] uint32 pool ids (never a sentinel: >= 512 visible pools is the caller's contract)
         self._mark("topk")
+        for t in (scores_rm, row_slice):
+            if t is not None and t.is_allocated():
+                ttnn.deallocate(t)
+        return top_p
+
+    def _expand_pools(self, top_p: ttnn.Tensor, tail: ttnn.Tensor, T: int, *, free_tail: bool) -> ttnn.Tensor:
+        """Ranked pool ids [1,1,T,512] (consumed) + tail ids [1,1,T,P-1] -> index rows [1,1,T,W] uint32."""
+        k_eff = self.cfg.index_topk
         # pool id p -> token ids 4p + j: exact in fp32 (ids < 2^24), [1,1,T,2048] uint32
         top_f = ttnn.typecast(top_p, ttnn.float32)
         top_rep = ttnn.repeat_interleave(top_f, self.P, dim=-1)
@@ -651,9 +744,8 @@ class TtDSAIndexer(LightweightModule):
             parts.append(self._sentinels(T, pad))
         idx = ttnn.concat(parts, dim=-1)
         ttnn.deallocate(top)
-        for t in (scores, scores_valid, scores_rm, row_slice) + ((tail,) if row is not None else ()):
-            if t is not None and t.is_allocated():
-                ttnn.deallocate(t)
+        if free_tail:
+            ttnn.deallocate(tail)
         self._mark("ids_concat")
         return idx
 
@@ -717,13 +809,25 @@ class TtDSAIndexer(LightweightModule):
         if self._topk_rows is None:
             self._topk_rows = TopkRows(self.device, k=self.cfg.index_select_pools)
         k = self.cfg.index_select_pools
-        R = positions.shape[0]
-        bounds = ((positions + 1) // self.P).clamp(k, kv_len).to(torch.int32).reshape(R * T, 1)
-        valid = self._const(bounds, ttnn.uint32, per_row=R > 1)  # [T, 1] per chip
+        valid = self._bounds_const(
+            "topk_bounds", positions, T, lambda p: ((p + 1) // self.P).clamp(k, kv_len), kv_len
+        )  # [T, 1] per chip
         out = ttnn.zeros((T, 1, 1, k), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         self._topk_rows(ttnn.reshape(scores_rm, [T, 1, 1, kv_len]), valid, out)
-        ttnn.deallocate(valid)
         return ttnn.reshape(out, [1, 1, T, k])
+
+    def _bounds_const(self, name: str, positions: torch.Tensor, T: int, bound, limit: int) -> ttnn.Tensor:
+        """The per-row bound tensor [R*T, 1] uint32 (row-sharded over the mesh rows when R > 1) of
+        ``bound(positions)``, cached per geometry like ``_tail_ids``: the positions of a sub-block are an
+        arithmetic sequence per row clamped at the floor, so (T, first, last, R, limit) identifies them, and a
+        prompt's chunks revisit the same keys at every layer. Replaces a host->device upload per sub-block
+        per layer (a blocking write on the dispatch path) with a dictionary lookup."""
+        R = positions.shape[0]
+        key = (name, T, tuple(positions[:, 0].tolist()), tuple(positions[:, -1].tolist()), R, limit)
+        if key not in self._const_cache:
+            bounds = bound(positions).to(torch.int32).reshape(R * T, 1)
+            self._const_cache[key] = self._const(bounds, ttnn.uint32, per_row=R > 1)
+        return self._const_cache[key]
 
     def _score_prefill_rows(
         self, q: ttnn.Tensor, w: ttnn.Tensor, cache: TtIndexCache, user: int, *, positions: torch.Tensor, kv_len: int
@@ -741,12 +845,11 @@ class TtDSAIndexer(LightweightModule):
             self._prefill_scorer = IndexScoreDecode(self.device)
         unit = TILE * self._prefill_scorer.KC
         cols = min(W, -(-kv_len // unit) * unit)
-        R = positions.shape[0]
-        bounds = torch.clamp((positions + 1) // self.P, max=cols).to(torch.int32).reshape(R * T, 1)
-        valid_rows = self._const(bounds, ttnn.uint32, per_row=R > 1)  # [T, 1] per chip
+        valid_rows = self._bounds_const(
+            "score_bounds", positions, T, lambda p: torch.clamp((p + 1) // self.P, max=cols), cols
+        )  # [T, 1] per chip
         out = ttnn.zeros((T, 1, 1, cols), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         self._prefill_scorer(q, w, cache.pools_batched(), out, valid_rows=valid_rows, slot=user, cols=cols)
-        ttnn.deallocate(valid_rows)
         return ttnn.reshape(out, [1, 1, T, cols])
 
     # ------------------------------------------------- traced multi-user decode

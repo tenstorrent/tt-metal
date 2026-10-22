@@ -69,6 +69,21 @@ MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
 # GLM53_MHC_PREFILL_IMPL=wrap (with GLM53_MHC_IMPL=fast): the composite wrap serves the prefill rows, the fast path
 # the decode tile (A/B of the prefill numerics; see TtMHCSplit)
 MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "wrap" if MHC_IMPL == "fast" else "")
+# A3 (decode ledger): the sublayer's input RMSNorm in the exact decode pre-block. "sharded" = typecast to bf16,
+# interleaved_to_sharded into the width-sharded L1 layout over the 8x4 worker grid, the sharded multicore
+# rms_norm (program config pc_norm), sharded_to_interleaved back (4 ops, 32 cores); "sharded_cast" = the same
+# with the fp32 -> bf16 cast folded into the reshard (3 ops; A/B of the reshard kernel's rounding); "single" =
+# the composite's typecast + interleaved rms_norm (2 ops, ONE core at T <= 32: 46 us per wrap, the pre-A3 path)
+MHC_NORM = os.environ.get("GLM53_MHC_NORM", "single")  # sharded = the 32-core norm (A3), default after its device A/B
+assert MHC_NORM in ("sharded", "sharded_cast", "single"), MHC_NORM
+# A4 (decode ledger): the parametrization (pre / post / Sinkhorn comb). "kernel" = the fused mhc_split_sinkhorn op
+# (one program per token tile: all T <= 32 users' 4x4 matrices sit in ONE tile and every normalisation is one
+# matmul + recip + mul on that tile, 52 us on one core); "batched" = that tile sequence as composite ttnn ops
+# (parametrize_graph: each op sees all users at once; 131 ops at iters=20). The composite cannot beat the
+# single-program kernel at one tile of data (op count is the cost there), so it is the A/B / reference path,
+# not the default; the lever on the 52 us is the kernel's per-tile sequence (ledger A4, a kernel change).
+MHC_SINKHORN = os.environ.get("GLM53_MHC_SINKHORN", "kernel")
+assert MHC_SINKHORN in ("kernel", "batched"), MHC_SINKHORN
 
 
 @dataclass(frozen=True)
@@ -173,6 +188,181 @@ def _view_tile_width(t: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(t, ttnn.Shape([1, 1, Tp, W]), ttnn.Shape([1, 1, Tp, W]))
 
 
+# ----------------------------------------------------------------------------------------------
+# The parametrization (pre / post / Sinkhorn comb) as composite ops: GLM53_MHC_SINKHORN=batched
+# ----------------------------------------------------------------------------------------------
+# build_consts' tile order (the host <-> kernel contract of mhc_split_sinkhorn)
+CONST_TILES = ("sel_pre", "sel_post", "sel_comb", "base_pre", "base_post", "base_comb", "rb", "cb")
+# the kernel caps the comb logits at 80 before exp (no inf/inf; a no-op for any realistic logit)
+EXP_CAP = 80.0
+
+
+def const_tile_specs(consts_t: torch.Tensor) -> dict[str, tuple[torch.Tensor, tuple[int, ...]]]:
+    """The 8 ``build_consts`` tiles ``[8, 32, 32]`` as the batched graph's operands, by ``CONST_TILES`` name:
+    the selection / RB / CB tiles whole ``[1,1,32,32]``; the base tiles (one bias row replicated down the tile,
+    the kernel's tile + tile add) as the single row ``[1,1,1,32]`` the composite adds with a row broadcast, so
+    the graph runs at any token count."""
+    out = {}
+    for i, name in enumerate(CONST_TILES):
+        t = consts_t[i]
+        out[name] = (t[:1], (1, 1, 1, W)) if name.startswith("base_") else (t, (1, 1, W, W))
+    return out
+
+
+def parametrize_graph(ops, mixes, k: dict, iters: int, eps: float):
+    """The ``mhc_split_sinkhorn`` kernel's tile sequence as a backend-independent graph over a whole token
+    tile: every op sees all ``T <= 32`` users at once, the Sinkhorn of their ``n x n`` matrices being the
+    matmul form ``m / (m @ K + eps)`` on the packed ``[T, n*n]`` rows (``K`` = RB row-sum / CB col-sum
+    broadcast, identity on the pad columns). One column normalisation of ``softmax + eps``, then
+    ``iters - 1`` (row, column) pairs, ``eps`` in every denominator but the softmax's; ``pre = sigmoid(.) +
+    eps``, ``post = 2 sigmoid(.)``.
+
+    ``ops``: ``_TtnnOps`` (the device path) or ``_TorchOps`` (``parametrize_torch``: the host reference of
+    tests/test_mhc_host_reference.py runs the very op order the device runs). ``mixes`` ``[.., T, 32]``
+    (columns past mix_hc zero), ``k`` the 8 constant tiles of ``build_consts`` by ``CONST_TILES`` name.
+    Returns (pre, post, comb) as full ``[.., T, 32]`` tiles (the first n / n / n*n columns are the
+    coefficients). Op count at iters=20: 125 (comb) + 3 (pre) + 3 (post) = 131."""
+
+    def normalize(m, kt, use_eps):
+        s = ops.mm(m, kt)  # every entry's row / column sum, broadcast in place
+        r = ops.recip_eps(s, eps) if use_eps else ops.recip(s)
+        ops.free(s)
+        out = ops.mul(m, r)
+        ops.free(m)
+        ops.free(r)
+        return out
+
+    z = ops.mm(mixes, k["sel_comb"])  # a_res * raw_comb, left-aligned
+    lg = ops.add(z, k["base_comb"])
+    ops.free(z)
+    m = ops.exp_capped(lg, EXP_CAP)  # in place
+    m = normalize(m, k["rb"], False)  # row softmax (no eps)
+    m2 = ops.add_scalar(m, eps)
+    ops.free(m)
+    m = normalize(m2, k["cb"], True)  # the first column normalisation
+    for _ in range(iters - 1):
+        m = normalize(m, k["rb"], True)
+        m = normalize(m, k["cb"], True)
+    comb = m
+    z = ops.mm(mixes, k["sel_pre"])
+    s = ops.add_sigmoid(z, k["base_pre"])
+    ops.free(z)
+    pre = ops.add_scalar(s, eps)
+    ops.free(s)
+    z = ops.mm(mixes, k["sel_post"])
+    s = ops.add_sigmoid(z, k["base_post"])
+    ops.free(z)
+    post = ops.mul_scalar(s, 2.0)
+    ops.free(s)
+    return pre, post, comb
+
+
+class _TorchOps:
+    """torch backend of ``parametrize_graph`` (host reference; ``count`` = device ops the graph would issue)."""
+
+    def __init__(self):
+        self.count = 0
+
+    def _n(self, t):
+        self.count += 1
+        return t
+
+    def mm(self, a, b):
+        return self._n(a @ b)
+
+    def add(self, a, b):
+        return self._n(a + b)
+
+    def add_scalar(self, a, c):
+        return self._n(a + c)
+
+    def mul(self, a, b):
+        return self._n(a * b)
+
+    def mul_scalar(self, a, c):
+        return self._n(a * c)
+
+    def recip(self, s):
+        return self._n(torch.reciprocal(s))
+
+    def recip_eps(self, s, eps):
+        return self._n(torch.reciprocal(s + eps))
+
+    def exp_capped(self, x, cap):
+        self.count += 2  # clamp + exp
+        return torch.exp(torch.clamp(x, max=cap))
+
+    def add_sigmoid(self, z, b):
+        return self._n(torch.sigmoid(z + b))
+
+    def free(self, t):
+        pass
+
+
+class _TtnnOps:
+    """ttnn backend: fp32 HiFi4 ops on ``[1,1,Tp,32]`` tiles (the kernel's FPU / SFPU sequences: HiFi4 matmul,
+    SFPU recip / exp / sigmoid), temporaries deallocated as the graph consumes them (trace-safe: no host ops,
+    every tensor transient within the step)."""
+
+    def __init__(self, ckc):
+        self.ckc = ckc
+        self.count = 0
+
+    def mm(self, a, b):
+        self.count += 1
+        return ttnn.matmul(a, b, compute_kernel_config=self.ckc)
+
+    def add(self, a, b):
+        self.count += 1
+        return ttnn.add(a, b)
+
+    def add_scalar(self, a, c):
+        self.count += 1
+        return ttnn.add(a, c)
+
+    def mul(self, a, b):
+        self.count += 1
+        return ttnn.multiply(a, b)
+
+    def mul_scalar(self, a, c):
+        self.count += 1
+        return ttnn.multiply(a, c)
+
+    def recip(self, s):
+        self.count += 1
+        return ttnn.reciprocal(s)
+
+    def recip_eps(self, s, eps):
+        self.count += 1  # add + recip in DST, like the kernel's OP_RECIP_EPS
+        return ttnn.add(s, eps, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RECIP)])
+
+    def exp_capped(self, x, cap):
+        self.count += 2
+        ttnn.clamp(x, min=None, max=cap, output_tensor=x)
+        return ttnn.exp(x, output_tensor=x)
+
+    def add_sigmoid(self, z, b):
+        self.count += 1
+        return ttnn.add(z, b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)])
+
+    def free(self, t):
+        ttnn.deallocate(t)
+
+
+def parametrize_torch(mixes: torch.Tensor, consts: torch.Tensor, iters: int, eps: float):
+    """Host mirror of the batched device path: ``mixes [T, w]`` (``w <= 32``, zero-extended to the tile width),
+    ``consts [8, 32, 32]`` from ``build_consts`` -> (pre, post, comb) ``[T, 32]`` tiles in ``mixes``' dtype and the
+    op count the device graph issues."""
+    T, w = mixes.shape
+    assert w <= W, mixes.shape
+    mx = torch.zeros(T, W, dtype=mixes.dtype)
+    mx[:, :w] = mixes
+    k = {name: t.reshape(shape[-2], shape[-1]).to(mixes.dtype) for name, (t, shape) in const_tile_specs(consts).items()}
+    ops = _TorchOps()
+    pre, post, comb = parametrize_graph(ops, mx, k, iters, eps)
+    return pre, post, comb, ops.count
+
+
 class TtMHCFast(LightweightModule):
     """mHC-wrapped sublayer with the ``TtMHCWrap`` semantics (fp32 tensors, HiFi4, the fused Sinkhorn
     kernel) and the composite stages rebuilt so that a decode step issues only compute ops (matmul,
@@ -210,6 +400,16 @@ class TtMHCFast(LightweightModule):
     pad-token rows) and ``y``'s pad rows are zeroed by the ``where`` guard; the output's pad rows are
     finite garbage, not zeros.
 
+    Exact decode pre-block (``MHC_DECODE_EXACT`` with ``post_kernel == 2``, the default; 18 ops per wrap with
+    the fused norm, 16 before A3): the projection as above but with exact fp32 ``ttnn.sum`` chains for the two
+    K-split reductions (7 device ops for both), ``mhc_split_sinkhorn`` (one program: pre / post / comb for every
+    user of the token tile), ``h_mix`` (the post-mix kernel's pre-mix mode, exact fp32 ``h = sum_i pre_i x_i``),
+    then the norm as ``_norm_decode``: ``typecast(h, bf16)``, ``interleaved_to_sharded`` (width-sharded over the
+    8x4 grid, 4 tiles per core), ``rms_norm`` (sharded multicore program config), ``sharded_to_interleaved``
+    (``GLM53_MHC_NORM``; ``single`` = the composite's interleaved ``rms_norm`` on one core, the pre-A3 path).
+    ``GLM53_MHC_SINKHORN=batched`` runs the Sinkhorn program's tile sequence as 131 composite ops instead
+    (``parametrize_graph``; A/B only).
+
     Prefill (``T > 32``): the stream-major form costs one tile-block transpose in and one out per wrap
     (``[T/32, n, 32, C] <-> [n, T/32, 32, C]``), the projection splits over the ``n`` streams, ``h`` is a
     broadcast multiply + ``fast_reduce_nc``, the residual update the exact fp32 broadcast ``addcmul``
@@ -230,6 +430,8 @@ class TtMHCFast(LightweightModule):
         dtype=ttnn.float32,
         exact: int | None = None,
         post_kernel: bool | None = None,
+        norm_mode: str | None = None,
+        sinkhorn_mode: str | None = None,
     ):
         assert dtype == ttnn.float32, f"TtMHCFast is fp32-only (fused op requires FLOAT32), got {dtype}"
         self.device = device
@@ -238,6 +440,11 @@ class TtMHCFast(LightweightModule):
         assert self.exact in (0, 2, 3), self.exact
         self.post_kernel = MHC_POST_KERNEL if post_kernel is None else int(post_kernel)  # 0 | 1 | 2 (version)
         assert self.post_kernel in (0, 1, 2), self.post_kernel
+        # A3 / A4 knobs (module defaults from GLM53_MHC_NORM / GLM53_MHC_SINKHORN; constructor overrides for A/Bs)
+        self.norm_mode = MHC_NORM if norm_mode is None else str(norm_mode)
+        assert self.norm_mode in ("sharded", "sharded_cast", "single"), self.norm_mode
+        self.sinkhorn_mode = MHC_SINKHORN if sinkhorn_mode is None else str(sinkhorn_mode)
+        assert self.sinkhorn_mode in ("kernel", "batched"), self.sinkhorn_mode
         self.n = int(cfg.n)
         # the fused post-block as a model-local generic op (custom_ops/mhc_post_mix); output allocated per call
         self.post_mix = MhcPostMix(self.n, version=self.post_kernel) if self.post_kernel else None
@@ -270,7 +477,14 @@ class TtMHCFast(LightweightModule):
         # bit-identical to TtMHCWrap's (accuracy gate: the prefill path must match the composite)
         self.fn_T = _upload(device, fn.float().t(), (1, 1, nC, mix_hc), dtype)
         self.eps_nc = self.norm_eps * nC
-        self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
+        consts_t = build_consts(cfg, scale, base)
+        self.consts = _upload(device, consts_t, (8, W, W), dtype)
+        # the batched (composite) parametrization reads the same 8 constant tiles as separate [1,1,32,32] tensors
+        self.const_tiles = (
+            {name: _upload(device, t, shape, dtype) for name, (t, shape) in const_tile_specs(consts_t).items()}
+            if self.sinkhorn_mode == "batched"
+            else None
+        )
         # the K-split matmul's single output tile per batch: one core per batch (32 batches)
         self.pc_ksplit = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
@@ -499,12 +713,7 @@ class TtMHCFast(LightweightModule):
             self.post_mix.h_mix(x32, _view_rows(pre, Tp), h)
             if norm is None:
                 return h
-            weight, eps = norm
-            hb = ttnn.typecast(h, ttnn.bfloat16)
-            ttnn.deallocate(h)
-            hn = ttnn.rms_norm(hb, epsilon=eps, weight=weight, compute_kernel_config=self.ckc)
-            ttnn.deallocate(hb)
-            return hn
+            return self._norm_decode(h, norm)
         if Tp == TILE:
             v = ttnn.matmul(_view_tile_width(pre), self.s_pre, compute_kernel_config=self.ckc)  # [1,1,Tp,nTp]
             P = ttnn.multiply(v, self.i_pre)
@@ -556,6 +765,63 @@ class TtMHCFast(LightweightModule):
         ttnn.deallocate(hb)
         return hn
 
+    def _norm_decode(self, h: ttnn.Tensor, norm) -> ttnn.Tensor:
+        """The sublayer's input RMSNorm of the exact decode ``h`` ``[1,1,32,C]`` fp32 interleaved -> bf16 interleaved
+        (A3). ``sharded``: typecast, reshard into ``h_mem`` (width-sharded bf16, 4 tiles per core on the 8x4 grid),
+        the sharded multicore ``rms_norm`` (``pc_norm``), reshard back to DRAM interleaved for the sublayer: 4 ops,
+        32 cores. ``sharded_cast``: the cast folded into the reshard (``interleaved_to_sharded(output_dtype)``,
+        3 ops). ``single``: the composite's typecast + interleaved ``rms_norm`` (2 ops on ONE core at this height).
+        All three consume ``h``. ``h_mem`` / ``pc_norm`` are built once in ``__init__``: the decode tile is always
+        the 32-row tile (``_view_rows`` widens every T <= 32), so there is one shape per wrap; nothing here
+        touches the host (trace-safe), the L1 shards are transient within the step."""
+        weight, eps = norm
+        if self.norm_mode == "single":
+            hb = ttnn.typecast(h, ttnn.bfloat16)
+            ttnn.deallocate(h)
+            hn = ttnn.rms_norm(hb, epsilon=eps, weight=weight, compute_kernel_config=self.ckc)
+            ttnn.deallocate(hb)
+            return hn
+        assert h.padded_shape[-2] == TILE and h.padded_shape[-1] == self.C, h.padded_shape
+        if self.norm_mode == "sharded_cast":
+            hs = ttnn.interleaved_to_sharded(h, self.h_mem, output_dtype=ttnn.bfloat16)
+            ttnn.deallocate(h)
+        else:
+            hb = ttnn.typecast(h, ttnn.bfloat16)
+            ttnn.deallocate(h)
+            hs = ttnn.interleaved_to_sharded(hb, self.h_mem)
+            ttnn.deallocate(hb)
+        hn = ttnn.rms_norm(
+            hs,
+            epsilon=eps,
+            weight=weight,
+            program_config=self.pc_norm,
+            memory_config=self.h_mem,
+            compute_kernel_config=self.ckc,
+        )
+        ttnn.deallocate(hs)
+        out = ttnn.sharded_to_interleaved(hn, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(hn)
+        return out
+
+    def _parametrize(self, mixes: ttnn.Tensor):
+        """``mixes [1,1,Tp,32]`` (or ``[1,1,Tp,mix_hc]``) -> (pre ``[Tp,n]``, post ``[Tp,n]``, comb ``[Tp,n*n]``) fp32,
+        one tile wide (padded): the fused ``mhc_split_sinkhorn`` program (``kernel``) or its tile sequence as
+        composite ops over the whole token tile (``batched``, ``parametrize_graph``; the outputs are the full
+        ``[1,1,Tp,32]`` tiles re-declared to the kernel's logical widths, zero-copy)."""
+        if self.sinkhorn_mode == "kernel":
+            return ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
+                mixes, self.consts, self.n, self.iters, self.eps
+            )
+        Tp = mixes.shape[-2]
+        ops = _TtnnOps(self.ckc)
+        pre, post, comb = parametrize_graph(ops, _view_tile_width(mixes), self.const_tiles, self.iters, self.eps)
+        n = self.n
+
+        def narrow(t, k):
+            return ttnn.reshape(t, ttnn.Shape([1, 1, Tp, k]), ttnn.Shape([1, 1, Tp, W]))
+
+        return narrow(pre, n), narrow(post, n), narrow(comb, n * n)
+
     def _fused_pre_block(self, norm):
         """The fused pre-block op for this wrap's norm weight (built once; the weight is read back to the host)."""
         weight, eps = norm
@@ -594,9 +860,7 @@ class TtMHCFast(LightweightModule):
         else:
             x_sm, owned = self._stream_major(x32)
         mixes = self._project(x32, x_sm)
-        pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
-            mixes, self.consts, self.n, self.iters, self.eps
-        )
+        pre, post, comb = self._parametrize(mixes)
         ttnn.deallocate(mixes)
         h32 = self._collapse(x32, x_sm, pre, norm)
         ttnn.deallocate(pre)

@@ -1,0 +1,669 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Host-only (no ttnn, no device) tests of the vLLM adapter's bookkeeping: the slot / column placement
+(``tt/vllm_config.py::SlotTable``), the logical block table, the prefill plan, the memory-planner gate, and
+``tt/generator_vllm.py`` driven end to end with a fake mesh model that mimics ``GLM53MeshModel``'s API on torch
+tensors (token / position routing onto the physical user slots, output un-permutation, chunked-prefill
+contiguity, slot remaps, the v1 reload commands).
+
+    PYTHONPATH=<worktree>:<tt-metal>/ttnn:<tt-metal> <tt-metal>/python_env/bin/pytest \\
+        models/demos/glm53_flash/tests/test_generator_vllm_host.py -p no:cacheprovider -q
+"""
+
+from __future__ import annotations
+
+import contextlib
+import sys
+from types import SimpleNamespace
+
+import pytest
+import torch
+from loguru import logger
+
+from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.generator_vllm import GLM53DecodeOutput, GLM53FlashForCausalLM
+from models.demos.glm53_flash.tt.memory_plan import MemoryPlan
+from models.demos.glm53_flash.tt.vllm_config import (
+    LogicalBlockTable,
+    PrefillPlanner,
+    ServingGeometry,
+    SlotTable,
+    greedy_rows,
+    max_tokens_all_users,
+)
+
+VOCAB = 64
+PAD = 3
+
+
+@contextlib.contextmanager
+def expect_error(error, message):
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host test runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
+    logger.info(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+    try:
+        with pytest.raises(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest here
+            yield exc_info
+    finally:
+        logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+
+def test_module_imports_without_ttnn():
+    """The adapter module must be importable on a host without ttnn (every ttnn use is lazy)."""
+    assert "models.demos.glm53_flash.tt.generator_vllm" in sys.modules
+    assert "ttnn" not in sys.modules, "importing the adapter must not import ttnn"
+    assert GLM53FlashForCausalLM.decode_input_update_contract == 1
+    caps = GLM53FlashForCausalLM.model_capabilities
+    assert caps["supports_async_decode"] is False and caps["supports_prefix_caching"] is False
+    assert caps["supports_sample_on_device"] is True and caps["max_device_top_k"] == 1
+    assert caps["supports_chunked_prefill"] is True
+
+
+# ----------------------------------------------------------------------------------------- geometry
+def test_geometry_columns_and_capacity():
+    g = ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=131072)
+    assert g.users_per_chip == 2 and g.physical_slots == 64 and g.request_capacity == 8
+    assert [g.column_of(u) for u in range(8)] == [0, 0, 1, 1, 2, 2, 3, 3]
+    assert list(g.users_of_column(2)) == [4, 5]
+    assert g.flat(3, 5) == 3 * 8 + 5
+    assert g.blocks_per_seq == 4096 and g.chunk_unit == 256
+    g.check_max_num_seqs(8)
+    with expect_error(ValueError, "request capacity"):
+        g.check_max_num_seqs(64)
+    gi = ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=131072, rows_independent=True)
+    assert gi.request_capacity == 64
+    with expect_error(ValueError, "users_per_row"):
+        ServingGeometry(rows=8, cols=4, users_per_row=6, max_seq_len=1024)
+    rep = ServingGeometry(rows=2, cols=4, users_per_row=6, max_seq_len=1024, partitioned=False)
+    assert rep.users_per_chip == 6 and rep.column_of(5) == 0
+    with expect_error(ValueError, "device_prefill_chunk"):
+        ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1024, device_prefill_chunk=100)
+
+
+def test_memory_plan_gate_matches_the_envelope():
+    """The planner's partitioned / no-scratch envelope (tests/test_memory_plan.py): 4 users per row fit 1 M, 8 do not."""
+    cfg = GLM53FlashConfig()  # config defaults: 11 DSA + 34 KDA layers, 288 experts
+    plan = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False)
+    ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1048576).check_memory_plan(plan)
+    with expect_error(ValueError, "do not fit"):
+        ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=1048576).check_memory_plan(plan)
+    ServingGeometry(rows=8, cols=4, users_per_row=32, max_seq_len=131072).check_memory_plan(plan)
+    assert max_tokens_all_users(32, 131072) == 32 * 131072
+
+
+# ---------------------------------------------------------------------------------------- slot table
+def test_slot_table_balances_columns():
+    g = ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=4096)
+    t = SlotTable(g)
+    users = [t.allocate(i).user for i in range(5)]
+    # one user per column first (lowest free user of the least-loaded column), then the second user of column 0
+    assert users == [0, 2, 4, 6, 1]
+    assert t.column_loads() == [2, 1, 1, 1]
+    assert all(t.physical(i).row == 0 for i in range(5))  # the rows replicate: row 0 is the read copy
+    t.release(1)  # frees user 2 (column 1)
+    assert t.column_loads() == [2, 0, 1, 1]
+    assert t.allocate(5).user == 2  # column 1 is the least loaded again
+    assert [t.allocate(i).user for i in (6, 7)] == [3, 5]  # the second users of columns 1 and 2
+    assert t.column_loads() == [2, 2, 2, 1]
+    assert t.allocate(1).user == 7 and t.column_loads() == [2, 2, 2, 2]
+    with expect_error(ValueError, "outside"):
+        t.allocate(8)
+    # a leaked physical slot (the table and the device disagree) fails loudly instead of placing a prompt on a live user
+    small = SlotTable(ServingGeometry(rows=1, cols=2, users_per_row=2, max_seq_len=64))
+    small.allocate(0)
+    small._occupied.add((0, 1))
+    with expect_error(RuntimeError, "no free physical slot"):
+        small.allocate(1)
+
+
+def test_slot_table_rows_independent_placement():
+    g = ServingGeometry(rows=2, cols=2, users_per_row=2, max_seq_len=64, rows_independent=True)
+    t = SlotTable(g)
+    placed = [(s.row, s.user) for s in (t.allocate(i) for i in range(4))]
+    # column balance first (user 1 lives on column 1), then row balance, then the lowest indices
+    assert placed == [(0, 0), (1, 1), (1, 0), (0, 1)]
+    assert t.flat_indices(2) == [g.flat(1, 0)] and t.read_index(2) == 2
+    assert t.column_loads() == [2, 2] and t.row_loads() == [2, 2]
+
+
+def test_slot_table_remap_and_moves():
+    g = ServingGeometry(rows=2, cols=4, users_per_row=4, max_seq_len=64)
+    t = SlotTable(g)
+    phys = [t.allocate(i).user for i in range(3)]  # users 0, 1, 2 (one per column)
+    assert phys == [0, 1, 2]
+    t.release(1)
+    # the plugin condenses: row 1 now reads the state of slot 2 -> remap [0, 2, 1, 3]
+    moves = t.apply_remap([0, 2, 1, 3])
+    assert moves == {2: 1, 1: 2}
+    assert t.physical(1).user == 2 and t.physical(2) is None
+    # the same permutation in the plugin's old -> new form reproduces the table
+    t2 = SlotTable(g)
+    for i in range(3):
+        t2.allocate(i)
+    t2.release(1)
+    t2.apply_moves({2: 1, 1: 2})
+    assert [None if s is None else s.user for s in t2._phys] == [None if s is None else s.user for s in t._phys]
+    with expect_error(ValueError, "permutation"):
+        t.apply_remap([0, 0, 1, 3])
+    # device feed: the rows replicate, so a request's token lands at its user index of EVERY row
+    ids, pos = t.device_feed({0: 11, 1: 22}, {0: 5, 1: 9})
+    assert ids == [11, 0, 22, 0, 11, 0, 22, 0] and pos == [5, 0, 9, 0, 5, 0, 9, 0]
+    with expect_error(ValueError, "outside"):
+        t.device_feed({0: 1}, {0: 64})
+
+
+def test_logical_block_table():
+    g = ServingGeometry(rows=1, cols=1, users_per_row=1, max_seq_len=256, partitioned=False)
+    bt = LogicalBlockTable(g)
+    assert bt.blocks_needed(0) == 0 and bt.blocks_needed(1) == 1 and bt.blocks_needed(33) == 2
+    assert bt.check_row(torch.tensor([7, 3, 9, 0, 0, 0, 0, 0]), 70) == 3
+    with expect_error(ValueError, "cannot hold"):
+        bt.check_row([1, 2], 100)
+    with expect_error(ValueError, "repeats"):
+        bt.check_row([4, 4, 5], 70)
+    with expect_error(ValueError, "negative"):
+        bt.check_row([4, -1, 5], 70)
+    with expect_error(ValueError, "outside"):
+        bt.check_row([1] * 8, 257)
+
+
+def test_prefill_planner_traced_vs_eager():
+    g = ServingGeometry(
+        rows=8, cols=4, users_per_row=4, max_seq_len=65536, traced_prefill_lengths=(256, 512, 1024, 2048)
+    )
+    p = PrefillPlanner(g)
+    traced = p.plan(0, 300)
+    assert traced.kind == "traced" and traced.padded_length == 512 and traced.chunks == ((0, 300),)
+    assert p.plan(0, 2048).padded_length == 2048
+    assert p.plan(0, 2049).kind == "eager"
+    assert p.plan(0, 300, enable_trace=False).kind == "eager"
+    long = p.plan(0, 40000)
+    assert long.kind == "eager" and long.chunks == ((0, 16384), (16384, 32768), (32768, 40000))
+    cont = p.plan(16384, 20000)
+    assert cont.kind == "eager" and cont.chunks == ((16384, 20000),)
+    with expect_error(ValueError, "multiple of 32"):
+        p.plan(100, 200)
+    with expect_error(ValueError, "empty"):
+        p.plan(256, 256)
+    with expect_error(ValueError, "max_seq_len"):
+        p.plan(0, 65537)
+    # a captured-length check that says "not captured" falls back to eager
+    assert PrefillPlanner(g, traced_available=lambda T: False).plan(0, 300).kind == "eager"
+
+
+def test_greedy_rows_admission():
+    greedy_rows(SimpleNamespace(temperature=[0.0, 0.7], top_k=[-1, 1]), [0, 1])
+    with expect_error(ValueError, "greedy"):
+        greedy_rows(SimpleNamespace(temperature=[0.0, 0.7], top_k=[-1, 40]), [0, 1])
+
+
+# ------------------------------------------------------------------------------------- fake model
+def _next_token(tok: int, pos: int) -> int:
+    return (tok * 7 + pos) % VOCAB
+
+
+def _first_token(user: int, ids: torch.Tensor) -> int:
+    return (int(ids.sum()) + user) % VOCAB
+
+
+class _FakeMesh:
+    def __init__(self, model):
+        self.m = model
+        self.rows, self.cols = model.rows, model.cols
+
+    def device_tensors(self, handle):
+        kind = handle[0]
+        if kind in ("logits_tr", "logits_eager"):
+            B = self.m.max_batch
+            out = []
+            for r in range(self.rows):
+                for _c in range(self.cols):
+                    out.append(self.m._last_logits[r * B : (r + 1) * B].reshape(1, 1, B, VOCAB).to(torch.bfloat16))
+            return out
+        if kind == "logits_last":  # eager prefill: [1,1,1,V] replicated on every chip
+            t = torch.zeros(1, 1, 1, VOCAB)
+            t[0, 0, 0, handle[1]] = 1.0
+            return [t.clone() for _ in range(self.rows * self.cols)]
+        if kind == "logits_tile":  # traced prefill: [1,1,32,V], the prompt's token at row handle[2]
+            t = torch.zeros(1, 1, 32, VOCAB)
+            t[0, 0, handle[2], handle[1]] = 1.0
+            return [t.clone() for _ in range(self.rows * self.cols)]
+        raise KeyError(handle)
+
+
+class _FakeMeshModel:
+    """``GLM53MeshModel``'s serving surface on torch tensors with deterministic token functions."""
+
+    def __init__(self, rows: int, cols: int, max_batch: int, max_seq_len: int, traced=(256, 512, 1024, 2048)):
+        self.rows, self.cols = rows, cols
+        self.max_batch = max_batch
+        self.total_users = rows * max_batch
+        self.max_seq_len = max_seq_len
+        self.cfg = SimpleNamespace(vocab_size=VOCAB, pad_token_id=PAD)
+        self.device = None
+        self.mesh = _FakeMesh(self)
+        self.layers = []
+        self.ids_dev, self.positions = ("ids_dev",), ("positions",)
+        self.calls: list[tuple] = []
+        self._traced = tuple(traced)
+        self._captured: list[int] = []
+        self.trace_id = None
+        self._fed_ids = None
+        self._fed_pos = None
+        self._last_ids = torch.zeros(self.total_users, dtype=torch.long)
+        self._last_logits = torch.zeros(self.total_users, VOCAB)
+
+    # trace management
+    def trace_prefill_lengths(self):
+        return list(self._traced)
+
+    def has_prefill_trace(self, T):
+        return T in self._captured
+
+    def capture_prefill(self):
+        self.calls.append(("capture_prefill",))
+        new = [T for T in self._traced if T not in self._captured]
+        self._captured += new
+        return new
+
+    def warmup_decode(self, ids, positions):
+        self.calls.append(("warmup_decode", len(positions)))
+
+    def capture(self, ids, positions):
+        self.calls.append(("capture", len(positions)))
+        self.trace_id = 7
+        return 7, (("streams",), ("logits_tr",), ("ids_tr",))
+
+    def reset_kda_states(self):
+        self.calls.append(("reset_kda_states",))
+
+    def release_prefill_traces(self):
+        self._captured = []
+
+    # decode
+    def load_ids(self, ids):
+        assert ids.numel() == self.total_users
+        self._fed_ids = ids.clone()
+
+    def set_positions(self, positions):
+        assert len(positions) == self.total_users
+        self._fed_pos = list(positions)
+
+    def _step(self):
+        self.calls.append(("decode", self._fed_ids.tolist(), list(self._fed_pos)))
+        for s in range(self.total_users):
+            nxt = _next_token(int(self._fed_ids[s]), int(self._fed_pos[s]))
+            self._last_ids[s] = nxt
+            self._last_logits[s] = 0.0
+            self._last_logits[s, nxt] = 1.0
+
+    def replay(self, trace_id, blocking=True):
+        assert trace_id == self.trace_id
+        self._step()
+
+    def decode_step(self, ids_dev, positions):
+        self._step()
+        return ("streams",), ("logits_eager",), ("ids_eager",)
+
+    def ids_to_host(self, ids):
+        return self._last_ids.clone()
+
+    # prefill
+    def prefill(self, ids, user=0, start=0):
+        S = int(ids.numel())
+        self.calls.append(("prefill", user, start, S))
+        first = _first_token(user, ids)
+        unit = 32 * self.rows
+        T_loc = (-(-S // unit) * unit) // self.rows
+        owner_row = (S - 1) // T_loc
+        return ("streams",), ("logits_last", first), owner_row
+
+    def prefill_traced(self, ids, user=0):
+        S = int(ids.numel())
+        T = min(t for t in self._captured if t >= S)
+        self.calls.append(("prefill_traced", user, S, T))
+        first = _first_token(user, ids)
+        return SimpleNamespace(
+            streams=("streams",),
+            logits=("logits_tile", first, (S - 1) % 32),
+            ids=None,
+            owner_row=0,
+            row=(S - 1) % 32,
+            S=S,
+            T=T,
+        )
+
+    def first_token(self, logits_or_res, owner_row=0, row=0):
+        if isinstance(logits_or_res, tuple):
+            return logits_or_res[1]
+        return logits_or_res.logits[1]
+
+
+def _adapter(rows=2, cols=4, users_per_row=4, max_seq_len=65536, warm=True):
+    model = _FakeMeshModel(rows, cols, users_per_row, max_seq_len)
+    g = ServingGeometry(
+        rows=rows,
+        cols=cols,
+        users_per_row=users_per_row,
+        max_seq_len=max_seq_len,
+        traced_prefill_lengths=tuple(model.trace_prefill_lengths()),
+        pad_token_id=PAD,
+    )
+    a = GLM53FlashForCausalLM(model, g)
+    if warm:  # the plugin's order: eager prefill, eager decode, traced prefill, traced decode
+        a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
+        a.warmup_model_decode(enable_trace=False, max_batch_size=users_per_row, num_blocks=1, can_sample_on_device=True)
+        a.warmup_model_prefill(enable_trace=True, can_sample_on_device=True)
+        a.warmup_model_decode(enable_trace=True, max_batch_size=users_per_row, num_blocks=1, can_sample_on_device=True)
+    return a, model
+
+
+def _greedy(n):
+    return SimpleNamespace(temperature=[0.0] * n, top_k=[1] * n)
+
+
+# ------------------------------------------------------------------------------------- adapter e2e
+def test_warmup_order_and_decode_bucket():
+    a, m = _adapter()
+    kinds = [c[0] for c in m.calls]
+    # persistent decode inputs + eager step first, one eager prefill, the prefill traces, then the decode trace
+    assert (
+        kinds.index("warmup_decode") < kinds.index("prefill") < kinds.index("capture_prefill") < kinds.index("capture")
+    )
+    assert a.tt_supported_decode_batch_sizes == (4,) and a._decode_warmup_complete and a.trace_id == 7
+    assert a.already_warmed_up_prefill and m.calls.count("capture") == 0  # tuples, not strings
+    with expect_error(ValueError, "request capacity"):
+        a.warmup_model_decode(enable_trace=True, max_batch_size=8, num_blocks=1, can_sample_on_device=True)
+
+
+def test_prefill_routes_prompts_to_columns_and_scores_them():
+    a, m = _adapter()
+    toks = torch.zeros(2, 300, dtype=torch.int32)
+    toks[0, :300] = torch.arange(300) % 50
+    toks[1, :100] = torch.arange(100) % 20 + 1
+    logits = a.prefill_forward(
+        toks,
+        page_table=torch.arange(2 * 2048).reshape(2, 2048),
+        prompt_lens=[300, 100],
+        start_pos=torch.tensor([0, 0]),
+        empty_slots=[0, 1],
+        enable_trace=True,
+    )
+    assert logits.shape == (2, 1, VOCAB)
+    # the traced path for both (<= 2048 tokens), distinct columns, the prompt's token out of the tile row
+    tr = [c for c in m.calls if c[0] == "prefill_traced"]
+    assert [(c[1], c[2], c[3]) for c in tr] == [(0, 300, 512), (1, 100, 256)]
+    assert int(logits[0, 0].argmax()) == _first_token(0, toks[0, :300].long())
+    assert int(logits[1, 0].argmax()) == _first_token(1, toks[1, :100].long())
+    assert a.slots.physical(0).user == 0 and a.slots.physical(1).user == 1 and a.slots.column_loads() == [1, 1, 0, 0]
+    assert a.slots.physical(0).prefilled_to == 300 and a.slots.physical(0).phase == "prefill"
+    # device sampling returns the greedy ids
+    toks2 = torch.full((1, 40), 5, dtype=torch.int32)
+    out, lp = a.prefill_forward(
+        toks2, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1)
+    )
+    assert lp is None and out.shape == (1, 1) and int(out[0, 0]) == _first_token(2, toks2[0].long())
+    assert a.slots.physical(2).user == 2
+    with expect_error(ValueError, "greedy"):
+        a.prefill_forward(
+            toks2,
+            prompt_lens=[40],
+            start_pos=torch.tensor([0]),
+            empty_slots=[3],
+            sampling_params=SimpleNamespace(temperature=[0.9], top_k=[50]),
+        )
+
+
+def test_decode_permutes_rows_onto_physical_slots_and_back():
+    a, m = _adapter()
+    for slot, n in ((0, 300), (1, 100), (2, 40)):
+        t = torch.full((1, n), 2 + slot, dtype=torch.int32)
+        a.prefill_forward(
+            t, prompt_lens=[n], start_pos=torch.tensor([0]), empty_slots=[slot], sampling_params=_greedy(1)
+        )
+    # a padded decode: 3 live rows, row 3 padding (position -1)
+    tokens = torch.tensor([[11], [22], [33], [0]], dtype=torch.int32)
+    positions = torch.tensor([300, 100, 40, -1])
+    out = a.decode_forward(
+        tokens,
+        positions,
+        sampling_params=_greedy(4),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+    assert out.shape == (4, 1) and out.dtype == torch.int32
+    step = [c for c in m.calls if c[0] == "decode"][-1]
+    fed_ids, fed_pos = step[1], step[2]
+    B = 4
+    for slot, tok, pos in ((0, 11, 300), (1, 22, 100), (2, 33, 40)):
+        user = a.slots.physical(slot).user
+        for r in range(2):  # the rows replicate the prompt: every row's copy of the user slot gets the token
+            assert fed_ids[r * B + user] == tok and fed_pos[r * B + user] == pos
+        assert int(out[slot, 0]) == _next_token(tok, pos)
+    idle = [i for i in range(2 * B) if i % B == 3]
+    assert all(fed_ids[i] == PAD and fed_pos[i] == 0 for i in idle)
+    assert int(out[3, 0]) == 0
+    assert a.slots.physical(0).position == 301 and a.slots.physical(0).phase == "decode"
+    # host sampling: logits in row order, argmax = the same next token
+    logits, lp = a.decode_forward(
+        torch.tensor([[1], [2], [3], [0]], dtype=torch.int32),
+        torch.tensor([301, 101, 41, -1]),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    assert lp is None and logits.shape == (4, 1, VOCAB)
+    assert [int(logits[i, 0].argmax()) for i in range(3)] == [
+        _next_token(1, 301),
+        _next_token(2, 101),
+        _next_token(3, 41),
+    ]
+    assert float(logits[3].abs().sum()) == 0.0
+    # the deferred-read form the plugin's sync path uses: a device handle, then process_decode_output_host
+    handle = a.decode_forward(
+        torch.tensor([[4], [5], [6], [0]], dtype=torch.int32),
+        torch.tensor([302, 102, 42, -1]),
+        read_from_device=False,
+        sampling_params=_greedy(4),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    assert isinstance(handle, GLM53DecodeOutput) and not handle.on_host
+    host, events = a.read_decode_output(handle, async_read=True)
+    assert events == [] and host.on_host
+    toks = a.process_decode_output_host(host, is_tokens=True)
+    assert [int(toks[i, 0]) for i in range(3)] == [_next_token(4, 302), _next_token(5, 102), _next_token(6, 42)]
+
+
+def test_decode_reload_contract_is_enforced():
+    a, _ = _adapter()
+    t = torch.full((1, 40), 5, dtype=torch.int32)
+    a.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    tokens, positions = torch.tensor([[1], [0], [0], [0]], dtype=torch.int32), torch.tensor([40, -1, -1, -1])
+    with expect_error(ValueError, "reload_inputs=False"):
+        a.decode_forward(
+            tokens,
+            positions,
+            reload_inputs=False,
+            reload_page_table=True,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    with expect_error(TypeError, "reset_batch"):
+        a.decode_forward(
+            tokens,
+            positions,
+            reset_batch=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    with expect_error(ValueError, "greedy"):
+        a.decode_forward(
+            tokens,
+            positions,
+            sampling_params=SimpleNamespace(temperature=[0.5] * 4, top_k=[10] * 4),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    with expect_error(RuntimeError, "never prefilled"):
+        a.decode_forward(
+            tokens,
+            torch.tensor([40, 7, -1, -1]),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    with expect_error(RuntimeError, "prefilled to 40"):
+        a.decode_forward(
+            tokens,
+            torch.tensor([41, -1, -1, -1]),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    assert a.slots.physical(0).phase == "prefill"  # a refused step leaves the table untouched
+
+
+def test_chunked_prefill_contiguity_and_the_mid_prefill_guard():
+    a, m = _adapter()
+    L = 16384 * 2 + 100
+    ids = (torch.arange(L) % 60).to(torch.int32).reshape(1, L)
+    # vLLM chunk 1: [0, 16384) -> one eager device chunk into user 0
+    a.prefill_forward(
+        ids, prompt_lens=[16384], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1)
+    )
+    assert [c for c in m.calls if c[0] == "prefill"][-1] == ("prefill", 0, 0, 16384)
+    s = a.slots.physical(0)
+    assert s.phase == "prefill" and s.prefilled_to == 16384
+    # another request decodes while slot 0 is mid-prefill: refused (the decode step would advance slot 0's KDA state)
+    t = torch.full((1, 40), 5, dtype=torch.int32)
+    a.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[1], sampling_params=_greedy(1))
+    with expect_error(RuntimeError, "mid-prefill"):
+        a.decode_forward(
+            torch.tensor([[0], [9], [0], [0]], dtype=torch.int32),
+            torch.tensor([-1, 40, -1, -1]),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    # a non-contiguous continuation is refused; the contiguous one runs as one eager chunk of 16484 tokens
+    with expect_error(RuntimeError, "not contiguous"):
+        a.prefill_forward(ids, prompt_lens=[L], start_pos=torch.tensor([16000]), empty_slots=[0])
+    # a 16484-token vLLM chunk is longer than the device chunk: the adapter walks it in two contiguous device calls
+    a.prefill_forward(
+        ids, prompt_lens=[L], start_pos=torch.tensor([16384]), empty_slots=[0], sampling_params=_greedy(1)
+    )
+    assert [c for c in m.calls if c[0] == "prefill"][-2:] == [("prefill", 0, 16384, 16384), ("prefill", 0, 32768, 100)]
+    assert a.slots.physical(0).prefilled_to == L
+    # a whole long prompt in one vLLM step walks the device chunks in order
+    a.prefill_forward(ids, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1))
+    chunks = [c for c in m.calls if c[0] == "prefill" and c[1] == a.slots.physical(2).user]
+    assert [(c[2], c[3]) for c in chunks] == [(0, 16384), (16384, 16384), (32768, 100)]
+    # both prompts complete: the decode runs for all three slots
+    out = a.decode_forward(
+        torch.tensor([[1], [2], [3], [0]], dtype=torch.int32),
+        torch.tensor([L, 40, L, -1]),
+        sampling_params=_greedy(4),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    assert [int(out[i, 0]) for i in range(3)] == [_next_token(1, L), _next_token(2, 40), _next_token(3, L)]
+
+
+def test_slot_remap_release_and_move_notification():
+    a, m = _adapter()
+    for slot in range(3):
+        t = torch.full((1, 40), 2 + slot, dtype=torch.int32)
+        a.prefill_forward(
+            t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[slot], sampling_params=_greedy(1)
+        )
+    users = {slot: a.slots.physical(slot).user for slot in range(3)}
+    assert users == {0: 0, 1: 1, 2: 2}
+    # slot 1 finishes; the plugin condenses row 2 into row 1 and sends remap [0, 2, 1, 3]
+    a.release_request(1)
+    out = a.decode_forward(
+        torch.tensor([[1], [2], [0], [0]], dtype=torch.int32),
+        torch.tensor([40, 40, -1, -1]),
+        sampling_params=_greedy(4),
+        slot_remap=torch.tensor([0, 2, 1, 3], dtype=torch.int32),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+    step = [c for c in m.calls if c[0] == "decode"][-1]
+    assert step[1][2] == 2 and step[2][2] == 40  # row 1's token went to physical user 2 (the former slot 2)
+    assert step[1][1] == PAD  # the released user 1 idles
+    assert a.slots.physical(1).user == 2 and a.slots.physical(2) is None
+    assert [int(out[i, 0]) for i in range(2)] == [_next_token(1, 40), _next_token(2, 40)]
+    # the plugin then reports the same gather: consumed, not applied twice
+    a.note_state_slots_moved({2: 1, 1: 2})
+    assert a.slots.physical(1).user == 2
+    # a gather applied through slot_remap must be reported with the same moves
+    a.decode_forward(
+        torch.tensor([[1], [2], [0], [0]], dtype=torch.int32),
+        torch.tensor([41, 41, -1, -1]),
+        sampling_params=_greedy(4),
+        slot_remap=torch.tensor([1, 0, 2, 3], dtype=torch.int32),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    assert a.slots.physical(0).user == 2 and a.slots.physical(1).user == 0
+    with expect_error(RuntimeError, "disagrees"):
+        a.note_state_slots_moved({3: 0})
+    a.note_state_slots_moved({1: 0, 0: 1})
+    # a plugin that never passes slot_remap: the notification is applied once
+    b, _ = _adapter()
+    for slot in range(2):
+        b.prefill_forward(
+            torch.full((1, 40), 9, dtype=torch.int32),
+            prompt_lens=[40],
+            start_pos=torch.tensor([0]),
+            empty_slots=[slot],
+            sampling_params=_greedy(1),
+        )
+    b.note_state_slots_moved({1: 0, 0: 1})
+    assert b.slots.physical(0).user == 1 and b.slots.physical(1).user == 0
+    # a new prompt handed a reused logical slot replaces the previous occupant
+    b.prefill_forward(
+        torch.full((1, 40), 4, dtype=torch.int32),
+        prompt_lens=[40],
+        start_pos=torch.tensor([0]),
+        empty_slots=[0],
+        sampling_params=_greedy(1),
+    )
+    assert b.slots.physical(0).user == 1 and b.slots.column_loads() == [1, 1, 0, 0]
+    b.release_persistent_capture()
+    assert b.trace_id is None and b.tt_supported_decode_batch_sizes == ()
+
+
+def test_kv_accounting_hooks():
+    a, _ = _adapter()
+    cache = a.allocate_kv_cache((1234, 1, 32, 512), torch.bfloat16, 11)
+    assert cache.num_blocks == 1234 and cache.num_layers == 11
+    with expect_error(ValueError, "block size"):
+        a.allocate_kv_cache((10, 1, 64, 512), torch.bfloat16, 11)
+    assert GLM53FlashForCausalLM.get_max_tokens_all_users(max_model_len=1048576, max_num_seqs=4) == 4 * 1048576
+    with expect_error(ValueError, "needs max_model_len"):
+        GLM53FlashForCausalLM.get_max_tokens_all_users()
+
+
+def test_zz_no_ttnn_was_imported_by_the_suite():
+    """Runs last (file order): every adapter path the fake model exercised stayed off ttnn."""
+    assert "ttnn" not in sys.modules
