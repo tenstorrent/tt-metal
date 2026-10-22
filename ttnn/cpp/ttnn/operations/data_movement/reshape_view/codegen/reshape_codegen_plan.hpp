@@ -87,6 +87,8 @@ constexpr uint32_t kMaxReadSize = 2048;
 // The non-aligned stick reader gathers this many source sticks per NOC barrier into one scratch slot each. A slot is
 // the aligned source page plus one NOC read-alignment unit of slack, so the read can keep the source's residue.
 constexpr uint32_t kRmScratchSticks = 8;
+// The reader's `read_alignment`: the largest NOC read alignment of any arch (64 B on BH, 32 B on WH), so its residue
+// mask holds on both.
 constexpr uint32_t kRmScratchSlackBytes = 64;
 
 // How `units` of work spread over a grid of `grid_cores` cores, as split_work_to_cores spreads them: `num_cores` cores

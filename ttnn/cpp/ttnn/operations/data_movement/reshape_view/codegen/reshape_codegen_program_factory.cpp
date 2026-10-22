@@ -169,7 +169,6 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
         {"cb_out0", kCbIn},
         {"new_stick_size", p.new_stick},
         {"aligned_page_size", p.new_aligned},
-        {"noc_max_burst_bytes", tt::tt_metal::hal::get_noc_max_burst_size_bytes()},
     };
     writer.config = WriterConfigDescriptor{};
 

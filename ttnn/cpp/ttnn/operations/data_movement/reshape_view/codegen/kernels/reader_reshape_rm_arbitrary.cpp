@@ -90,7 +90,6 @@ void kernel_main() {
             }
         }
         noc.async_read_barrier();
-        invalidate_l1_cache();
 
         // Pieces whose 16 B phases match are NOC self-reads, the rest RISC copies; both complete before the push.
         uint32_t last_store = 0;
@@ -121,6 +120,8 @@ void kernel_main() {
         }
 
         noc.async_read_barrier();
+        // push_back does not order RISC stores; on WH a load from the last stored address must retire before the
+        // writer's NOC read.
         if (last_store != 0) {
             drain_stores(last_store);
         }

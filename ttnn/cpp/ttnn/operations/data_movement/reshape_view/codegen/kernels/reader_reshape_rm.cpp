@@ -10,8 +10,9 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/reshape_view/codegen/kernels/riscv_copy.h"
 
-// Re-stores a copy's final halfword after a compiler barrier, so it is the last RISC store in program order and the
-// drain reads back exactly that address whatever width the copy stored with.
+// push_back does not order RISC stores, so the writer's NOC read could see the page before the repack lands. Re-stores
+// the copy's final halfword after a compiler barrier, so it is the last RISC store in program order and the drain reads
+// back exactly that address whatever width the copy stored with.
 FORCE_INLINE void drain_halfword_stores(uint32_t last_addr, uint16_t value) {
     asm volatile("" ::: "memory");
     *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(last_addr) = value;
@@ -109,7 +110,6 @@ void kernel_main() {
                         {.offset_bytes = b * scratch_slot_size + byte_offsets[b]});
                 }
                 noc.async_read_barrier();
-                invalidate_l1_cache();
                 for (uint32_t b = 0; b < batch; ++b) {
                     // One reserve for all ratio pages: one semaphore check instead of ratio.
                     cb.reserve_back(a->ratio);
@@ -174,7 +174,6 @@ void kernel_main() {
                             {.offset_bytes = b * scratch_slot_size + byte_offsets[b]});
                     }
                     noc.async_read_barrier();
-                    invalidate_l1_cache();
                     for (uint32_t b = 0; b < batch; ++b) {
                         uint16_t* src_ptr =
                             reinterpret_cast<uint16_t*>(scratch_addr + b * scratch_slot_size + byte_offsets[b]);

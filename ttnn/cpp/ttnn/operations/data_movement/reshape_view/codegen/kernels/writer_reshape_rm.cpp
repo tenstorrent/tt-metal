@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t new_stick_size = get_named_compile_time_arg_val("new_stick_size");
     constexpr uint32_t aligned_page_size = get_named_compile_time_arg_val("aligned_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    constexpr uint32_t noc_max_burst_bytes = get_named_compile_time_arg_val("noc_max_burst_bytes");
 
     const auto s = TensorAccessor(dst_args, dst_addr, aligned_page_size);
 
@@ -32,20 +31,12 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_sticks_per_read; ++i) {
             const uint32_t i_stick = seq_identity_next(st);
-            // A stick can exceed the NOC transaction ceiling, so it goes out in bursts.
-            uint32_t remaining = new_stick_size;
-            uint32_t offset = 0;
-            while (remaining > 0) {
-                uint32_t burst = remaining < noc_max_burst_bytes ? remaining : noc_max_burst_bytes;
-                noc.async_write(
-                    out_buffer,
-                    s,
-                    burst,
-                    {.offset_bytes = l1_read_offset + offset},
-                    {.page_id = i_stick, .offset_bytes = offset});
-                remaining -= burst;
-                offset += burst;
-            }
+            noc.async_write(
+                out_buffer,
+                s,
+                new_stick_size,
+                {.offset_bytes = l1_read_offset},
+                {.page_id = i_stick, .offset_bytes = 0});
             l1_read_offset += new_stick_size;
         }
         // Source reads are done once the writes are issued; a full barrier is only needed at exit.
