@@ -387,6 +387,8 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        # The norm weight is a few tiles that every norm core reads before its first item: L1 spares that DRAM read.
+        self._norm_weight_l1 = ttnn.to_memory_config(self.weights.norm, ttnn.L1_MEMORY_CONFIG)
         self.fused_output_reduce_scatter = program_config.fused_output_reduce_scatter and self.tensor_parallel_size > 1
         if self.fused_output_reduce_scatter and self.carry_with_output_projection:
             from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import FinalCarryProgram
@@ -563,7 +565,7 @@ class ttKDA:
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
             output_gate,
-            weights.norm,
+            self._norm_weight_l1,
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=self.norm_output_memory_config,
