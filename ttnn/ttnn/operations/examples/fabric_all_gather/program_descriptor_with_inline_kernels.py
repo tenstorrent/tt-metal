@@ -38,6 +38,30 @@ NOC1 = ttnn.NOC.RISCV_1_default  # routes -Y, then -X
 # Shared by reader, sender and copy writer: the chunk walk of one shard for one link. Banks b = first, first+stride, ...
 # are visited round-robin; a chunk is n <= run_pages pages b + (m + t) * B, consecutive in bank b.
 _CHUNK_WALK = r"""
+// Profiling (only under the device profiler): ZONE_K(name, k, body) runs body in zone name_e<k>, k < 3; WAIT_T(acc, x)
+// adds the cycles x takes to acc (reported per entry as timestamped data, see the sender / reader).
+#if defined(PROFILE_KERNEL)
+#define ZONE_K(name, k, ...)                         \
+    if ((k) == 0) {                                  \
+        DeviceZoneScopedN(name "_e0");               \
+        __VA_ARGS__;                                 \
+    } else if ((k) == 1) {                           \
+        DeviceZoneScopedN(name "_e1");               \
+        __VA_ARGS__;                                 \
+    } else {                                         \
+        DeviceZoneScopedN(name "_e2");               \
+        __VA_ARGS__;                                 \
+    }
+#define WAIT_T(acc, ...)                             \
+    {                                                \
+        const uint32_t _t0 = get_timestamp_32b();    \
+        __VA_ARGS__;                                 \
+        acc += get_timestamp_32b() - _t0;            \
+    }
+#else
+#define ZONE_K(name, k, ...) __VA_ARGS__;
+#define WAIT_T(acc, ...) __VA_ARGS__;
+#endif
 // The chunk walk of one shard for one port. The port owns banks first, first+stride, ... (its bank set, nb banks); it
 // visits them round-robin starting at set index `rot`. A chunk is n <= run_pages pages b + (m + t) * B, consecutive in
 // bank b. `part` 0 = every bank of the set, 1 = its first half, 2 = its second half (a shard split between the two
@@ -114,7 +138,7 @@ void kernel_main() {
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);  // my arrival counter (relays wait on it)
     const uint32_t full = get_arg_val<uint32_t>(a++);          // chunks of a whole shard for this port (host-counted)
     uint32_t chunks_left = get_arg_val<uint32_t>(a++);         // chunks over all my entries (host-counted)
-    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // entries follow: shard | part << 16; the first is my own
+    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // entries follow: shard | part << 16 | own << 28
     const uint32_t shards_idx = a;
     const auto in = TensorAccessor(in_args, in_addr, page_bytes);
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
@@ -125,6 +149,8 @@ void kernel_main() {
     // keep my sender, and around a ring every sender, from sending it (a short shard would deadlock).
     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
     for (uint32_t k = 0; k < num_shards; ++k) {
+        uint32_t arr_wait = 0, cb_wait = 0;  // profiling: cycles waiting on upstream arrivals / for CB space
+        auto read_entry = [&]() {
         const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
         const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
         // relay entry k is (part of) upstream entry k - 1; every upstream entry before it is a whole shard. Upstream
@@ -135,18 +161,19 @@ void kernel_main() {
         for (uint32_t e = 1; e < k; ++e) {
             ends += (e * full) % inc_every != 0;
         }
-        for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t idx) {
+        const bool own = (entry >> 28) & 1;  // my own shard (relay mode: entry 0; direct / mcast modes: every entry)
+        for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, (entry >> 16) & 0xF, [&](uint32_t page, uint32_t n, uint32_t idx) {
             if (batch == 0) {
                 need = group - pos % group;
-                cb_reserve_back(cb, run_pages * need);
+                WAIT_T(cb_wait, cb_reserve_back(cb, run_pages * need));
                 wptr = get_write_ptr(cb);
             }
             uint64_t src;
-            if (k == 0) {
+            if (own) {
                 src = in.get_noc_addr(page);  // my own shard, from the input
             } else {
                 // upstream increments my counter once per inc_every chunks it sends; this is its chunk up_base + idx
-                noc_semaphore_wait_min(arrived, (up_base + idx) / inc_every + ends + 1);  // landed in my output
+                WAIT_T(arr_wait, noc_semaphore_wait_min(arrived, (up_base + idx) / inc_every + ends + 1));  // landed
                 src = out.get_noc_addr(out_base + page);
             }
             noc_async_read(src, wptr + batch * chunk_bytes, n * page_bytes);
@@ -164,6 +191,10 @@ void kernel_main() {
             pos += batch;
             batch = 0;
         }
+        };
+        ZONE_K("R", k, read_entry());
+        DeviceTimestampedData("R_arrwait", (uint64_t(k) << 32) | arr_wait);
+        DeviceTimestampedData("R_cbwait", (uint64_t(k) << 32) | cb_wait);
     }
 }
 """
@@ -180,15 +211,24 @@ _SENDER_SOURCE = (
 
 using namespace tt::tt_fabric;
 
-// One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
-inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
+// The route of one packet. 2D fabrics route by destination fabric node (the fabric picks the path); 1D fabrics by hop
+// count in this connection's direction (ROUTING_MODE from the build). mcast_range > 0 (1D only; the host refuses it on
+// 2D): write at each of the next mcast_range chips.
+inline void set_route(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint32_t hops, uint32_t mcast_range, uint16_t chip_id, uint16_t mesh_id) {
 #if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)) || defined(EMULE_FABRIC_2D)
+    (void)hops;
+    (void)mcast_range;
     (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
 #else
     (void)chip_id;
     (void)mesh_id;
-    (void)fabric_set_unicast_route<false>(
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr), static_cast<uint16_t>(1));
+    auto* h = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr);
+    if (mcast_range > 0) {
+        h->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_range)});
+    } else {
+        (void)fabric_set_unicast_route<false>(h, static_cast<uint16_t>(hops));
+    }
 #endif
 }
 """
@@ -218,58 +258,72 @@ void kernel_main() {
     entry_chunks[0] = get_arg_val<uint32_t>(a++);
     entry_chunks[1] = get_arg_val<uint32_t>(a++);
     entry_chunks[2] = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);    // my ready counter; the peer's is at the same address
-    const uint32_t send_ready = get_arg_val<uint32_t>(a++);    // 1 = tell the peer's port that sends to me I've started
-    const uint32_t ready_x = get_arg_val<uint32_t>(a++);       // that port core (NoC coords)
-    const uint32_t ready_y = get_arg_val<uint32_t>(a++);
-    const uint32_t peer_x = get_arg_val<uint32_t>(a++);        // downstream port core (NoC coords)
-    const uint32_t peer_y = get_arg_val<uint32_t>(a++);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // 0 = nothing to send (line end); entries: shard | part << 16
+    const uint32_t ready_addr = get_arg_val<uint32_t>(a++);    // my ready counter; every port's is at the same address
+    const uint32_t ready_expect = get_arg_val<uint32_t>(a++);  // readies I wait for: one per chip I write into
+    const uint32_t n_ready = get_arg_val<uint32_t>(a++);       // readies I send: one per port that writes into me
+    const uint32_t ready_idx = a;                              // per ready: hops, mesh id, chip id, port x, port y
+    a += 5 * n_ready;
+    const uint32_t num_shards = get_arg_val<uint32_t>(a++);    // 0 = nothing to send; entries: shard | part << 16 | own << 28
     const uint32_t shards_idx = a;
     a += num_shards;
+    const uint32_t route_idx = a;                              // per entry: hops, mcast range, mesh id, chip id, port x, y
+    a += 6 * num_shards;
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
 
-    if (num_shards > 0 || send_ready) {
+    if (num_shards > 0 || n_ready > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
         for (uint32_t h = 0; h < num_headers; ++h) {
             hdrs[h] = PacketHeaderPool::allocate_header();
-            route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
         }
         conn.open();
+        {
+        DeviceZoneScopedN("S_fence");
         // Fence between calls. This program running here means every earlier command on this chip is done, including
-        // whatever read the output of the previous call, so the peer may now write into my output: say so. Then send
-        // nothing until the peer has said the same (each call sends, and consumes, exactly one ready per port).
-        if (send_ready) {
-            hdrs[0]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
+        // whatever read the output of the previous call, so every port that writes into my output may now: say so,
+        // to each of them (`hops` back along this connection). Then send nothing until every chip I write into has
+        // said the same (each call sends, and consumes, exactly one ready per sender / receiver pair).
+        for (uint32_t i = 0; i < n_ready; ++i) {
+            const uint32_t r = ready_idx + 5 * i;
+            set_route(hdrs[0], get_arg_val<uint32_t>(r), 0, get_arg_val<uint32_t>(r + 2), get_arg_val<uint32_t>(r + 1));
+            hdrs[0]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(get_arg_val<uint32_t>(r + 3), get_arg_val<uint32_t>(r + 4), ready_addr), 1, true});
             conn.wait_for_empty_write_slot();
             conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
         }
-        if (num_shards > 0) {
+        if (ready_expect > 0) {
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-            noc_semaphore_wait_min(ready, 1);
-            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
+            noc_semaphore_wait_min(ready, ready_expect);
+            noc_semaphore_inc(get_noc_addr(ready_addr), 0u - ready_expect);
             noc_async_atomic_barrier();
         }
-        const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
+        }
         uint32_t chunks_left = total;
         uint32_t sent = 0;
-        // Up to `group` chunks in flight; the read pointer sits on a group boundary of a 2-group CB (no wrap).
+        // Up to `group` chunks in flight; the read pointer sits on a group boundary of a 2-group CB (no wrap). A header
+        // is reused only after the flush that follows its send, so re-routing it per chunk is safe.
         uint32_t h = 0, unflushed = 0;
         for (uint32_t k = 0; k < num_shards; ++k) {
+            uint32_t cb_wait = 0, slot_wait = 0;  // profiling: cycles waiting for the reader / for a fabric slot
+            auto send_entry = [&]() {
             const uint32_t entry = get_arg_val<uint32_t>(shards_idx + k);
             const uint32_t out_base = (entry & 0xFFFF) * shard_pages;
-            const uint32_t entry_total = entry_chunks[entry >> 16];
+            const uint32_t part = (entry >> 16) & 0xF;
+            const uint32_t entry_total = entry_chunks[part];
+            const uint32_t rt = route_idx + 6 * k;
+            const uint32_t hops = get_arg_val<uint32_t>(rt), mcast_range = get_arg_val<uint32_t>(rt + 1);
+            const uint16_t mesh_id = get_arg_val<uint32_t>(rt + 2), chip_id = get_arg_val<uint32_t>(rt + 3);
+            // the destination port's arrival counter (an mcast packet bumps the same address on every chip it writes)
+            const uint64_t arrival_noc = get_noc_addr(get_arg_val<uint32_t>(rt + 4), get_arg_val<uint32_t>(rt + 5), arrival_addr);
             uint32_t entry_sent = 0;
-            for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, entry >> 16, [&](uint32_t page, uint32_t n, uint32_t) {
-                cb_wait_front(cb, run_pages * (unflushed + 1));
+            for_each_chunk(shard_pages, first_bank, bank_stride, num_banks, run_pages, rot, part, [&](uint32_t page, uint32_t n, uint32_t) {
+                WAIT_T(cb_wait, cb_wait_front(cb, run_pages * (unflushed + 1)));
                 const uint32_t src = get_read_ptr(cb) + unflushed * chunk_bytes;
                 const uint32_t bytes = n * page_bytes;
                 const uint64_t dst = out.get_noc_addr(out_base + page, 0, 0);  // NoC0 coordinates
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                 h = (h + 1 == num_headers) ? 0 : h + 1;
+                set_route(hdr, hops, mcast_range, chip_id, mesh_id);
                 // The increment is issued only after its write has landed (flush), which stalls the receiving
                 // router, so only every inc_every-th chunk carries one, and the last of each entry: a relay of a
                 // short shard must not wait for chunks its upstream sends only after relaying (a ring would deadlock).
@@ -280,7 +334,7 @@ void kernel_main() {
                 } else {
                     hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
                 }
-                conn.wait_for_empty_write_slot();
+                WAIT_T(slot_wait, conn.wait_for_empty_write_slot());
                 conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
                 --chunks_left;
                 if (++unflushed == group || chunks_left == 0) {
@@ -289,12 +343,17 @@ void kernel_main() {
                     unflushed = 0;
                 }
             });
+            };
+            ZONE_K("S", k, send_entry());
+            DeviceTimestampedData("S_cbwait", (uint64_t(k) << 32) | cb_wait);
+            DeviceTimestampedData("S_slotwait", (uint64_t(k) << 32) | slot_wait);
         }
         conn.close();
     }
 
     // Everything from upstream has landed (the relays needed part of it already); then re-arm for the next call.
     if (expect_in > 0) {
+        DeviceZoneScopedN("S_tail");
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
         noc_semaphore_wait_min(arrived, expect_in);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
@@ -379,6 +438,35 @@ def build_groups(mesh_shape, cluster_axis):
     for r in range(rows):
         snake += [(r, c) for c in (range(cols) if r % 2 == 0 else reversed(range(cols)))]
     return [snake]
+
+
+MODES = ("relay", "direct", "mcast")
+
+
+def _schedule_routes(p, G, ring, balance, mode):
+    """Ring send modes without relays (mode "direct" / "mcast"): every entry is the chip's own shard.
+
+    Returns (fwd, bwd), each a list of (position, part, hops, mcast_range): the entry is written `hops` chips away in
+    that direction (unicast; the fabric forwards it through the chips in between), or, with mcast_range > 0, at each of
+    the next mcast_range chips by one multicast packet.
+      direct: toward p+1 one unicast per distance 1..G//2, toward p-1 per distance 1..G-1-G//2. balance (even G): the
+              shard for the opposite chip goes half each way (parts 1 / 2), so both directions carry G/2 - 1/2.
+      mcast:  one multicast toward p+1 over G//2 chips and one toward p-1 over the rest. balance (even G): chips of
+              even position swap the two ranges, so the long leg alternates direction around the ring and both
+              directions carry the same total. Per link it alternates (G = 4: 2 and 1 shards): a multicast cannot
+              split a shard the way the relay and direct modes do, so the busiest hop stays at G/2."""
+    assert ring and mode in ("direct", "mcast")
+    kf, kb = G // 2, G - 1 - G // 2
+    if mode == "direct":
+        if balance and G % 2 == 0 and G >= 4:
+            fwd = [(p, 1 if h == kf else 0, h, 0) for h in range(1, kf + 1)]
+            bwd = [(p, 2 if h == kf else 0, h, 0) for h in range(1, kf + 1)]
+            return fwd, bwd
+        return [(p, 0, h, 0) for h in range(1, kf + 1)], [(p, 0, h, 0) for h in range(1, kb + 1)]
+    if balance and G % 2 == 0 and p % 2 == 0:
+        kf, kb = kb, kf
+    one = lambda k: [] if k == 0 else [(p, 0, 1, 0)] if k == 1 else [(p, 0, 1, k)]  # noqa: E731
+    return one(kf), one(kb)
 
 
 def _schedule(p, G, ring, balance=False):
@@ -724,15 +812,47 @@ def plan(
     scheme="ring",
     balance=False,
     sub_core_grid=None,
+    mode="relay",
 ):
     """Rings, per-port shard schedules and core placement for every chip.
 
     scheme "ring":        one ring (or line) per group, in group order.
     scheme "dual_cycles": one group over the whole mesh (a 2D torus, both sides >= 3) and two rings over it — two
                           edge-disjoint Hamiltonian cycles — each carrying half of every shard (half the DRAM banks).
+    mode "relay":  every send goes one hop; intermediate chips relay the shards of chips further away.
+    mode "direct" / "mcast" (ring only): every chip sends only its own shard, routed by the fabric through the chips in
+                   between (see _schedule_routes); nothing is relayed.
+    placement "uniform": the "auto" placement of the first chip, used on every chip (an mcast packet carries one
+                   arrival-counter address for every chip it writes, so the receiving ports must sit on the same core).
     The output concatenates the group's shards in row-major chip order, independent of the ring order."""
     import os
 
+    if mode not in MODES:
+        raise ValueError(f"fabric_all_gather: unknown mode {mode!r}")
+    if placement == "uniform":
+        first, _ = plan(
+            mesh_device,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
+            placement="auto",
+            scheme=scheme,
+            balance=balance,
+            sub_core_grid=sub_core_grid,
+            mode=mode,
+        )
+        ports0 = next(iter(first.values()))["ports"]
+        return plan(
+            mesh_device,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
+            placement=dict(ports0),
+            scheme=scheme,
+            balance=balance,
+            sub_core_grid=sub_core_grid,
+            mode=mode,
+        )
     mesh_shape = tuple(mesh_device.shape)
     R, C = mesh_shape
     if scheme == "dual_cycles":
@@ -752,6 +872,12 @@ def plan(
         raise ValueError(f"fabric_all_gather: unknown scheme {scheme!r}")
     G = len(groups[0])
     assert G >= 2, "a group needs at least two chips"
+    if mode != "relay" and not ring:
+        raise ValueError(f"fabric_all_gather: mode {mode!r} needs a ring")
+    if mode != "relay" and "2D" in str(ttnn.get_fabric_config()):
+        # A 2D fabric routes a unicast by destination: the path to a chip 2+ hops away is the fabric's choice (a tie on
+        # an even ring), not this connection's direction, and a 2D multicast follows one physical direction only.
+        raise ValueError(f"fabric_all_gather: mode {mode!r} needs a 1D fabric (FABRIC_1D_RING)")
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     chips = {}
     for grp, rings in zip(groups, ring_lists):
@@ -762,24 +888,49 @@ def plan(
             for p, coord in enumerate(cyc):
                 nxt = cyc[(p + 1) % G] if (ring or p < G - 1) else None
                 prv = cyc[(p - 1) % G] if (ring or p > 0) else None
-                fwd, bwd = _schedule(p, G, ring, balance)  # (position along this ring, part), own first
-                chips[coord]["rings"].append(
-                    dict(
-                        p=p,
-                        next=nxt,
-                        prev=prv,
-                        fwd=[(out_idx[cyc[q]], part) for q, part in fwd],
-                        bwd=[(out_idx[cyc[q]], part) for q, part in bwd],
-                    )
-                )
+                rg = dict(p=p, next=nxt, prev=prv)
+                if mode == "relay":
+                    fwd, bwd = _schedule(p, G, ring, balance)  # (position along this ring, part), own first
+                    routes = {d: [(q, part, 1, 0) for q, part in e] for d, e in (("fwd", fwd), ("bwd", bwd))}
+                else:
+                    fwd, bwd = _schedule_routes(p, G, ring, balance, mode)
+                    routes = {"fwd": fwd, "bwd": bwd}
+                for d, sign in (("fwd", 1), ("bwd", -1)):
+                    rg[d] = [(out_idx[cyc[q]], part) for q, part, _, _ in routes[d]]
+                    # per entry: (hops, mcast range, own shard?) and the chips it writes
+                    rg[f"{d}_route"] = [(h, m, mode != "relay" or i == 0) for i, (_, _, h, m) in enumerate(routes[d])]
+                    rg[f"{d}_dsts"] = [
+                        [cyc[(p + sign * k) % G] for k in (range(1, m + 1) if m else [h])] for _, _, h, m in routes[d]
+                    ]
+                chips[coord]["rings"].append(rg)
     n_rings = len(ring_lists[0])
+    # The fence between calls, generalized to sends that skip chips: a sending port waits for one *ready* from every
+    # chip it writes into (ready_expect); a chip sends each of those readies from its port that faces the sender
+    # (direction d' = opposite of the sender's), `k` hops back to it (ready_to). Relay mode: one ready, one hop, the
+    # same as _needs_ready.
+    pos = {(coord, j): rg["p"] for coord, ch in chips.items() for j, rg in enumerate(ch["rings"])}
+    for coord, ch in chips.items():
+        for rg in ch["rings"]:
+            for d in ("fwd", "bwd"):
+                rg[f"{d}_ready_to"] = []
+                rg[f"{d}_ready_expect"] = len({t for ds in rg[f"{d}_dsts"] for t in ds}) if rg[d] else 0
+    for s, ch in chips.items():
+        for j, rg in enumerate(ch["rings"]):
+            for d in ("fwd", "bwd"):
+                if not rg[d]:
+                    continue
+                sign = 1 if d == "fwd" else -1
+                for t in sorted({t for ds in rg[f"{d}_dsts"] for t in ds}):
+                    # t sits h hops from s in direction d, so s is h hops from t in direction opp(d)
+                    h = (sign * (pos[(t, j)] - pos[(s, j)])) % G
+                    chips[t]["rings"][j][f"{_OPP[d]}_ready_to"].append((h, s, d))
     # links for every neighbour this chip sends to; every hop must be direct
     connections = {}
     for coord, ch in chips.items():
         conns = []
         for j, rg in enumerate(ch["rings"]):
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
-                if peer is None or not (rg[d] or _needs_ready(chips, coord, j, d)):
+                if peer is None or not (rg[d] or rg[f"{d}_ready_to"]):
                     continue
                 links = ttnn.get_forwarding_link_indices(node(coord), node(peer))
                 if len(links) < num_links:
@@ -843,20 +994,47 @@ def link_load(chips):
     for coord, ch in chips.items():
         for rg in ch["rings"]:
             for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
-                if peer is not None and rg[d]:
+                if peer is None or not rg[d]:
+                    continue
+                if f"{d}_dsts" not in rg:  # a plan without routes (every entry one hop)
                     shards = sum(1.0 if part == 0 else 0.5 for _, part in rg[d])
                     load[(coord, peer)] = load.get((coord, peer), 0.0) + shards / ch["n_rings"]
+                    continue
+                # an entry loads every hop on its way: from this chip to its farthest destination
+                for (_, part), ds in zip(rg[d], rg[f"{d}_dsts"]):
+                    w = (1.0 if part == 0 else 0.5) / ch["n_rings"]
+                    a = coord
+                    for t in _path(chips, coord, ds[-1], rg, d):
+                        load[(a, t)] = load.get((a, t), 0.0) + w
+                        a = t
     return load
+
+
+def _path(chips, src, dst, rg, d):
+    """Chips a packet from `src` toward direction d passes through, up to and including `dst` (one ring)."""
+    out, cur, j = [], src, next(i for i, r in enumerate(chips[src]["rings"]) if r is rg)
+    while cur != dst:
+        r = chips[cur]["rings"][j]
+        cur = r["next"] if d == "fwd" else r["prev"]
+        out.append(cur)
+    return out
 
 
 def _incs(entry_chunks, inc_every):
     """Increments a sender issues for entries of these chunk counts: every inc_every-th chunk and each entry's last."""
-    sent, n = 0, 0
+    return sum(_incs_per_entry(entry_chunks, inc_every))
+
+
+def _incs_per_entry(entry_chunks, inc_every):
+    """The same increments, per entry (each lands at that entry's destinations); the count runs across entries."""
+    sent, per = 0, []
     for c in entry_chunks:
+        n = 0
         for i in range(1, c + 1):
             sent += 1
             n += sent % inc_every == 0 or i == c
-    return n
+        per.append(n)
+    return per
 
 
 def create_mesh_program_descriptor(
@@ -884,11 +1062,41 @@ def create_mesh_program_descriptor(
     out_ct = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     in_addr, out_addr = int(input_tensor.buffer_address()), int(output_tensor.buffer_address())
     ct = [CB_CHUNKS, page_bytes, run_pages, num_banks, group, inc_every]
+    # The send mode and balance go last in the compile-time args (after the tensor accessors, so no index moves): the
+    # program cache keys on compile-time args, not on runtime-arg counts, and the modes' runtime args differ in length.
+    r0 = next(iter(chips.values()))["rings"][0]
+    variant_ct = [
+        len(r0["fwd"])
+        | len(r0["bwd"]) << 4
+        | len(r0["fwd_ready_to"]) << 8
+        | len(r0["bwd_ready_to"]) << 12
+        | (max((m for _, m, _ in r0["fwd_route"] + r0["bwd_route"]), default=0) << 16)
+        | (max((h for h, _, _ in r0["fwd_route"] + r0["bwd_route"]), default=0) << 20)
+    ]
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
+
+    two_d = "2D" in str(ttnn.get_fabric_config())
+    # increments every receiving port (chip, ring, direction, link) gets: from every sender of the same key whose
+    # entries write it (relay: just the upstream neighbour)
+    expect = {}
+    for s, sch in chips.items():
+        stride_s = sch["n_rings"] * num_links
+        for j, rg in enumerate(sch["rings"]):
+            for d in ("fwd", "bwd"):
+                if not rg[d]:
+                    continue
+                for l in range(num_links):
+                    first = j * num_links + l
+                    counts = [
+                        _chunks_per_shard(shard_pages, first, stride_s, num_banks, run_pages, part) for _, part in rg[d]
+                    ]
+                    for n, ds in zip(_incs_per_entry(counts, inc_every), rg[f"{d}_dsts"]):
+                        for t in ds:
+                            expect[(t, j, d, l)] = expect.get((t, j, d, l), 0) + n
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
@@ -917,38 +1125,46 @@ def create_mesh_program_descriptor(
             nb = len(range(first, num_banks, stride))
             # desync: the two directions of a link walk the same banks; start the backward walk halfway round
             rot = nb // 2 if (desync and d == "bwd") else 0
-            recv = sum(
-                _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in up_sends
-            )
-            packed = [out | (part << 16) for out, part in sends]
+            routes = rg[f"{d}_route"] if peer is not None else []
+            dsts = rg[f"{d}_dsts"] if peer is not None else []
+            packed = [out | (part << 16) | (int(own) << 28) for (out, part), (_, _, own) in zip(sends, routes)]
             full = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
             mine = sum(_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in sends)
             per_part = [_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for part in (0, 1, 2)]
-            up_parts = [
-                _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in up_sends
-            ]
             head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
             reader_rt[core.x][core.y] = head + [len(sends)] + packed
-            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, _incs(up_parts, inc_every), mine]
+            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, expect.get((coord, j, d, l), 0), mine]
             args += per_part + [ready_addr]
-            # the peer's port that sends to me waits for my ready (see _needs_ready)
-            send_ready = _needs_ready(chips, coord, j, d)
-            rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
-            args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
-            if rg.get(f"{d}_links"):
-                pc = virt(chips[peer]["ports"][(j, d, l)])
-                pn = node(peer)
-                args += [pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), len(sends)] + packed
-                args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
-            else:
-                args += [0, 0, 0, 0, 0]
+            # readies: wait for one from every chip I write into; send one to every port that writes into me
+            ready_to = rg[f"{d}_ready_to"] if peer is not None else []
+            args += [rg[f"{d}_ready_expect"] if sends else 0, len(ready_to)]
+            for h, s, sd in ready_to:
+                sc, sn = virt(chips[s]["ports"][(j, sd, l)]), node(s)
+                args += [h, int(sn.mesh_id), int(sn.chip_id), sc.x, sc.y]
+            args += [len(sends)] + packed
+            for (h, m, _), ds in zip(routes, dsts):
+                if m and two_d:
+                    raise ValueError(
+                        "fabric_all_gather: mode 'mcast' needs a 1D fabric (2D multicast follows one "
+                        "physical direction, which a bent ring does not)"
+                    )
+                cores = {(virt(chips[t]["ports"][(j, d, l)]).x, virt(chips[t]["ports"][(j, d, l)]).y) for t in ds}
+                if len(cores) > 1:
+                    raise ValueError(
+                        "fabric_all_gather: an mcast entry needs its receiving ports on the same core "
+                        "on every chip (placement='uniform')"
+                    )
+                (px, py), tn = next(iter(cores)), node(ds[0] if m else ds[-1])
+                args += [h, m, int(tn.mesh_id), int(tn.chip_id), px, py]
+            if rg.get(f"{d}_links") and (sends or ready_to):
+                args += list(ttnn.setup_fabric_connection(node(coord), node(peer), rg[f"{d}_links"][l], program, core))
             sender_rt[core.x][core.y] = args
         copy_reader_rt, copy_writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         J = len(ch["copy"])
         for jj, core in enumerate(ch["copy"]):
             n_copy = _chunks_per_shard(shard_pages, jj, J, num_banks, run_pages)
             head = [in_addr, out_addr, shard_pages, jj, J, 0, arrival_addr, n_copy, n_copy]
-            copy_reader_rt[core.x][core.y] = head + [1, ch["out"]]
+            copy_reader_rt[core.x][core.y] = head + [1, ch["out"] | (1 << 28)]  # one entry: my own shard
             copy_writer_rt[core.x][core.y] = [out_addr, shard_pages, jj, J, ch["out"], n_copy]
         port_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in port_cores])
         copy_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ch["copy"]])
@@ -958,7 +1174,7 @@ def create_mesh_program_descriptor(
                 kernel_source=_READER_SOURCE,
                 source_type=src,
                 core_ranges=port_set,
-                compile_time_args=ct + in_ct + out_ct,
+                compile_time_args=ct + in_ct + out_ct + variant_ct,
                 runtime_args=reader_rt,
                 config=dm("RISCV_1", NOC0),
             ),
@@ -966,7 +1182,7 @@ def create_mesh_program_descriptor(
                 kernel_source=_SENDER_SOURCE,
                 source_type=src,
                 core_ranges=port_set,
-                compile_time_args=ct + out_ct,
+                compile_time_args=ct + out_ct + variant_ct,
                 runtime_args=sender_rt,
                 config=dm("RISCV_0", NOC1),
             ),
@@ -1043,9 +1259,14 @@ def fabric_all_gather(
     data_valid_semaphore=None,
     inc_every=8,
     cb_bytes=112 * 1024,
+    mode="relay",
 ):
     """All-gather `input_tensor` (TILE or ROW_MAJOR, any dtype, DRAM interleaved, one shard per chip) over each group;
     returns the output.
+
+    mode: "relay" (default; intermediate chips forward other chips' shards), or, on a ring, "direct" (each chip
+        unicasts its own shard to every other chip, the fabric routing it through the chips in between) or "mcast"
+        (one multicast per direction; 1D fabrics only, and placement="uniform"). See _schedule_routes.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
     topology=Ring). The output is always in row-major chip order (as high_bw_all_gather's), for snakes too.
@@ -1075,6 +1296,7 @@ def fabric_all_gather(
         scheme=scheme,
         balance=balance,
         sub_core_grid=sub_core_grid,
+        mode=mode,
     )
     G = next(iter(chips.values()))["G"]
     _check_dram_interleaved(input_tensor, "input")
