@@ -77,8 +77,9 @@ From the repository root:
 export HF_MODEL=google/gemma-4-31B-it
 export HF_HOME=/mnt/models/huggingface
 export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
-export HF_HUB_OFFLINE=1 PREFILL_DFLASH=1
-python_env/bin/pytest \
+export HF_HUB_OFFLINE=1
+export PREFILL_DFLASH=1
+pytest \
   'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4]' \
   -sv --timeout=1800
 ```
@@ -98,17 +99,3 @@ Standalone callers can access the resulting caches through `model.dflash.kv_cach
 
 Run these with the environment above. Set `GEMMA4_CCL_ASYNC=1` separately to
 exercise asynchronous collectives.
-
-Revalidated on Blackhole 8×4 on 2026-10-13 after rebasing onto main
-`7c2259da971`: all 154 Gemma4 prefill unit tests and 18 shared migration/trace
-helper tests passed. All five DFlash device cases passed with both synchronous
-and asynchronous collectives, including sequence-parallel target outputs.
-Checkpoint K/V PCC was at least 0.999960.
-
-The canonical 256K demo and both six-slot service cases (DFlash off/on) passed
-with synchronous collectives. The DFlash service preserved 960 sampled KV blocks
-per slot across all 65 layers and reused all six slots for 8193-token prompts
-without recapturing the trace. Target trace/eager PCC was at least 0.99999988.
-The isolated sequence-parallel checkpoint trace measured about 3.3 ms per
-8192-token chunk; the canonical 256K run used 6.83 s of device time (one run,
-excluding loading and compilation).
