@@ -586,7 +586,6 @@ public:
                 executors.push_back(executor);
             }
         }
-        // One worker would run every call in order while the caller waits for it.
         if (executors.size() == 1) {
             run_on_caller(device_ids.size(), fn);
             return;
