@@ -26,7 +26,6 @@
 // Ethernet txq transport
 template <uint32_t TXQ_ID>
 struct EthTxqLinkTransport {
-    static constexpr uint32_t txq_id = TXQ_ID;
 
     static FORCE_INLINE bool is_busy() { return internal_::eth_txq_is_busy(TXQ_ID); }
 
