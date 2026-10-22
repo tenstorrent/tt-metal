@@ -62,11 +62,25 @@ There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.js
       "warnings": ["the run was built from aaaaaaaaaa; decode is at bbbbbbbbbb"]
     }
   ],
+  "routing_tables": {
+    "M0/C0/E1": {
+      "chip": "M0/C0",
+      "routers": ["M0/C0/E1", "M0/C0/E0", "M0/C0/S1", "M0/C0/S0"],
+      "raw": { "bytes": { "offset": 164, "size": 2704 } },
+      "fields": { "my_mesh_id": 0, "my_device_id": 0, "intra_mesh_direction_table": [ ... ], ... },
+      "route_table_2d": {
+        "M0/C5": { "delivers": ["M0/C5"], "steps": [{ "src": "M0/C0", "direction": "south", "dst": "M0/C4" }, ...], "exits": [], "odd": [] },
+        ...
+      },
+      "mcast_trees": { "y": [{ "child": 1, "parent": 0, "direction": "south" }], "x": [ ... ] },
+      "path_table_1d": null
+    }
+  },
   "routers": {
     "M0/C0/E1": {
       "source": 0,
       "error": null,
-      "areas": { "routing_table": { "my_mesh_id": 0, "state_manager": { "state": { "raw": 1, "name": "running" }, ... }, ... }, ... },
+      "areas": { "heartbeat": 2882396417, ... },
       "regions": {
         "fields/edm_status": { "raw": 2746467283, "name": "ready_for_traffic" },
         "channels/senders/vc0/ch0/ring_buffer": [{ "bytes": { "offset": 4028, "size": 4448 } }, ...]
@@ -80,7 +94,35 @@ There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.js
       "elements": {
         "channels/senders/vc0/ch0/credits/completed": { "array": "credit_counters/to_sender_completion", "index": 0, "value": 1234 }
       },
-      "health": { "t_ns": [...], "eriscs": { ... }, "wall_clock": { ... }, "heartbeat": { ... } }
+      "health": { "t_ns": [...], "eriscs": { ... }, "wall_clock": { ... }, "heartbeat": { ... } },
+      "routing": {
+        "table_key": "M0/C0/E1",
+        "state_manager": { "state": { "raw": 1, "name": "running" }, "command": { "raw": 0, "name": "run" } },
+        "raw": { "bytes": { "offset": 164, "size": 2704 } }
+      },
+      "channels": {
+        "channels/senders/vc0/ch0": {
+          "kind": "sender", "depth": 14, "producer": "worker",
+          "connection": { "raw": 0, "name": "unused_connection_value" },
+          "producer_core": { "x": 0, "y": 0, "whose": "last" },
+          "unsent": { "before": 0, "after": 0, "not_observable": null },
+          "uncredited": { "before": 0, "after": 0, "not_observable": null },
+          "credits": { "completed": { "frees": "receiver_slot", "backing": "stream_register", "pending": { ... }, ... } },
+          "speedy_batch": null, "within_bounds": true, "moved": false,
+          "slots": [
+            { "empty": true, "header": null, "route": null, "scatter": null, "problems": [] },
+            { "empty": false, "header": { ... }, "route": { "start": "M0/C1", "entered_from": "west", "walk": { ... },
+              "landing": false, "rebuilt": null }, "scatter": null, "problems": [] },
+            ...
+          ]
+        },
+        "channels/receivers/vc0/ch0": {
+          "kind": "receiver", "depth": 8,
+          "waiting": { "before": 0, "after": 0, "not_observable": null },
+          "unacked": { "before": null, "after": null, "not_observable": "first-level ack is off on this VC" },
+          "moved": false, "slots": [ ... ]
+        }
+      }
     }
   }
 }
@@ -114,6 +156,15 @@ There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.js
 - **Elements.** There is one entry per `{array, index}` reference: the element of the decoded array it names. Each one
   the manifest writes is a credit on a VC whose credits use L1 counters.
 - **Health.** The router's liveness facts, described in [HEALTH.md](docs/HEALTH.md).
+- **Routing tables.** Each router holds its chip's routing table in its `routing_table` area. The file stores each
+  unique table once, in `routing_tables`, keyed by the first router holding it, with its fields and the routes, trees
+  or 1D path entries it gives. A router's `routing` names its copy (`table_key`), and holds its own `state_manager` and
+  bytes. So `areas` doesn't hold `routing_table`. [ROUTING_TABLES.md](docs/ROUTING_TABLES.md) has the rules.
+- **Channels.** Each active channel of a router, keyed by its path in the router, has its counts and credits
+  ([FLOW_CONTROL.md](docs/FLOW_CONTROL.md)) and its ring buffer slots: each slot's header and where its packet goes
+  ([RING_BUFFER_SLOTS.md](docs/RING_BUFFER_SLOTS.md)). `slots` is null when capture didn't read the ring. A channel no
+  ERISC runs isn't listed. A used slot may be history: its packet may be waiting, sent or done. The counts say how many
+  packets are waiting, but not which slot has a packet that is waiting.
 - **A router capture stopped part way through.** Its `error` is capture's `{stage, path, message}`. Everything read
   before the error is decoded. A value never read is null: a stream word, an element of an array that wasn't read, or a
   sample's value in `health`. An area or region never read is absent.
@@ -132,7 +183,9 @@ python3 -m tt_metal.fabric.debug.visualizer.decode generated/fabric
 - **The manifest.** A snapshot is decoded with the manifest it names, or with a file of that name beside it. For a
   snapshot whose manifest has moved, pass `--manifest` with manifests or directories of them; decode takes the one with
   the snapshot's sha256 ([INPUTS.md](docs/INPUTS.md)).
-- **What it prints.** One line per decoded file, then its warnings and router errors.
+- **What it prints.** One line per decoded file, then its warnings and router errors. The line says how many routers
+  capture couldn't fully read, how many ring buffer slots are used, and how many packets the counts say are unsent in
+  senders and waiting in receivers.
 - **Exit status.** Non-zero when a snapshot is refused or its decoded file can't be written. A router that capture
   couldn't fully read isn't a failure: it is recorded in the file.
 
@@ -149,7 +202,7 @@ python3 -m tt_metal.fabric.debug.visualizer.decode generated/fabric
 | [`ring_buffer_slots.py`](ring_buffer_slots.py) | `get_ring_buffer_slots`: decodes the packet header in each ring buffer slot of a router's active channels, from the slot's L1 bytes, and where the packet goes, starting where the slot's channel says. A rule that refuses a slot's bytes is recorded as a problem, never raised. In depth: [RING_BUFFER_SLOTS.md](docs/RING_BUFFER_SLOTS.md) |
 | [`flow_control.py`](flow_control.py) | `get_channel_flows`: what each active channel's counts and credits say: a sender's unsent and uncredited packets and the credits coming back from its peer, and a receiver's waiting or unacked packets, each with why when the snapshot can't give it. In depth: [FLOW_CONTROL.md](docs/FLOW_CONTROL.md) |
 | [`health.py`](health.py) | `get_health`: a router's liveness samples and main pass as facts: whether each ERISC is held in reset, how the wall clock moves, and whether the heartbeat moves. In depth: [HEALTH.md](docs/HEALTH.md) |
-| [`decoded.py`](decoded.py) | `decode_snapshot`: puts a snapshot's sources, decoded routers and health facts into the decoded file, and `write_decoded` writes it |
+| [`decoded.py`](decoded.py) | `decode_snapshot`: puts a snapshot's sources, its routing tables, and its decoded routers with their health, routing and channels into the decoded file, and `write_decoded` writes it |
 | [`__main__.py`](__main__.py) | The command line: decodes each snapshot given |
 | [`fabric_decoded_schema.json`](fabric_decoded_schema.json) | The decoded file's JSON Schema |
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
@@ -160,7 +213,7 @@ python3 -m tt_metal.fabric.debug.visualizer.decode generated/fabric
 | [`tests/test_ring_buffer_slots.py`](tests/test_ring_buffer_slots.py) | Cases for empty ring buffer slots, each place a route starts (2D sender, receiver, a link leaving the mesh, a landing before and after its rebuild; 1D sender and receiver), extension words, scatter writes, problems, and renamed header members |
 | [`tests/test_flow_control.py`](tests/test_flow_control.py) | Cases for each count by producer (worker connected and not, sibling-fed, unfed), counters that wrap, both credit backings with a peer in and out of the snapshot, first-level ack on and off, speedy batches, and manifest values the rules don't know |
 | [`tests/test_health.py`](tests/test_health.py) | Cases for each health fact: reset bits by physical ERISC, the wall clock's join and wrap, and heartbeat words from other writers |
-| [`tests/test_decoded.py`](tests/test_decoded.py) | Cases for the decoded file and the command line, from a snapshot written to a temporary directory |
+| [`tests/test_decoded.py`](tests/test_decoded.py) | Cases for the decoded file and the command line, from a one-router 2D snapshot written to a temporary directory: its routing table stored once, its channels' counts and slots, and the schema, when `jsonschema` is installed |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
 | [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
 | [`tests/check_decode.py`](tests/check_decode.py) | Decodes each manifest's types, and a snapshot of each manifest CI writes taken with a fake device, and checks the decoded file |
@@ -188,9 +241,9 @@ python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes g
 Last, the script runs `tests/check_decode.py` on every manifest it writes. The check decodes every struct in the
 manifest's types from zeros and from random bytes, and every tagged union under each value of its tag and under one that
 names no member, checking that the union picks the member it says. It then takes a snapshot through capture with a fake
-device that returns random bytes, and decodes it. It checks that the decoded file has a value for each area, region,
-stream reference and element reference of every router, has health with a sample per liveness round and one for the
-main pass, and matches the schema. Like capture's check, it needs `jsonschema`, and it deletes each snapshot and decoded
+device that returns random bytes, and decodes it. It checks that the decoded file has a value for each area other than
+the routing table, which is in `routing_tables`, and for each region, stream reference and element reference of every
+router, has health with a sample per liveness round and one for the main pass, and matches the schema. Like capture's check, it needs `jsonschema`, and it deletes each snapshot and decoded
 file once checked:
 
 ```bash

@@ -15,9 +15,17 @@ import json
 import os
 import pathlib
 
+from tt_metal.fabric.debug.visualizer.decode.flow_control import ReceiverFlow, SenderFlow, get_channel_flows
 from tt_metal.fabric.debug.visualizer.decode.health import get_health
 from tt_metal.fabric.debug.visualizer.decode.inputs import Checkout, Input
+from tt_metal.fabric.debug.visualizer.decode.ring_buffer_slots import (
+    RingBufferSlot,
+    get_ring_buffer_slots,
+    get_slot_context,
+)
+from tt_metal.fabric.debug.visualizer.decode.route_context import get_route_context
 from tt_metal.fabric.debug.visualizer.decode.routers import decode_router
+from tt_metal.fabric.debug.visualizer.decode.routing_tables import ROUTING_TABLE, get_routing_table_store
 from tt_metal.fabric.debug.visualizer.decode.type_parser import get_types_from_manifest
 
 DECODED_VERSION = 1
@@ -52,24 +60,55 @@ def _get_source(snapshot: Input) -> dict:
     }
 
 
+def _get_channels(
+    flows: dict[str, SenderFlow | ReceiverFlow], slots: dict[str, list[RingBufferSlot]]
+) -> dict[str, dict]:
+    """Each active channel's counts and credits, and its ring buffer slots: None when capture didn't read the ring."""
+    channels = {}
+    for path, flow in flows.items():
+        channel_slots = slots.get(path)
+        channels[path] = {
+            "kind": "receiver" if isinstance(flow, ReceiverFlow) else "sender",
+            **dataclasses.asdict(flow),
+            "slots": None if channel_slots is None else [dataclasses.asdict(slot) for slot in channel_slots],
+        }
+    return channels
+
+
 def decode_snapshot(snapshot: Input, checkout: Checkout | None, decoded_at: datetime.datetime) -> dict:
     """
     The decoded file for a loaded snapshot. `checkout` is decode's own, recorded as the decoder, and `decoded_at` is
-    when the decode ran. Raises ManifestError or InputError, as decode_router and get_health do.
+    when the decode ran. Raises ManifestError or InputError, as the modules it calls do.
     """
     types = get_types_from_manifest(snapshot.manifest)
+    decoded_routers = {path: decode_router(snapshot, types, path) for path in snapshot.json["routers"]}
+    route_context = get_route_context(snapshot.manifest)
+    store = get_routing_table_store(snapshot, types, decoded_routers, route_context)
+    slot_context = get_slot_context(snapshot.manifest, types, route_context)
+
     routers = {}
-    for path in snapshot.json["routers"]:
-        decoded = decode_router(snapshot, types, path)
-        values = dataclasses.asdict(decoded)
+    for path, router in decoded_routers.items():
+        values = dataclasses.asdict(router)
         del values["path"]  # the router's key
-        routers[path] = {"source": 0, **values, "health": dataclasses.asdict(get_health(snapshot, decoded))}
+        # Each router's routing table is stored once in routing_tables, with only its own part in routing.
+        values["areas"].pop(ROUTING_TABLE, None)
+        table_ref = store.routers.get(path)
+        table = None if table_ref is None else store.copies[table_ref.table_key]
+        slots = get_ring_buffer_slots(snapshot, types, slot_context, router, table)
+        routers[path] = {
+            "source": 0,
+            **values,
+            "health": dataclasses.asdict(get_health(snapshot, router)),
+            "routing": None if table_ref is None else dataclasses.asdict(table_ref),
+            "channels": _get_channels(get_channel_flows(snapshot, decoded_routers, path), slots),
+        }
     return {
         "kind": "fabric_decoded",
         "decoded_version": DECODED_VERSION,
         "decoded_at": _utc_text(decoded_at),
         "decoder": None if checkout is None else {"git_sha": checkout.sha, "git_dirty": checkout.dirty},
         "sources": [_get_source(snapshot)],
+        "routing_tables": {key: dataclasses.asdict(table) for key, table in store.copies.items()},
         "routers": routers,
     }
 

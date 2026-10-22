@@ -346,7 +346,7 @@ def get_ring_buffer_slots(
     problems and is never raised. Raises ManifestError for a manifest value the rules can't use.
     """
     node, where = get_router(snapshot.manifest, router.path)
-    landing_table = _get_landing_table(table, snapshot) if ctx.route_context.is_2d else None
+    landing_table = None  # read only for a router with an intermesh ingress, the one channel that lands packets
     slots = {}
     for kind in CHANNEL_KINDS:
         for vc, channels in lookup(node, f"channels.{kind}", "object", of="object", where=where).items():
@@ -363,6 +363,8 @@ def get_ring_buffer_slots(
                         f"{ctx.header_size}-byte packet header"
                     )
                 start = _get_start(kind, channel, channel_where, router.path, node, where, ctx)
+                if start.landing and landing_table is None:
+                    landing_table = _get_landing_table(table, snapshot)
                 slots[channel_path] = [
                     _decode_slot(entry["bytes"]["offset"], start, landing_table, snapshot, types, ctx) for entry in ring
                 ]

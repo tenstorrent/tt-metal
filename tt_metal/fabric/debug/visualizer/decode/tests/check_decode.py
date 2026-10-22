@@ -34,6 +34,7 @@ from tt_metal.fabric.debug.visualizer.common.manifest_lookup import ManifestErro
 from tt_metal.fabric.debug.visualizer.common.router_paths import LeafKind, get_router, walk_router
 from tt_metal.fabric.debug.visualizer.decode.decoded import decode_snapshot, write_decoded
 from tt_metal.fabric.debug.visualizer.decode.inputs import InputError, load_input
+from tt_metal.fabric.debug.visualizer.decode.routing_tables import ROUTING_TABLE
 from tt_metal.fabric.debug.visualizer.decode.type_parser import decode_struct, get_types_from_manifest
 
 SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[1] / "fabric_decoded_schema.json"
@@ -94,12 +95,15 @@ def check_types(manifest: dict, problems: list) -> str:
 
 
 def check_router(manifest: dict, path: str, router: dict, problems: list):
-    """The decoded router has one entry, with a value, for each item the manifest locates, and health."""
+    """
+    The decoded router has one entry, with a value, for each item the manifest locates, and health. Its routing table
+    is stored in the file's routing_tables instead of its areas.
+    """
     node, where = get_router(manifest, path)
     leaves = {kind: [leaf.path for leaf in walk_router(node, where) if leaf.kind is kind] for kind in LeafKind}
     areas = lookup(manifest, f"archs.{manifest['run']['arch']}.areas", "object")
     expected = {
-        "areas": [name for name, area in areas.items() if area is not None],
+        "areas": [name for name, area in areas.items() if area is not None and name != ROUTING_TABLE],
         "regions": leaves[LeafKind.REGION],
         "streams": leaves[LeafKind.STREAM],
         "elements": leaves[LeafKind.ELEMENT],

@@ -262,10 +262,11 @@ def scatter_command(chunk_sizes, chunk_count, chunk_encoding):
     return struct.pack("<3HBB", *chunk_sizes, chunk_count, chunk_encoding)
 
 
-def slots_of(manifest, router_path, rings, with_table=False):
+def slots_of(manifest, router_path, rings, with_table=False, table_fields=None):
     """
     The slots get_ring_buffer_slots gives for `router_path`, whose rings hold `rings`: the headers in each channel's slots,
-    by channel path. With `with_table`, the router's routing table holds ACTION_VECTORS and EXIT_NODE_TABLE.
+    by channel path. With `with_table`, the router's routing table holds ACTION_VECTORS and EXIT_NODE_TABLE; with
+    `table_fields`, it holds those fields instead.
     """
     slot_size = SLOT_2D if manifest["fabric_context"]["is_2d_routing"] else SLOT_1D
     raw, regions = b"", {}
@@ -282,6 +283,8 @@ def slots_of(manifest, router_path, rings, with_table=False):
         }
         raw += ACTION_VECTORS
         table = RoutingTable(router_path.rsplit("/", 1)[0], [router_path], {}, fields, None, None, None)
+    if table_fields is not None:
+        table = RoutingTable(router_path.rsplit("/", 1)[0], [router_path], {}, table_fields, None, None, None)
     snapshot = Input(
         pathlib.Path("snapshot.json"), "0" * 64, {"routers": {}}, raw, pathlib.Path("manifest.json"), manifest, ()
     )
@@ -342,6 +345,14 @@ class Slots2DTest(unittest.TestCase):
 class Landing2DTest(unittest.TestCase):
     # C2's table toward C3, chip 3 at (1, 0): south first, then west twice.
     TOWARD_C3 = [S, 0, D, W, W]
+
+    def test_only_a_router_whose_receiver_lands_packets_reads_its_routing_table(self):
+        # A table with neither member a landing reads: C0's east router has no intermesh ingress and never reads it,
+        # and C2's, whose receiver does, refuses it.
+        slots = slots_of(MANIFEST_2D, "M0/C0/E0", {SENDER: [header_2d(TOWARD_C2)]}, table_fields={})
+        self.assertEqual(only_slot(slots, SENDER).route.walk.delivers, ["M0/C2"])
+        with self.assertRaisesRegex(ManifestError, "which a landing reads"):
+            slots_of(MANIFEST_2D, "M0/C2/E0", {RECEIVER: [header_2d([E])]}, table_fields={})
 
     def landing(self, header, with_table=True):
         return only_slot(slots_of(MANIFEST_2D, "M0/C2/E0", {RECEIVER: [header]}, with_table), RECEIVER)

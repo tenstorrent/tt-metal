@@ -12,8 +12,8 @@ Usage, from the repository root:
 A DIR stands for the fabric_snapshot_*.json files in it. Each decoded file goes next to its snapshot, or into -o's
 directory, named after the snapshot: fabric_decoded_rank_<r>_of_<n>_<UTC>.json. A snapshot's manifest is the one it
 names, one of that name beside it, or, with --manifest, whichever of those manifests has its sha256. Prints one line per
-decoded file, then its warnings and router errors. Exits non-zero when a snapshot is refused or its decoded file can't be
-written.
+decoded file, with how many packets the routers hold, then its warnings and router errors. Exits non-zero when a
+snapshot is refused or its decoded file can't be written.
 """
 
 import argparse
@@ -32,6 +32,23 @@ def find_files(paths: list, pattern: str) -> list:
     for path in paths:
         files.extend(sorted(path.glob(pattern)) if path.is_dir() else [path])
     return files
+
+
+def get_packet_summary(decoded: dict) -> str:
+    """
+    How many packets the decoded file's routers hold: the used ring buffer slots, which may be history, and the counts,
+    which aren't: the senders' unsent packets, and the receivers' waiting or unacked ones, as read after the L1.
+    """
+    used = unsent = received = 0
+    for router in decoded["routers"].values():
+        for channel in router["channels"].values():
+            used += sum(not slot["empty"] for slot in channel["slots"] or [])
+            if channel["kind"] == "sender":
+                unsent += channel["unsent"]["after"] or 0
+            else:
+                count = channel["waiting"] if channel["waiting"]["not_observable"] is None else channel["unacked"]
+                received += count["after"] or 0
+    return f"{used} used ring buffer slots; {unsent} packets unsent in senders, {received} waiting in receivers"
 
 
 def main(argv: list) -> int:
@@ -92,7 +109,7 @@ def main(argv: list) -> int:
         errors = {path: router["error"] for path, router in decoded["routers"].items() if router["error"] is not None}
         print(
             f"{out_path}: {len(decoded['routers'])} routers, {len(errors)} with capture errors; "
-            f"decoded in {time.monotonic() - started:.1f} s"
+            f"{get_packet_summary(decoded)}; decoded in {time.monotonic() - started:.1f} s"
         )
         for warning in snapshot.warnings:
             print(f"  warning: {warning}")
