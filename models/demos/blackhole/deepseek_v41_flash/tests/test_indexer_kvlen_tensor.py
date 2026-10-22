@@ -57,12 +57,12 @@ def test_kv_len_tensor(mesh_device):
     cs = T - 32
 
     def host(kvl):
-        # (the host scalar op needs chunk_start < kv_len: chunk_start = kvl - 32 masks only the last 32 columns of the first 31 rows; every comparison below is on the columns [0, kvl - 32))
+        # (reference: host kv_len = kvl + 32 with chunk_start = kvl: every key < kvl is visible to every row; the comparison covers ALL kvl columns, incl. a partial last k unit)
         o = ttnn.experimental.indexer_score_dsa(
-            q, k, w, chunk_start_idx=kvl - 32, kv_len=kvl, program_config=cfg, cache_batch_idx=0
+            q, k, w, chunk_start_idx=kvl, kv_len=kvl + 32, program_config=cfg, cache_batch_idx=0
         )
         ttnn.synchronize_device(md)
-        return ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, : kvl - 32].float()
+        return ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, :kvl].float()
 
     kvt = _rep(md, torch.zeros(1, 1, 1, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -84,13 +84,13 @@ def test_kv_len_tensor(mesh_device):
 
     print("KVT inputs uploaded", flush=True)
     # (1) eager equality
-    for kvl in (1024, 4096, 30720, 65536, T - 32):
+    for kvl in (1024, 4096, 4128, 4160, 16384, 16416, 16448, 30720, 30752, 65536, 65568, 65600, T - 32 - 64):
         ref = host(kvl)
         print(f"KVT host ref {kvl} done", flush=True)
         setv(kvl)
         o = dev()
         ttnn.synchronize_device(md)
-        got = ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, : kvl - 32].float()
+        got = ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, :kvl].float()
         eq = bool(torch.equal(ref, got))
         print(f"KVT eager kv_len={kvl}: bit-equal to the host scalar op: {eq}", flush=True)
         assert eq
@@ -104,7 +104,7 @@ def test_kv_len_tensor(mesh_device):
     o = dev()
     ttnn.end_trace_capture(md, tid, cq_id=0)
     ttnn.synchronize_device(md)
-    for kvl in (1024, 4096, 30720, 65536, T - 32, 2048):
+    for kvl in (1024, 4128, 16448, 30720, 65568, T - 32 - 64, 2048):
         setv(kvl)
         ttnn.synchronize_device(md)
         ts = []
@@ -113,7 +113,7 @@ def test_kv_len_tensor(mesh_device):
             ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(md)
             ts.append(time.perf_counter() - t0)
-        got = ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, : kvl - 32].float()
+        got = ttnn.to_torch(ttnn.get_device_tensors(o)[0])[0, 0, :, :kvl].float()
         ref = host(kvl)
         eq = bool(torch.equal(ref, got))
         print(
