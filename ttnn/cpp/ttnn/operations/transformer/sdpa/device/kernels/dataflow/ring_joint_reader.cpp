@@ -1605,6 +1605,10 @@ void kernel_main() {
                 CircularBuffer cb_k(cb_k_in);
                 uint32_t k_addr;
                 if (k_armed) {
+                    // Armed pages are only created for chain-received pieces, and a chain member receives every
+                    // piece of its stream (cores whose chunks span two heads are kept off the chains), so an armed
+                    // page always meets a chain piece: its ready signal has already been sent.
+                    ASSERT(k_rx);
                     k_addr = k_armed_addr;
                     k_armed = false;
                 } else {
@@ -1627,13 +1631,11 @@ void kernel_main() {
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
                 // forward(), and the page is not reused before piece p+2's reserve. Then arm p+1 if its page is free.
                 cb_k.push_back(k_chunk_tiles);
-                if (has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
+                if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
                     cb_k.reserve_back(k_chunk_tiles);
                     k_armed_addr = cb_k.get_write_ptr();
                     k_armed = true;
-                    if (k_rx) {
-                        k_chain.signal_ready(noc);
-                    }
+                    k_chain.signal_ready(noc);
                 }
                 if (k_chain.should_forward(k_head, 0)) {
                     SOL_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
@@ -1643,6 +1645,7 @@ void kernel_main() {
                 CircularBuffer cb_v(cb_v_in);
                 uint32_t v_addr;
                 if (v_armed) {
+                    ASSERT(v_rx);
                     v_addr = v_armed_addr;
                     v_armed = false;
                 } else {
@@ -1660,13 +1663,11 @@ void kernel_main() {
                     fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 }
                 cb_v.push_back(v_cb_entry_tiles);
-                if (has_next && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
+                if (v_rx && has_next && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
                     cb_v.reserve_back(v_cb_entry_tiles);
                     v_armed_addr = cb_v.get_write_ptr();
                     v_armed = true;
-                    if (v_rx) {
-                        v_chain.signal_ready(noc);
-                    }
+                    v_chain.signal_ready(noc);
                 }
                 if (v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
