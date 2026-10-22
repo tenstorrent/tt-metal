@@ -54,7 +54,7 @@ KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0) {
 
 void expect_pattern(
     const Mcast& channel,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const std::vector<std::vector<CoreCoord>>& receivers,
     const std::vector<std::vector<CoreCoord>>& senders,
     const std::vector<std::vector<uint32_t>>& acks,

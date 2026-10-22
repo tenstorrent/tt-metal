@@ -331,6 +331,14 @@ for submodule_path in $SUBMODULE_PATHS; do
     fi
 done
 
+# A submodule bump (notably UMD) can change what the public headers should
+# include, e.g. when a header's symbol moves to another header. The api-header
+# include-cleaner gate sweeps every public header in ~40 s, so run it on any
+# submodule change instead of only when a tt_metal/api header is edited.
+if [ "$SUBMODULE_CHANGED" = true ]; then
+    TTMETALIUM_API_HEADERS_CHANGED=true
+fi
+
 # run-clang-tidy: should the code-analysis (clang-tidy) job run? Computed
 # from the dedicated C/C++-only scan and the RAW pre-fallback flags above
 # (plus SUBMODULE_CHANGED, which the fallback never mutates, and the explicit

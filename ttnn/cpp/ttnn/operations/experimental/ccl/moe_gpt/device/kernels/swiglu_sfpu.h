@@ -22,6 +22,9 @@
 //   PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
 //   PACK((llk_math_eltwise_binary_sfpu_swiglu<false, MyConfig>(gate, up, out)));
 //
+//   // Clamped SiLU gating, with alpha=1 and no additive up bias:
+//   PACK((llk_math_eltwise_binary_sfpu_swiglu<false, MyConfig, false>(gate, up, out)));
+//
 // This header is designed to be reusable across different models.
 // Include it from a compute kernel that runs SFPU on the PACK or MATH thread.
 //=============================================================================
@@ -40,16 +43,15 @@ namespace ckernel::sfpu {
 struct SwiGLUConfigGPTOSS {
     static constexpr float alpha = 1.702f;
     static constexpr float clamp_limit = 7.0f;
-    static constexpr bool up_plus_one = true;  // swigluoai: (clamp(up) + 1) * ...
 };
 
 // DeepSeek-V4 clamped SwiGLU (config.json swiglu_limit = 10): silu(clamp(gate, max=L)) * clamp(up, +-L),
-// i.e. alpha = 1 and NO "+1" on up. The plain-SiLU routed-expert kernel dropped the clamp; a real-prompt
-// histogram (tt-blaze postmortem DS4F-0251) showed |pre-activations| up to 58 in the deep layers.
+// i.e. alpha = 1 and NO "+1" on up: callers pass AddUpBias = false. The plain-SiLU routed-expert kernel dropped
+// the clamp; a real-prompt histogram (tt-blaze postmortem DS4F-0251) showed |pre-activations| up to 58 in the deep
+// layers.
 struct SwiGLUConfigDeepSeekV4 {
     static constexpr float alpha = 1.0f;
     static constexpr float clamp_limit = 10.0f;
-    static constexpr bool up_plus_one = false;
 };
 
 //-----------------------------------------------------------------------------
@@ -75,7 +77,7 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
 //-----------------------------------------------------------------------------
 // Core SwiGLU computation
 //-----------------------------------------------------------------------------
-template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS, bool AddUpBias = true>
 inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
     constexpr float alpha = Config::alpha;
     constexpr float clamp_limit = Config::clamp_limit;
@@ -96,8 +98,8 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
         v_if(up < -clamp_limit) { up = -clamp_limit; }
         v_endif;
 
-        // up = up + 1 (swigluoai only; the DeepSeek-V4 clamped SiLU multiplies by the clamped up as is)
-        if constexpr (Config::up_plus_one) {
+        // GPT-OSS adds one; ordinary clamped SiLU gating (moe_compute, the DeepSeek-V4 routed experts) does not.
+        if constexpr (AddUpBias) {
             up = up + 1.0f;
         }
 
@@ -105,7 +107,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
         sfpi::vFloat alpha_gate = gate * alpha;
         sfpi::vFloat sig = _swiglu_sigmoid_<is_fp32_dest_acc_en>(alpha_gate);
 
-        // result = (up + 1) * gate * sigmoid(alpha * gate)
+        // up already includes the optional bias; result = up * gate * sigmoid(alpha * gate)
         // Compute gate*sig first (bounded range, similar to SiLU), then multiply by up.
         sfpi::vFloat glu = gate * sig;
         sfpi::vFloat result = up * glu;
@@ -133,14 +135,14 @@ inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init);
 }
 
-template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS, bool AddUpBias = true>
 inline void llk_math_eltwise_binary_sfpu_swiglu(
     uint gate_tile, uint32_t up_tile, uint32_t out_tile, VectorMode vector_mode = VectorMode::RC) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_swiglu,
-        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config, AddUpBias),
         gate_tile,
         up_tile,
         out_tile,

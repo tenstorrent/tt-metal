@@ -743,8 +743,8 @@ public:
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
-        DataflowBuffer& dfb_;
+        FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
+        DataflowBufferAnyPattern& dfb_;
     };
 
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
@@ -863,7 +863,7 @@ private:
     uint32_t destination_offset_bytes_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBuffer> relay_dfb_;
+    std::optional<DataflowBufferAnyPattern> relay_dfb_;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
@@ -1284,8 +1284,18 @@ private:
             return;
         }
         ASSERT(num_credit_lanes() == 1);
-        note_credit_atomic_noc(noc);
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx, 0);
+        // The pad holds its bytes of the ring until the receiver steps over them, so it waits for room
+        // as reserve_back does. Published into a full ring it would push the outstanding count past the
+        // ring, and reserve_back's free-space check would then let the next entry overwrite ones the
+        // receiver still holds.
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        volatile tt_l1_ptr uint32_t* acked_ptr = local_acked_ptr(iface, receiver_idx, 0);
+        WAYPOINT("GSPW");
+        while ((num_units - (*sent_ptr - load_remote_l1_credit(acked_ptr))) < adjustment) {
+        }
+        WAYPOINT("GSPD");
+        note_credit_atomic_noc(noc);
         volatile tt_l1_ptr uint32_t* xy =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
         const uint64_t remote_sent_noc_addr =

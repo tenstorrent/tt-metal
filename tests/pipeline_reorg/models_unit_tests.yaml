@@ -787,7 +787,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -806,10 +807,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models

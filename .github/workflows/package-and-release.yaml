@@ -489,7 +489,6 @@ jobs:
               "CHANGELOG.txt"
               "README.md"
               "INSTALLING.md"
-              "MODEL_UPDATES.md"
               "tt-metalium.tar.gz"
             )
 
@@ -572,7 +571,6 @@ jobs:
             "CHANGELOG.txt"
             "README.md"
             "INSTALLING.md"
-            "models/docs/MODEL_UPDATES.md"
             "tt-metalium.tar.gz"
           )
           for file in "${required_files[@]}"; do
@@ -608,7 +606,6 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
             debian-packages/*.deb
           fail_on_unmatched_files: true

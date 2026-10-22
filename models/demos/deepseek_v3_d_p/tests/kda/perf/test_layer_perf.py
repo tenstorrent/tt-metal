@@ -48,16 +48,17 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox targets.
+# LoudBox targets. SP2xTP4 is the CI bh_loudbox runner's median (6.816, 6.821 ms); a developer LoudBox measured
+# 6.45 ms, so the others, measured there, may run slow on the runner.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 7.379,
-    "SP2xTP4": 7.436,
-    "SP4xTP2": 6.755,
+    "SP1xTP8": 6.447,
+    "SP2xTP4": 6.819,
+    "SP4xTP2": 5.593,
 }
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 2.077
+_GALAXY_PERF_REFERENCE_MS = 1.678
 _GALAXY_ACTUAL_START = 4 * 640 + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
