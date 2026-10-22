@@ -2521,7 +2521,8 @@ template <
     bool RANK_STAMPED,
     TopkTieOrder TIE_ORDER,
     bool STRAIGHT_LINE,
-    bool REV_BY_MODE9 = false>
+    bool REV_BY_MODE9 = false,
+    bool FIRST_HALF_ONLY = false>
 inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // NOTE (stable sort): tie-break polarity comes from TIE_ORDER, NOT from idir. The multi-core topk deliberately
@@ -2752,7 +2753,8 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                 default:
                     std::uint32_t num_steps               = ph + 1;
                     std::uint32_t sorted_seq_length       = 1 << num_steps;
-                    std::uint32_t total_datums_to_compare = 64;
+                    // FIRST_HALF_ONLY (K 32 with skip_second): the second tile is dead after the distance 32 step, so its sort is skipped.
+                    std::uint32_t total_datums_to_compare = FIRST_HALF_ONLY ? 32 : 64;
                     if constexpr (STRAIGHT_LINE)
                     {
                         // Steps N to 6 at distance 32, step 5 at distance 16; the direction is chosen once per step
@@ -2771,11 +2773,11 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                         if (idir)
                         {
-                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, 64>(sorted_seq_length);
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, true, FIRST_HALF_ONLY ? 32 : 64>(sorted_seq_length);
                         }
                         else
                         {
-                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false, 64>(sorted_seq_length);
+                            bitonic_topk_rebuild_step<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, false, FIRST_HALF_ONLY ? 32 : 64>(sorted_seq_length);
                         }
                     }
                     else
@@ -2903,8 +2905,16 @@ TT_ALWAYS_INLINE void _bitonic_topk_rebuild(const bool idir, const int m_iter, c
     // Reversed steps 4 to 1 groups by mode 9 read faster up to K 32 and slower at K 64, which keeps the bracketed groups.
     if ((STABLE_SORT || FUSED || logk >= 5) && logk <= 5)
     {
-        _bitonic_topk_rebuild_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, true>(
-            idir, m_iter, k, logk, skip_second);
+        if ((skip_second & 0x1) && logk == 5)
+        {
+            _bitonic_topk_rebuild_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, true, true>(
+                idir, m_iter, k, logk, skip_second);
+        }
+        else
+        {
+            _bitonic_topk_rebuild_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, true>(
+                idir, m_iter, k, logk, skip_second);
+        }
     }
     else if (STABLE_SORT || FUSED || logk >= 5)
     {
