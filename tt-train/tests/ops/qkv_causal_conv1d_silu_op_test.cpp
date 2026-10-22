@@ -186,6 +186,29 @@ TEST_F(QkvCausalConv1dSiluTest, RepeatedRunsAreStable) {
     }
 }
 
+// Invalid work splits are rejected by validation before anything is launched.
+TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto run = [&](const Shape& s, uint32_t chunk, uint32_t splits) {
+        const auto p = random_problem(s, 3);
+        auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
+        auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+        std::array<ttnn::Tensor, 4> taps;
+        for (size_t j = 0; j < 4; ++j) {
+            taps[j] = core::from_xtensor(p.taps[j], device);
+        }
+        auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
+        auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
+        auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
+        metal::qkv_causal_conv1d_silu_bw(
+            grad_q, grad_k, grad_v, input, history, taps[0], taps[1], taps[2], taps[3], s.Q, s.K, s.V, chunk, splits);
+    };
+    EXPECT_THROW(run({64, 128, 64, 64}, 96, 1), std::runtime_error);      // 96 does not divide C = 256
+    EXPECT_THROW(run({64, 128, 64, 64}, 64, 3), std::runtime_error);      // T = 64 has only 2 tile rows
+    EXPECT_THROW(run({64, 512, 256, 256}, 1024, 1), std::runtime_error);  // 32 tiles per block exceed L1
+}
+
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
 TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
     check_metal_bw({256, 128, 64, 64}, 256, 4, 7, "large preact", /*x_scale=*/4.0F);
