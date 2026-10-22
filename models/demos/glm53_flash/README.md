@@ -44,12 +44,14 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 27.3 s | 6.7 | 33 | 216 | one run: every slot populated (4 prompts per row prefilled one after another at 2400 tok/s on the MoE regions prefill path), needle retrieved by all 32 slots, users of a row bit-identical; decode step 148.2 ms through the regions expert kernel (the stacked block op decodes at 90 ms when its copy fits: one-run re-measure queued) |
 | 8   | Galaxy 8x4 (Blackhole) | 1 047 612 | 460 s | 6.4 | 33 | 51 | one run (needle depth 0.56, retrieved by all 8 slots): one prompt, replicated to the 8 rows; 2276 tok/s prefill; decode step 156.0 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
 | 32  | Galaxy 8x4 (Blackhole) | 1 047 612 (user-partitioned cache) | 456-489 s | 6.6 | 33 | 210 | one run (needle depth 0.56, gen 160): 4 prompts per row prefilled one after another (each replicated to the 8 rows, 31 min to fill the 32 slots) at 2142-2296 tok/s; needle retrieved by all 32 slots, the 32 chains bit-identical over 160 tokens; decode step 152.1 ms through the regions expert path |
+| 64  | Galaxy 8x4 (Blackhole) | 525 183 (user-partitioned cache, 2 slots per chip) | 223-240 s | 5.6 | 33 | 359 | one run (needle depth 0.56, gen 32): 8 prompts per row prefilled one after another at 2187-2354 tok/s; decode step 178.2 ms; 27 of 64 slots wrote the passphrase within 32 tokens, the rest were still reasoning (quoting it) when cut: gen-160 rerun queued |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.2 s | 6.9 | - | 14 | one run (multimodal demo): eager vision tower 90 ms + prefill; decode step 145 ms; 45 layers bfp4 experts; answer identical to HF (one-run re-measure with today's defaults queued) |
 
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
 long-context prefill path and a prefill accuracy gap at 128 tokens, so not the default): with one random token
-per user, traced decode step 139.2 ms at 256 users with the combine op (7.2 tok/s per user) and 126.3 ms with the
-dense row-exchange combine (7.9 tok/s per user, 2028 aggregate); a reduce-scatter combine is under validation.
+per user, traced decode step 71.2 ms at 32 users (14.1 tok/s per user, 450 aggregate; hybrid 83.1 ms), 139.2 ms at
+256 users with the combine op (7.2 tok/s per user) and 126.3 ms with the dense row-exchange combine (7.9 tok/s per
+user, 2028 aggregate; hybrid dense 115.5 ms); a reduce-scatter combine is under validation.
 
 Accuracy on the same stack: the 16 K and 64 K needle prompts generate 8/8 greedy tokens identical to the HF CPU
 reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens (32 of 32 slots in the 32-user run; a needle placed 523 K tokens before the question is missed, and on that prompt one slot per row also flipped its first token, under investigation); the
