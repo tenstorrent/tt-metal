@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// wint4_aint8 linear, integer matmul + parallel group-wise SFPU dequant.
-// TRISC0-1: int8 x int4 matmul -> Int32 Dest (FPU); every GROUP_KT_DIM K tiles the
-//           group's partial sum is handed to the SFPU in its own Dest section.
-// TRISC3:   per group, loads the weight scales s_w[g, n] of each tile column into LREGs
-//           (one SrcS fill), then rewrites the Dest partials in place as
-//           float(partial) * s_w with a replayed per-face sequence.
-// TRISC2:   PACK0 writes group 0 and accumulates later groups onto it in L1 (fp32).
-// Epilogue: once PACK0 has written the last group, TRISC3 reads each result tile back
-//           through SrcS, multiplies by s_a[m] and rewrites it with PACK1.
-//
-// Perf run types: MATH_ISOLATE times the FPU matmul alone, SFPU_ISOLATE the per-group SFPU
-// pass alone (no epilogue), PACK_ISOLATE the group packs alone, L1_TO_L1 the full pipeline.
+// wint4_aint8 linear: FPU int8 x int4 matmul per K group, SFPU scales each group's Int32 partial by s_w in Dest,
+// PACK0 sums the groups in L1, then a TRISC3 epilogue multiplies by s_a through SrcS and PACK1.
 
 #include <cstdint>
 
@@ -199,11 +189,8 @@ using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-// Replay slots for the dequant sequence over half a face (8 rows): one per 16-column half of
-// the tile, since faces 0/2 (columns 0-15) and 1/3 (columns 16-31) use different scale LREGs.
-// Two 16-entry sequences fit the replay buffer where two full-face (32-entry) ones did not.
-// A pass covers 4 rows of the even or odd columns: 8 rows x 2 column parities = 4 passes, each
-// one LOAD, CAST, MUL and STORE.
+// One replay per half face (8 rows = 4 passes of 4 rows x even/odd columns, each LOAD, CAST, MUL, STORE), in two
+// slots because columns 0-15 and 16-31 use different scale LREGs.
 constexpr std::uint32_t HALF_FACE_ROWS            = 8;
 constexpr std::uint32_t HALF_FACES_PER_FACE       = 2;
 constexpr std::uint32_t SFPU_PASSES_PER_HALF_FACE = 4;
@@ -217,10 +204,8 @@ static_assert(2 * FACE_SEQ_LEN <= 32, "both half-face sequences must fit TRISC3'
 // s_w is stored as one SrcS slice per 16-column half of each (group, tile column).
 constexpr std::uint32_t W_SCALE_SLICES_PER_TILE_COL = 2;
 
-// Rewrites 8 rows of a 16x16 Dest face in place: float(int32 partial) * column scale. A pass
-// covers 4 rows of the even (addr +0) or odd (addr +2) columns, so the scale LREG alternates.
-// Recorded stage-major (4 loads, 4 casts, 4 multiplies, 4 stores), each pass in its own LREG0-3,
-// so independent work sits between every dependent pair instead of stalling on each result.
+// float(int32 partial) * column scale over 8 rows of a face, recorded stage-major (all loads, casts, multiplies,
+// then stores) so independent work separates each dependent pair.
 template <std::uint32_t SLOT, std::uint32_t SCALE_EVEN, std::uint32_t SCALE_ODD>
 inline void record_face_seq()
 {
@@ -299,10 +284,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const ckernel::TensorShape srcs_shape =
                 ckernel::make_tensor_shape(static_cast<std::uint8_t>(srcs_ydim), srcs_dims::XDIM, srcs_dims::ZDIM, srcs_dims::ZDIM);
 
-            // Weight scales s_w[g, n]: one slice per (group, tile column, 16-column half), the 16
-            // column scales repeated down 4 rows. The two halves get their own BFD (offset by one
-            // slice) so one L1 index addresses both: changing the index between the two UNPACR2s,
-            // by SET or by L1 increment, made both read the second half.
+            // s_w: one slice per (group, tile column, 16-column half). The halves get BFDs one slice apart because
+            // moving the L1 index between the two UNPACR2s made both read the second half.
             constexpr std::uint32_t slice_bytes_16B = 4 /*rows*/ * 16 /*cols*/ * 4 /*bytes*/ / 16;
             bfd_w_scale_lo                          = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
                 srcs_shape, L1_ADDRESS(buffer_C[0]), ckernel::to_underlying(fp32));
