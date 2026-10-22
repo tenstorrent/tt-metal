@@ -91,3 +91,11 @@ fp32 reference on the device's routing); per-stage device time, slowest chip, me
   programs never run together. GLM-Flash and K3 frees ~37 / ~118 KB a core for the arena.
 - Device times unchanged (GLM-Flash 4739 -> 4738 us, K3 8496 -> 8493; experts + combine 2070 -> 2083 / 2856 -> 2855,
   the extra arena not used by the combine's sizing at this load); PCC unchanged (0.98704 / 0.99637).
+
+### Step 2: the router
+The block's router already was the tuned path (H-split logits, reduce-scatter to the owners, one ttnn.add with the
+sigmoid as its input activation, combine_rf/router_topk writing the joint rows; the GLM-Flash bring-up's "9 + 48 us").
+Changed: the reduce-scatter's output and the biased scores in L1 (the top-k's 64 B reads at L1 latency, as the K3 block's
+K3_L1=router): top-k GLM-Flash 57.0 -> 45.4 us, K3 100.0 -> 81.2 us; reduce-scatter unchanged (70 -> 75 / 111 -> 108,
+noise). Tried: the router matmul writing L1: 62 -> 120 us (kept DRAM). Totals GLM-Flash 4738 -> 4782 (run-to-run noise
+in the experts + combine, 2083 -> 2111), K3 8493 -> 8455. PCC unchanged.

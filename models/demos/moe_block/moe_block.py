@@ -378,7 +378,9 @@ class MoEBlock(LightweightModule):
         # ---- head ----
         partial = self.router.logits(x)  # [S/SP, E] fp32 partial over H
         mark("router")
-        logits = ttnn.reduce_scatter(partial, dim=2, cluster_axis=1)  # owners' [S/N, E]
+        logits = ttnn.reduce_scatter(  # owners' [S/N, E]
+            partial, dim=2, cluster_axis=1, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(partial)
         mark("logits_rs")
         rows = self.router.top_k(logits)  # joint routing rows [S/N / 32, 32 x 2K] uint16
@@ -536,7 +538,13 @@ class Router:
     def top_k(self, logits):
         """the owners' complete logits [1, 1, S/N, E] -> joint routing rows [S/N / 32, 32 x 2K] uint16."""
         lg = ttnn.reshape(logits, [self.S, int(logits.shape[-1])])
-        b = ttnn.add(lg, self.bias32, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
+        # (the biased scores in L1: the top-k's 64 B reads at L1 latency; freed before the exchange's arena)
+        b = ttnn.add(
+            lg,
+            self.bias32,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         rows = self.rtopk(self.bias_row, b)
         ttnn.deallocate(b)
         return rows
