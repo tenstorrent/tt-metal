@@ -18,7 +18,7 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
-#include "program_allocation_support.hpp"  // L1RegionAllocator
+#include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
@@ -268,6 +268,9 @@ public:
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
+    // Call before allocate_circular_buffers, allocate_dataflow_buffers and allocate_scratchpads.
+    // Seals the program's cores in the device's persistent L1 and sets the base address of every registered region.
+    void prepare_ephemeral_allocation(const IDevice* device);
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
@@ -697,8 +700,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
-    // Used to generate circular buffer addresses. There is one L1RegionAllocator per unique CoreRange
-    std::vector<L1RegionAllocator> cb_allocators_;
+    EphemeralAllocationMetadata cb_allocation_metadata_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
 
@@ -724,7 +726,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
-    std::vector<L1RegionAllocator> dfb_allocators_;
+    EphemeralAllocationMetadata dfb_allocation_metadata_;
     std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.

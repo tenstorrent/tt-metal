@@ -643,9 +643,8 @@ KernelHandle detail::ProgramImpl::add_kernel(
         }
     }
 
-    // Scratchpads stack on the DFB allocators, so their core ranges must be registered before the DFBs are placed.
     if (!kernel->scratchpad_binding_handles().empty()) {
-        register_ephemeral_allocation(this->dfb_allocators_, kernel->core_range_set());
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
     kernels_[index].insert({id, kernel});
@@ -1362,7 +1361,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
             }
         }
     }
-    register_ephemeral_allocation(this->cb_allocators_, circular_buffer->core_ranges());
+    register_ephemeral_allocation(this->cb_allocation_metadata_, circular_buffer->core_ranges());
 
     this->circular_buffers_.push_back(circular_buffer);
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
@@ -2180,10 +2179,15 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
-    for (L1RegionAllocator& cb_allocator : this->cb_allocators_) {
-        cb_allocator.reset_available_addresses();
-    }
+    invalidate_ephemeral_allocation_metadata(this->cb_allocation_metadata_);
     this->local_circular_buffer_allocation_needed_ = true;
+}
+
+void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
+    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
+    auto& seals = this->persistent_l1_seals_[&persistent_l1];
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1, seals);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1, seals);
 }
 
 // Scratchpad is a Metal 2.0-only construct.
@@ -2192,9 +2196,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         return;
     }
 
-    // Scratchpad ranges are in dfb_allocators_, but a program with no DFBs never runs allocate_dataflow_buffers.
-    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    prepare_ephemeral_allocation(this->dfb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
@@ -2206,11 +2207,11 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
             for (auto& handle : scratchpad_handles) {
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
-                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+                // (DFBs and CBs are mutually exclusive, so dfb_allocation_metadata_ owns the whole region.)
                 // The scratchpad address is delivered as a CRTA, so it sits at the same L1 offset on every core of
                 // the kernel. The kernel's core ranges were registered in add_kernel.
-                const uint64_t addr =
-                    allocate_ephemeral_memory(this->dfb_allocators_, kernel_cores, handle.size_bytes, alignment);
+                const uint64_t addr = allocate_ephemeral_memory(
+                    this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
@@ -2300,8 +2301,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    prepare_ephemeral_allocation(this->cb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
@@ -2317,7 +2316,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         }
 
         const uint64_t computed_addr = allocate_ephemeral_memory(
-            this->cb_allocators_,
+            this->cb_allocation_metadata_,
             circular_buffer->core_ranges(),
             circular_buffer->size(),
             device->allocator()->get_alignment(BufferType::DRAM));
@@ -2378,7 +2377,7 @@ void merge_cb_stats_intervals(
 
 void detail::ProgramImpl::merge_cb_l1_regions_by_core_range(
     std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const {
-    for (const auto& cb_allocator : cb_allocators_) {
+    for (const auto& cb_allocator : cb_allocation_metadata_.regions) {
         merge_cb_stats_intervals(regions_per_range[cb_allocator.core_range], cb_allocator.l1_regions);
     }
 }
@@ -2461,7 +2460,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
-    for (const L1RegionAllocator& cb_allocator : this->cb_allocators_) {
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
         }
@@ -3332,6 +3331,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         return;
     }
     this->compile(device, force_slow_dispatch);
+    this->prepare_ephemeral_allocation(device);
     this->allocate_circular_buffers(device);
     this->validate_circular_buffer_core_ranges(device);
     this->validate_circular_buffer_region(device);
@@ -3351,13 +3351,13 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
     this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
     this->simple_l1_validation_region_end_ = 0;
-    for (const auto& cb_allocator : this->cb_allocators_) {
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (!cb_allocator.l1_regions.empty()) {
             this->simple_l1_validation_region_end_ =
                 std::max(this->simple_l1_validation_region_end_, cb_allocator.l1_regions.back().second);
         }
     }
-    for (const auto& dfb_allocator : this->dfb_allocators_) {
+    for (const auto& dfb_allocator : this->dfb_allocation_metadata_.regions) {
         if (!dfb_allocator.l1_regions.empty()) {
             this->simple_l1_validation_region_end_ =
                 std::max(this->simple_l1_validation_region_end_, dfb_allocator.l1_regions.back().second);

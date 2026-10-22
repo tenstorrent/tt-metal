@@ -2273,7 +2273,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             }
         }
     }
-    register_ephemeral_allocation(this->dfb_allocators_, dfb->core_ranges);
+    register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
 
     this->local_dataflow_buffer_allocation_needed_ = true;
     this->compile_and_allocate_needed_ = true;
@@ -2968,9 +2968,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
-    for (L1RegionAllocator& dfb_allocator : this->dfb_allocators_) {
-        dfb_allocator.reset_available_addresses();
-    }
+    invalidate_ephemeral_allocation_metadata(this->dfb_allocation_metadata_);
     this->local_dataflow_buffer_allocation_needed_ = true;
 }
 
@@ -2980,8 +2978,6 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         return;
     }
 
-    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    prepare_ephemeral_allocation(this->dfb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     for (auto& dfb : this->dataflow_buffers_) {
         // Alias secondaries share the primary's L1 address; skip allocation here
         // and propagate the address inline after the primary is processed below.
@@ -2995,7 +2991,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             alloc_addr = dfb->borrowed_addr_;
         } else {
             const uint64_t computed_addr = allocate_ephemeral_memory(
-                this->dfb_allocators_,
+                this->dfb_allocation_metadata_,
                 dfb->core_ranges,
                 dfb->total_size(),
                 device->allocator()->get_alignment(BufferType::DRAM));
@@ -3039,7 +3035,7 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
 
-    for (const L1RegionAllocator& dfb_allocator : this->dfb_allocators_) {
+    for (const auto& dfb_allocator : this->dfb_allocation_metadata_.regions) {
         if (dfb_allocator.l1_regions.empty()) {
             continue;
         }
