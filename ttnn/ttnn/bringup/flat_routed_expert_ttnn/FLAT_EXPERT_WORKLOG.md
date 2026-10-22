@@ -1423,3 +1423,80 @@ us per call / DRAM % / math % (90):
 - Correctness: test_closeout_flat (GLM-5.3, GLM-Flash, K3, M3 at chunks 5120 / 16384, K2.7 at 5120) plus DSv4.1-Flash
   at both chunks (the same check, run ad hoc): 11 passed, min PCC 0.9980 (K3) against the bfp4 reference; M covered
   about 80-512.
+
+### The fixed cost and the crossover, diagnosed; 64-row sub-blocks from layout.rows_hint (2026-10-22, bh-lb-09, flat alone)
+Same bench as the sweep above (test_flat_balanced_sweep.py, Galaxy 8x4 experts per chip, defaults); scripts and logs
+/localdev/mstaletovic/flat_fix/ (run.sh, batch.sh, prof.py / tl.py / hlat.py: per-core zone timelines from
+profile_log_device.csv with MIMO_FL_ZONES=1 / MIMO_FL_WAITZ).
+
+**The "fixed cost" is mostly not fixed.** Scaling experts per call at one M separates the two (us per call, E 4 / 8 /
+16 for GLM-5.3, 2 / 4 / 8 for M3):
+| | GLM-5.3 M 32 | GLM-5.3 M 384 | M3 M 32 | M3 M 384 |
+|---|---|---|---|---|
+| calls | 220 / 408 / 797 | 442 / 789 / 1464 | 160 / 297 / 565 | 334 / 556 / 1021 |
+| per expert (slope) / its floor | 48.6 / 43.0 | 84.4 / 60 DRAM, 58 math | 67 / 63.7 | 116 / 81 DRAM, 87 math |
+| intercept (truly per call) | ~19 | ~114 | ~29 | ~92 |
+At M 32 the gap is the stream rate (88-95% of the floor per expert) plus ~20-30 us per call; at M 384 it is the
+steady state and a ~100 us fill + drain.
+
+Where the per-call part goes (GLM-5.3 E 8, profiles):
+- **The slowest DRISC slot sets the end.** Expert e's gate/up weights land every 44-46 us at M 32 (the first 58: it
+  shares DRAM with two experts of down weights and x); per gate/up core the last block lands 429-460 us at M 160 - a
+  7% spread between slots over a call, and every h waits for all 64 gate/up cores.
+- **The drain after the last weights** (M 160, 128-row sub-blocks): last weights 440 / 460 us (median / slowest) ->
+  last gate/up row pass 495 / 507 -> h at the down cores ~501 -> down done 527: 67-87 us = the last expert's remaining
+  row passes (~26 us), the h hand-off (~6-15), the last 128-row down sub-block (20) and its 32-row tail (5).
+- **The fill at M 384**: the first sub-block's K loop waits for expert 0's whole gate/up slice (lands at 67 us vs ~45
+  in steady state); a first h at the down cores at ~105-111 us.
+
+What the crossover's steady state waits on (M 384, E 8 / E 3):
+- **Gate/up compute is the bound, not the DRAM / math overlap.** fp32 DST (4 tiles a half) forces 2-row-tile passes
+  (row passes, SE_GU_RP): a pass of 64 rows x 2 tiles x K 192 takes 12.8 us (~71% of the LoFi tile rate), 25.6 us per
+  128-row sub-block; the down cores take 20 us per sub-block (~91%) and wait ~7 us each for h. Gate/up also waits
+  ~3.5 us per sub-block on x / weights (WAITZ): the x ring holds exactly one sub-block (x_slots 24 = nk_gu) and row
+  passes keep it until the final pass, so the next sub-block's x streams in only during that pass.
+- **DRAM is a near tie**: with x read by both rectangles (2 x 4.7 MB at M 384) the true bytes are ~35 MB an expert
+  (~69 us); without the down-weight reads (MIMO_FL_DN_NOREAD, garbage) 790 -> 728 us. The two near-equal limits are
+  why the time looks like a sum.
+
+Tried, no gain (GLM-5.3 E 8 unless noted, us at M 32 / 160 / 384 / 1024 vs 408 / 539 / 790 / 1722):
+- MIMO_FL_GU_FULL_SYNC (one 4-row pass in a full-sync DST): 408 / - / 770 / 1760; M3 and K3 +12-23% at M >= 384.
+- h chains: DCH 4 / 16 / 32, HPIECES 8, LINK_DEPTH 8: within 0.5% (DCH 32 +6% at 384).
+- down weights: DW_BATCH 1 / 4 unchanged; their start delayed 20-70 us at the call start (a probe, reverted):
+  unchanged - the DN_NOREAD gain is steady-state sharing, not the fill.
+- LEAN 3 + NS_MAX 10: 402 / 535 / - (-1.5% at M 32 only); M3 unchanged.
+- x read once (X1): 411 / 755 / 1119 / 2644 (one primary's multicast caps x); M3 likewise.
+- x ring 26 slots (MIMO_FL_X_SLOTS_MAX): **hangs** (gate/up waits on x at se3_compute.cpp:437: the row-pass x
+  indexing assumes x_slots == nk_gu); 28 does not fit. Not pursued.
+- 64-row sub-blocks with a 4th h buffer (MIMO_FL_HBUF=4 extended to bfp8 h, a probe, reverted): same as without it.
+
+**Change: layout.rows_hint** (FlatLayoutOptions; expected mean rows per local expert per call, -1 unknown; in the
+plan key and the plan log line). The capacity callers pass is the whole chunk, so the plan cannot infer M. With a
+hint <= 320, plans that have 128-row sub-blocks and gate/up row passes (GLM-5.3, GLM-5.3-Flash; every other model
+already plans 64-row ones) take 64-row sub-blocks: one row pass a sub-block (x streams in during the whole pass; the
+drain is halved). y bit-exact (GLM-5.3 M 128). Above ~384 rows the 128-row sub-blocks are better (64-row ones:
++0.4% at 384, +3.1% at 512, +5.9% at 1024 on GLM-5.3), hence the threshold. The close-out tests pass the hint
+(round(chunk x top-k / experts)): GLM-5.3 / GLM-Flash at 5120 take 64-row sub-blocks, at 16384 128-row ones.
+test_flat_balanced_sweep.py: GLM_SWEEP_ROWS_HINT=<n> | auto (auto: the op rebuilt per M with the hint M).
+
+Full sweep, before (the table above) -> after (hint = M; us / DRAM %):
+| M | GLM-5.3 | GLM-5.3-Flash | K3 | K2.7 | M3 | DSv4.1-Flash |
+|---|---|---|---|---|---|---|
+| 32 | 408 -> 403 / 85 | 312 -> 307 / 84 | 1110 -> 1109 | 695 -> 696 | 297 -> 297 | 530 -> 529 |
+| 96 | 468 -> 458 / 80 | 356 -> 347 / 80 | 1233 -> 1230 | 784 -> 782 | 354 -> 355 | 609 -> 608 |
+| 128 | 516 -> 497 / 77 | 389 -> 377 / 76 | 1308 -> 1311 | 829 -> 829 | 375 -> 375 | 656 -> 658 |
+| 160 | 539 -> 524 / 75 | 410 -> 397 / 74 | 1434 -> 1448 | 875 -> 877 | 390 -> 389 | 711 -> 716 |
+| 192 | 572 -> 553 / 73 | 435 -> 420 / 72 | 1503 -> 1515 | 927 -> 925 | 411 -> 413 | 761 -> 762 |
+| 256 | 642 -> 630 / 68 | 494 -> 479 / 67 | 1692 -> 1699 | 1062 -> 1057 | 457 -> 458 | 880 -> 871 |
+| 384 | 787 -> 786 | 598 -> 599 | 2244 -> 2241 | 1350 -> 1345 | 555 -> 556 | 1088 -> 1086 |
+| 1024 | 1722 -> 1722 | 1283 -> 1283 | 4999 -> 4999 | 3138 -> 3136 | 1159 -> 1156 | 2589 -> 2589 |
+GLM-5.3 -1.2 .. -3.7% and GLM-Flash -1.5 .. -3.4% at M 32-256, unchanged above. The other plans are unchanged (their
+plan is identical); the largest move, K3 at 160 / 192 (+0.9 / +0.8%), is run-to-run noise: HEAD without the change
+gave 1441 / 1431 / 1448 at 160 and 1498 / 1519 / 1508 at 192, with it 1447 / 1440 / 1440 and 1515 / 1514 / 1518.
+Correctness: test_closeout_flat 9 / 9 (min PCC 0.9980), test_flat_combine_closeout 9 / 9 under uniform, zipf
+spread and zipf packed routing (flat min PCC 0.9984, worst per-token rel err 2.43e-3), test_closeout_plans passes.
+
+Left (largest first): gate/up compute at mid / large M (2-row passes at ~71% of LoFi: a 4-row pass needs 8 fp32 DST
+tiles - full sync lost the pack overlap; an x ring deeper than one sub-block needs the row-pass x indexing fixed);
+the DRISC slot spread (~7% of a call, the slowest slot gates the drain); x read twice (~7% of DRAM bytes at M 160+);
+the remaining drain (h hand-off + the last down sub-block).

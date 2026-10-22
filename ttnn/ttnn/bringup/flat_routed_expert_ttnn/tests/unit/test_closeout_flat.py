@@ -38,10 +38,13 @@ def test_closeout_flat(device, case):
     wsets = [tuple(torch.randn(*sh) * 0.02 for sh in ((H, I), (H, I), (I, H))) for _ in range(N_W)]
     weights = [[wsets[e % N_W] for e in range(E)]]
     gids = [[(NG // E) * e + 1 for e in range(E)]]
-    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, act=act, pin=1)
+    # (layout.rows_hint: the expected rows per expert, chunk x top-k / experts, as the model's caller passes it)
+    op = FlatRoutedExpert(
+        device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, act=act, pin=1, layout=dict(rows_hint=round(pc["M"]))
+    )
     p = op.plan
     logger.info(
-        f"{model} chunk {chunk}: E {E} M {pc['M']:.0f}; gate/up {len(p['gu'])} x {p['nu'] or 2 * p['np']} "
+        f"{model} chunk {chunk}: E {E} M {pc['M']:.0f} (sub-block {32 * p['mt']} rows); gate/up {len(p['gu'])} x {p['nu'] or 2 * p['np']} "
         f"(units {p['nu']}), down {p['nd']} x {max(p['pcds'])}, drisc {p['drisc']} dual {p['dual']} rdown {p['rdown']}"
     )
     assert p["drisc"] and not p["dual"] and not p["rdown"], "not DRISC only"

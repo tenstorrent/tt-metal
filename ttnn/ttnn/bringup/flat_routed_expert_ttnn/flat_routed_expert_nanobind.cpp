@@ -197,6 +197,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
         .def_rw("single_subgrid", &fre::FlatLayoutOptions::single_subgrid)
         .def_rw("even_split", &fre::FlatLayoutOptions::even_split)
+        .def_rw("rows_hint", &fre::FlatLayoutOptions::rows_hint)
         .def_rw("row0", &fre::FlatLayoutOptions::row0)
         .def_rw("row1", &fre::FlatLayoutOptions::row1)
         .def_rw("x_path", &fre::FlatLayoutOptions::x_path)

@@ -594,6 +594,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (cfg.h_bf16 && !p.hu) {
         p.mt = std::min(p.mt, 2u / p.g * p.g);
     }
+    // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
+    // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
+    // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)
+    if (lo.rows_hint > 0 && lo.rows_hint <= 320 && p.gu_rp && p.g == 1 && p.mt == 4 && !p.hu && !cfg.h_bf16) {
+        p.mt = 2;
+    }
     if (const char* mt = cstr(pr.mt)) {  // (perf probe: cap the sub-block's row tiles)
         p.mt = std::min(mt_full, static_cast<uint32_t>(std::atoi(mt)) / p.g * p.g);
     }

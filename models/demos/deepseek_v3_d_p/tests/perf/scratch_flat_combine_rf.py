@@ -150,6 +150,8 @@ def closeout_cfg(model, chunk, routings=("uniform",), **kw):
         timing=kw.pop("timing", False),
         routings=routings,
         closeout=True,
+        # (the flat plan's hint: the expected rows per expert, chunk x top-k / experts - its sub-block size)
+        layout=kw.pop("layout", dict(rows_hint=round(pc["M"]))),
         **kw,
     )
 

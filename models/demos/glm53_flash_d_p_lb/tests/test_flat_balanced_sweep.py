@@ -48,7 +48,7 @@ DRAM_GBS, FLOP_CYC, N_COMPUTE, N_GRID = 512.0, 4096, 64 + 26, 110
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_balanced_sweep(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
-    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout, layout_from_env
 
     torch.manual_seed(0)
     W = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
@@ -65,22 +65,33 @@ def test_flat_balanced_sweep(device):
             math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     else:
-        op = FlatRoutedExpert(
-            device,
-            W,
-            m=CAP,
-            H=H,
-            I=I,
-            gids=[list(range(E))],
-            n_global=NG,
-            wdtype="bf4",
-            act=ACT,
-            pin=1,
-            x_bf16=XBF16,
-            h_bf16=HBF16,
-            layout=layout_from_env(),  # (a bench: the MIMO_FL_* recipe names, e.g. the pure DRISC layout)
-        )
-    del W
+        # GLM_SWEEP_ROWS_HINT: layout.rows_hint (expected rows per expert) - an integer for every M, or "auto": the
+        # op is built per M with the hint M (balanced routing: the exact mean)
+        HINT = os.environ.get("GLM_SWEEP_ROWS_HINT")
+
+        def make_op(hint):
+            lay = layout_from_env()  # (a bench: the MIMO_FL_* recipe names, e.g. the pure DRISC layout)
+            if hint is not None:
+                lay = flat_layout(lay, rows_hint=int(hint))
+            return FlatRoutedExpert(
+                device,
+                W,
+                m=CAP,
+                H=H,
+                I=I,
+                gids=[list(range(E))],
+                n_global=NG,
+                wdtype="bf4",
+                act=ACT,
+                pin=1,
+                x_bf16=XBF16,
+                h_bf16=HBF16,
+                layout=lay,
+            )
+
+        op = make_op(None if HINT in (None, "auto") else HINT)
+        if HINT != "auto":  # (the host weights are kept only to rebuild the op per M)
+            del W
     if not UNIFIED:  # (the plan's roles: what the layout resolved to)
         pl = op.plan
         print(
@@ -111,6 +122,9 @@ def test_flat_balanced_sweep(device):
     rows_out = []
     try:
         for M, cl in cases:
+            if not UNIFIED and HINT == "auto":
+                op = make_op(M)
+                print(f"[sweep] M {M}: rows_hint {M}, sub-block row tiles {op.plan['mt']}", flush=True)
             pads = [(c + 31) // 32 * 32 for c in cl]
             counts = torch.zeros(1, NG, dtype=torch.int32)
             regions = torch.zeros(1, NG, dtype=torch.int32)

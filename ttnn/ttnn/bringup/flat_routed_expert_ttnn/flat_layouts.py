@@ -38,6 +38,7 @@ FIELDS = (
     "pin_ratio",
     "single_subgrid",
     "even_split",
+    "rows_hint",
 )
 
 # DRAM-core (DRISC) gate/up weight readers only: no Tensix weight readers, no per-call Tensix fallback, inside the

@@ -50,6 +50,11 @@ struct FlatLayoutOptions {
     // one subgrid (one M group of gate/up cores) also for small I (It <= 32 tiles takes 2 or 3 subgrids by default,
     // which the overlap-era program factory no longer builds): with 16-column units, e.g. a split shared expert's slice
     bool single_subgrid = false;
+    // expected mean rows per local expert in a call (-1: unknown; the capacity m is the whole chunk). Plans with
+    // 128-row sub-blocks and gate/up row passes (GLM-5.3, GLM-5.3-Flash) take 64-row sub-blocks at <= 320: one row
+    // pass a sub-block (the x ring no longer pins a whole sub-block until its last pass) and half the drain after the
+    // last weights land; -1.2 .. -3.3% at M 32 .. 256, but +3 .. +7% at M >= 512 (FLAT_EXPERT_WORKLOG.md)
+    int32_t rows_hint = -1;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

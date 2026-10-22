@@ -13,7 +13,7 @@ std::vector<uint32_t> FlatLayoutOptions::key() const {
     return {drisc,       drisc_dual,      drisc_in_overlap, u(drisc_pure),  u(max_down),      u(x_helpers),
             half_width,  u(hg_units),     u(row0),          u(row1),        u(x_path),        u(x_snakes),
             u(x_pieces), u(x_fwd_ncrisc), u(x_fwd_noc),     u(x_fwd_depth), u(x_relay_depth), x_once,
-            u(dw_batch), pin_ratio,       single_subgrid,   even_split};
+            u(dw_batch), pin_ratio,       single_subgrid,   even_split,     u(rows_hint)};
 }
 
 std::string FlatLayoutOptions::str() const {
@@ -21,7 +21,7 @@ std::string FlatLayoutOptions::str() const {
         "drisc {} dual {} in_overlap {} pure {} max_down {} x_helpers {} half_width {} hg_units {} rows {}..{} x_path "
         "{} "
         "snakes {} pieces {} fwd_ncrisc {} fwd_noc {} fwd_depth {} relay_depth {} x_once {} dw_batch {} pin_ratio {} "
-        "single_subgrid {} even_split {}",
+        "single_subgrid {} even_split {} rows_hint {}",
         drisc,
         drisc_dual,
         drisc_in_overlap,
@@ -43,7 +43,8 @@ std::string FlatLayoutOptions::str() const {
         dw_batch,
         pin_ratio,
         single_subgrid,
-        even_split);
+        even_split,
+        rows_hint);
 }
 
 FlatProbes FlatProbes::from_env() {
