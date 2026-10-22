@@ -608,6 +608,7 @@ ttnn::Tensor reshape_dispatch(
     const auto [logical_shape, padded_shape] =
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
 
+    // Skips the arch gate like the gather/repeat/untilize forced entries, so a caller can force codegen on any arch.
     if (impl == ReshapeImpl::CODEGEN) {
         const char* violation =
             reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);
