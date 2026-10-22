@@ -38,18 +38,21 @@ void kernel_main() {
         for (uint32_t i = 0; i < elems_per_page; ++i) {
             ptr[i] = val.u >> 16;
         }
+        drain_fill_stores(ptr, elems_per_page);
 #endif
 #ifdef OUTPUT_DTYPE_INT32
         auto ptr = reinterpret_cast<uint32_t*>(write_addr);
         for (uint32_t i = 0; i < elems_per_page; ++i) {
             ptr[i] = fill_value;
         }
+        drain_fill_stores(ptr, elems_per_page);
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
         auto ptr = reinterpret_cast<float*>(write_addr);
         for (uint32_t i = 0; i < elems_per_page; ++i) {
             ptr[i] = val.f;
         }
+        drain_fill_stores(ptr, elems_per_page);
 #endif
     }
 
