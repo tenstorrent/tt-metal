@@ -152,20 +152,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest.
+    // mul_reduce_scalar_init: element-wise op, no accumulate-to-dest.
     // Only ELWMUL takes fidelity phases. ELWADD and ELWSUB need LoFi, and the reduce keeps MATH_FIDELITY.
     constexpr ckernel::MathFidelity ELTWISE_FIDELITY = ELTWISE_BINARY_OP == EltwiseBinaryType::ELWMUL ? MATH_FIDELITY : ckernel::MathFidelity::LoFi;
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, ELTWISE_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        tensor_shape, 0 /* acc_to_dest */);
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, ELTWISE_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0 /*acc_to_dest*/);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i].
+    // Step 1 - element-wise phase: C[i] = A[i] op B[i] into DEST[i], where op is ELTWISE_BINARY_OP.
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
-        LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
+        LLK_ASSERT(
+            (i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Element-wise tile index exceeds maximum destination tiles");
         _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DST_SYNC, is_fp32_dest_acc_en, ELTWISE_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-            tensor_shape, i, true /* clear_fp32_dst_acc */);
+            tensor_shape, i, true /*clear_fp32_dst_acc*/);
     }
 
     // Step 3 - initialize the reduce phase (addr mods + counter reset).
