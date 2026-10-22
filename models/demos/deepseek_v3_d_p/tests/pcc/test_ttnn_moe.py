@@ -1014,12 +1014,13 @@ def _fabric2d_torus_xy_8x4(model_cfg):
 )
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 1),
             torus_y_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1",
         ),
@@ -1027,6 +1028,7 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (4, 2),
             fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
@@ -1034,6 +1036,7 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (2, 4),
             fabric2d_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
@@ -1041,8 +1044,27 @@ def _fabric2d_torus_xy_8x4(model_cfg):
             (8, 4),
             torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # SP on mesh axis 1: Galaxy with SP=4 on axis 1 and TP=8 on axis 0, then one 4x4 prefill stage (a
+        # Galaxy tray half, run_4x4_stage_tests.sh) with SP=4 on the axis-1 ring and TP=4 on the axis-0 line.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1066,6 +1088,7 @@ def test_glm_moe(
     run_pcc_check,
     is_balanced,
     num_links,
+    sp_axis,
     gate_fallback_mode,
     request,
     padded_percent,
@@ -1090,6 +1113,7 @@ def test_glm_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
+        sp_axis=sp_axis,
     )
 
 
