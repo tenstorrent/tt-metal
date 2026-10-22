@@ -42,7 +42,7 @@ The remaining long-prefix gap versus legacy is **175.59 ms**: global SDPA adds 1
 
 ## Artifacts and validation
 
-- [Interactive timeline](index.html), served at `http://localhost:8520/tuned/`. The page links back to the previous capture.
+- [Interactive timeline](index.html), served at `http://localhost:8280/tuned/`. The page links back to the previous capture.
 - [Exact measurements](measurements.md), [analysis JSON with selected configurations](analysis.json), [Perfetto/Chrome trace](trace.json.gz), and [vector chart](breakdown.svg).
 - [Previous findings](../findings.md) and [previous measurements](../measurements.md) are retained unchanged apart from a link to this rerun.
 - 107 host configuration tests passed, including all 48 JSON chunk entries through the striped selector and missing-table/entry failure checks.

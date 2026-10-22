@@ -45,10 +45,10 @@ Legacy 8192 uses its tuned global configuration Q=96 / K=256 / one split / segme
 
 ## Inspect and reproduce
 
-Serve this directory and open the interactive timeline at port 8520:
+Serve this directory and open the interactive timeline at port 8280:
 
 ```bash
-python_env/bin/python -m http.server 8520 --bind 0.0.0.0 \
+python_env/bin/python -m http.server 8280 --bind 0.0.0.0 \
     --directory investigations/gemma4_hybrid_8k_profile
 ```
 
