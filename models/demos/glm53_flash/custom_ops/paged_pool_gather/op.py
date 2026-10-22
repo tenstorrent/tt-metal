@@ -15,6 +15,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.glm53_flash.custom_ops.core_ranges import rect_core_ranges
 
 TILE = 32
 SENTINEL = 0xFFFFFFFF
@@ -110,7 +111,7 @@ class PagedPoolGather:
         items = B * OB
         n_cores = min(items, self.grid_x * self.grid_y)
         cores = [ttnn.CoreCoord(c // self.grid_y, c % self.grid_y) for c in range(n_cores)]
-        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        core_set = rect_core_ranges(cores)  # whole columns + one partial column as 2 rectangles (dispatch < 1 us)
 
         def cb(index, page, pages):
             return ttnn.CBDescriptor(

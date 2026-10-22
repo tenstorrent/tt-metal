@@ -20,6 +20,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.glm53_flash.custom_ops.core_ranges import rect_core_ranges
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -170,7 +171,7 @@ class KdaDecode:
         parts, core_of = self.placement(grid, H * Bt)
         NI = H * Bt * parts
         NC = len(core_of)
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_of])
+        cores = rect_core_ranges(core_of)  # 1-2 rectangles instead of one range per core: < 1 us of dispatch
 
         f32, f16 = ttnn.float32, ttnn.bfloat16
         t32, t16 = TILE * TILE * 4, TILE * TILE * 2

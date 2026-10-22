@@ -1389,8 +1389,14 @@ class TtEPExperts(LightweightModule):
         # op's 2-core per-token scan (340-890 us on the 8x4 at 32 users/row: _agents/ep32_combine/ANALYSIS.md). It
         # also drops the slot clone, the out untilize and the slot tilize. The generic a2a splits the tile-row dim in
         # 16-row multiples only, so T % 16 != 0 (4 users/row) stays on the op.
-        self.combine_mode = os.environ.get("GLM53_EP_COMBINE", "op")
-        assert self.combine_mode in ("op", "a2a"), self.combine_mode
+        self.combine_mode = os.environ.get(
+            "GLM53_EP_COMBINE", "rs"
+        )  # rs default since 2026-10-22 (exact; 139 -> 123 ms at 256 users)
+        # rs: the combine as ONE reduce-scatter along the rows of the zero-padded expert output (row r*T+t = this
+        # chip's weighted contribution to token t of row r): summing over the senders and handing row r its chunk IS
+        # the combine; the hybrid layout runs the same collective on the same [1,1,rows*T,H] shape in ~130 us (the
+        # decode ledger, _agents/decode_ledger/LEDGER.md C1). T % 32 == 0 only (4 users/row stays on the op).
+        assert self.combine_mode in ("op", "a2a", "rs"), self.combine_mode
         # GLM53_EP_FORCE_A2A=1: run the dispatch / combine even on one chip (D = 1: the identity) to exercise the
         # mesh plumbing before a block is available
         self.force_a2a = os.environ.get("GLM53_EP_FORCE_A2A", "0") == "1"
@@ -1500,6 +1506,8 @@ class TtEPExperts(LightweightModule):
         K, H = meta.shape[-1], self.H
         l1 = ttnn.L1_MEMORY_CONFIG
         Td = out.shape[-2]
+        if self.combine_mode == "rs" and T % TILE == 0 and Td == self.mesh.rows * T:
+            return self.mesh.reduce_scatter_rows(out, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,T,H]
         if self.combine_mode == "a2a" and T % 16 == 0 and Td == self.mesh.rows * T:
             return self._combine_rows_a2a(out, T)
         out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))
