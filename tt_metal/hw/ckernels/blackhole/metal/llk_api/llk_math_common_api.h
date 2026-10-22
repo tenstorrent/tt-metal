@@ -72,6 +72,9 @@ template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     SAN_HOOK(reconfigure(StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[new_srca_operand_id])));
+    LLK_ASSERT(
+        (is_fp32_dest_acc_en == is_fp32_dest_acc_en_rt()),
+        "is_fp32_dest_acc_en does not match the configured dest accumulation mode");
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, skip_int8>(unpack_dst_format[new_srca_operand_id]);
 }
 
@@ -79,6 +82,9 @@ template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
     SAN_HOOK(reconfigure(StateVal<Operand<Exu::Sfpu>::Format>(unpack_dst_format[new_srcb_operand_id])));
+    LLK_ASSERT(
+        (is_fp32_dest_acc_en == is_fp32_dest_acc_en_rt()),
+        "is_fp32_dest_acc_en does not match the configured dest accumulation mode");
     _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, skip_int8>(unpack_dst_format[new_srcb_operand_id]);
 }
 
@@ -90,6 +96,9 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, 
     SAN_HOOK(reconfigure(
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[new_srca_operand_id]),
         StateVal<Operand<Exu::Sfpu>::Format>(unpack_dst_format[new_srcb_operand_id])));
+    LLK_ASSERT(
+        (is_fp32_dest_acc_en == is_fp32_dest_acc_en_rt()),
+        "is_fp32_dest_acc_en does not match the configured dest accumulation mode");
     _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, skip_int8>(
         unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
 }

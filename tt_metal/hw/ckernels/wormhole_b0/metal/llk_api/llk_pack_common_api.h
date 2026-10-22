@@ -201,6 +201,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
         StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
+    LLK_ASSERT(
+        (is_fp32_dest_acc_en == is_fp32_dest_acc_en_rt()),
+        "is_fp32_dest_acc_en does not match the configured dest accumulation mode");
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
