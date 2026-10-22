@@ -23,6 +23,9 @@
 // DEST 1..chunk, one DEST window for the whole row; exact fp32 unpack, fused multiply-adds in k order) -> cb_acc; the
 // writer's coefficient-major copy of it (cb_soa, lane = token row) -> slot 0 = sum of its 32 slots in column order ->
 // cb_soa_out.
+//
+// MHC_XING_X16 (bf16 streams, P.20): cb_x holds bf16 tiles (UnpackToDestFp32: bf16 -> fp32 DEST, exact) and cb_y is
+// bf16 (the packer rounds the fp32 y once); srcA is reconfigured before every copy from a CB of the other format.
 
 #include <cstdint>
 
@@ -287,6 +290,13 @@ using namespace ckernel;
 
 ALWI void custom_sfpu_init() { MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>())); }
 
+// MHC_XING_X16: srcA to ``cb``'s format before a copy from it (the CBs alternate fp32 / bf16); absent otherwise.
+ALWI void srca_to(uint32_t cb) {
+#ifdef MHC_XING_X16
+    reconfig_data_format_srca(cb);
+#endif
+}
+
 void kernel_main() {
     const uint32_t start = get_arg_val<uint32_t>(0);
     const uint32_t count = get_arg_val<uint32_t>(1);
@@ -300,6 +310,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t k0 = 0; k0 < k_tiles; k0 += chunk) {
                 cb_wait_front(cb_x, chunk);
+                srca_to(cb_x);
                 copy_tile_to_dst_init_short(cb_x);
                 for (uint32_t t = 0; t < chunk; ++t) {
                     copy_tile(cb_x, t, 1 + t);
@@ -322,6 +333,7 @@ void kernel_main() {
             cb_reserve_back(cb_soa_out, 1);
             pack_reconfig_data_format(cb_soa_out);
             tile_regs_acquire();
+            srca_to(cb_soa);
             copy_tile_to_dst_init_short(cb_soa);
             copy_tile(cb_soa, 0, 0);
             custom_sfpu_init();
@@ -353,6 +365,7 @@ void kernel_main() {
             cb_reserve_back(cb_soa_out, 1);
             pack_reconfig_data_format(cb_soa_out);
             tile_regs_acquire();
+            srca_to(cb_soa);
             copy_tile_to_dst_init_short(cb_soa);
             copy_tile(cb_soa, 0, 0);
 #ifdef MHC_XING_PARTIALS
@@ -379,8 +392,10 @@ void kernel_main() {
                 cb_wait_front(cb_x, n_streams);
                 cb_reserve_back(cb_y, 1);
                 tile_regs_acquire();
+                srca_to(cb_pb);
                 copy_tile_to_dst_init_short(cb_pb);
                 copy_tile(cb_pb, 0, 0);
+                srca_to(cb_x);
                 copy_tile_to_dst_init_short(cb_x);
                 for (uint32_t i = 0; i < n_streams; ++i) {
                     copy_tile(cb_x, i, 1 + i);

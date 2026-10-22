@@ -2824,3 +2824,66 @@ Re-run the measurement: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_fix10_mem < te
   outputs need topk_overlap. Not a logic bug, not from P.21: a framework / frozen-test or waiver decision.
 - No fix in the model: sorting the device ids would add a device sort only for the test and still not pass (a flip shifts
   positions), and fp32 top-k scores would raise precision above the official code (rule 7).
+
+## P.20 perf attempt 1 (2026-10-22): BF16_ACTIVATIONS=on, activations in bf16 where the GPU code keeps bf16 (J5)
+
+What: setting BF16_ACTIVATIONS (tt/settings.py, default on; off = the P.21 path, kept for the owner's A/B). On, per
+bringup/official_taps.yaml:
+- the four mHC streams bf16 (block boundary and h_mid): embed concats the bf16 embedding rows (no typecast), the
+  residuals (mhc_post, plain and stats_weight) and the engram add write bf16, tt/layout.streams_to_device (harness
+  boundary, from_host) uploads bf16 (tt/common.stream_dtype);
+- attn_collapse / ffn_collapse / final collapse bf16 (mhc_pre_xing writes y in the streams' dtype);
+- attn_norm and the final norm write bf16 (build_norm / TtDistributedRmsNorm dtype=act_dtype());
+- the [wq_a | wkv] exchange stays bf16 (ccl.tp_sum(fp32=False): the fabric_bf16 RS + gather result without the
+  typecast back), q_norm writes bf16 (q_resid), kv_norm already bf16;
+- wo_a writes bf16 (no cast after it); engram wkv writes bf16 (the engram add reads it as is);
+- the compressor's norm writes the latent bf16 (the rope reads it as is, no typecast), wk writes bf16.
+fp32 kept where the reference is fp32: the hc mixes / Sinkhorn, every norm statistic, the engram gate sums (fp32 SFPU
+on the exact bf16 values), the compressor's projection + pair pooling, the router; fp32 accumulation in every matmul.
+Requires MHC_FUSED, GLUE_FOLD, ROPE_IMPL, NORM_IMPL on (asserted in TtDS41Model).
+Fork extensions (bring-up ops, rule 16; option = bf16 inputs, fp32 programs unchanged):
+- ttnn.bringup.mhc_pre_xing / mhc_pre_xing_pack: bf16 streams and engram keys (CHANGELOG 11; defines MHC_XING_X16 /
+  MHC_ENGRAM_X16; srcA reconfigured between the fp32 / bf16 CBs; UnpackToDestFp32 on the bf16 CBs: exact);
+- ttnn.bringup.mhc_post(stats_weight=): bf16 X with bf16 F (CHANGELOG 9; MHC_POST_STATS_X16; X' and the matmul's
+  X' bf16, the sum of squares from the fp32 mix).
+- The hybrid's collapse with a bare [R, 4] pre on bf16 streams pads the pre to 24 columns and uses
+  mhc_pre_xing(coefficients_given=True) (tt/collapse.py; harness only).
+Measured (2x2, chunk 53248-55296):
+- Final `measure --task P.20` (quick A/B side on, rc 0): every err_* within its limit and equal to P.21 within noise:
+  err_layer L00 .0248/.0570 (P.21 .0250), L01 .0338/.0720, L02 .0514/.1077, L03 .0805/.1587, L14 .0605/.1380,
+  L20 .0299/.0507, L21 .0513/.1312, L24 .0280/.0418; worst state window_kv_L03 .0543/.1314 (P.21 .0525);
+  compress_kv_L02 .0382/.2095 (.0390), index_k_L02 .0205/.2404 (.0210); worst err/limit 0.67; min layer PCC L03
+  0.99676 (P.21 0.99680), pcc_chunk_out 0.99961, host_transfers_per_layer 0.
+- Wall: chunk_wall_ms 142.1 (spread 27.5) on a loaded box (a golden generation at ~7 cores + a selftest, load
+  13-19); the off side run by hand right after, same command and load (DS41_BF16_ACTIVATIONS=off BRINGUP_QUICK=1
+  BRINGUP_PROFILE_WALL=1 test_profile.py): 161.3 (spread 57.3). P.21's 103.5 was on an idle box: compare only the
+  orchestrator's A/B pair.
+- Plain profile (on; profiles/P.20_20261022T202929.json) vs FIX.10's (P.21 code, off): device 88.33 -> 83.96 ms a
+  chunk (-4.4); programs (4 chips) 3328 -> 3216; mHC / residual / norm / engram sections: attn_hc 2.65 -> 1.75,
+  ffn_hc 1.57 -> 1.12, attn_residual 2.50 -> 1.80, ffn_residual 2.87 -> 2.44, engram_add 1.79 -> 1.34, engram_kv
+  4.94 -> 4.62, attn_norm 0.89 -> 0.60, ffn_norm 1.17 -> 1.00, q_a 3.79 -> 3.12 (programs 192 -> 128), attention
+  30.72 -> 30.38, indexer 11.86 -> 11.73; moe_add 1.52 -> 1.96 (its code is unchanged: the RS waits on the slowest
+  chip of the row).
+- Memory per chip (computed from the shapes, not measured; weights unchanged): a stream copy [1024, 4 x 2560] 40 ->
+  20 MiB (2x2; 4x4 [1024, 4 x 1280]: 20 -> 10 MiB), about 3 live a block (in, h_mid, out); collapse / attn_norm
+  [1024, 2560] 10 -> 5 MiB, q_resid 5 -> 2.5, the [wq_a | wkv] output 7 -> 3.5, engram kv [1024, 12800] 50 -> 25
+  MiB: peak activations about -80 MiB a chip at 2x2.
+- Hybrid path: test_swap_swa_engram_15_experts passes (every failure waived, as before); attn_hc vs CPU rel 0.0021 ->
+  0.0012, ffn_hc 0.0027 -> 0.0016 (the FPU reads bf16 exactly, fp32 at TF32: DS41-104); err_swap_out 0.0235 (0.0234).
+- Fork tests: tests/unit/test_xing_bf16_streams.py (10) and test_mhc_post_bf16_streams.py (7): bf16 paths
+  bit-identical to the fp32 programs on the same values up to the packer's one rounding (to nearest, ties away:
+  DS41-103); regressions with fp32 inputs: mhc_pre unit + golden 355 / 1 skipped (= 345 / 1 + 10), model cases 103;
+  mhc_post unit + golden + cases 408 (= 401 + 7). Build OK.
+Gotchas:
+- The packer's fp32 -> bf16 rounds ties away from zero (DS41-103): a bit-exact test against torch's .bfloat16() fails
+  on ~1e-5 of values.
+- A background orchestrator `measure` killed at the tool's limit leaves its pytest running orphaned; stop it before
+  re-running (the next safe run resets the cards).
+- When the owner accepts: delete BF16_ACTIVATIONS=off with the fp32 stream paths that only it uses (embed's typecast,
+  tp_sum's fp32 default for q_a, the compressor's latent cast); the fp32 fork programs stay (other models).
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.20`; fork tests
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_bf16_streams.py` and
+`.../mhc_post_ttnn/tests/unit/test_mhc_post_bf16_streams.py`; profile (on)
+`TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/common/bringup/tests/test_profile.py`.

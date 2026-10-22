@@ -37,7 +37,12 @@ void kernel_main() {
 #else
     const auto f_acc = TensorAccessor(f_args, get_arg_val<uint32_t>(0), page);
 #endif
-    const auto x_acc = TensorAccessor(x_args, get_arg_val<uint32_t>(1), page);
+#ifdef MHC_POST_STATS_X16
+    constexpr uint32_t in_page = page / 2;  // P.20: bf16 X tiles in cb_in (the F slots stay unused)
+#else
+    constexpr uint32_t in_page = page;
+#endif
+    const auto x_acc = TensorAccessor(x_args, get_arg_val<uint32_t>(1), in_page);
     const auto w_acc = TensorAccessor(w_args, get_arg_val<uint32_t>(2), page);
     const auto s_acc = TensorAccessor(s_args, get_arg_val<uint32_t>(3), page);
     const uint32_t start = get_arg_val<uint32_t>(4);
@@ -68,14 +73,14 @@ void kernel_main() {
         const uint32_t f_base = get_write_ptr(cb_f);
 #endif
         for (uint32_t c = 0; c < U.valid; ++c) {
-            uint32_t dst = base + c * (n + 1) * page;
+            uint32_t dst = base + c * (n + 1) * in_page;
 #ifdef MHC_POST_STATS_F16
             noc_async_read_page(U.r * ct + U.col0 + c, f_acc, f_base + c * f_page);
 #else
             noc_async_read_page(U.r * ct + U.col0 + c, f_acc, dst);
 #endif
             for (uint32_t j = 0; j < n; ++j) {
-                dst += page;
+                dst += in_page;
                 noc_async_read_page(U.r * n * ct + j * ct + U.col0 + c, x_acc, dst);
             }
         }

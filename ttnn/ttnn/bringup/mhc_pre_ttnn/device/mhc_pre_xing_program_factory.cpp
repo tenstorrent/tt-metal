@@ -76,13 +76,18 @@ std::vector<uint32_t> scalar_args(const MhcPreXingParams& p) {
     return a;
 }
 
-CBDescriptor make_cb(uint8_t index, uint32_t page_bytes, uint32_t num_pages, const CoreRangeSet& cores) {
+CBDescriptor make_cb(
+    uint8_t index,
+    uint32_t page_bytes,
+    uint32_t num_pages,
+    const CoreRangeSet& cores,
+    DataType dt = DataType::FLOAT32) {
     CBDescriptor cb;
     cb.total_size = num_pages * page_bytes;
     cb.core_ranges = cores;
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = index,
-        .data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::FLOAT32),
+        .data_format = tt::tt_metal::datatype_to_dataformat_converter(dt),
         .page_size = page_bytes});
     return cb;
 }
@@ -147,7 +152,12 @@ ProgramDescriptor create_xing_program_descriptor(
     }
     const uint32_t page = TILE_HW * TILE_HW * 4;
     TT_FATAL(row.buffer()->page_size() == page, "mhc_pre_xing: the input row must be one fp32 tile wide");
-    TT_FATAL(!has_streams || x.buffer()->page_size() == page, "mhc_pre_xing: streams must be fp32 tiles");
+    // P.20: bf16 streams (CB_X / CB_Y in bf16 pages, y bf16; define MHC_XING_X16); fp32: the program it always was
+    const bool x16 = has_streams && x.dtype() == DataType::BFLOAT16;
+    const DataType x_dt = x16 ? DataType::BFLOAT16 : DataType::FLOAT32;
+    const uint32_t x_page = x16 ? page / 2 : page;
+    TT_FATAL(!has_streams || x.buffer()->page_size() == x_page, "mhc_pre_xing: streams must be fp32 or bf16 tiles");
+    const uint32_t y_page = y.buffer()->page_size();
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
@@ -159,7 +169,7 @@ ProgramDescriptor create_xing_program_descriptor(
         desc.cbs.push_back(make_cb(CB_SOA, page, 1, all_cores));
         desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 1, all_cores));
         desc.cbs.push_back(make_cb(CB_ACC, page, 1, all_cores));
-        desc.cbs.push_back(make_cb(CB_X, page, 2 * chunk, all_cores));
+        desc.cbs.push_back(make_cb(CB_X, x_page, 2 * chunk, all_cores, x_dt));
     } else if (p.compute_coef) {
         desc.cbs.push_back(make_cb(CB_SOA, page, 2 * np, all_cores));
         desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 2, all_cores));
@@ -172,8 +182,8 @@ ProgramDescriptor create_xing_program_descriptor(
     }
     if (has_streams && !p.pack_stats) {
         desc.cbs.push_back(make_cb(CB_PB, page, 2, all_cores));
-        desc.cbs.push_back(make_cb(CB_X, page, n * X_DEPTH_COLS, all_cores));
-        desc.cbs.push_back(make_cb(CB_Y, page, Y_DEPTH, all_cores));
+        desc.cbs.push_back(make_cb(CB_X, x_page, n * X_DEPTH_COLS, all_cores, x_dt));
+        desc.cbs.push_back(make_cb(CB_Y, y_page, Y_DEPTH, all_cores, y.dtype()));
     }
 
     std::vector<uint32_t> reader_ct = {
@@ -183,7 +193,7 @@ ProgramDescriptor create_xing_program_descriptor(
         CB_ROW,
         CB_X,
         page,
-        page,
+        x_page,
         static_cast<uint32_t>(p.pack_stats),
         chunk};
     for (const Tensor* t : {&row, &x}) {
@@ -208,7 +218,7 @@ ProgramDescriptor create_xing_program_descriptor(
         CB_PB,
         CB_Y,
         page,
-        page,
+        (has_streams && !p.pack_stats) ? y_page : page,
         n * (n + 2) + 1,
         n * (n + 2),
         static_cast<uint32_t>(p.pack_stats),
@@ -269,6 +279,9 @@ ProgramDescriptor create_xing_program_descriptor(
     desc.kernels.push_back(make_kernel(
         "mhc_pre_xing_writer.cpp", all_cores, writer_ct, writer_rt, tt::tt_metal::WriterConfigDescriptor{}));
     desc.kernels.push_back(make_kernel("mhc_pre_xing_compute.cpp", all_cores, compute_ct, compute_rt, cc));
+    if (x16) {  // absent for fp32 streams: the compute kernel unchanged (P.20)
+        desc.kernels[COMPUTE_KERNEL].defines.emplace_back("MHC_XING_X16", "1");
+    }
     if (p.deepseek) {  // absent when off: Xing's program unchanged
         desc.kernels.back().defines.emplace_back("MHC_XING_DEEPSEEK", "1");
     }

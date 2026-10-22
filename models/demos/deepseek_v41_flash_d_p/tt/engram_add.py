@@ -187,10 +187,12 @@ class TtEngramAdd:
     def add(self, h: ttnn.Tensor, kv: ttnn.Tensor, pre: ttnn.Tensor | None = None, hc=None):
         """(new streams, pre, row): with MHC_FUSED=on and ``hc`` (this layer's attn_hc, tt/mhc.py:TtHcMixes) the
         mhc_post pass also emits that step's partial row of the new streams (stats_weight), else row is None."""
-        assert h.dtype == ttnn.float32, h.dtype
+        # h bf16: BF16_ACTIVATIONS=on (P.20, MHC_FUSED=on): bf16 streams and keys, the gate sums fp32 on their exact
+        # values (the fork's engram pass), the new streams bf16 (mhc_post: one rounding of the fp32 h + g v)
+        assert h.dtype == ttnn.float32 or self.fused, "bf16 streams need MHC_FUSED=on"
         rows, w = h.shape[-2], self.w
         assert h.shape[-1] == HC * w and kv.shape[-1] == (HC + 1) * w and kv.shape[-2] == rows, (h.shape, kv.shape)
-        kv32 = kv if kv.dtype == ttnn.float32 else ttnn.typecast(kv, ttnn.float32, memory_config=DRAM)
+        kv32 = kv if kv.dtype == h.dtype else ttnn.typecast(kv, h.dtype, memory_config=DRAM)
         gate = self.gates(h, kv32)
         value = ttnn.slice(kv32, [0, 0, 0, HC * w], [1, 1, rows, (HC + 1) * w], memory_config=DRAM)
         if kv32 is not kv:

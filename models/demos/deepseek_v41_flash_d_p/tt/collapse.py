@@ -33,19 +33,28 @@ from .settings import settings
 
 
 class TtHcCollapse:
-    """Call with (streams [1, 1, R, n x w] fp32, pre [1, 1, R, >= n] fp32); returns [1, 1, R, w] fp32. Consumes
-    neither input."""
+    """Call with (streams [1, 1, R, n x w] fp32 or bf16, pre [1, 1, R, >= n] fp32); returns [1, 1, R, w] in the
+    streams' dtype (bf16 streams: BF16_ACTIVATIONS=on, P.20). Consumes neither input."""
 
     def __init__(self, n: int = HC, fused: bool | None = None):
         self.n = n
         self.fused = settings.get("MHC_FUSED") == "on" if fused is None else bool(fused)
 
     def __call__(self, x: ttnn.Tensor, pre: ttnn.Tensor) -> ttnn.Tensor:
-        assert x.dtype == ttnn.float32 and pre.dtype == ttnn.float32, (x.dtype, pre.dtype)
+        assert x.dtype in (ttnn.float32, ttnn.bfloat16) and pre.dtype == ttnn.float32, (x.dtype, pre.dtype)
         rows, w = x.shape[-2], x.shape[-1] // self.n
         assert x.shape[-1] == self.n * w and pre.shape[-1] >= self.n and pre.shape[-2] == rows, (x.shape, pre.shape)
-        if self.fused and pre.shape[-1] == self.n * (self.n + 2):
+        ng = self.n * (self.n + 2)
+        if self.fused and pre.shape[-1] == ng:
             _, y = ttnn.bringup.mhc_pre_xing(pre, x, n=self.n, coefficients_given=True)
+            return y
+        if x.dtype == ttnn.bfloat16:
+            # BF16_ACTIVATIONS=on (P.20) with a bare [R, n] pre (the hybrid harness): the fork's collapse on the pre
+            # padded to the mixes' width (only columns 0..n-1 are read); y bf16, one rounding of the fp32 sum
+            p = ttnn.pad(pre, [(0, 0), (0, 0), (0, 0), (0, ng - pre.shape[-1])], 0.0) if pre.shape[-1] < ng else pre
+            _, y = ttnn.bringup.mhc_pre_xing(p, x, n=self.n, coefficients_given=True)
+            if p is not pre:
+                dealloc(p)
             return y
         y = None
         for i in range(self.n):

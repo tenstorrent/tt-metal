@@ -52,7 +52,7 @@ import ttnn
 
 from . import ccl
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, cast, fp32_acc, tp_sum
+from .common import DRAM, TP_AXIS, act_dtype, cast, fp32_acc, tp_sum
 from .settings import settings
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
@@ -75,7 +75,8 @@ class TtDistributedRmsNorm:
         # all-gather moves half the bytes, the router and the experts read it as is
         bf16 = gather and settings.get("FFN_NORM_DTYPE") == "bf16"
         self.out_dtype = ttnn.bfloat16 if bf16 else ttnn.float32
-        if dtype is not None:  # ROPE_IMPL=on (P.17): kv_norm / k_norm write the bf16 the stock rope reads
+        if dtype is not None:  # ROPE_IMPL=on (P.17): kv_norm / k_norm write the bf16 the stock rope reads;
+            # BF16_ACTIVATIONS=on (P.20): attn_norm, q_norm, the compressor norm and the final norm write bf16 too
             assert not gather, "gather norms take FFN_NORM_DTYPE"
             self.out_dtype = dtype
         self.inv_h = 1.0 / float(hidden)
@@ -157,7 +158,7 @@ class TtDistributedRmsNorm:
             y = self(xs)
             dealloc(xs)
             return y
-        assert x.dtype == ttnn.float32, x.dtype
+        assert x.dtype == ttnn.float32, f"NORM_IMPL=off takes fp32 rows ({x.dtype}; BF16_ACTIVATIONS=on needs on)"
         assert x.shape[-1] * self.tp == self.hidden, (x.shape, self.hidden)
         rs = self.rstd(x)
         xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM)
@@ -186,4 +187,7 @@ GATHERED_NORMS = {"ffn_norm"}
 
 def build_norm(mesh, ck, cfg, layer: int, step: str) -> TtDistributedRmsNorm:
     w = ck.weight(f"layers.{layer}.{NORM_WEIGHTS[step]}", torch.float32)
-    return TtDistributedRmsNorm(mesh, w, cfg.eps, gather=step in GATHERED_NORMS)
+    gather = step in GATHERED_NORMS
+    # BF16_ACTIVATIONS=on (P.20): attn_norm writes bf16 (the GPU code's RMSNorm .to(dtype)); ffn_norm: FFN_NORM_DTYPE
+    dtype = None if gather else act_dtype()
+    return TtDistributedRmsNorm(mesh, w, cfg.eps, gather=gather, dtype=dtype)
