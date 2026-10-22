@@ -56,8 +56,13 @@
 // Dest accumulation mode as last configured on this TRISC (math / pack hw_configure, _llk_set_fp32_dest_acc_).
 // Kept in software rather than read from ALU_ACC_CTRL_Fp32_enabled: that bit is MATH-owned, toggled transiently
 // (transpose_dest, 32b datacopy, fast_tilize), and a RISC cfg_read is not ordered behind queued CFG writes.
-// Only written through LLK_ASSERT_BLOCK, so production builds never store to it.
+// Only written through LLK_ASSERT_BLOCK and read inside LLK_ASSERT. Without ENABLE_LLK_ASSERT it is declared
+// but never defined: those macros keep it in an unevaluated operand, so any other use fails to link.
+#ifdef ENABLE_LLK_ASSERT
 inline bool llk_assert_fp32_dest_acc_en = false;
+#else
+extern bool llk_assert_fp32_dest_acc_en;
+#endif
 
 // Asserts that a passed is_fp32_dest_acc_en matches the configured dest accumulation mode.
 #define LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en) \
