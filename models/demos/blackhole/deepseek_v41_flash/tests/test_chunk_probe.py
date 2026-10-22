@@ -63,8 +63,8 @@ def test_chunk_probe(mesh_device):
     rec = []
     orig_rw = pm.replay_window
 
-    def rw(tokens, hashes, s0, C, active, vis=None):
-        th, td = orig_rw(tokens, hashes, s0, C, active, vis=vis)
+    def rw(tokens, hashes, s0, C, active, vis=None, **kw):  # (prepped / overlap / ops of the host-overlap path)
+        th, td = orig_rw(tokens, hashes, s0, C, active, vis=vis, **kw)
         rec.append((s0, th, td))
         return th, td
 

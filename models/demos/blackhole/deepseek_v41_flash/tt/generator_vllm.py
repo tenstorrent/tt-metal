@@ -262,6 +262,18 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
         os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
         max_seq_len = cls.bounded_max_seq_len(max_seq_len, B)
+        if _interleave_on():
+            # ONE traced prefill chunk (tt/prefill_single.py) replayed for every chunk of every prompt, instead of a chunk trace per padded prompt width (+ the DSV41_PF_SMALL_BUCKET contexts). Decided here,
+            # before the prefill state is built, and never flipped afterwards.
+            from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as _ps
+
+            on_, why_ = _ps.resolve_server_default(os.environ.get("DSV41_VLLM_CHUNK", "512"), max_seq_len)
+            if on_:
+                logger.info(f"DSV4.1 vLLM: single-trace chunked prefill ON ({why_}); no per-width prefill contexts")
+            else:
+                logger.warning(
+                    f"DSV4.1 vLLM: single-trace chunked prefill OFF ({why_}): per-S_pad chunk traces / small contexts as before"
+                )
         from models.demos.blackhole.deepseek_v41_flash.tt.common import create_tt_model, default_page_params
         from models.demos.blackhole.deepseek_v41_flash.tt.generator import Generator
         from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -387,6 +399,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         extra = []
         if (
             not fixed.isdigit()
+            and os.environ.get("DSV41_PF_SINGLE", "0")
+            != "1"  # (the single chunk trace serves every width: no small context)
             and os.environ.get("DSV41_PF_SMALL_BUCKET", "1") == "1"
             and self.m.max_ctx >= int(os.environ.get("DSV41_PF_SMALL_MIN_CTX", "524288"))
         ):

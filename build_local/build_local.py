@@ -66,6 +66,8 @@ def link(target, replace, out):
         cmd.append(toks[i])
         i += 1
     cmd = [replace.get(t, t) for t in cmd]
+    # RUNPATH: this build's lib dir FIRST, so that _ttnn.so finds ITS _ttnncpp.so without LD_LIBRARY_PATH
+    cmd = [(f"-Wl,-rpath,{OUT}/lib:" + t[len("-Wl,-rpath,") :]) if t.startswith("-Wl,-rpath,") else t for t in cmd]
     i_o = cmd.index("-o")
     cmd[i_o + 1] = out
     # _ttnn.so links ttnn/_ttnncpp.so: use the new one

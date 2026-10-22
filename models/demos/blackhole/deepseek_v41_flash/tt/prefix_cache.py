@@ -53,10 +53,17 @@ class CarriedSpec:
         0  # ``keys`` (tile copy of ``keys_rm`` + 32 zero pad rows): the tail ends ``pad_rows`` before the last row
     )
     end: int = 0  # kv table: the latent FIFO ends at row LAT (window scratch rows follow); 0 = N - pad_rows
+    start: int = (
+        -1
+    )  # >= 0: the valid rows of a ``tail`` kind START here (single-trace key slab: history entry j at row start + j / cols) instead of ending at ``end_row``
     replicated: bool = True  # identical on the 8 columns of a mesh row (everything but the column-sharded key FIFO): one host copy, one upload per mesh row
 
     def end_row(self, N):
         return self.end or N - self.pad_rows
+
+    def row0(self, N, n):
+        """first valid row of a ``tail`` kind holding n entries"""
+        return self.start if self.start >= 0 else self.end_row(N) - n
 
     def count(self, s):
         return None if self.kind == "full" else s // self.ratio // self.div
@@ -89,7 +96,21 @@ def carried_specs(model):
         ix = sp.indexer
         if ix is not None and sp.owner and ix.key_owner is None:
             sh = getattr(ix, "sh", None)
-            if sh is not None:  # column-sharded FIFO
+            if sh is not None and sh.get(
+                "single"
+            ):  # single-trace slab (tt/prefill_single.py): history entry j at local row Cc8 + j / cols
+                add(
+                    CarriedSpec(
+                        f"L{lid}.keys",
+                        ix.keys,
+                        "tail",
+                        ratio=pa.ratio,
+                        div=sh["cols"],
+                        start=sh["Cc8"],
+                        replicated=False,
+                    )
+                )
+            elif sh is not None:  # column-sharded FIFO
                 add(
                     CarriedSpec(f"L{lid}.keys_rm", ix.keys_rm, "tail", ratio=pa.ratio, div=sh["cols"], replicated=False)
                 )
@@ -206,7 +227,7 @@ def write_batch(model, batch, targets, mask_d):
     host = torch.zeros(rows * Up, ncol, len(batch) * rn, D, dtype=torch.bfloat16)
     flats = [r * Up + i for r, i in targets]
     for j, (sp, per_col) in enumerate(batch):
-        row0 = sp.end_row(sp.tensor.shape[2]) - n if tail else 0
+        row0 = sp.row0(sp.tensor.shape[2], n) if tail else 0
         _fill(host, flats, j, rn, per_col, tail, N, row0, replicated)
     mesh = ttnn.ShardTensor2dMesh(md, dims=(0, None if replicated else 1), mesh_shape=(rows, cols))
     big = ttnn.from_torch(
@@ -216,7 +237,7 @@ def write_batch(model, batch, targets, mask_d):
         t = sp.tensor
         new_j = ttnn.slice(big, [0, 0, j * rn, 0], [Up, 1, (j + 1) * rn, D]) if len(batch) > 1 else big
         if tail:
-            row0 = sp.end_row(t.shape[2]) - n
+            row0 = sp.row0(t.shape[2], n)
             old = ttnn.slice(t, [0, 0, row0, 0], [Up, 1, row0 + n, D])
             upd = _where(mask_d, new_j, old)
             ttnn.experimental.slice_write(upd, t, [0, 0, row0, 0], [Up, 1, row0 + n, D], [1, 1, 1, 1])
@@ -374,9 +395,9 @@ def _snapshot_user(model, b, s, toks, nb):
             raise ApcUnsupported(f"{name} is {sp.tensor.dtype}")
         n = sp.count(s)
         N, D = sp.tensor.shape[2], sp.tensor.shape[3]
-        end = sp.end_row(N) if sp.kind == "tail" else N
+        lo = sp.row0(N, n) if sp.kind == "tail" else 0
+        end = lo + n if sp.kind == "tail" else N
         # slice the slot (and, for a FIFO, its valid tail) ON DEVICE first: reading a whole padded table per tensor is what made a snapshot cost ~0.5 s regardless of its size
-        lo = end - n if sp.kind == "tail" else 0
         whole = (
             sp.tensor.shape[0] == 1 and lo == 0 and end == N
         )  # (a full slice returns the persistent tensor itself: never free it)
@@ -471,6 +492,7 @@ def restore_users(model, snap, bs):
             n,
             sp.replicated,
             sp.end_row(sp.tensor.shape[2]) if sp.kind == "tail" else 0,
+            sp.start,
         )
         groups.setdefault(key, []).append((sp, per_col))
     for key, batch in groups.items():

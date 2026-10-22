@@ -69,7 +69,12 @@ def test_snapshot_restore_into_another_row(mesh_device):
     layer_ids = list(range(int(a), int(b or a) + 1))
     B = 4 * U
     S_pad = -(-E // CHUNK) * CHUNK
-    max_ctx = S_pad + 256
+    max_ctx = S_pad + (
+        0 if os.environ.get("DSV41_PF_SINGLE") == "1" else 256
+    )  # (single trace: S_pad = max_ctx rounded to the chunk must stay <= max_ctx + 128)
+    max_ctx = max(
+        max_ctx, int(os.environ.get("DSV41_M2_MAXCTX", "0"))
+    )  # (single trace: every column slab needs >= 512 local slots for the top-k: max_ctx >= 16384)
     pp = default_page_params(max_ctx, U)
     args, m, pool, _ = create_tt_model(
         md,
@@ -126,8 +131,8 @@ def test_snapshot_restore_into_another_row(mesh_device):
             for c in range(cols):
                 x = PC.read_shard(sp.tensor, r_ * cols + c)[i_ : i_ + 1]
                 if sp.kind == "tail":
-                    end = sp.end_row(x.shape[2])
-                    x = x[:, :, end - sp.count(s_) : end]
+                    lo = sp.row0(x.shape[2], sp.count(s_))
+                    x = x[:, :, lo : lo + sp.count(s_)]
                 vals.append(x.clone())
             out[n_] = vals
         return out
@@ -239,8 +244,8 @@ def test_snapshot_restore_into_another_row(mesh_device):
             for c in range(cols):
                 x = PC.read_shard(sp.tensor, r2 * cols + c)[i2 : i2 + 1]
                 if sp.kind == "tail":
-                    end = sp.end_row(x.shape[2])
-                    x = x[:, :, end - n : end]
+                    lo = sp.row0(x.shape[2], n)
+                    x = x[:, :, lo : lo + n]
                 if not same(x, snap.carried[name][c]):
                     bad_c.append((name, c))
         pool_now = {

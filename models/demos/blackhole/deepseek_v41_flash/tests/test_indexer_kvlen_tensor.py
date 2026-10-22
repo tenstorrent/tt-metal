@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device test of the on-device ``kv_len_tensor`` of ``ttnn.experimental.indexer_score_dsa`` (classic op, C++ change of branch ssinghal/dsv4p1-chunk1-cpp, needs the build_local libs):
+"""Device test of the on-device ``kv_len_tensor`` of ``ttnn.experimental.indexer_score_dsa`` (classic op, C++ change of this release; needs the build_local libs: python3 build_local/build_local.py):
 
   (1) the scores of the columns [0, kv_len) are bit-identical to the op with the host scalar ``kv_len`` (several kv_len, production knobs: q chunk 32, k chunk 128, all 32 heads resident,
       chunk_start = T - 32, 4 x 8 mesh with a different key slab per device),
   (2) ONE captured trace replayed with new tensor values scores the new prefix (a host scalar would stay frozen at the captured value),
   (3) the replay time follows kv_len.
 
-    LD_LIBRARY_PATH=<wt>/tm_chunk_cpp/build_local/lib PYTHONPATH=<wt>/tm_chunk/ttnn:<wt>/tm_chunk pytest tests/test_indexer_kvlen_tensor.py -s
+    TT_METAL_HOME=<wt> PYTHONPATH=<wt>/ttnn:<wt> pytest tests/test_indexer_kvlen_tensor.py -s   (ttnn/ttnn/_ttnn.so -> build_local/lib/_ttnn.so, whose RUNPATH finds build_local/lib/_ttnncpp.so)
 """
 
 import os

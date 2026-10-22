@@ -41,6 +41,42 @@ def enabled():
     return os.environ.get("DSV41_PF_SINGLE", "0") == "1"
 
 
+def kv_len_tensor_available():
+    """True when the loaded ttnn build has the ``kv_len_tensor`` argument of ``ttnn.experimental.indexer_score_dsa`` (C++ change of this release, ttnn/cpp/.../indexer_score; the shared build of the
+    previous release lacks it). Checked on the nanobind signature, no device needed."""
+    try:
+        return "kv_len_tensor" in (ttnn.experimental.indexer_score_dsa.__doc__ or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def resolve_server_default(chunk, max_ctx):
+    """vLLM server: decide ONCE, before the model is built, whether the server runs the single chunk trace (DSV41_PF_SINGLE=1) and pin the answer in the environment (modes are never flipped at run time).
+    Default ON when the paged read mode with the bf16 pool is active and the kv_len_tensor op is available; ``DSV41_PF_SINGLE=0`` keeps the per-S_pad chunk traces (+ DSV41_PF_SMALL_BUCKET contexts).
+    ``DSV41_PF_SINGLE=1`` with a missing prerequisite falls back the same way (log line). -> (enabled, reason)."""
+    want = os.environ.get("DSV41_PF_SINGLE")
+    if want == "0":
+        return False, "DSV41_PF_SINGLE=0"
+    why = None
+    if os.environ.get("DSV41_PF_PAGED", "read") != "read":
+        why = f"DSV41_PF_PAGED={os.environ.get('DSV41_PF_PAGED')} (the single trace needs read mode)"
+    elif os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1":
+        why = "DSV41_PF_PAGED_FP8=1 (fp8 pool)"
+    elif os.environ.get("DSV41_PREFILL_DYN", "1") == "0":
+        why = "DSV41_PREFILL_DYN=0"
+    elif int(chunk) % 512:
+        why = f"chunk {chunk} is not a multiple of 512 (tile split of the per-column key slab)"
+    elif int(max_ctx) < 16384:
+        why = f"max context {max_ctx} < 16384 (a column slab needs >= 512 local key slots for the top-k)"
+    elif not kv_len_tensor_available():
+        why = "the loaded ttnn build lacks indexer_score_dsa(kv_len_tensor=...) (build the C++ of branch ssinghal/dsv4p1-release: build_local/build_local.py)"
+    if why:
+        os.environ["DSV41_PF_SINGLE"] = "0"
+        return False, why
+    os.environ["DSV41_PF_SINGLE"] = "1"
+    return True, "read mode + bf16 pool + kv_len_tensor op available"
+
+
 def use_kv_tensor():
     """DSV41_PF_SINGLE_KVT=0 (debug): score with the host scalar kv_len = the whole slab (no C++ change needed; the top-k stays bounded by the tensor): the cost then follows Wmax again."""
     return os.environ.get("DSV41_PF_SINGLE_KVT", "1") == "1"
