@@ -62,9 +62,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
 
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    auto intermed_data_format = fp32_dest_acc_en                        ? tt::DataFormat::Float32
-                                : data_format == tt::DataFormat::Bfp8_b ? tt::DataFormat::Float16_b
-                                                                        : data_format;
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
