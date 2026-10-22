@@ -125,6 +125,20 @@ def test_compute_padded_vocab_size_rejects_invalid_num_devices(expect_error):
 
 
 @pytest.mark.parametrize(
+    "optimizations",
+    [
+        "precision_cfg = {ff1_3: bfp8}",
+        "fidelity_cfg = {li_ff1_3: hifi4}",
+        "precision_cfg = {ff1_3: bfp8, wqkv: bf16}, fidelity_cfg = {li_ff1_3: hifi4}",
+    ],
+)
+def test_parse_optimizations_accepts_either_section(optimizations):
+    from models.tt_transformers.tt.model_config import parse_optimizations
+
+    assert callable(parse_optimizations(optimizations))
+
+
+@pytest.mark.parametrize(
     ("vocab_size", "num_devices", "expected"),
     [
         (128256, 32, 128 * 1024),
