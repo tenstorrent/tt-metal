@@ -41,6 +41,18 @@ void kernel_main() {
         // GMPOOL only respects the scaler's exponent for MAX/MIN and SFPU reduce ignores the
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
         // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
+#ifdef ARCH_BLACKHOLE
+        // Returns whether it ran anything on the math thread; false (the identity scalar) keeps the SFPU reduce init.
+        [](uint32_t dst_idx) -> bool {
+            const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+            if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                return false;
+            }
+            constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
+            compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(dst_idx, post_mul_scaler_bits);
+            return true;
+        }
+#else
         [](uint32_t dst_idx) {
             const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
             if (post_mul_scaler_bits == k_identity_scaler_bits) {
@@ -53,6 +65,7 @@ void kernel_main() {
             constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
             compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(dst_idx, post_mul_scaler_bits);
         }
+#endif
 #else
         compute_kernel_lib::NoOp{}
 #endif
