@@ -121,6 +121,23 @@ class TestPrecisionContract(unittest.TestCase):
         self.assertEqual(policy["weight_groups"]["down"], "bfloat4_b")
 
 
+class TestTokenHistoryBounds(unittest.TestCase):
+    def test_invalid_scratch_batch_is_rejected_before_kernel_creation(self):
+        name = "models.demos.granite42_30b_qb2.tt.token_history"
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).parents[1] / "tt/token_history.py")
+        module = importlib.util.module_from_spec(spec)
+        dtype, layout = object(), object()
+        with patch.dict(sys.modules, {"ttnn": SimpleNamespace(uint32=dtype, ROW_MAJOR_LAYOUT=layout)}):
+            spec.loader.exec_module(module)
+        for batch in (0, 33, 65):
+            with self.subTest(batch=batch), self.assertRaisesRegex(ValueError, "batches 1..32"):
+                module.append_tokens(
+                    SimpleNamespace(dtype=dtype, layout=layout, shape=(1, 1, 1, batch)),
+                    SimpleNamespace(dtype=dtype, layout=layout, shape=(2, 1, 1, batch)),
+                    SimpleNamespace(dtype=dtype, layout=layout, shape=(1,)),
+                )
+
+
 class TestCheckpointResolution(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()

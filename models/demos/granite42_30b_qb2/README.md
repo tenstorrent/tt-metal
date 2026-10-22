@@ -86,7 +86,7 @@ Weekly CI uses the Agentic Research model-tests pipeline.
 The `granite42-30b-qb2` entry in `Agentic Research Model Tests` runs
 `tests/run_ci.sh` on `bh_quietbox_2`. It runs the host contracts, token-history
 trace and external-cache device regressions, reasoning-channel and partial-batch
-API checks, cold-versus-cached comparisons for ten concurrent requests with aligned
+HF decoder comparisons for prefill and traced decode, API checks, cold-versus-cached comparisons for ten concurrent requests with aligned
 and unaligned cached prefixes, warmed serving at concurrency 1/8/16, and the first ten GPQA Diamond
 questions with a 32K output budget and thinking enabled. The subset gate is 6/10;
 this is CI regression coverage, not a full-set accuracy or GPU-parity claim.
@@ -94,8 +94,9 @@ Fixed-length performance uses raw token continuations and checks completion;
 Shield separately grades release performance targets and Terminal/SWE results.
 
 Dispatch the workflow on this PR branch with model `granite42-30b-qb2`,
-sku `bh_quietbox_2`, tier `3`, and plugin ref
-`a2500313c990b129d78b74dadca312ed696caca0`. The 45-minute allowance
+sku `bh_quietbox_2`, tier `3`, and `vllm-tt-plugin-ref` set to the default pin in
+`tests/run_ci.sh`. The shared workflow otherwise overrides the script with `main`.
+For direct script runs, set `VLLM_TT_PLUGIN_REF` only to test another revision. The 45-minute allowance
 includes device tests, model startup, reasoning and setup variance; phase timings
 in the artifacts allow recalibration after a complete run. The weights must be
 available in the runner's pinned Hugging Face cache.

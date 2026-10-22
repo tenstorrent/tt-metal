@@ -59,7 +59,7 @@ export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300
 export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
 
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/plugin"
-plugin_ref="${VLLM_TT_PLUGIN_REF:-0a76258e14ca7237067ca9a22ec02e257bee570a}"
+plugin_ref="${VLLM_TT_PLUGIN_REF:-a2500313c990b129d78b74dadca312ed696caca0}"
 git -C "$work/plugin" checkout "$plugin_ref"
 git -C "$work/plugin" rev-parse HEAD > "$results/plugin-revision.txt"
 unset VLLM_TT_PLUGIN_REF
@@ -76,6 +76,7 @@ python -m pytest "$model_dir/tests/test_host_contract.py" "$model_dir/tests/test
 mark_phase host_tests_complete
 mark_phase device_tests
 python -m pytest "$model_dir/tests/test_token_history.py" "$model_dir/tests/test_external_cache.py" \
+    "$model_dir/tests/test_decoder.py" \
     --timeout 900 --junitxml "$results/device.xml"
 mark_phase device_tests_complete
 

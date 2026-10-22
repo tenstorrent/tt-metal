@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from models.demos.granite42_30b_qb2.tests import benchmark
 
@@ -95,12 +96,23 @@ def test_nonstreaming_keeps_reasoning_separate_from_scored_text():
     assert row["ttft_ms"] is row["decode_tokens_per_s"] is None
 
 
-def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path):
+@pytest.mark.parametrize("checkpoint", [None, "/local/granite-checkpoint"])
+def test_single_user_performance_never_submits_a_batch(monkeypatch, tmp_path, checkpoint):
     """Capacity-one results contain four measured requests and two separate warmups."""
     from transformers import AutoTokenizer
 
     tokenizer = SimpleNamespace(bos_token_id=2, encode=lambda *args, **kwargs: [3, 4, 5])
-    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+    if checkpoint is None:
+        monkeypatch.delenv("HF_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("HF_MODEL", checkpoint)
+
+    def load_tokenizer(source, **kwargs):
+        assert source == (checkpoint or benchmark.MODEL)
+        assert kwargs == {"revision": benchmark.MODEL_REVISION, "local_files_only": True}
+        return tokenizer
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", load_tokenizer)
     active = calls = 0
 
     async def complete(client, payload, *, chat):

@@ -24,7 +24,7 @@ def test_token_history_trace():
             )
 
         states = []
-        for b in (1, 8, 16):
+        for b in (1, 8, 16, 32):
             tokens = put(torch.arange(b).reshape(1, 1, 1, b) + 100000)
             history = put(torch.zeros(257, 1, 1, b))
             cursor = put(torch.zeros(1))

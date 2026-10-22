@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import random
 import statistics
 import time
@@ -209,7 +210,9 @@ def performance_shapes(request_concurrency, input_lengths):
 async def run_performance(client, output_dir, server_capacity, request_concurrency, input_lengths):
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        os.environ.get("HF_MODEL", MODEL), revision=MODEL_REVISION, local_files_only=True
+    )
     passage = "The scientific method tests explanations against observations. Describe an experiment and its controls. "
     source = tokenizer.encode(passage, add_special_tokens=False)
     rows, summaries, inputs = [], [], []

@@ -12,6 +12,8 @@ def append_tokens(tokens, history, cursor):
     if any(t.dtype != ttnn.uint32 or t.layout != ttnn.ROW_MAJOR_LAYOUT for t in tensors):
         raise ValueError("Token history requires row-major UINT32 tensors")
     batch = tokens.shape[-1]
+    if not 1 <= batch <= 32:
+        raise ValueError("Token history scratch supports batches 1..32")
     if tuple(tokens.shape) != (1, 1, 1, batch) or tuple(history.shape)[1:] != (1, 1, batch):
         raise ValueError("History rows must match the physical token bucket")
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
