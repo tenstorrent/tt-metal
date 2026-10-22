@@ -168,7 +168,7 @@ while IFS= read -r FILE; do
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
+        tt-train/**/*.@(h|hpp|inl|c|cpp|py|fbs))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

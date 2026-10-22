@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
+        description: "Choice of 'pr_gate', 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string
@@ -152,6 +152,10 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: ${{ inputs.package-artifact-name == '' && 'recursive' || 'false' }}
+          sparse-checkout: |
+            ${{ inputs.package-artifact-name != '' && '.github' || '' }}
+            ${{ inputs.package-artifact-name != '' && 'tools' || '' }}
+            ${{ inputs.package-artifact-name != '' && 'tt-train/tests/ops' || '' }}
           path: docker-job
 
       - name: ⬇️  Setup Job
@@ -180,8 +184,9 @@ jobs:
         timeout-minutes: 10
         run: |
           # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it.
-          jit=$(ls ./pkgs/tt-metalium-jit_*.deb 2>/dev/null || true)
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-ml-validation_*.deb $jit
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-ml-validation_*.deb)
+          apt install -y "${pkgs[@]}"
 
       - name: Set up tt-train
         if: ${{ inputs.package-artifact-name == '' }}
