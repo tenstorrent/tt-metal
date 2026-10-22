@@ -237,8 +237,12 @@ class TTBottleneck:
         if self.row_major_input:
             input_layout = ttnn.ROW_MAJOR_LAYOUT
 
-        # conv2d and ttnn.linear keep their input's dtype and emit TILE, and the DCN branch
-        # emits bfloat16.
+        # A sliced DRAM conv2 reads and writes ROW_MAJOR, where conv2d's reshapes to NHWC and back
+        # are free; in TILE both copy the tensor, as the widths are not tile multiples. conv3, a
+        # 1x1 linear, tilizes its input itself.
+        self.row_major_conv2 = not self.with_dcn and "conv2" in dram_convs
+
+        # conv2d and ttnn.linear keep their input's dtype, and the DCN branch emits bfloat16.
         conv2_dtype = input_dtype
         conv3_dtype = ttnn.bfloat16 if self.with_dcn else input_dtype
         self.output_dtype = conv3_dtype
@@ -254,6 +258,7 @@ class TTBottleneck:
             dram_conv_slices=dram_conv_slices,
             input_dtype=input_dtype,
             input_layout=input_layout,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
         )
 
         if not self.with_dcn:
@@ -270,6 +275,8 @@ class TTBottleneck:
                 dram_activation="conv2" in dram_convs,
                 dram_conv_slices=dram_conv_slices,
                 input_dtype=conv2_dtype,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
             )
         else:
             # The BatchNorm is folded into the DCN weights (create_resnet_parameters); the ReLU
@@ -318,6 +325,9 @@ class TTBottleneck:
         x, _, _ = self.conv1(x_identity)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if self.row_major_conv2 and x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            # A 1x1 conv1 runs as ttnn.linear, which emits TILE.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x, _, _ = self.conv2(x)
         x, _, _ = self.conv3(x)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
