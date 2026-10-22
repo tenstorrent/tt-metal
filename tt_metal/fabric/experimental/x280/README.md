@@ -521,9 +521,12 @@ obligations are left to the image, and `X280ActiveContract` in
    `X280ActiveContract` checks it on hardware.
 2. **Every hart reaches `return`.** One hart that never returns blocks every
    aggregate wait.
-3. **No WFI.** The harness enables no interrupt, so a WFI-parked hart
-   never wakes. A NOC write to the tile's MSI catcher does raise one (§ 4,
-   inbound paths), but only for an image that enables it itself.
+3. **No WFI unless the image enables the MSI catcher.** The harness enables
+   no interrupt, so a WFI-parked hart with nothing enabled never wakes. A NOC
+   write to the tile's MSI catcher raises PLIC source 6 (§ 4, inbound paths):
+   an image that enables it for hart 0 may park there, as long as a timer wake
+   still lets it poll STOP (obligation 1) and it disables both before `main`
+   returns (`src/doorbell.c`, `rt/x280_plic.h`).
 4. **No `.bss`.** The harness zeroes none, and the link asserts it. Mutable
    globals need `__attribute__((section(".data")))` and a non-zero
    initialiser.
@@ -633,10 +636,13 @@ A host NOC access to an L2CPU takes the L2CPU-local address (for example, `X280_
 Through the L2CPU tile, `X280_LOCAL_DDR_TILE_BASE + offset` is coherent with the
 X280 caches in both directions, with no flush. The System Port alias
 `0x30000000 + offset` and the DRAM tile itself (bank address `offset`) are not:
-through them the NOC and the X280 see each other's data stale. The coherent
-address is 47 bits wide, beyond the 36-bit local address `get_noc_addr` builds,
-so a Tensix kernel writes the upper bits to the command buffer's
-`NOC_TARG_ADDR_MID` register itself.
+through them the NOC and the X280 see each other's data stale. The rule holds
+at both ends of the WayEnable range, 0 (this runtime's 15 LIM ways) and 15. The
+coherent address is 47 bits wide, beyond the 36-bit local address `get_noc_addr`
+builds, so a Tensix kernel writes the upper bits to the command buffer's
+`NOC_TARG_ADDR_MID` (reads) or `NOC_RET_ADDR_MID` (writes) register itself and
+clears it afterwards. `X280CoherentAliasHw` checks all three paths both ways, and
+`X280DoorbellHw` the MSI catcher doorbell, from the host and from a Tensix kernel.
 
 ---
 
@@ -672,6 +678,8 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, host
 | `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` (§ 1) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
+| `firmware-doorbell.bin` | `src/doorbell.c` | hart 0 in WFI on the MSI catcher, for `X280DoorbellHw` |
+| `firmware-coherent-alias.bin` | `src/coherent_alias.c` | cached Memory Port loads and stores on command, for `X280CoherentAliasHw` |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
@@ -708,7 +716,7 @@ broken path list fails on a laptop.
 Every runtime device test takes its image from `build/x280/` unless its
 variable names another (`X280_ACTIVE_FW_IMAGE` for `X280ActiveHw`, which runs
 the sentinel; `X280_ATOMIC_BENCH_FW_IMAGE`; `X280_ACTIVE_FAULT_FW_IMAGE`;
-`X280_PINNED_INPUT_PREPARE_FW_IMAGE`; `X280_IDLE_FW_IMAGE` for the resident idle the active fixtures boot), so a
+`X280_PINNED_INPUT_PREPARE_FW_IMAGE`; `X280_DOORBELL_FW_IMAGE`; `X280_COHERENT_ALIAS_FW_IMAGE`; `X280_IDLE_FW_IMAGE` for the resident idle the active fixtures boot), so a
 run from the build needs none of them. Set `X280_ACTIVE_FW_IMAGES` to exercise
 the guard:
 
@@ -747,6 +755,7 @@ a silent skip:
 | Image | Why it is excluded |
 |---|---|
 | `firmware-active-session-fault.bin` | the deliberate non-conformer, with its own gated binary and its own test |
+| `firmware-doorbell.bin`, `firmware-coherent-alias.bin` | each needs its argument block and its own test (`X280DoorbellHw`, `X280CoherentAliasHw`) |
 
 ## 7. Cross-hart atomics micro-benchmark
 
