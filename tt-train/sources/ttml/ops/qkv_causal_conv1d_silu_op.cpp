@@ -26,10 +26,11 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
     uint32_t v_width,
     uint32_t channel_chunk_size) {
     auto* device = &autograd::ctx().get_device();
-    if (channel_chunk_size == 0) {
-        channel_chunk_size = metal::qkv_causal_conv1d_silu_chunk_size(q_width + k_width + v_width, *device);
-    }
-    const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{channel_chunk_size};
+    // The backward gets the caller's value: 0 lets it pick its own chunk together with the row split.
+    const uint32_t forward_chunk_size =
+        channel_chunk_size != 0 ? channel_chunk_size
+                                : metal::qkv_causal_conv1d_silu_chunk_size(q_width + k_width + v_width, *device);
+    const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{forward_chunk_size};
     auto input_rm = ttnn::to_layout(input->get_value(), ttnn::Layout::ROW_MAJOR);
     auto history_rm = ttnn::to_layout(history, ttnn::Layout::ROW_MAJOR);
     auto actual_start = core::from_vector<uint32_t, ttnn::DataType::UINT32>(

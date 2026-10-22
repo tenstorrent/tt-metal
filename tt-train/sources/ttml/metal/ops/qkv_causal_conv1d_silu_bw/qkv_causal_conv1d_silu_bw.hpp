@@ -18,9 +18,24 @@ namespace ttml::metal {
 // 2.4x slower than 256 on the backward.
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device);
 
+struct QkvCausalConv1dSiluBackwardWorkSplit {
+    uint32_t channel_chunk_size;
+    uint32_t row_splits;
+};
+
+// Picks the (channel_chunk_size, row_splits) pair with the lowest modelled cost over `cores` cores; a nonzero
+// argument fixes that dimension. Candidate chunks are the tile-aligned divisors of channels <= 256 that fit
+// l1_bytes. See the cost model in qkv_causal_conv1d_silu_bw.cpp.
+QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
+    uint32_t channels,
+    uint32_t row_count,
+    uint32_t cores,
+    uint64_t l1_bytes,
+    uint32_t channel_chunk_size = 0,
+    uint32_t row_splits = 0);
+
 // Returns (grad_input [1,T,Q+K+V] TILE, grad_tap0..3 shaped like the taps). History gets no gradient.
-// channel_chunk_size = 0 picks qkv_causal_conv1d_silu_chunk_size; row_splits = 0 picks enough row_count
-// splits to fill the core grid.
+// channel_chunk_size = 0 and row_splits = 0 are picked by qkv_causal_conv1d_silu_bw_work_split.
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& grad_q,
     const ttnn::Tensor& grad_k,

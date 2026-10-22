@@ -88,6 +88,29 @@ xt::xarray<float> slice_cols(const xt::xarray<float>& t, size_t begin, size_t en
     return xt::view(t, xt::all(), xt::all(), xt::range(begin, end));
 }
 
+// The cost model reproduces the choices measured on a 110-core grid (see qkv_causal_conv1d_silu_bw.cpp).
+TEST(QkvCausalConv1dSiluWorkSplit, MatchesMeasuredChoices) {
+    constexpr uint32_t cores = 110;
+    constexpr uint64_t l1 = 1 << 20;
+    const auto pick = [&](uint32_t channels, uint32_t rows, uint32_t chunk = 0, uint32_t splits = 0) {
+        const auto w = ttml::metal::qkv_causal_conv1d_silu_bw_work_split(channels, rows, cores, l1, chunk, splits);
+        return std::pair{w.channel_chunk_size, w.row_splits};
+    };
+    EXPECT_EQ(pick(6144, 4096), (std::pair{256U, 4U}));
+    EXPECT_EQ(pick(12288, 4096), (std::pair{256U, 2U}));
+    // Short sequences fill the grid with narrower chunks instead of more splits.
+    EXPECT_EQ(pick(6144, 512), (std::pair{128U, 2U}));
+    EXPECT_EQ(pick(3072, 1024), (std::pair{128U, 4U}));
+    // A fixed dimension is kept.
+    EXPECT_EQ(pick(6144, 4096, 64), (std::pair{64U, 1U}));
+    EXPECT_EQ(pick(6144, 4096, 0, 9).second, 9U);
+    EXPECT_EQ(pick(6144, 4096, 128, 3), (std::pair{128U, 3U}));
+    // The chunk divides C, and 32 is only a fallback.
+    EXPECT_EQ(192 % pick(192, 256).first, 0U);
+    EXPECT_NE(pick(192, 256).first, 32U);
+    EXPECT_EQ(pick(32, 256).first, 32U);
+}
+
 class QkvCausalConv1dSiluTest : public ::testing::Test {
 protected:
     static void SetUpTestSuite() {
