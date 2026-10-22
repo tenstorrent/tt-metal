@@ -139,6 +139,65 @@ class DsaDecodeState:
             pool[b * pool_blocks + p // 32, 0, p % 32] = pooled
         return q_resid, latent, ring_k, ring_g, pool
 
+    @staticmethod
+    def composite_golden(
+        stem,
+        latent,
+        pt,
+        positions,
+        ring_k,
+        ring_g,
+        pool,
+        wq,
+        wkva,
+        wk,
+        bk,
+        ape,
+        *,
+        Lq,
+        L,
+        D,
+        P,
+        pool_blocks,
+        offsets,
+        eps_rms=1e-5,
+        eps_ln=1e-6,
+    ):
+        """The COMPOSITE decode path's state math in torch (``tt/dsa.py`` ``decode_forward`` with
+        ``GLM53_DSA_DECODE_STATE=0``: 29 ttnn ops), same signature and return as ``golden``, with the composite's
+        dtypes and rounding points: the norm weights are bf16 device tensors (``ttnn.rms_norm`` / ``layer_norm`` at
+        fp32 compute -> bf16 rows), the k row ``layer_norm(k_raw) * w + b`` and the gate row raw are the ring
+        writes, the pool is ``typecast(ring) -> fp32``, ``+ ape``, fp32 softmax over the P rows, ``prob * k`` summed
+        over the rows, ``-> bf16``. ``golden`` differs only in keeping fp32 norm weights (the program's constants):
+        with bf16-valued weights (the checkpoint's norms are bf16) the two references agree bit for bit
+        (``tests/test_dsa_decode_state_host.py``)."""
+        B = stem.shape[0]
+        qa_o, kva_o, k_o, g_o = offsets
+        bf = lambda t: t.to(torch.bfloat16).float()
+        wq_b, wkva_b, wk_b, bk_b = (bf(w.float()) for w in (wq, wkva, wk, bk))  # the composite's bf16 weights
+        qa = bf(stem[:, qa_o : qa_o + Lq])
+        q_resid = bf(qa * torch.rsqrt((qa * qa).mean(-1, keepdim=True) + eps_rms) * wq_b)
+        kva = bf(stem[:, kva_o : kva_o + L])
+        lat_row = bf(kva * torch.rsqrt((kva * kva).mean(-1, keepdim=True) + eps_rms) * wkva_b)
+        k_raw = bf(stem[:, k_o : k_o + D])
+        k_row = bf(torch.nn.functional.layer_norm(k_raw, (D,), wk_b, bk_b, eps_ln))
+        g_row = bf(stem[:, g_o : g_o + D])
+        latent, ring_k, ring_g, pool = (t.clone() for t in (latent, ring_k, ring_g, pool))
+        for b in range(B):  # paged_update_cache of the latent rows, then the ring rows
+            a = int(positions[b])
+            latent[int(pt[b, a // 32]), 0, a % 32] = lat_row[b]
+            ring_k[b, 0, a % P] = k_row[b]
+            ring_g[b, 0, a % P] = g_row[b]
+        # pool_rings on the updated rings (typecast fp32, + ape, softmax over P, * k, sum, -> bf16), update_pools
+        kf = bf(ring_k[:B, 0, :P])
+        logits = bf(ring_g[:B, 0, :P]) + ape.float()[None]
+        prob = torch.softmax(logits, dim=1)
+        pooled = bf((prob * kf).sum(1))  # [B, D]
+        for b in range(B):
+            p = int(positions[b]) // P
+            pool[b * pool_blocks + p // 32, 0, p % 32] = pooled[b]
+        return q_resid, latent, ring_k, ring_g, pool
+
     def _cb(self, idx, dtype, page, pages, cores):
         return ttnn.CBDescriptor(
             total_size=page * pages,

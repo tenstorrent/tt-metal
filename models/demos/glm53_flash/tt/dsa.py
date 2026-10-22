@@ -70,6 +70,16 @@ DSA_FUSED_DEFAULT = "fused" if os.environ.get("GLM53_DSA_FUSED", "0") == "1" els
 # which absorb matrices the fused block folds into its projections: "both" (default) | "q" | "o" | "none"
 # (an unfolded side runs the composite's per-head bmm + transposes; a precision / perf attribution knob)
 DSA_FOLD = os.environ.get("GLM53_DSA_FOLD", "both")
+DSA_FOLD_MODES = ("both", "q", "o", "none")
+# GLM53_DSA_DECODE_STATE: the traced multi-user sparse decode (``_decode_unified``, the mesh default) with the fused
+# ``dsa_decode_state`` program for the state side (q_a norm, latent append, index ring + pool maintenance: 29 ops ->
+# 1), the GLM53_DSA_FOLD absorb folds (w_qb1 / w_o2: 4 + 4 ops -> 1 + 1) and the free head-major query views:
+#   "0" (default) = today's composite ops; "1" = the fused state block (``_decode_state_unified``);
+#   "latent" = the fallback that keeps the index maintenance on today's ops: the program still norms q_a and appends
+#   the latent, its ring / pool writes are then overwritten by the composite ``maintain_decode`` (bit-identical
+#   index state by construction, 19 ops back). Read at construction (``decode_state_default``), so two layers of one
+#   process can A/B it (``TtDSA(decode_state=...)``).
+DSA_DECODE_STATE_MODES = ("0", "1", "latent")
 # prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
 PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
 # The whole-prefix ROW_MAJOR latent copy of the sparse prefill (the sparse_sdpa kv contract), per DSA layer and
@@ -112,6 +122,45 @@ def sparse_block_plan(r0: int, r1: int, qblock: int, ablock: int) -> list[tuple[
         a1 = min(r1, a0 + ab)
         plan.append((a0, a1, [(q0, min(a1, q0 + qb)) for q0 in range(a0, a1, qb)]))
     return plan
+
+
+def decode_state_default() -> str:
+    """The ``GLM53_DSA_DECODE_STATE`` knob (``DSA_DECODE_STATE_MODES``; default "0" = the composite path)."""
+    mode = os.environ.get("GLM53_DSA_DECODE_STATE", "0")
+    if mode not in DSA_DECODE_STATE_MODES:
+        raise ValueError(f"GLM53_DSA_DECODE_STATE={mode!r}: expected one of {DSA_DECODE_STATE_MODES}")
+    return mode
+
+
+def dsa_folds(mode: str | None = None, *, strict: bool = True) -> tuple[bool, bool]:
+    """(fold the q absorb into q_b, fold the o absorb into o_proj) of a ``GLM53_DSA_FOLD`` value (``None`` = the
+    environment, default ``both``). ``strict``: an unknown value raises (else it folds nothing, as the fused dense
+    block treats it)."""
+    mode = os.environ.get("GLM53_DSA_FOLD", "both") if mode is None else mode
+    if strict and mode not in DSA_FOLD_MODES:
+        raise ValueError(f"GLM53_DSA_FOLD={mode!r}: expected one of {DSA_FOLD_MODES}")
+    return mode in ("both", "q"), mode in ("both", "o")
+
+
+def fold_absorb_weights(
+    w_qb_t: torch.Tensor, wkb1: torch.Tensor, wkb2: torch.Tensor, w_o_t: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The absorbed-MLA decode projections with the per-head absorb matrices folded in (fp32 host math):
+    ``w_qb_t`` [Lq, H*Dq] (q_b^T, head-major), ``wkb1`` [H, Dq, L], ``wkb2`` [H, Dv, L] (the kv_b halves),
+    ``w_o_t`` [H*Dv, hidden] (o_proj^T, head-major) -> (``w_qb1`` [Lq, H*L], ``w_o2`` [H*L, hidden]) with
+    ``W_qb1[h] = W_qb[h] W_kb1[h]`` (q_lat[h] = q_resid @ W_qb1[h] in one matmul, packed head-major) and
+    ``W_o2[h] = W_kb2[h]^T W_o[h]`` stacked over the heads (y = o_lat_packed @ W_o2: the head sum inside K).
+    Equal to the composite per-head bmms (``_absorb_q`` / ``_o_lat_to_heads`` + ``o_proj``) up to fp32 rounding
+    (``tests/test_dsa_decode_state_host.py``)."""
+    H, Dq, L = wkb1.shape
+    Dv = wkb2.shape[1]
+    Lq = w_qb_t.shape[0]
+    hidden = w_o_t.shape[-1]
+    wqb = w_qb_t.float().reshape(Lq, H, Dq)  # [Lq, H, Dq]
+    w_qb1 = torch.einsum("lhd,hdm->lhm", wqb, wkb1.float()).reshape(Lq, H * L)  # [Lq, H*L]
+    wo = w_o_t.float().reshape(H, Dv, hidden)  # [H, Dv, hidden]
+    w_o2 = torch.einsum("hdm,hmn->hdn", wkb2.transpose(1, 2).float(), wo).reshape(H * L, hidden)
+    return w_qb1, w_o2
 
 
 def sparse_decode_enabled() -> bool:
@@ -672,9 +721,13 @@ class TtDSA(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
         fused_decode: str | bool | None = None,
+        decode_state: str | bool | None = None,
     ):
         """``attn_state_dict``: raw checkpoint tensors of ``self_attn.`` (prefix stripped, fp8 dequantized).
         ``fused_decode``: "fused" | "composite" (default: the ``GLM53_DSA_FUSED`` knob); ``True`` = "fused".
+        ``decode_state``: "0" | "1" | "latent" (default: the ``GLM53_DSA_DECODE_STATE`` knob, read now); ``True`` =
+        "1": the traced sparse decode (``sparse_meta`` given) runs ``_decode_state_unified`` (the fused state program
+        + the GLM53_DSA_FOLD folds) instead of the composite ops.
 
         On a mesh the heads are split over the columns (``mesh.tp``, ``self.H`` = local heads): the
         latent stems (q_a, kv_a, their norms) and the indexer are replicated, q_b / kv_b / o_proj are
@@ -779,42 +832,19 @@ class TtDSA(LightweightModule):
             self.fused_decode = "fused" if fused_decode else "composite"
         else:
             self.fused_decode = str(fused_decode)
-        if self.fused_decode == "fused":
-            # the dsa_decode_state program's constants (fp32 norm weights, the ape block, the selectors) and the
-            # folded absorb weights: q_lat = q_resid @ (Wqb[h] Wkb1[h]) per head -> packed [1,1,B,H*L] (the
-            # flash-MLA decode layout after one reshape), y = o_lat_packed @ stack_h(Wkb2[h]^T Wo[h]) (one matmul)
-            idx = self.indexer
-            f32 = lambda t: up(t.float().reshape(1, 1, 1, -1), ttnn.float32)
-            self.qa_norm_w32 = f32(sd["q_a_layernorm.weight"])
-            self.kva_norm_w32 = f32(sd["kv_a_layernorm.weight"])
-            self.knorm_w32 = f32(sd["indexer.k_norm.weight"])
-            self.knorm_b32 = f32(sd["indexer.k_norm.bias"])
-            ape = torch.full((1, 1, TILE, idx.D), -1e9)
-            ape[0, 0, : idx.P] = sd["indexer.index_kpool_compress_ape"].float().reshape(idx.P, idx.D)
-            self.ape_block = up(ape, ttnn.float32)
-            self.selectors = up(selector_tiles(), ttnn.bfloat16)
-            b = self.stem_bounds
-            self.state_op = DsaDecodeState(
-                q_lora_rank=Lq,
-                latent_dim=L,
-                index_dim=idx.D,
-                pool_size=idx.P,
-                pool_blocks=1,  # set from the cache at call time
-                qa_offset=b["qa"][0],
-                kva_offset=b["kva"][0],
-                k_offset=b["k"][0],
-                g_offset=b["g"][0],
-                eps_rms=cfg.rms_norm_eps,
-                eps_ln=1e-6,
-            )
-            wqb = sd["q_b_proj.weight"].t().float().reshape(Lq, H, Dq)  # [Lq, H, Dq]
-            w_qb1 = torch.einsum("lhd,hdm->lhm", wqb, wkb1.float()).reshape(Lq, H * L)  # [Lq, H*L]
-            self.w_qb1 = up(w_qb1, weight_dtype, cols=-1)
-            wo = sd["o_proj.weight"].t().float().reshape(H, Dv, cfg.hidden_size)  # [H, Dv, hidden]
-            w_o2 = torch.einsum("hdm,hmn->hdn", wkb2.transpose(1, 2).float(), wo).reshape(H * L, cfg.hidden_size)
-            self.w_o2 = up(w_o2, weight_dtype, cols=-2)
-            self.lin_qb1 = DecodeLinear(device, self.w_qb1)
-            self.lin_o2 = DecodeLinear(device, self.w_o2)
+        if decode_state is None:
+            self.decode_state = decode_state_default()
+        elif isinstance(decode_state, bool):
+            self.decode_state = "1" if decode_state else "0"
+        else:
+            self.decode_state = str(decode_state)
+        if self.decode_state not in DSA_DECODE_STATE_MODES:
+            raise ValueError(f"decode_state={self.decode_state!r}: expected one of {DSA_DECODE_STATE_MODES}")
+        # the folds of the state block: validated only when that block is on (the dense fused block reads DSA_FOLD)
+        self.folds = dsa_folds(strict=self.decode_state != "0")
+        self.state_op: DsaDecodeState | None = None
+        if self.fused_decode == "fused" or self.decode_state != "0":
+            self._init_decode_state(sd, wkb1, wkb2, weight_dtype)
         # the sparse-decode latent gather (model-local generic op) and its persistent compact output per batch size
         self.pool_gather = PagedPoolGather(device, pool_size=cfg.index_kpool)
         self._compact: dict[int, ttnn.Tensor] = {}
@@ -824,6 +854,46 @@ class TtDSA(LightweightModule):
         # the batched one-query-per-user indexer scorer (model-local generic op) and its persistent score rows
         self.index_scorer = IndexScoreDecode(device)
         self._score_buf: dict[int, ttnn.Tensor] = {}
+
+    def _init_decode_state(self, sd: dict[str, torch.Tensor], wkb1: torch.Tensor, wkb2: torch.Tensor, weight_dtype):
+        """The ``dsa_decode_state`` program's constants (fp32 norm weights -- bf16 checkpoint values, so exactly the
+        composite's bf16 weights --, the ape block, the selectors) and the folded absorb weights
+        (``fold_absorb_weights``): q_lat = q_resid @ (Wqb[h] Wkb1[h]) per head -> packed [1,1,B,H*L] (the flash-MLA
+        decode layout after one free view + transpose), y = o_lat_packed @ stack_h(Wkb2[h]^T Wo[h]) (one matmul).
+        Shared by the dense fused block (``GLM53_DSA_FUSED=1``) and the state block of the traced sparse decode
+        (``GLM53_DSA_DECODE_STATE``)."""
+        cfg, idx, up = self.cfg, self.indexer, self.mesh.upload
+        Lq, L = cfg.q_lora_rank, self.L
+        f32 = lambda t: up(t.float().reshape(1, 1, 1, -1), ttnn.float32)
+        self.qa_norm_w32 = f32(sd["q_a_layernorm.weight"])
+        self.kva_norm_w32 = f32(sd["kv_a_layernorm.weight"])
+        self.knorm_w32 = f32(sd["indexer.k_norm.weight"])
+        self.knorm_b32 = f32(sd["indexer.k_norm.bias"])
+        ape = torch.full((1, 1, TILE, idx.D), -1e9)
+        ape[0, 0, : idx.P] = sd["indexer.index_kpool_compress_ape"].float().reshape(idx.P, idx.D)
+        self.ape_block = up(ape, ttnn.float32)
+        self.selectors = up(selector_tiles(), ttnn.bfloat16)
+        b = self.stem_bounds
+        self.state_op = DsaDecodeState(
+            q_lora_rank=Lq,
+            latent_dim=L,
+            index_dim=idx.D,
+            pool_size=idx.P,
+            pool_blocks=1,  # set from the cache at call time
+            qa_offset=b["qa"][0],
+            kva_offset=b["kva"][0],
+            k_offset=b["k"][0],
+            g_offset=b["g"][0],
+            eps_rms=cfg.rms_norm_eps,
+            eps_ln=1e-6,
+        )
+        w_qb1, w_o2 = fold_absorb_weights(
+            sd["q_b_proj.weight"].t(), wkb1, wkb2, sd["o_proj.weight"].t()
+        )  # [Lq, H*L], [H*L, hidden] (H = all heads; head-major, sharded over the columns below)
+        self.w_qb1 = up(w_qb1, weight_dtype, cols=-1)
+        self.w_o2 = up(w_o2, weight_dtype, cols=-2)
+        self.lin_qb1 = DecodeLinear(self.device, self.w_qb1)
+        self.lin_o2 = DecodeLinear(self.device, self.w_o2)
 
     def set_stage_timer(self, timer: StageTimer | None):
         """Install (or remove, ``None``) the per-stage timer on this layer and its indexer."""
@@ -1488,10 +1558,15 @@ class TtDSA(LightweightModule):
         ``sparse_meta`` (a ``SparseDecodeMeta`` of this step's positions) selects the traced multi-user
         path instead: every user, dense or sparse, is attended over a compact cache gathered from its
         selected pools (``_decode_unified``), with no host geometry and no whole-prefix copy; the dense
-        flash-MLA over the real cache and the per-user eager rows are then not run at all."""
+        flash-MLA over the real cache and the per-user eager rows are then not run at all. With
+        ``decode_state`` ("1" / "latent", the ``GLM53_DSA_DECODE_STATE`` knob) that path runs through
+        ``_decode_state_unified`` (the fused state program + the absorb folds); it takes precedence over the
+        dense fused block (``GLM53_DSA_FUSED=1``), which ignores ``sparse_meta``."""
         B = x.shape[-2]
         if self.stage_timer is not None:
             self.stage_timer.start()
+        if sparse_meta is not None and self.decode_state != "0":
+            return self._decode_state_unified(x, cache, positions, pool_ids, ring_slots, sparse_meta)
         if self.fused_decode == "fused":
             return self._fused_decode(x, cache, positions, host_positions, dense_positions)
         stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,2336]
@@ -1604,31 +1679,7 @@ class TtDSA(LightweightModule):
         idx = cache.index
         b = self.stem_bounds
         stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,Ws]
-        if self.state_op.pool_blocks != idx.pool_blocks:
-            self.state_op.pool_blocks = idx.pool_blocks  # the pool cache geometry of this cache
-        q_resid = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, B, self.cfg.q_lora_rank]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )  # the program's pre-allocated output
-        self.state_op(
-            stem,
-            cache.cache,
-            cache.page_table,
-            positions,
-            idx.ring_k,
-            idx.ring_g,
-            idx.pool_cache,
-            self.qa_norm_w32,
-            self.kva_norm_w32,
-            self.knorm_w32,
-            self.knorm_b32,
-            self.ape_block,
-            self.selectors,
-            q_resid,
-        )  # [1,1,B,Lq]
+        q_resid = self._run_state_op(stem, cache, positions)  # [1,1,B,Lq]
         self._mark("stem+state")
         if DSA_FOLD in ("both", "q"):
             q_lat = self.lin_qb1(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*L]
@@ -1685,6 +1736,156 @@ class TtDSA(LightweightModule):
         self._mark("out_proj")
         return y
 
+    def _run_state_op(self, stem: ttnn.Tensor, cache: TtLatentCache, positions: ttnn.Tensor) -> ttnn.Tensor:
+        """ONE ``dsa_decode_state`` program on ``stem`` [1,1,B,Ws] (B = the users this chip's caches hold, their
+        ``positions`` [B]): the q_a RMSNorm of every row into the pre-allocated ``q_resid`` [1,1,B,Lq] (returned),
+        the RMSNorm'd latent of row b into row ``a % 32`` of page ``page_table[b, a // 32]``, the LayerNorm'd
+        indexer k row and the raw gate row into ring slot ``a % P`` of ring block b, the pooled key of pool
+        ``a // P`` into pool block ``b * pool_blocks + (a // P) // 32`` -- the four caches updated in place (the
+        decode page-table / ring / pool views pair batch entry b with slot b: the identity the program assumes).
+        Trace-safe: ``stem`` and ``q_resid`` are allocated inside the step (in-trace allocations replay at the same
+        addresses), everything else is persistent; no host work."""
+        idx = cache.index
+        if self.state_op.pool_blocks != idx.pool_blocks:
+            self.state_op.pool_blocks = idx.pool_blocks  # the pool cache geometry of this cache (a host int)
+        B = stem.shape[-2]
+        q_resid = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, B, self.cfg.q_lora_rank]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )  # the program's pre-allocated output
+        self.state_op(
+            stem,
+            cache.cache,
+            cache.page_table,
+            positions,
+            idx.ring_k,
+            idx.ring_g,
+            idx.pool_cache,
+            self.qa_norm_w32,
+            self.kva_norm_w32,
+            self.knorm_w32,
+            self.knorm_b32,
+            self.ape_block,
+            self.selectors,
+            q_resid,
+        )
+        return q_resid
+
+    def _require_state_caches(self, cache: TtLatentCache, positions: ttnn.Tensor, B_loc: int):
+        """The fused state program read-modify-writes bf16 tiles: a bfp8 pool cache (``GLM53_POOL_DTYPE``) or a
+        non-bf16 latent cache cannot take it (explicit, never a silent fallback)."""
+        if cache.dtype != ttnn.bfloat16 or cache.index.pool_dtype != ttnn.bfloat16:
+            raise ValueError(
+                "GLM53_DSA_DECODE_STATE needs bf16 latent and pool caches (dsa_decode_state updates bf16 tiles in "
+                f"place); got latent {cache.dtype}, pools {cache.index.pool_dtype}"
+            )
+        if positions.shape[0] != B_loc:
+            raise ValueError(
+                f"GLM53_DSA_DECODE_STATE: {positions.shape[0]} positions for the {B_loc} users of this chip's caches"
+            )
+
+    def _decode_state_unified(self, x, cache: TtLatentCache, positions, pool_ids, ring_slots, meta: SparseDecodeMeta):
+        """``decode_forward`` through the traced multi-user sparse path (``_decode_unified``) with the fused state
+        block (``GLM53_DSA_DECODE_STATE=1`` / ``latent``): stem matmul -> ONE ``dsa_decode_state`` program (q_a norm,
+        latent append, ring + pool maintenance, in place) -> the indexer head-weight slice -> ``q_lat = q_resid W_qb1``
+        (``folds[0]``: the absorb folded into the projection; the packed rows read as the head-major [1,H,B,L] tiles
+        for B <= 32, a free view) -> ``_decode_unified`` (its index query also through the free view) -> ``y =
+        o_lat_packed W_o2`` (``folds[1]``) + the TP all-reduce. Per DSA layer at B <= 32 users per chip: 15 ops
+        where the composite runs 50 (both folds; the ``w`` slice stays: the program has no fifth output).
+
+        User-partitioned cache (``cache.partition``: column c holds users ``[c*B/cols, (c+1)*B/cols)`` of the row,
+        ``positions`` [B/cols]): the program runs on the chip's own user rows (``partition_cols`` of the stem: one
+        device slice, through ROW_MAJOR when B/cols is not a tile multiple) and returns their q_resid for the
+        indexer; the head-sharded q projection needs EVERY user of the row, which the program cannot norm without
+        owning their caches (one role-B core per stem row), so that q_resid comes from the composite slice + rms_norm
+        (2 ops; the user-offset extension of the program's reader would remove them). ``latent`` mode: after the
+        program the composite ``maintain_decode`` rewrites the ring slot and the pool from its own k / gate rows
+        (the program's ring / pool writes are overwritten; its other-row updates are exact ``old * 1 + 0``), so the
+        index state is bit-identical to the composite path by construction."""
+        B, H, L = x.shape[-2], self.H, self.L
+        idx = self.indexer
+        b = self.stem_bounds
+        fold_q, fold_o = self.folds
+        part = cache.partition
+        stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,Ws]
+        stem_loc = self.mesh.partition_cols(stem, 2) if part else stem  # [1,1,B_loc,Ws]: this chip's users
+        B_loc = stem_loc.shape[-2]
+        self._require_state_caches(cache, positions, B_loc)
+        q_resid_loc = self._run_state_op(stem_loc, cache, positions)  # [1,1,B_loc,Lq]; caches updated in place
+        w_idx = ttnn.slice(stem_loc, [0, 0, 0, b["w"][0]], [1, 1, B_loc, b["w"][1]])  # [1,1,B_loc,Hi]
+        if self.decode_state == "latent":
+            k_loc = ttnn.slice(stem_loc, [0, 0, 0, b["k"][0]], [1, 1, B_loc, b["k"][1]])
+            g_loc = ttnn.slice(stem_loc, [0, 0, 0, b["g"][0]], [1, 1, B_loc, b["g"][1]])
+            idx.maintain_decode(x, cache.index, pool_ids, ring_slots, kg=(k_loc, g_loc))  # consumes k_loc, g_loc
+        if part:
+            qa = ttnn.slice(stem, [0, 0, 0, b["qa"][0]], [1, 1, B, b["qa"][1]])
+            q_resid = ttnn.rms_norm(
+                qa, epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4
+            )  # [1,1,B,Lq]: every user of the row, for the head-sharded q projection
+            ttnn.deallocate(qa)
+            ttnn.deallocate(stem_loc)
+        else:
+            q_resid = q_resid_loc
+        ttnn.deallocate(stem)
+        self._mark("stem+state")
+        if fold_q:
+            q_packed = self.lin_qb1(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*L]
+            # B <= 32: the packed tiled rows ARE the head-major [1,H,B,L] tile sequence (a free view)
+            q_lat = ttnn.experimental.view(q_packed, [1, H, B, L]) if B <= TILE else self._heads_major(q_packed, B)
+            q_owner = q_packed if B <= TILE else q_lat
+            if B > TILE:
+                ttnn.deallocate(q_packed)
+        else:
+            q = self._q(q_resid)  # [1,1,B,H*Dq]
+            q_lat = self._absorb_q(q)  # [1,H,B,L] (composite absorb)
+            ttnn.deallocate(q)
+            q_owner = q_lat
+        self._mark("absorb_q")
+        if part:
+            # heads -> users: every column holds its 16 heads of all B users; the owner needs all 64 heads of
+            # its B/cols users (the inverse exchange after attention), exactly as the composite path
+            q_t = ttnn.transpose(q_lat, 1, 2)  # [1,B,H_loc,L]
+            ttnn.deallocate(q_owner)
+            q_x = self.mesh.all_to_all_cols(q_t, in_dim=1, out_dim=2)  # [1,B/cols,H,L]
+            ttnn.deallocate(q_t)
+            q_full = ttnn.transpose(q_x, 1, 2)  # [1,H,B/cols,L]
+            ttnn.deallocate(q_x)
+            self._mark("a2a_heads_to_users")
+            oh_full = self._decode_unified(q_resid_loc, q_full, cache, meta, w_idx, free_q_view=True)
+            ttnn.deallocate(q_full)
+            ttnn.deallocate(q_resid_loc)
+            ttnn.deallocate(q_resid)
+            o_t = ttnn.transpose(oh_full, 1, 2)  # [1,B/cols,H,L]
+            ttnn.deallocate(oh_full)
+            o_x = self.mesh.all_to_all_cols(o_t, in_dim=2, out_dim=1)  # [1,B,H_loc,L]
+            ttnn.deallocate(o_t)
+            oh = ttnn.transpose(o_x, 1, 2)  # [1,H_loc,B,L]
+            ttnn.deallocate(o_x)
+            self._mark("a2a_users_to_heads")
+        else:
+            oh = self._decode_unified(q_resid, q_lat, cache, meta, w_idx, free_q_view=True)  # [1,H,B,L]
+            ttnn.deallocate(q_owner)
+            ttnn.deallocate(q_resid)
+        ttnn.deallocate(w_idx)
+        if fold_o:
+            # the head-major tiles read as the packed [1,1,B,H*L] rows (free view, B <= 32)
+            o_p = ttnn.experimental.view(oh, [1, 1, B, H * L]) if B <= TILE else self._heads_packed(oh, B)
+            y = self.lin_o2(o_p, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden] (TP partial)
+            if B > TILE:
+                ttnn.deallocate(o_p)
+            ttnn.deallocate(oh)
+            y = self.mesh.all_reduce_cols(y)
+        else:
+            o_heads = self._o_lat_to_heads(oh)  # composite absorb_o
+            ttnn.deallocate(oh)
+            y = self._o_proj(o_heads)
+            ttnn.deallocate(o_heads)
+        self._mark("out_proj")
+        return y
+
     def _heads_major(self, q_lat: ttnn.Tensor, B: int) -> ttnn.Tensor:
         """[1,1,B,H*L] -> [1,H,B,L] for B > 32 (several tile rows: no free view), through the row-major layout."""
         rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
@@ -1720,18 +1921,22 @@ class TtDSA(LightweightModule):
             self._pad_cache[key] = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         return self._pad_cache[key]
 
-    def _decode_unified(self, q_resid, q_lat, cache: TtLatentCache, meta: SparseDecodeMeta, w) -> ttnn.Tensor:
+    def _decode_unified(
+        self, q_resid, q_lat, cache: TtLatentCache, meta: SparseDecodeMeta, w, *, free_q_view: bool = False
+    ) -> ttnn.Tensor:
         """All users of the chip in one trace-safe graph: per user the indexer scores its pooled keys
         (``score_decode_row``) and the top-512 pools are selected under the user's own causal bound
         (``select_decode_pools`` with ``meta.valid_len[u]``); then, batched, the pool lists are completed
         with the tail pool and the dense users' in-order lists (``meta``), the selected pools are gathered
         out of the paged latent cache into a compact cache (``paged_pool_gather``: 2052 rows per user, one
         KB per selected token) and ONE ``paged_flash_multi_latent_attention_decode`` attends every user
-        over its compact rows ``[0, cur_pos]``. Returns [1,H,B,L] bf16 (the ``oh`` layout)."""
+        over its compact rows ``[0, cur_pos]``. Returns [1,H,B,L] bf16 (the ``oh`` layout). ``free_q_view``
+        (the state block): the index query's head-major layout as a free view of the projection's packed rows
+        (B <= 32) instead of the reshape copy + transpose."""
         idx = self.indexer
         B = q_lat.shape[-2]
         Hi, D, P, K = idx.Hi, idx.D, idx.P, self.cfg.index_select_pools
-        q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w)  # [1,Hi,B,D], [1,1,B,Hi]
+        q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w, free_view=free_q_view)  # [1,Hi,B,D], [1,1,B,Hi]
         # GLM53_SCORER_BATCHED=1 (default): ONE index_score_decode program scores every user's query (its 32 heads
         # as the rows of one query tile row) against its pooled keys -> [B,1,1,W] score rows, no per-user calls,
         # no 32-row score blocks (needs pools_per_user % 256 == 0: TtIndexCache rounds to 256); 0 = one shared

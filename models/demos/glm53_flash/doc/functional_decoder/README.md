@@ -191,6 +191,27 @@ Limits: K/V-lora widths 1536 / 512 and index dim 128 are wired into the program 
 TP-mesh placement of the folded weights (`cols=-1` / `cols=-2`, head-major) is written but not run on a mesh here;
 `GLM53_DSA_FUSED` defaults to off. Logs: `_logs/optkda_dsa*.log`, `_logs/optkda_dsaops_*.txt`.
 
+### The state block in the traced sparse decode (`GLM53_DSA_DECODE_STATE`, ledger item B5)
+
+The mesh decode path (`sparse_meta` given: `_decode_unified`, every user attended over its gathered pools) ran the
+composite state ops whatever `GLM53_DSA_FUSED` said. `GLM53_DSA_DECODE_STATE=1` (default 0 = unchanged; read at
+`TtDSA` construction, `TtDSA(decode_state=...)`) routes it through `_decode_state_unified`: stem matmul -> ONE
+`dsa_decode_state` program -> the indexer head-weight slice -> `q_lat = q_resid W_qb1` (free head-major view, B <= 32)
+-> `_decode_unified` (its index query through the same free view: `queries_and_weights(free_view=True)`) ->
+`y = o_lat_packed W_o2` -> TP all-reduce: **15 device ops per DSA layer where the composite runs 50** (the ledger's
+14 counted the `w` slice into the program, which has no fifth output). `GLM53_DSA_FOLD` applies as in the dense block
+(`none` keeps the composite absorb bmms: 21 ops). User-partitioned cache (heads2users): the program runs on the chip's
+own user rows (`partition_cols` of the stem) and feeds the indexer; the head-sharded q projection needs every user of
+the row, so that q_resid is the composite slice + `rms_norm` (2 ops; a user-offset arg in the program's reader would
+remove them): 26 ops where the composite runs 71 at B/cols not a tile multiple. `GLM53_DSA_DECODE_STATE=latent` is the
+documented fallback if the rings / pools are not bit-identical on device: the program norms q_a and appends the
+latent, the composite `maintain_decode` then rewrites the ring slot and the pool from its own rows (index state
+identical to today's by construction; 36 ops). Caches must be bf16 (`GLM53_POOL_DTYPE=bfloat8_b` is refused
+explicitly). Host checks: `tests/test_dsa_decode_state_host.py` (the program's reference vs the composite's math:
+bit-identical for bf16 norm weights; the fold algebra in fp32; the free views; the knob). Device A/B (0 vs 1, chip 0
+and the (2,4) block, traced): `tests/test_dsa_decode_state_mesh.py` -- NOT yet run (status:
+`_agents/dsa_b5/STATUS.md`).
+
 ## Running
 
 ```bash
