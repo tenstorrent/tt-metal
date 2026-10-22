@@ -264,8 +264,7 @@ def _unpack_format(input_format: DataFormat, output_format=None, dest_acc=None):
     in a Float16 Dest. Without *output_format* and *dest_acc*, the input's own."""
     if output_format is None or dest_acc is None:
         return stimuli_format_for(input_format)
-    from helpers.data_format_inference import infer_unpack_out
-    from helpers.sfpu_domains import unpacks_to_dest
+    from helpers.data_format_inference import infer_unpack_out, unpacks_to_dest
 
     return stimuli_format_for(
         infer_unpack_out(

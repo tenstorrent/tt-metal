@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
+from .data_format_inference import unpacks_to_dest
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .sfpu_dispatch_constants import (
@@ -2069,14 +2070,6 @@ def specials_safe(
         return False
 
     return True
-
-
-def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
-    """Does the unpack write *input_format* straight into Dest, rather than through
-    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
-    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
-    so the three cannot drift apart."""
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
 def negative_zero_delivered(

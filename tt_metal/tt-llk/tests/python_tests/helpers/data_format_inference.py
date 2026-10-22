@@ -9,11 +9,11 @@ the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import DestAccumulation
+from .llk_params import DestAccumulation, Tilize
 
 VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
@@ -161,6 +161,26 @@ def effective_dest_acc(
     if arch is None:
         arch = get_chip_architecture()
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
+
+
+def unpacks_to_dest(
+    input_format: DataFormat,
+    dest_acc: Union[bool, DestAccumulation],
+    tilize: Tilize = Tilize.No,
+) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes, except a tilized Float32
+    input, which always goes through SrcA.
+
+    *dest_acc* may be a ``DestAccumulation`` member or a plain bool. The member is not
+    tested for truthiness: both of its values wrap a bool, so ``bool(DestAccumulation.No)``
+    is True.
+    """
+    if tilize == Tilize.Yes and input_format == DataFormat.Float32:
+        return False
+    return (
+        input_format.is_32_bit() and DestAccumulation(dest_acc) == DestAccumulation.Yes
+    )
 
 
 _2X_L1_FORMAT = {
