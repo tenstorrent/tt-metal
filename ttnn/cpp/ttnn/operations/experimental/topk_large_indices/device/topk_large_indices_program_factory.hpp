@@ -68,8 +68,9 @@ struct TopkLargeIndicesProgramFactory {
 // Rows split across cores only when two cores per split row are free (all rows, or the rows left after whole
 // rounds), so other programs carry no tree code.
 inline bool row_split_possible(uint32_t num_rows, uint32_t num_cores) {
-    const uint32_t split_rows = num_rows < num_cores ? num_rows : num_rows % num_cores;
-    return split_rows != 0 && 2ull * split_rows <= num_cores;
+    (void)num_rows;
+    (void)num_cores;
+    return false;
 }
 
 ComputeBodyMode compute_body_mode(
