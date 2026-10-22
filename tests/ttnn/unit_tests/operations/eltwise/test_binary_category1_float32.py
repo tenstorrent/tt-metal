@@ -99,10 +99,11 @@ def test_divide(device, ttnn_op):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
-# |alpha| == 2 scales b by an exponent shift. 2 * 2^126 = 2^127, still finite;
-# the next binade (b ≥ 2^127) makes that scale overflow to ±inf on device while
-# torch computes the sum without the intermediate overflow
-# (1.02e31 + 2*(-2^127) → torch -max float32, device -inf).
+# For |alpha| > 1 the scale alpha * b overflows to ±inf on device once it
+# exceeds float32 max, while torch computes the sum without the intermediate
+# overflow (1.02e31 + 2*(-2^127) → torch -max float32, device -inf).
+# Bounding b to 2^126 keeps the scale finite for |alpha| < 4
+# (float32 max ≈ 3.9999998 × 2^126).
 _ADDALPHA_LARGE_SCALE_BOUND = 2.0**126
 
 
@@ -118,8 +119,8 @@ def test_addalpha_subalpha(device, ttnn_op, alpha):
     | alpha      | Input grid           | Handling                                   |
     |------------|----------------------|--------------------------------------------|
     | 0, ±1      | Full grid            | None                                       |
-    | ±0.5       | Full grid            | Mask pairs where alpha * b underflows      |
-    | ±2         | [-2^126, 2^126]      | Bounded so alpha * b stays finite          |
+    | ±0.5       | Full grid            | Expect a where alpha * b underflows        |
+    | ±2, 3.75   | [-2^126, 2^126]      | Bounded so alpha * b stays finite          |
     """
     if abs(alpha) > 1:
         values = binary_grid_values(
@@ -140,16 +141,19 @@ def test_addalpha_subalpha(device, ttnn_op, alpha):
     golden = flush_subnormal_values_to_zero(golden)
 
     # SFPU scale underflow: 0 < |alpha| < 1 can flush alpha*b to 0 while b is
-    # still a normal, so the device returns a. Torch multiplies first and the
-    # sum can be a subnormal that flushes to 0.
+    # still a normal, so the device returns a. Torch keeps the subnormal
+    # alpha*b, so its sum differs from a whenever |a| is small:
+    #   a = b = 2^-126, alpha = 0.5
+    #   torch a + 0.5*b = 1.763e-38; device 0.5*b → 0, then a + 0 = 1.175e-38.
+    # The torch sum can also be a subnormal that flushes to 0:
     #   a = -2.342e-38, b = 2.342e-38, alpha = 0.5
-    #   torch a + 0.5*b ≈ -1.17e-38 → 0; device 0.5*b → 0, then a + 0 = a.
-    # alpha == 0 is excluded: |b| * 0 is below the bound for every b, so the
-    # mask would replace the whole grid with the golden and the identity
-    # (a ± 0) would never reach the ULP check.
+    #   torch a + 0.5*b ≈ -1.17e-38 → 0; device returns a.
+    # The expected value for these pairs is a, and the device output is still
+    # checked against it. The grid holds only normals and zero, so a needs no
+    # flush. alpha == 0 needs no mask: alpha*b is exactly 0 in torch too.
     if 0.0 < abs(alpha) < 1:
         scale_underflow = (input_b != 0) & (input_b.abs() * abs(alpha) < 2.0**-126)
         assert scale_underflow.any(), "expected the SFPU scale of b to underflow on this grid"
-        result = torch.where(scale_underflow, golden, result)
+        golden = torch.where(scale_underflow, input_a, golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
