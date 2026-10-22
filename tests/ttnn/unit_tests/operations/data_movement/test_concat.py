@@ -927,6 +927,29 @@ def test_sharded_concat_rank3_width_multicore(device, layout, num_inputs, shape)
 # shard height, so the last core runs a partial arg set. ConcatS2SRMProgramFactory sized that
 # from padded_shape()[-2], which under-counts as soon as the leading dims are not all 1 -- the
 # last core then copied too few rows and left the tail of the output shard uninitialised.
+@pytest.mark.parametrize("width", [8, 24])
+@pytest.mark.parametrize(
+    "a_buffer, b_buffer, out_buffer",
+    [
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+    ],
+)
+def test_concat_row_major_mixed_buffer_types(device, width, a_buffer, b_buffer, out_buffer):
+    torch.manual_seed(0)
+    torch_a = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    torch_b = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    memory_config = {
+        buffer: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer)
+        for buffer in (ttnn.BufferType.L1, ttnn.BufferType.DRAM)
+    }
+    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[a_buffer])
+    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[b_buffer])
+    output = ttnn.concat([a, b], dim=-2, memory_config=memory_config[out_buffer])
+    assert_equal(torch.cat([torch_a, torch_b], dim=-2), ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -1225,24 +1248,121 @@ def test_sharded_concat_height_interleaves_leading_dims(device, strategy, shape,
     assert_equal(torch_out, ttnn_out)
 
 
-@pytest.mark.parametrize("width", [8, 24])
+def _noc_max_burst_bytes():
+    """NOC_MAX_BURST_SIZE for the running arch: 256 words x the NoC word width."""
+    return {"blackhole": 16384, "quasar": 65536}.get(ttnn.get_arch_name(), 8192)
+
+
+def _row_width(spec, element_size):
+    """Shard width in elements for a row at / just over / well over the one-packet limit.
+
+    Widths step by a whole 32 byte unit: the dataflow buffer rounds its entry size up to 32 B
+    while the tensor allocates the unrounded row, so a row that is only 16 B aligned makes the
+    buffer larger than the shard it borrows. "double_over" is sized so that even after dividing
+    by two groups the row is still over the limit.
+    """
+    at_limit = _noc_max_burst_bytes() // element_size
+    step = 32 // element_size
+    return {"at": at_limit, "over": at_limit + step, "double_over": 2 * (at_limit + step)}[spec]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
 @pytest.mark.parametrize(
-    "a_buffer, b_buffer, out_buffer",
-    [
-        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.L1),
-        (ttnn.BufferType.DRAM, ttnn.BufferType.L1, ttnn.BufferType.L1),
-        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
-    ],
+    "spec_0, spec_1, groups, ragged_height",
+    (
+        ("at", "at", 1, False),
+        ("over", "over", 1, False),
+        ("over", "at", 1, False),
+        ("at", "over", 1, False),
+        ("over", "over", 2, False),
+        ("double_over", "double_over", 2, False),
+        ("over", "over", 1, True),
+    ),
+    ids=(
+        "at_limit_control",
+        "both_over",
+        "first_over",
+        "second_over",
+        "groups2_row_over_group_within",
+        "groups2_group_over",
+        "ragged_height_last_core_short",
+    ),
 )
-def test_concat_row_major_mixed_buffer_types(device, width, a_buffer, b_buffer, out_buffer):
-    torch.manual_seed(0)
-    torch_a = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
-    torch_b = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
-    memory_config = {
-        buffer: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer)
-        for buffer in (ttnn.BufferType.L1, ttnn.BufferType.DRAM)
-    }
-    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[a_buffer])
-    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[b_buffer])
-    output = ttnn.concat([a, b], dim=-2, memory_config=memory_config[out_buffer])
-    assert_equal(torch.cat([torch_a, torch_b], dim=-2), ttnn.to_torch(output))
+def test_height_sharded_width_concat_row_over_noc_burst(device, dtype, spec_0, spec_1, groups, ragged_height):
+    """A shard row longer than NOC_MAX_BURST_SIZE used to go out as one oversized packet and hang.
+
+    ConcatS2SRMProgramFactory's kernel asked for one-packet mode unconditionally by passing
+    NOC_MAX_BURST_SIZE as the max_page_size template argument. Passing the row instead keeps the
+    same instantiation when it fits and takes the splitting path when it does not.
+
+    "at_limit_control" sits exactly on the limit and must keep the one-packet path.
+    """
+    element_size = 2 if dtype == ttnn.bfloat16 else 4
+    width_0 = _row_width(spec_0, element_size)
+    width_1 = _row_width(spec_1, element_size)
+
+    num_cores, shard_h = 8, 4
+    # A height that is not a multiple of the shard height leaves the last core short, which is
+    # what selects the factory's separate "_last" kernel pair.
+    height = shard_h * num_cores - 2 if ragged_height else shard_h * num_cores
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    def mem(width):
+        return ttnn.create_sharded_memory_config(
+            (shard_h, width),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    torch_inputs = [random_torch_tensor(dtype, (1, 1, height, w)) for w in (width_0, width_1)]
+    expected = ttnn.concat.golden_function(torch_inputs, 3, groups)
+    tt_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem(w))
+        for t, w in zip(torch_inputs, (width_0, width_1))
+    ]
+
+    result = ttnn.concat(tt_inputs, dim=3, memory_config=mem(width_0 + width_1), groups=groups)
+    assert_equal(expected, ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+def test_width_sharded_height_concat_page_over_noc_burst(device, dtype):
+    """Drive ConcatS2SMultiProgramFactory's page over NOC_MAX_BURST_SIZE.
+
+    That factory's page is the gcd of the aligned stick sizes, so two equal rows push it to the
+    row itself. At 8224 B it clears the 8192 B limit on Wormhole and the kernel takes its
+    splitting path. Nothing else in the suite reaches that path: every other sharded case has a
+    page well under the limit, so the branch would otherwise never run.
+
+    Checked by deliberately halving the read in that branch, which turns this case wrong and
+    leaves the rest of the suite passing.
+
+    Sized in elements, not bytes, to work around a known defect: the factory's gcd takes the
+    output's stick as a count of elements and the inputs' as bytes, so the page follows the
+    element count whatever the dtype. Tracked in #60710; when it is fixed this needs resizing
+    to bytes / element_size to keep crossing the limit.
+    """
+    # Sized in elements because of the unit mismatch noted above, not because that is correct.
+    shard_w = _noc_max_burst_bytes() + 32
+    num_cores, height = 4, 2
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    def mem(h):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (h, shard_w), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    width = shard_w * num_cores
+    torch_inputs = [random_torch_tensor(dtype, (1, 1, height, width)) for _ in range(2)]
+    expected = torch.cat(torch_inputs, dim=2)
+    tt_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem(height))
+        for t in torch_inputs
+    ]
+
+    result = ttnn.concat(tt_inputs, dim=2, memory_config=mem(2 * height))
+    assert_equal(expected, ttnn.to_torch(result))
