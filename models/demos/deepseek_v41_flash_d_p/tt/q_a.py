@@ -14,8 +14,8 @@ Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TI
     tt/common.py:tp_sum         all_gather over axis 1 + SFPU ttnn.add in mesh-column order (K-30: exact fp32 sum,
                                 bit-identical on every chip of the row; the FPU in reduce_scatter / all_reduce reads fp32
                                 at about TF32) -> [1, 1, S/SP, 1792] fp32, replicated over TP
-    slice q [S/SP, 1280] -> tt/norm.py:TtDistributedRmsNorm(split=False) q_norm (fp32, replicated weight, eps 1e-20;
-                                K-12: not ttnn.rms_norm on fp32)
+    q [S/SP, 1280] = p's wq_a columns -> tt/norm.py:TtDistributedRmsNorm(split=False) q_norm (fp32, replicated weight,
+                                eps 1e-20; NORM_IMPL=on: ttnn.bringup.rms_norm(input_window=) on p in place, P.18)
 
 Output q_resid [1, 1, S/SP, 1280] fp32 TILE, rows split over axis 0, replicated over axis 1 (wq_b and the indexer
 need it whole). wkv rides in the same matmul and exchange (plan.md: one exchange per layer for the attention
@@ -97,10 +97,8 @@ class TtQa:
         p = self.proj(xq)
         if xq is not x:
             ttnn.deallocate(xq)
-        rows = p.shape[-2]
-        q = ttnn.slice(p, [0, 0, 0, self.q0], [1, 1, rows, self.q1], memory_config=DRAM)
-        y = self.norm(q)
-        ttnn.deallocate(q)
+        # q_norm on p's wq_a columns (NORM_IMPL=on, P.18: read in place by the fork's input_window; off: a slice)
+        y = self.norm(p, window=(self.q0, self.q1))
         return y, p
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:

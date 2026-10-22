@@ -129,6 +129,21 @@ TABLE = {
         "probe_002 (2x2, [1, 16, 1024, 512] bf16, tail vs float64): rel 0.0037 (one bf16 rounding 0.0017; HiFi2 "
         "0.0052), 0.09-0.10 ms a call",
     ),
+    "NORM_IMPL": Setting(
+        "on",
+        ("on", "off"),
+        "P.18 (owner comparison 2026-10-22, precision-debt report J4): the RMS norms (attn_norm, ffn_norm, the final "
+        "norm, q_norm, kv_norm, the compressor's norm and k_norm; tt/norm.py). on = ttnn.bringup.rms_norm at the fork's "
+        "normal settings (HiFi4, fp32 DEST): a column-split norm = ONE rms_norm(stats_out=True) (the chip's partial "
+        "sums of squares) + one all_gather of those [S/SP, 32 B] partials over TP + ONE rms_norm(partial_stats=, "
+        "stats_width=H, weight=, dtype=) (fork options of CHANGELOG 6); q_norm / kv_norm read their columns of the "
+        "fused [wq_a | wkv] output in place (input_window=, no slice), kv_norm / k_norm write bf16 (dtype=); the "
+        "compressor norm is the fork's default program. The statistic is FPU-grade (x^2 and the row sum read fp32 at "
+        "TF32, DS41-44): probe ds41_norm_split/probe_002 (2x2, bf16-valued weights, vs float64) fp32 rows: rel 6.1e-4, "
+        "median row-norm ratio -3.5e-4 (fp32 out), rel 1.77e-3 (bf16 out; one bf16 rounding 1.66e-3); bf16-valued rows "
+        "-1.6e-4. off = the P.17 path (fp32 SFPU compositions: mhc_pre_xing_pack + slice + exact tp_sum + scale, eps, "
+        "rsqrt, two multiplies; 8-15 calls a norm)",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",

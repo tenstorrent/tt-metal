@@ -27,6 +27,21 @@ ffn_norm (``gather=True``) adds one ttnn.all_gather (dim 3, cluster_axis 1; a da
 ``quant(y)`` (y in the experts' input dtype, a cast at most) gives the x the shared and the routed experts both
 read, computed once per layer.
 No host work in __call__.
+
+NORM_IMPL=on (P.18, the default; tt/settings.py): every norm is ttnn.bringup.rms_norm at the fork's normal settings
+(HiFi4, fp32 DEST), one call per norm on the rows (fork CHANGELOG 6 options):
+
+    column-split (attn_norm / ffn_norm / final norm):
+        rms_norm(x, stats_out=True)                 the chip's partial sums of x^2, [1, 1, S/SP, 32 B] fp32
+        ccl.all_gather(dim 3, over TP)              [1, 1, S/SP, 32 B TP] (every element a partial; exact move)
+        rms_norm(x, partial_stats=, stats_width=H, weight=, dtype=)
+                                                    x rsqrt(sum of the row's partials / H + eps) w, the chip's columns
+        (ffn_norm: + the output all_gather, as before)
+    whole rows (split=False: q_norm / kv_norm / compressor norm / k_norm):
+        rms_norm(x, weight=, [input_window=(c0, c1)], [dtype=])   q_norm / kv_norm read their columns of the fused
+                                                    projection output in place (``window``); kv_norm / k_norm write
+                                                    bf16 (``dtype``)
+The statistic is FPU-grade (x^2 and the row sum read fp32 at TF32, DS41-44), well inside the norms' bf16 floor.
 """
 
 from __future__ import annotations
@@ -36,7 +51,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, cast, tp_sum
+from .common import DRAM, TP_AXIS, cast, fp32_acc, tp_sum
 from .settings import settings
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
@@ -63,6 +78,15 @@ class TtDistributedRmsNorm:
             assert not gather, "gather norms take FFN_NORM_DTYPE"
             self.out_dtype = dtype
         self.inv_h = 1.0 / float(hidden)
+        self.impl = settings.get("NORM_IMPL")  # P.18: on = ttnn.bringup.rms_norm, off = the fp32 SFPU composition
+        # the fork's normal settings: HiFi4 (its default), fp32 DEST (the statistic; FP32_ACC needed), exact SFPU
+        self.ckc = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_acc(True),
+            packer_l1_acc=False,
+        )
         # w as [1, 1, 1, H] fp32 TILE, the last dim split over the TP axis (chip column c holds w[c H/TP, (c+1) H/TP)),
         # replicated over the SP axis; split=False: replicated everywhere.
         dims = ((None, 3) if TP_AXIS == 1 else (3, None)) if split else (None, None)
@@ -96,7 +120,42 @@ class TtDistributedRmsNorm:
         ttnn.deallocate(t)
         return rs
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _fork(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
+        """NORM_IMPL=on (P.18): the norm through ttnn.bringup.rms_norm (module docstring). ``window`` (split=False
+        only): normalize x's columns [c0, c1) in place of a slice."""
+        kw = dict(epsilon=self.eps, weight=self.weight, compute_kernel_config=self.ckc, memory_config=DRAM)
+        if self.out_dtype != x.dtype:
+            kw["dtype"] = self.out_dtype
+        if not self.split:
+            if window is not None and tuple(window) != (0, x.shape[-1]):
+                kw["input_window"] = tuple(window)
+            return ttnn.bringup.rms_norm(x, **kw)
+        assert window is None, "a column-split norm takes its whole input"
+        part = ttnn.bringup.rms_norm(x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM)
+        if self.tp > 1:
+            gathered = ccl.all_gather(part, 3, TP_AXIS)
+            ttnn.deallocate(part)
+        else:
+            gathered = part
+        y = ttnn.bringup.rms_norm(x, partial_stats=gathered, stats_width=self.hidden, **kw)
+        ttnn.deallocate(gathered)
+        if not self.gather:
+            return y
+        full = ccl.all_gather(y, 3, TP_AXIS)  # ffn_norm: whole token rows on every chip of the mesh row
+        ttnn.deallocate(y)
+        return full
+
+    def __call__(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
+        if self.impl == "on":
+            width = (window[1] - window[0]) if window is not None else x.shape[-1]
+            assert width * self.tp == self.hidden, (x.shape, window, self.hidden)
+            return self._fork(x, window)
+        if window is not None:  # off (the P.17 path): the caller's slice, here
+            rows = x.shape[-2]
+            xs = ttnn.slice(x, [0, 0, 0, window[0]], [1, 1, rows, window[1]], memory_config=DRAM)
+            y = self(xs)
+            ttnn.deallocate(xs)
+            return y
         assert x.dtype == ttnn.float32, x.dtype
         assert x.shape[-1] * self.tp == self.hidden, (x.shape, self.hidden)
         rs = self.rstd(x)
