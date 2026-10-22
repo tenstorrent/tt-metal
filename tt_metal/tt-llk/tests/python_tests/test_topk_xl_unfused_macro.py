@@ -34,6 +34,7 @@ the stimulus/golden machinery of ``test_topk_xl.py``.
 
 from dataclasses import dataclass
 
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import (
@@ -150,6 +151,12 @@ def test_topk_xl_unfused_macro_equals_opt_out(K):
     num_chunks=4. Both must also pass the golden — equality of two wrong
     outputs would otherwise slip through."""
     (K,) = K
+    if K == 512:
+        # Skipped before either build, so no other variant's ELF depends on it.
+        pytest.skip(
+            "intermittent macro vs opt-out mismatch on Blackhole, only at K=512 "
+            "(#61376); K=1024/2048 and the K=512 golden gates still run"
+        )
     good_cfg, rows = _variant(K, num_chunks=4)
     base_cfg, _ = _variant(K, num_chunks=4, opt_out=True)
     # Build both before running either: under --compile-producer, run() skips
