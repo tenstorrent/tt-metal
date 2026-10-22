@@ -458,7 +458,6 @@ class TtKimiK3Transformer(LightweightModule):
         rope_tensors=None,
         padding_side: Optional[str] = None,
         layer_tap: Optional[Callable] = None,
-        attn_input_tap: Optional[Callable] = None,
         mtp_union=None,
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
@@ -472,15 +471,13 @@ class TtKimiK3Transformer(LightweightModule):
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
 
-        `attn_input_tap(local_idx, hidden)` fires inside each layer with its AttnRes read before
-        attention, the input of `attn_norm`. That read is what DSpark taps for target layer
-        `local_idx - 1`. `hidden` is borrowed from the stream, so use or copy it before returning.
-
-        `on_layer_hidden(global_idx, hidden)` is the runtime's drafter hook. It rides the same read,
-        reported as the layer before it: under AttnRes a new read site would need its own query.
+        `on_layer_hidden(global_idx, hidden)` is the drafter hook. DSpark taps target layer L at layer
+        L+1's AttnRes read before attention (the input of `attn_norm`), so it fires inside each layer
+        with that read, reported as the layer before it: under AttnRes a new read site would need its
+        own query. `hidden` is borrowed from the stream, so use or copy it before returning.
         """
+        attn_input_tap = None
         if on_layer_hidden is not None:
-            assert attn_input_tap is None, "on_layer_hidden and attn_input_tap share one read site"
             first = self.first_layer_idx
 
             def attn_input_tap(local_idx, hidden):
