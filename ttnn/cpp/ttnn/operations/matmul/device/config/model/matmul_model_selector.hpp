@@ -42,8 +42,8 @@ public:
         const MatmulProblem& problem, std::span<const Candidate> candidates, Arch arch = Arch::kBlackholeP150) const;
 
 private:
-    explicit ConfigModel(config::model::GbdtModelStorage storage) : storage_(std::move(storage)) {}
-    config::model::GbdtModelStorage storage_;
+    explicit ConfigModel(GbdtModelStorage storage) : storage_(std::move(storage)) {}
+    GbdtModelStorage storage_;
 };
 
 // Indices of the candidates with a finite prediction, lowest first; ties keep candidate order (so the first of equal

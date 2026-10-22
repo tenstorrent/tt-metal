@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/matmul/device/config/model/matmul_model_device_params.hpp"
 
-#include <stdexcept>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::matmul::model {
 namespace {
@@ -148,12 +148,22 @@ constexpr DeviceParams kBlackholeGalaxy = make_blackhole_galaxy();
 
 }  // namespace
 
+std::uint32_t fidelity_phases(Fidelity f) {
+    switch (f) {
+        case Fidelity::kLoFi: return 1;
+        case Fidelity::kHiFi2: return 2;
+        case Fidelity::kHiFi3: return 3;
+        case Fidelity::kHiFi4: return 4;
+    }
+    TT_THROW("Unreachable");
+}
+
 const DeviceParams& device_params(Arch arch) {
     switch (arch) {
         case Arch::kBlackholeP150: return kBlackholeP150;
         case Arch::kBlackholeGalaxy: return kBlackholeGalaxy;
     }
-    throw std::invalid_argument("matmul model: no device parameters for this arch");
+    TT_THROW("matmul model: no device parameters for arch {}", static_cast<int>(arch));
 }
 
 std::optional<Arch> blackhole_arch_for_grid(std::uint32_t grid_x, std::uint32_t grid_y) {

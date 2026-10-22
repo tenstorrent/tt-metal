@@ -7,11 +7,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <exception>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <numeric>
+
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::matmul::model {
 
@@ -38,25 +39,22 @@ std::unique_ptr<const ConfigModel> ConfigModel::load_file(const std::string& pat
 }
 
 std::unique_ptr<const ConfigModel> ConfigModel::from_blob(std::span<const std::byte> blob, std::string& error) {
-    try {
-        auto storage = config::model::GbdtModelStorage::from_blob(blob);
-        const auto& names = storage.feature_names();
-        if (names.size() != kNumFeatures || storage.model().num_features != kNumFeatures) {
-            error = "model has " + std::to_string(names.size()) + " features, expected " + std::to_string(kNumFeatures);
-            return nullptr;
-        }
-        for (std::size_t i = 0; i < kNumFeatures; ++i) {
-            if (names[i] != kFeatureNames[i]) {
-                error =
-                    "feature " + std::to_string(i) + " is " + names[i] + ", expected " + std::string(kFeatureNames[i]);
-                return nullptr;
-            }
-        }
-        return std::unique_ptr<const ConfigModel>(new ConfigModel(std::move(storage)));
-    } catch (const std::exception& e) {
-        error = e.what();
+    auto storage = GbdtModelStorage::from_blob(blob, error);
+    if (!storage) {
         return nullptr;
     }
+    const auto& names = storage->feature_names();
+    if (names.size() != kNumFeatures || storage->model().num_features != kNumFeatures) {
+        error = "model has " + std::to_string(names.size()) + " features, expected " + std::to_string(kNumFeatures);
+        return nullptr;
+    }
+    for (std::size_t i = 0; i < kNumFeatures; ++i) {
+        if (names[i] != kFeatureNames[i]) {
+            error = "feature " + std::to_string(i) + " is " + names[i] + ", expected " + std::string(kFeatureNames[i]);
+            return nullptr;
+        }
+    }
+    return std::unique_ptr<const ConfigModel>(new ConfigModel(std::move(*storage)));
 }
 
 std::vector<double> ConfigModel::predict_ns(
@@ -65,7 +63,9 @@ std::vector<double> ConfigModel::predict_ns(
     // The memo of placement link loads and L1 compute tables is problem independent but device specific; one per
     // thread and arch
     thread_local std::array<ModelCache, 2> caches;
-    ModelCache& cache = caches.at(static_cast<std::size_t>(arch));
+    const auto arch_index = static_cast<std::size_t>(arch);
+    TT_FATAL(arch_index < caches.size(), "matmul model: no model cache for arch {}", arch_index);
+    ModelCache& cache = caches[arch_index];
     std::vector<double> predicted(candidates.size(), std::numeric_limits<double>::quiet_NaN());
     std::vector<double> rows;
     std::vector<double> base;

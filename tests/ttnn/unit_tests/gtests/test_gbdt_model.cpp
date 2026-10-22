@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@
 
 #include "ttnn/operations/matmul/device/config/model/gbdt_model.hpp"
 
-namespace ttnn::operations::matmul::config::model {
+namespace ttnn::operations::matmul::model {
 namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
@@ -122,7 +122,9 @@ TEST(GbdtModel, ValidateRejectsBackEdges) {
 
 TEST(GbdtModel, BlobRejectsGarbage) {
     const char junk[] = "not a model";
-    EXPECT_THROW(GbdtModelStorage::from_blob(std::as_bytes(std::span<const char>(junk))), std::runtime_error);
+    std::string error;
+    EXPECT_FALSE(GbdtModelStorage::from_blob(std::as_bytes(std::span<const char>(junk)), error).has_value());
+    EXPECT_NE(error, "");
 }
 
 std::vector<char> slurp(const std::filesystem::path& p) {
@@ -140,8 +142,11 @@ TEST(GbdtModel, ParityWithLightGBM) {
     }
     const std::filesystem::path d(dir);
     const auto blob = slurp(d / "model.blob");
-    const auto storage = GbdtModelStorage::from_blob(std::as_bytes(std::span<const char>(blob.data(), blob.size())));
-    const GbdtModel& m = storage.model();
+    std::string error;
+    const auto storage =
+        GbdtModelStorage::from_blob(std::as_bytes(std::span<const char>(blob.data(), blob.size())), error);
+    ASSERT_TRUE(storage.has_value()) << error;
+    const GbdtModel& m = storage->model();
     const auto xb = slurp(d / "rows.bin");
     const auto rb = slurp(d / "ref.bin");
     ASSERT_EQ(xb.size(), rb.size() * m.num_features);
@@ -160,4 +165,4 @@ TEST(GbdtModel, ParityWithLightGBM) {
 }
 
 }  // namespace
-}  // namespace ttnn::operations::matmul::config::model
+}  // namespace ttnn::operations::matmul::model

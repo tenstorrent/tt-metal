@@ -8,6 +8,8 @@
 #include <cmath>
 #include <limits>
 
+#include <tt_stl/assert.hpp>
+
 // Parity with the Python reference is bit-for-bit only if the compiler evaluates every expression as written: no
 // fused multiply-add contraction (build with -ffp-contract=off on GCC) and no -ffast-math. Expressions below keep the
 // reference's operation order on purpose; do not "simplify" them.
@@ -16,6 +18,16 @@
 #endif
 
 namespace ttnn::operations::matmul::model {
+
+std::uint32_t tile_size_bytes(DataType t) {
+    switch (t) {
+        case DataType::kBfloat16: return kTileDim * kTileDim * 2;
+        case DataType::kBfloat8B: return kTileDim * kTileDim + kTileDim * kTileDim / 16;
+        case DataType::kBfloat4B: return kTileDim * kTileDim / 2 + kTileDim * kTileDim / 16;
+        case DataType::kFloat32: return kTileDim * kTileDim * 4;
+    }
+    TT_THROW("Unreachable");
+}
 
 const std::array<std::string_view, kNumFeatures> kFeatureNames = {
     "x_fam",
@@ -92,6 +104,13 @@ std::string_view to_string(ScoreStatus s) {
     return "?";
 }
 
+void ModelCache::clear() {
+    link_.clear();
+    l1_.clear();
+}
+
+std::size_t ModelCache::size() const { return link_.size() + l1_.size(); }
+
 const ModelCache::Lanes* ModelCache::find_link(std::uint64_t key) const {
     auto it = link_.find(key);
     return it == link_.end() ? nullptr : &it->second;
@@ -122,47 +141,30 @@ inline double pymax(double a, double b, double c) { return pymax(pymax(a, b), c)
 inline double npmax(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a >= b ? a : b); }
 inline double npmin(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a <= b ? a : b); }
 
-double feature_tile_bytes(DataType t) {
-    switch (t) {
-        case DataType::kBfloat16: return 2048.0;
-        case DataType::kBfloat8B: return 1088.0;
-        case DataType::kBfloat4B: return 576.0;
-        case DataType::kFloat32: return 4096.0;
-    }
-    return kNaN;
-}
-
-double phases(Fidelity f) {
-    switch (f) {
-        case Fidelity::kLoFi: return 1.0;
-        case Fidelity::kHiFi2: return 2.0;
-        case Fidelity::kHiFi3: return 3.0;
-        case Fidelity::kHiFi4: return 4.0;
-    }
-    return 4.0;
-}
-
 // model7: 0 DRAM interleaved, 1 L1 interleaved, 2 sharded
 int src_code(MemLayout m) {
     switch (m) {
         case MemLayout::kDramInterleaved: return 0;
         case MemLayout::kL1Interleaved: return 1;
-        default: return 2;
+        case MemLayout::kL1HeightSharded:
+        case MemLayout::kL1WidthSharded:
+        case MemLayout::kL1BlockSharded: return 2;
     }
+    TT_THROW("Unreachable");
 }
 
-double tiles_of(std::uint32_t v) { return std::ceil(static_cast<double>(v) / 32.0); }
+double tiles_of(std::uint32_t v) { return std::ceil(static_cast<double>(v) / kTileDim); }
 
 // ---------------------------------------------------------------- model7.geometry (one row)
 struct Geometry {
-    Family fam;
-    double Mt, Kt, Nt, B, kb, obh, obw, sbh, sbw;
-    double cores, rx0, rx1, rd0, rd1, rrounds, rbsf, rtail, nob, nK, bloop, nsb;
-    bool dbuf;
-    double tb_a, tb_b, tb_o, tb_p, reloads, ph, kpad;
-    bool bias, sfpu;
-    int src_a, src_b, dst_o;
-    double R2, C2;  // output block grid (rows, cols), batch rows stacked when fused
+    Family fam{};
+    double Mt{}, Kt{}, Nt{}, B{}, kb{}, obh{}, obw{}, sbh{}, sbw{};
+    double cores{}, rx0{}, rx1{}, rd0{}, rd1{}, rrounds{}, rbsf{}, rtail{}, nob{}, nK{}, bloop{}, nsb{};
+    bool dbuf{};
+    double tb_a{}, tb_b{}, tb_o{}, tb_p{}, reloads{}, ph{}, kpad{};
+    bool bias{}, sfpu{};
+    int src_a{}, src_b{}, dst_o{};
+    double R2{}, C2{};  // output block grid (rows, cols), batch rows stacked when fused
     double link = 0.0, bk_a = 0.0, bk_b = 0.0;
 };
 
@@ -212,9 +214,9 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     g.obh = obh;
     g.obw = obw;
     g.nsb = std::ceil(obh / g.sbh) * std::ceil(obw / g.sbw);
-    g.tb_a = feature_tile_bytes(p.a_dtype);
-    g.tb_b = feature_tile_bytes(p.b_dtype);
-    g.tb_o = feature_tile_bytes(p.has_out_dtype ? p.out_dtype : p.a_dtype);
+    g.tb_a = tile_size_bytes(p.a_dtype);
+    g.tb_b = tile_size_bytes(p.b_dtype);
+    g.tb_o = tile_size_bytes(p.has_out_dtype ? p.out_dtype : p.a_dtype);
     const bool acc32 = p.fp32_dest_acc, l1acc = p.packer_l1_acc;
     g.bias = p.bias;
     g.tb_p = acc32 ? 4096.0 : (l1acc ? 2048.0 : g.tb_o);
@@ -222,12 +224,12 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     const bool l1on = l1acc && (g.bias ? nK > 1 : nK > 2);
     g.reloads = l1on ? (g.bias ? 0.0 : 1.0) : npmax(nK - 1, 0.0);
     g.sfpu = p.activation == Activation::kSfpu;
-    g.ph = phases(p.fidelity);
+    g.ph = fidelity_phases(p.fidelity);
     g.src_a = src_code(p.a_mem);
     g.src_b = src_code(p.b_mem);
     g.dst_o = src_code(p.out_mem);
-    const double kr = std::fmod(static_cast<double>(p.K), 32.0);
-    g.kpad = kr > 0 ? 32 * (32 - kr) : 0.0;
+    const double kr = std::fmod(static_cast<double>(p.K), static_cast<double>(kTileDim));
+    g.kpad = kr > 0 ? kTileDim * (kTileDim - kr) : 0.0;
     return g;
 }
 

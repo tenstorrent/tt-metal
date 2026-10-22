@@ -51,7 +51,7 @@ struct Config {
         // heuristics, for the inputs it covers (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md).
         // matmul_model_path names the model blob; anything the model can't handle keeps the legacy default.
         bool matmul_model_config = false;
-        std::string matmul_model_path;
+        std::filesystem::path matmul_model_path;
     };
 
 private:

@@ -13,6 +13,8 @@
 #include <tuple>
 #include <utility>
 
+#include <tt_stl/assert.hpp>
+
 // Ported from tt-metal 4b385bbeace (Ryan Miller, #57884), ttnn/cpp/ttnn/operations/matmul/device/:
 //   config/enumerating_source.cpp       EnumeratingSource (k_depths, output_blocks, subblock_variants, layouts)
 //   config/factory_blocking_source.cpp  HeuristicBlocking / HeuristicSubblock / HeuristicFamily, FactoryBlockingSource
@@ -43,17 +45,6 @@ constexpr std::uint32_t kBlocksPerK = 3;  // EnumeratingSource::blocks_per_k
 
 std::uint32_t div_up(std::uint32_t a, std::uint32_t b) { return (a + b - 1) / b; }
 std::uint32_t align_up(std::uint32_t x, std::uint32_t a) { return div_up(x, a) * a; }
-
-// tt::tile_size of a 32x32 tile
-std::uint32_t tile_bytes(DataType t) {
-    switch (t) {
-        case DataType::kBfloat16: return 2048;
-        case DataType::kBfloat8B: return 1088;
-        case DataType::kBfloat4B: return 576;
-        case DataType::kFloat32: return 4096;
-    }
-    return 2048;
-}
 
 bool is_block_float(DataType t) { return t == DataType::kBfloat8B || t == DataType::kBfloat4B; }
 
@@ -109,9 +100,9 @@ std::uint32_t entry_size(std::uint32_t bytes, const HardwareDesc& hw) { return a
 std::uint32_t finish(const MatmulDesc& p, std::uint32_t in0_bytes, std::uint32_t k, std::uint32_t out_block_tiles) {
     const bool l1_acc = p.packer_l1_acc && p.Kt / k > 1;
     const DataType interm = p.fp32_dest_acc ? DataType::kFloat32 : (l1_acc ? DataType::kBfloat16 : p.out);
-    std::uint32_t total = tile_bytes(p.out) * out_block_tiles;
+    std::uint32_t total = tile_size_bytes(p.out) * out_block_tiles;
     if (interm != p.out) {
-        total += tile_bytes(interm) * out_block_tiles;  // partials can't share the output buffer
+        total += tile_size_bytes(interm) * out_block_tiles;  // partials can't share the output buffer
     }
     if (p.transpose_a) {
         total += in0_bytes;  // in0_transposed
@@ -123,8 +114,8 @@ std::uint32_t cb_bytes(const MatmulDesc& p, const HardwareDesc& hw, Family famil
     const std::uint32_t a_batches = fuse ? 1 : p.batch_a;
     const std::uint32_t b_batches = fuse ? 1 : p.batch_b;
     const std::uint32_t nb = p.Kt / b.in0_block_w;
-    const std::uint32_t t0 = entry_size(tile_bytes(p.in0), hw);
-    const std::uint32_t t1 = entry_size(tile_bytes(p.in1), hw);
+    const std::uint32_t t0 = entry_size(tile_size_bytes(p.in0), hw);
+    const std::uint32_t t1 = entry_size(tile_size_bytes(p.in1), hw);
     const std::uint32_t bias = p.bias_tile_bytes != 0 ? entry_size(p.bias_tile_bytes, hw) * b.out_block_w : 0;
     const std::uint32_t k = b.in0_block_w;
     switch (family) {
@@ -188,13 +179,10 @@ bool factory_limit_ok(const MatmulDesc& p, const HardwareDesc& hw, const Candida
 // ---- roofline (config/roofline_estimator.cpp) ----
 
 double roofline_cycles(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse) {
-    const double fid = p.fidelity == Fidelity::kLoFi    ? 1
-                       : p.fidelity == Fidelity::kHiFi2 ? 2
-                       : p.fidelity == Fidelity::kHiFi3 ? 3
-                                                        : 4;
-    const double a_bytes = tile_bytes(p.in0);
-    const double b_bytes = tile_bytes(p.in1);
-    const double cycles_per_product = 2.0 * 32 * 32 * 32 * fid / (hw.matmul_flops_per_cycle * 1.0);
+    const double fid = fidelity_phases(p.fidelity);
+    const double a_bytes = tile_size_bytes(p.in0);
+    const double b_bytes = tile_size_bytes(p.in1);
+    const double cycles_per_product = 2.0 * kTileDim * kTileDim * kTileDim * fid / (hw.matmul_flops_per_cycle * 1.0);
     const double Kt = p.Kt;
     double products = 0, received = 0, a_total = 0, b_total = 0;
     if (family == Family::kReuse) {
@@ -217,7 +205,7 @@ double roofline_cycles(const MatmulDesc& p, const HardwareDesc& hw, Family famil
     }
     const double out_total = double(std::max(p.batch_a, p.batch_b)) * p.Mt * p.Nt;
     const double dram = (p.a.in_l1 ? 0.0 : a_total * a_bytes) + (p.b.in_l1 ? 0.0 : b_total * b_bytes) +
-                        (p.out_place.in_l1 ? 0.0 : out_total * tile_bytes(p.out));
+                        (p.out_place.in_l1 ? 0.0 : out_total * tile_size_bytes(p.out));
     return std::max({products * cycles_per_product, received / hw.noc_bytes_per_cycle, dram / hw.dram_bytes_per_cycle});
 }
 
@@ -409,7 +397,7 @@ public:
             case Family::k1DMcastIn1: return block_1d(p, hw, family, s);
             case Family::kReuse: return block_reuse(p, hw, s);
         }
-        return std::nullopt;
+        TT_THROW("Unreachable");
     }
     const std::vector<Layout>& layouts() const { return layouts_; }
 
@@ -450,7 +438,7 @@ std::pair<std::uint32_t, std::uint32_t> choose_subblock(
 
 Blocking heuristic_subblock(const MatmulDesc& p, Family family, Blocking b) {
     const bool reuse = family == Family::kReuse;
-    const bool prefer_two_wide = tile_bytes(p.in1) >= tile_bytes(p.in0);
+    const bool prefer_two_wide = tile_size_bytes(p.in1) >= tile_size_bytes(p.in0);
     const auto [h, w] = choose_subblock(
         reuse ? b.per_core_M : b.out_block_h,
         reuse ? b.per_core_N : b.out_block_w,
@@ -581,7 +569,7 @@ std::optional<Blocking> reuse_blocking(const MatmulDesc& p, const HardwareDesc& 
     }
     auto estimate = [&](const Blocking& b) {
         const double blocks_per_core = std::ceil(std::ceil(double(p.batch_a) * p.Mt / b.per_core_M) / cores);
-        const double tail = double(b.per_core_M) * p.Nt * tile_bytes(p.out) / kReuseWriteBytesPerCycle;
+        const double tail = double(b.per_core_M) * p.Nt * tile_size_bytes(p.out) / kReuseWriteBytesPerCycle;
         return blocks_per_core * kReuseBlockCycles + roofline_cycles(p, hw, Family::kReuse, b, true) + tail;
     };
     std::optional<Blocking> best;

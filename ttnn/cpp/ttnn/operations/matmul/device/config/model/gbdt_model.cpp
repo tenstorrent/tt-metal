@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 #include <string_view>
 
-namespace ttnn::operations::matmul::config::model {
+namespace ttnn::operations::matmul::model {
 
 namespace {
 
@@ -130,14 +129,19 @@ constexpr std::size_t kHeaderBytes = 8 + 8 * 4 + 32;
 
 static_assert(std::endian::native == std::endian::little, "the blob is little-endian");
 
+// Reads the blob front to back; a read past its end reads nothing and marks the blob truncated
 class Reader {
 public:
     explicit Reader(std::span<const std::byte> b) : b_(b) {}
 
+    bool truncated() const { return truncated_; }
+
     template <typename T>
     void read(std::vector<T>& out, std::size_t count) {
         const std::size_t bytes = count * sizeof(T);
-        need(bytes);
+        if (!need(bytes)) {
+            return;
+        }
         out.resize(count);
         if (bytes != 0) {
             std::memcpy(out.data(), b_.data() + pos_, bytes);
@@ -147,41 +151,49 @@ public:
     }
 
     std::uint32_t u32() {
-        need(4);
-        std::uint32_t v;
-        std::memcpy(&v, b_.data() + pos_, 4);
-        pos_ += 4;
+        std::uint32_t v = 0;
+        if (need(4)) {
+            std::memcpy(&v, b_.data() + pos_, 4);
+            pos_ += 4;
+        }
         return v;
     }
 
     std::span<const std::byte> take(std::size_t bytes) {
-        need(bytes);
+        if (!need(bytes)) {
+            return {};
+        }
         auto s = b_.subspan(pos_, bytes);
         pos_ += bytes;
         return s;
     }
 
 private:
-    void need(std::size_t bytes) const {
-        if (pos_ > b_.size() || b_.size() - pos_ < bytes) {
-            throw std::runtime_error("gbdt blob truncated");
+    bool need(std::size_t bytes) {
+        if (truncated_ || pos_ > b_.size() || b_.size() - pos_ < bytes) {
+            truncated_ = true;
         }
+        return !truncated_;
     }
 
     std::span<const std::byte> b_;
     std::size_t pos_ = 0;
+    bool truncated_ = false;
 };
 
 }  // namespace
 
-GbdtModelStorage GbdtModelStorage::from_blob(std::span<const std::byte> blob) {
+std::optional<GbdtModelStorage> GbdtModelStorage::from_blob(std::span<const std::byte> blob, std::string& error) {
     if (blob.size() < kHeaderBytes || std::memcmp(blob.data(), kMagic.data(), kMagic.size()) != 0) {
-        throw std::runtime_error("not a gbdt blob");
+        error = "not a gbdt blob";
+        return std::nullopt;
     }
     Reader r(blob);
     r.take(kMagic.size());
-    if (r.u32() != kBlobVersion) {
-        throw std::runtime_error("unsupported gbdt blob version");
+    if (const std::uint32_t version = r.u32(); version != kBlobVersion) {
+        error = "unsupported gbdt blob version " + std::to_string(version) + " (expected " +
+                std::to_string(kBlobVersion) + ")";
+        return std::nullopt;
     }
     const std::uint32_t num_features = r.u32();
     const std::uint32_t num_trees = r.u32();
@@ -206,17 +218,25 @@ GbdtModelStorage GbdtModelStorage::from_blob(std::span<const std::byte> blob) {
     r.read(s.right_child_, num_nodes);
     r.read(s.split_feature_, num_nodes);
     r.read(s.decision_, num_nodes);
-    std::string names(reinterpret_cast<const char*>(r.take(names_bytes).data()), names_bytes);
+    const std::span<const std::byte> names_section = r.take(names_bytes);
+    if (r.truncated()) {
+        error = "gbdt blob truncated (" + std::to_string(blob.size()) + " bytes)";
+        return std::nullopt;
+    }
+    std::string names(reinterpret_cast<const char*>(names_section.data()), names_section.size());
     for (std::size_t p = 0; p < names.size();) {
         const std::size_t e = names.find('\0', p);
         if (e == std::string::npos) {
-            throw std::runtime_error("gbdt blob: unterminated feature name");
+            error = "gbdt blob: unterminated feature name";
+            return std::nullopt;
         }
         s.feature_names_.push_back(names.substr(p, e - p));
         p = e + 1;
     }
     if (s.feature_names_.size() != num_features) {
-        throw std::runtime_error("gbdt blob: feature name count mismatch");
+        error = "gbdt blob: " + std::to_string(s.feature_names_.size()) + " feature names for " +
+                std::to_string(num_features) + " features";
+        return std::nullopt;
     }
 
     s.model_ = GbdtModel{
@@ -232,9 +252,10 @@ GbdtModelStorage GbdtModelStorage::from_blob(std::span<const std::byte> blob) {
         .leaf_value = s.leaf_value_,
     };
     if (const std::string err = s.model_.structure_error(); !err.empty()) {
-        throw std::runtime_error("gbdt blob invalid: " + err);
+        error = "gbdt blob invalid: " + err;
+        return std::nullopt;
     }
     return s;
 }
 
-}  // namespace ttnn::operations::matmul::config::model
+}  // namespace ttnn::operations::matmul::model

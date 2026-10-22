@@ -9,6 +9,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string_view>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -22,6 +23,9 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_stl/reflection.hpp"
+#include <tt_stl/assert.hpp>
+#include <tt_stl/indestructible.hpp>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::matmul::model {
 
@@ -41,14 +45,14 @@ struct LoadedModel {
 };
 
 LoadedModel& loaded_model() {
-    static LoadedModel loaded;
-    return loaded;
+    static ttsl::Indestructible<LoadedModel> loaded;
+    return loaded.get();
 }
 
 const ConfigModel* model() {
     auto& loaded = loaded_model();
     std::call_once(loaded.once, [&] {
-        const std::string path = ttnn::CONFIG.get<"matmul_model_path">();
+        const std::string path = ttnn::CONFIG.get<"matmul_model_path">().string();
         std::string error;
         loaded.model = ConfigModel::load_file(path, error);
         if (loaded.model) {
@@ -65,8 +69,8 @@ const ConfigModel* model() {
 }
 
 PickCache& pick_cache() {
-    static PickCache cache;
-    return cache;
+    static ttsl::Indestructible<PickCache> cache;
+    return cache.get();
 }
 
 std::optional<DataType> model_dtype(tt::tt_metal::DataType t) {
@@ -75,20 +79,31 @@ std::optional<DataType> model_dtype(tt::tt_metal::DataType t) {
         case tt::tt_metal::DataType::BFLOAT8_B: return DataType::kBfloat8B;
         case tt::tt_metal::DataType::BFLOAT4_B: return DataType::kBfloat4B;
         case tt::tt_metal::DataType::FLOAT32: return DataType::kFloat32;
-        default: return std::nullopt;
+        case tt::tt_metal::DataType::UINT32:
+        case tt::tt_metal::DataType::UINT8:
+        case tt::tt_metal::DataType::UINT16:
+        case tt::tt_metal::DataType::INT32:
+        case tt::tt_metal::DataType::FP8_E4M3:
+        case tt::tt_metal::DataType::INT8:
+        case tt::tt_metal::DataType::INVALID: return std::nullopt;
     }
+    TT_THROW("Unreachable");
 }
 
-Fidelity model_fidelity(tt::tt_metal::MathFidelity f) {
+std::optional<Fidelity> model_fidelity(tt::tt_metal::MathFidelity f) {
     switch (f) {
         case tt::tt_metal::MathFidelity::LoFi: return Fidelity::kLoFi;
         case tt::tt_metal::MathFidelity::HiFi2: return Fidelity::kHiFi2;
         case tt::tt_metal::MathFidelity::HiFi3: return Fidelity::kHiFi3;
-        default: return Fidelity::kHiFi4;
+        case tt::tt_metal::MathFidelity::HiFi4: return Fidelity::kHiFi4;
+        case tt::tt_metal::MathFidelity::Invalid: return std::nullopt;
     }
+    TT_THROW("Unreachable");
 }
 
-bool is_32x32(const tt::tt_metal::Tile& tile) { return tile.get_height() == 32 && tile.get_width() == 32; }
+bool is_32x32(const tt::tt_metal::Tile& tile) {
+    return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+}
 
 std::uint32_t batch_of(const ttnn::Shape& shape) {
     return static_cast<std::uint32_t>(shape.volume() / (static_cast<std::uint64_t>(shape[-2]) * shape[-1]));
@@ -162,6 +177,11 @@ std::optional<Call> describe(
     }
     const auto [fidelity, approx, fp32_acc, l1_acc, full_sync] =
         get_compute_kernel_config_args(device->arch(), *attr.compute_kernel_config);
+    const auto model_fid = model_fidelity(fidelity);
+    if (!model_fid) {
+        why = "invalid math fidelity";
+        return std::nullopt;
+    }
 
     Call call;
     MatmulDesc& p = call.desc;
@@ -169,23 +189,23 @@ std::optional<Call> describe(
     p.batch_b = batch_of(b_padded);
     p.rank_a = a_padded.rank();
     p.rank_b = b_padded.rank();
-    p.Mt = a_padded[-2] / 32;
-    p.Kt = a_padded[-1] / 32;
-    p.Nt = b_padded[-1] / 32;
+    p.Mt = a_padded[-2] / tt::constants::TILE_HEIGHT;
+    p.Kt = a_padded[-1] / tt::constants::TILE_WIDTH;
+    p.Nt = b_padded[-1] / tt::constants::TILE_WIDTH;
     p.in0 = *in0;
     p.in1 = *in1;
     p.out = *out;
     if (bias.has_value()) {
         p.bias_tile_bytes =
             bias->tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype()));
-        p.bias_rows = bias->padded_shape()[-2] / 32;
+        p.bias_rows = bias->padded_shape()[-2] / tt::constants::TILE_HEIGHT;
         if (p.bias_rows != 1) {
             why = "bias other than a single row";
             return std::nullopt;
         }
     }
     p.transpose_a = attr.transpose_a;
-    p.fidelity = model_fidelity(fidelity);
+    p.fidelity = *model_fid;
     p.fp32_dest_acc = fp32_acc;
     p.packer_l1_acc = l1_acc;
     p.dst_full_sync = full_sync;
@@ -268,10 +288,7 @@ std::uint32_t l1_cb_budget(const Tensor& a, const MatmulDesc& p, bool out_in_l1)
     if (out_in_l1) {
         const std::uint64_t out_tiles = static_cast<std::uint64_t>(std::max(p.batch_a, p.batch_b)) * p.Mt * p.Nt;
         const std::uint64_t banks = a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
-        const std::uint64_t tile = p.out == DataType::kFloat32    ? 4096
-                                   : p.out == DataType::kBfloat16 ? 2048
-                                   : p.out == DataType::kBfloat8B ? 1088
-                                                                  : 576;
+        const std::uint64_t tile = tile_size_bytes(p.out);
         const std::uint64_t per_bank = (out_tiles + banks - 1) / banks * tile;
         budget = per_bank >= budget ? 0 : budget - per_bank;
     }
@@ -342,8 +359,10 @@ std::string validation_error(
         return "";
     } catch (const std::exception& e) {
         const std::string what = e.what();
-        const auto info = what.find("info:\n");
-        const std::string msg = info == std::string::npos ? what : what.substr(info + 6);
+        // tt_throw's what(): "<kind> @ file:line: condition\ninfo:\n<message>\nbacktrace:..."
+        constexpr std::string_view kInfoMarker = "info:\n";
+        const auto info = what.find(kInfoMarker);
+        const std::string msg = info == std::string::npos ? what : what.substr(info + kInfoMarker.size());
         return msg.substr(0, msg.find('\n'));
     } catch (...) {
         return "unknown error";
@@ -368,7 +387,8 @@ std::optional<MatmulProgramConfig> choose(
         last = "default: model not loaded";
         return std::nullopt;
     }
-    const std::string key = call->key + "|" + m->sha256();
+    // The model is loaded once per process, so the call signature alone identifies a pick
+    const std::string& key = call->key;
     const std::uint32_t budget = l1_cb_budget(a, call->desc, call->desc.out_place.in_l1);
     call->hw.l1_cb_budget = budget;
 
@@ -463,6 +483,7 @@ std::optional<MatmulProgramConfig> model_program_config(
     } catch (...) {
         last = "default: selector error";
     }
+    log_warning(tt::LogOp, "matmul_model_config: {}; matmul keeps its default program config", last);
     return std::nullopt;
 }
 

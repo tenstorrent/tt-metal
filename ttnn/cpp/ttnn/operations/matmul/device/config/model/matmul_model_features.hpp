@@ -34,6 +34,11 @@ namespace ttnn::operations::matmul::model {
 
 enum class DataType : std::uint8_t { kBfloat16, kBfloat8B, kBfloat4B, kFloat32 };
 
+// The model covers 32x32 tiles only
+inline constexpr std::uint32_t kTileDim = 32;
+// Bytes of a 32x32 tile (tt::tile_size): block-float formats add one shared exponent byte per 16 values
+std::uint32_t tile_size_bytes(DataType t);
+
 // The model distinguishes DRAM interleaved, L1 interleaved and "sharded" (every L1 shard layout alike).
 enum class MemLayout : std::uint8_t {
     kDramInterleaved,
@@ -105,7 +110,7 @@ extern const std::array<std::string_view, kNumFeatures> kFeatureNames;
 // The equation's per-K-step resource terms, cycles (fpterms.py): the in0 / in1 sender's fetch and multicast, the
 // chip-wide DRAM / L1 bound, the busiest NoC link, compute and the output block write.
 struct EquationTerms {
-    double fetch0, mcast0, fetch1, mcast1, chip, link, comp, write, read;
+    double fetch0{}, mcast0{}, fetch1{}, mcast1{}, chip{}, link{}, comp{}, write{}, read{};
 };
 
 struct ModelInput {
@@ -127,16 +132,15 @@ public:
     const Lanes& insert_link(std::uint64_t key, Lanes lanes);
     const double* find_l1(std::uint64_t k0, std::uint64_t k1) const;
     void insert_l1(std::uint64_t k0, std::uint64_t k1, double cycles);
-    void clear() {
-        link_.clear();
-        l1_.clear();
-    }
-    std::size_t size() const { return link_.size() + l1_.size(); }
+    void clear();
+    std::size_t size() const;
 
 private:
     struct PairHash {
         std::size_t operator()(const std::pair<std::uint64_t, std::uint64_t>& k) const {
-            return std::hash<std::uint64_t>{}(k.first * 0x9E3779B97F4A7C15ull ^ k.second);
+            // 2^64 / golden ratio: spreads k.first's bits before combining (boost::hash_combine's constant)
+            constexpr std::uint64_t kGoldenRatio64 = 0x9E3779B97F4A7C15ull;
+            return std::hash<std::uint64_t>{}(k.first * kGoldenRatio64 ^ k.second);
         }
     };
     std::unordered_map<std::uint64_t, Lanes> link_;

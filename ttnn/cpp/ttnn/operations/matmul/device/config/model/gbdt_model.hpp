@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -14,7 +15,7 @@
 // tt-matmul-predictor's bench/export/export_gbdt.py. predict() reproduces LightGBM's
 // Booster.predict(raw_score=True) bit for bit: same split rule, same missing-value handling and the
 // same summation order over trees.
-namespace ttnn::operations::matmul::config::model {
+namespace ttnn::operations::matmul::model {
 
 // decision bits (the exporter's compaction of LightGBM's decision_type)
 inline constexpr std::uint8_t kGbdtDefaultLeft = 1u << 0;
@@ -65,8 +66,8 @@ private:
 // Owning storage for a model read from the exporter's binary blob (--format blob / cpp-blob).
 class GbdtModelStorage {
 public:
-    // Throws std::runtime_error on a malformed or truncated blob.
-    static GbdtModelStorage from_blob(std::span<const std::byte> blob);
+    // nullopt, with the reason in `error`, for a malformed or truncated blob
+    static std::optional<GbdtModelStorage> from_blob(std::span<const std::byte> blob, std::string& error);
 
     const GbdtModel& model() const { return model_; }
     const std::vector<std::string>& feature_names() const { return feature_names_; }
@@ -91,4 +92,4 @@ private:
     GbdtModel model_;
 };
 
-}  // namespace ttnn::operations::matmul::config::model
+}  // namespace ttnn::operations::matmul::model
