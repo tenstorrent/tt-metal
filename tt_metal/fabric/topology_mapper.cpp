@@ -531,9 +531,6 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // PGD<->MGD matching wants pins already keyed by mesh. Start from the MGD map and merge galaxy
         // corner pins (pinning_groups_) into the same buckets. CSP still uses the flat config.pinnings list.
         ::tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
-        TT_FATAL(
-            mesh_graph_.has_mesh_graph_descriptor(),
-            "TopologyMapper: MeshGraph must have a MeshGraphDescriptor to map onto the physical topology");
         const auto& mesh_graph_descriptor = mesh_graph_.get_mesh_graph_descriptor();
         pinnings_by_mesh = mesh_graph_descriptor.get_pinnings();
         ::tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
