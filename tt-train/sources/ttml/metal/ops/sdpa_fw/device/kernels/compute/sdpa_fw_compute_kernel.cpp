@@ -200,6 +200,9 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
 #else
         // Arbitrary / no mask: one score tile at a time, mask applied while it is still in DST.
         constexpr uint32_t matmul_accum_reg = 0U;
+#ifdef USE_ATTN_MASK
+        cb_wait_front(cb_attn_mask, score_tiles);
+#endif
         cb_reserve_back(cb_attention_weights, score_tiles);
         for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
             for (uint32_t n = 0; n < Sk_chunk_t; ++n) {

@@ -60,7 +60,7 @@ void recip_tile_first_column(uint32_t idst) {
 // positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
 // tile so that masked positions become large negative values that vanish under softmax.
 //
-// Preconditions: DST acquired; cb_attn_mask has mask_tile_idx + 1 tiles fronted
+// Preconditions: DST acquired; the caller has waited for the mask tiles of this step
 // (host mask is staged row-major per step: pass row * Sk_chunk_t + n).
 //
 void apply_mask_on_reg(
@@ -70,7 +70,6 @@ void apply_mask_on_reg(
     uint32_t custom_inf_bits,
     uint32_t mask_tile_idx = 0U) {
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
-    cb_wait_front(cb_attn_mask, mask_tile_idx + 1U);
     copy_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
