@@ -106,13 +106,15 @@ void ConcatCodegenDeviceOperation::validate_on_program_cache_hit(
 }
 
 // The batch plan follows live L1, so it is keyed: a plan change must rebuild, not replay CBs sized for L1 no longer
-// free.
+// free. The cost is that a trace capture, which compiles nothing, misses the cache when the frontier moved since
+// warm-up; a caller warms up under the L1 pressure it will capture under.
 ttsl::hash::hash_t ConcatCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensors = tensor_args.input_tensors;
     uint32_t read_batch = 0;
     uint32_t write_batch = 0;
-    if (all_inputs_plannable(operation_attributes, tensor_args)) {
+    const bool plannable = all_inputs_plannable(operation_attributes, tensor_args);
+    if (plannable) {
         // A missing output is allocated after the hash, so its L1 is reserved here to match the factory's live view.
         const auto batches = ttnn::operations::data_movement::concat_codegen::plan_batches_live(
             input_tensors, operation_attributes, tensor_args.optional_output_tensor.has_value());
@@ -123,12 +125,14 @@ ttsl::hash::hash_t ConcatCodegenDeviceOperation::compute_program_hash(
     }
 
     // Each input's position of the first input backed by the same buffer. The program is cached with one buffer
-    // address slot per input, so concat([x, x]) and concat([a, b]) of identical specs must not share an entry.
+    // address slot per input and rebound by Buffer*, which the framework de-duplicates, so concat([x, x]) and
+    // concat([a, b]) of identical specs must not share an entry. Tensors that are views of one allocation share a
+    // Buffer*, so the buffer is what is compared. An unplannable call fails validation next, so it keys by position.
     std::vector<uint32_t> input_alias_signature(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); ++i) {
         input_alias_signature[i] = i;
-        for (uint32_t j = 0; j < i; ++j) {
-            if (&input_tensors[j].mesh_tensor() == &input_tensors[i].mesh_tensor()) {
+        for (uint32_t j = 0; plannable && j < i; ++j) {
+            if (input_tensors[j].buffer() == input_tensors[i].buffer()) {
                 input_alias_signature[i] = j;
                 break;
             }
