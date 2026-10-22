@@ -1589,7 +1589,7 @@ const SECTIONS = [
   { id: "overview", label: "Overview", body: OverviewTab },
   { id: "today", label: "How the policy flows today", body: TodayTab },
   { id: "semantics", label: "Semantics per connection", body: SemanticsTab },
-  { id: "solver", label: "Solver: a constraint, not an argument", body: SolverTab },
+  { id: "solver", label: "Solver: STRICT / RELAXED as a per-edge channel requirement, not a solver-wide mode", body: SolverTab },
   { id: "changes", label: "MGD, mapper and control plane", body: ChangesTab },
   { id: "cable", label: "Cable type: constraints by port type", body: CableTab },
   { id: "implications", label: "Implications", body: ImplicationsTab },

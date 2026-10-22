@@ -103,7 +103,7 @@ plus a mesh-level RELAXED count of 2 on the same pair means: one pinned channel 
 two more are wanted, and the pair is never zero-link. Device-level connections are demands on
 `(src chip, dst chip)` in the same way.
 
-## 3. The solver: policy as a constraint, not an argument
+## 3. Solver: STRICT / RELAXED as a per-edge channel requirement, not a solver-wide mode
 
 ### 3.1 One structure per edge
 
