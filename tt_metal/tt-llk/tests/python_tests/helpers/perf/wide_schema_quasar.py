@@ -6,9 +6,8 @@
 
 Separate published table from the WH/BH schema in ``wide_schema.py``. A Quasar
 run is aligned to this schema; a WH/BH run is aligned to that one. The two must
-not be mixed: Quasar-only columns (face dims, unpacker engine, implied math
-format, ...) stay out of the WH/BH table, and WH/BH-only columns stay out of
-this one.
+not be mixed: Quasar-only columns (face dims, unpacker engine, ...) stay out of
+the WH/BH table, and WH/BH-only columns stay out of this one.
 
 Same conventions as ``wide_schema``: one row per test config per run; every
 column except ``marker`` and the mandatory provenance keys is nullable; Column
@@ -85,7 +84,6 @@ DB_SCHEMA = [
     Column("face_r_dim", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
-    Column("implied_math_format", "string", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),

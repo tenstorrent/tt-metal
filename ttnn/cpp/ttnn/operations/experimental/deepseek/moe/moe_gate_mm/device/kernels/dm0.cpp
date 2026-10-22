@@ -53,7 +53,7 @@ void kernel_main() {
     const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto core_id = get_arg_val<uint32_t>(argidx++);
-    const auto raw_scores_semaphore = get_arg_val<uint32_t>(argidx++);
+    const auto collector_semaphore = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;

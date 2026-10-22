@@ -15,7 +15,7 @@ import ttnn
 from loguru import logger
 
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
-from models.perf.device_perf_utils import run_device_perf_detailed
+from tt_py_test_utils_common.perf.device_perf_utils import run_device_perf_detailed
 
 pytestmark = pytest.mark.models_device_performance_bare_metal
 

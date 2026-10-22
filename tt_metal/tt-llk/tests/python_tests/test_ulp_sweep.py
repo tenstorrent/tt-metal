@@ -28,6 +28,7 @@ from helpers.ulp_sweep import (
     measurable_mask,
     merge_measured,
     nonfinite_failures,
+    ranked_mask,
     received_inputs,
     record,
     stale_excuses,
@@ -42,12 +43,17 @@ _OP = MathOperation.Abs
 _CELL = ("Float16", "Float16", "No", "No")
 
 
-def _record_full_grid(op, in_fmt, out_fmt, value):
-    """*value* on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``: the whole
-    grid the emitter refuses to write without."""
+def _record_full_grid(op, in_fmt, out_fmt, value, floor=None):
+    """*value* (with *floor*) on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``:
+    the whole grid the emitter refuses to write without."""
     for approx in ("No", "Yes"):
         for dest in ("No", "Yes"):
-            record(op, (in_fmt, out_fmt, approx, dest), value)
+            record(op, (in_fmt, out_fmt, approx, dest), value, floor=floor)
+
+
+#: A floored reading: the worst lane over every lane, and ``(residual, atol)`` for the
+#: lanes outside the floor.
+_WORST, _FLOOR = 14337, (2, 2.4e-7)
 
 
 #: One op block with a row of each kind write_table has to tell apart.
@@ -238,20 +244,21 @@ def test_a_row_for_another_architecture_survives_a_regeneration(table):
     assert any("arch: BLACKHOLE, max_ulp: 44" in row for row in _rows(table))
 
 
-def test_a_row_carrying_a_floor_is_kept_rather_than_regenerated(table):
-    """`_render` emits only `max_ulp` or `metric: tolerance`, so a `near_zero_atol`
-    floor cannot be put back — and it cannot ride along on a demotion either, since
-    `AccuracyContract` refuses the field outside the ULP metric. Emitting over it would
-    drop it silently; keeping it as well would give the cell two equally specific keys.
-    """
+def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
+    """`near_zero_atol` is a field the emitter writes (`near_zero_floor`), so a block
+    with a floor row is no longer kept verbatim: a re-measurement replaces the row,
+    with a floor when the cell needs one and without when it does not. Keeping the
+    block was how Erfinv and Gelu stayed on a hand-set floor through every emit."""
     table.write_text(
         "Gelu:\n"
         "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 5.59e-07}  # floor\n",
         encoding="utf-8",
     )
-    record("Gelu", _CELL, 5)
-    assert write_table(table, "today") == (0, ["Gelu"])
-    assert "near_zero_atol: 5.59e-07}  # floor" in table.read_text()  # kept verbatim
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
+    assert write_table(table, "today") == (1, [])
+    text = table.read_text()
+    assert "near_zero_atol" not in text
+    assert "{in: Float16, out: Float16, max_ulp: 6}" in text
 
 
 @pytest.mark.parametrize(
@@ -270,7 +277,7 @@ def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
     any one measured cell -- but every rendered row is more specific than it, and a bare
     `metric: tolerance` there resolves to `atol=None`: the driver's 0.05, not the 0.13
     the table says the LUT needs. Such a row answers for every measured cell, so the op
-    is kept verbatim like a floor."""
+    is kept verbatim."""
     anchor = (
         ""
         if not wildcard.startswith("*")
@@ -514,9 +521,9 @@ def test_the_sweeps_own_zero_padding_is_not_data():
 
 
 def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
-    """`Sin` and `Cos` disagree on ~21,000 bf16 lanes past [-pi, pi] -- an argument
-    reduction giving up, not a regression. The budget is still measured everywhere;
-    only the non-finite answer needs the op to have been claiming something."""
+    """`Sin` and `Cos` disagree on bf16 lanes past +/-65504 -- an argument reduction
+    giving up, not a regression -- and those lanes leave the claim, so they are neither
+    ranked nor a non-finite failure."""
     fmt = DataFormat.Float16_b
     far = torch.tensor([2.6e28], dtype=torch.bfloat16)
     golden = torch.tensor([-1.0], dtype=torch.bfloat16)
@@ -528,7 +535,7 @@ def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
     assert not nonfinite_failures(
         MathOperation.Sin, far, golden, result, DataFormat.Bfp8_b, fmt
     ).any()
-    # Inside [-pi, pi] the same disagreement is a failure.
+    # Inside +/-65504 the same disagreement is a failure.
     assert nonfinite_failures(
         MathOperation.Sin,
         torch.tensor([1.0], dtype=torch.bfloat16),
@@ -546,9 +553,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
     """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
     kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
     fp16 input carries no limit, and a non-finite answer at its very top is a failure.
-    Keyed on the op alone, the pi claim covered the fp16 cells too. The format that
-    counts is the one the kernel is handed: a Float32 input into a Float16 output at
-    ``dest_acc=No`` unpacks into a Float16 Dest, so it carries no limit either."""
+    The bf16/fp32 limit is 65504, where the reduction really breaks."""
     fmt = DataFormat.Float16
     top = torch.tensor([65504.0, 4.0], dtype=torch.float16)
     golden = torch.tensor([-1.0, -1.0], dtype=torch.float16)
@@ -557,7 +562,8 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         True,
         True,
     ]
-    # The same two magnitudes from a bfloat16 input: 4.0 is past pi and excused.
+    # From a bfloat16 input: 65504 rounds to 65536, past the limit and excused; 4.0 is
+    # claimed, so an inf there is a failure.
     assert nonfinite_failures(
         op,
         top.to(torch.bfloat16),
@@ -565,26 +571,19 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         result.to(torch.bfloat16),
         DataFormat.Float16_b,
         DataFormat.Float16_b,
-    ).tolist() == [False, False]
-    # Float32 into a Float16 output: 4.0 is past pi, excused at a 32-bit Dest, where
-    # the kernel is handed fp32, and a failure at a 16-bit one, where it is handed fp16.
+    ).tolist() == [False, True]
+    # Float32 into a Float16 output: 4.0 is claimed at either Dest width.
     wide = top.to(torch.float32)
-    for dest, past_pi_excused in (
-        (DestAccumulation.Yes, True),
-        (DestAccumulation.No, False),
-    ):
-        assert (
-            nonfinite_failures(
-                op,
-                wide,
-                golden,
-                result,
-                DataFormat.Float32,
-                DataFormat.Float16,
-                dest_acc=dest,
-            ).tolist()[1]
-            is not past_pi_excused
-        ), dest
+    for dest in DestAccumulation:
+        assert nonfinite_failures(
+            op,
+            wide,
+            golden,
+            result,
+            DataFormat.Float32,
+            DataFormat.Float16,
+            dest_acc=dest,
+        ).tolist()[1], dest
 
 
 def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
@@ -656,23 +655,15 @@ def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign)
     assert torch.equal(received[2:], src[2:])
 
 
-def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
-    """#58590, pinned until it lands. UnarySFPUGolden tilizes and untilizes its Dest
-    result in the *input* format, so a bfloat16 input's Float32 golden at a 32-bit Dest
-    is rounded to bfloat16 while the kernel keeps fp32: 1.0078125**2 reads 1.015625
-    against the exact 1.0156860. Every 16-bit/block input -> Float32, ``dest: "Yes"``
-    row of the table measures that rounding rather than the kernel (the YAML header
-    says so), and nothing else would tell them apart once the golden is fixed.
-
-    So when this fails, the golden has stopped rounding there: re-emit the whole table
-    (`--ulp-emit`) on the fix, which tightens those rows, drop the header paragraph, and
-    delete this test."""
+def test_the_unary_golden_keeps_a_float32_output_at_fp32_on_a_16bit_input():
+    """#58590: a bfloat16 input's Float32 golden at a 32-bit Dest was rounded to
+    bfloat16. 1/3 is inexact in both formats, so the golden must be fp32's 1/3 exactly,
+    not bf16's; x*x on a bf16 x is fp32-exact and could not tell them apart."""
     from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
-    x = 1.0 + 2.0**-7  # bf16-exact; its square is not
-    src = torch.full((1024,), x, dtype=torch.bfloat16)
+    src = torch.full((1024,), 3.0, dtype=torch.bfloat16)
     golden = get_golden_generator(UnarySFPUGolden)(
-        MathOperation.Square,
+        MathOperation.Reciprocal,
         src,
         DataFormat.Float32,
         DestAccumulation.Yes,
@@ -680,8 +671,90 @@ def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
         [32, 32],
     )
     assert golden.dtype == torch.float32
-    rounded = float(torch.tensor(x * x, dtype=torch.bfloat16))
-    assert float(golden[0]) == rounded != x * x
+    fp32 = float(torch.tensor(1 / 3, dtype=torch.float32))
+    assert float(golden[0]) == fp32
+    assert fp32 != float(torch.tensor(1 / 3, dtype=torch.bfloat16))
+
+
+def test_the_unary_golden_does_not_overflow_a_float16_input_into_a_float32_output():
+    """cosh(-89.375) is 3.27e38: finite in fp32, past fp16. A tile held in the Float16
+    input format read inf against the kernel's finite answer."""
+    from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+
+    src = torch.full((1024,), -89.375, dtype=torch.float16)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Cosh,
+        src,
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        DataFormat.Float16,
+        [32, 32],
+    )
+    assert golden.dtype == torch.float32
+    assert math.isclose(float(golden[0]), math.cosh(89.375), rel_tol=1e-6)
+
+
+def _binary_golden(a: float, b: float, output_format, dest_acc):
+    from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
+
+    pair = torch.tensor([a] * 1024 + [b] * 1024, dtype=torch.bfloat16)
+    return get_golden_generator(BinarySFPUGolden)(
+        MathOperation.SfpuElwmul,
+        pair,
+        0,
+        1,
+        0,
+        32,
+        [64, 32],
+        DataFormat.Float16_b,
+        dest_acc=dest_acc,
+        output_format=output_format,
+    ).flatten()
+
+
+def test_the_binary_golden_keeps_a_float32_output_at_fp32_on_a_16bit_input():
+    """The bf16 x bf16 product is fp32-exact and not bf16-exact, so a tile held in the
+    operand format would round it."""
+    x = 1.0 + 2.0**-7
+    golden = _binary_golden(x, x, DataFormat.Float32, DestAccumulation.Yes)
+    assert golden.dtype == torch.float32
+    assert float(golden[0]) == x * x != float(torch.tensor(x * x).to(torch.bfloat16))
+
+
+def test_the_binary_golden_hands_a_16bit_output_back_in_the_operand_dtype():
+    """Bit-exact callers compare the golden to the packed result, dtype included."""
+    x = 1.0 + 2.0**-7
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+        golden = _binary_golden(x, x, DataFormat.Float16_b, dest_acc)
+        assert golden.dtype == torch.bfloat16
+        assert float(golden[0]) == float(torch.tensor(x * x).to(torch.bfloat16))
+
+
+def test_widening_an_fp16_nan_keeps_its_sign():
+    """torch's fp16 -> fp32 cast drops a NaN's sign; the goldens' permutations must not."""
+    import math
+
+    from helpers.golden_generators import widen_to_float32
+
+    half = torch.tensor([-math.nan, math.nan, -1.5], dtype=torch.float16)
+    wide = widen_to_float32(half)
+    assert torch.isnan(wide[:2]).all() and float(wide[2]) == -1.5
+    assert torch.signbit(wide).tolist() == [True, False, True]
+
+
+def test_an_fp16_dest_saturates_an_infinity_of_either_sign():
+    """An fp16 Dest has no infinity; both overflows pack out as its top magnitude."""
+    import math
+
+    from helpers.golden_generators import convert_inf_to_value
+
+    values = torch.tensor([-math.inf, math.inf, -2.0])
+    assert convert_inf_to_value(values, 130560.0).tolist() == [
+        -130560.0,
+        130560.0,
+        -2.0,
+    ]
+    assert convert_inf_to_value([-math.inf, 1.0], 130560.0) == [-130560.0, 1.0]
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
@@ -1091,11 +1164,11 @@ def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
         )
 
 
-def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
-    """The key line is the enrolment and the only place a measurement can land, so the
-    emit set is exactly the unary ops that have one -- an op on tolerance everywhere
-    included, an unregistered-in-the-table op excluded. Sweeping the latter made every
-    whole-table emit exit red after writing the rest (65 of 93 ops had no block)."""
+def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
+    """The key line is the enrolment and the only place a measurement can land, so both
+    runs take exactly the unary ops that have one. Gating used to take only the ops with
+    a step budget somewhere, which left every op on tolerance everywhere (Erfc,
+    SigmoidAppx, ...) with recorded figures that no gate run ever re-measured."""
     import test_unary_sfpu_ulp as sweep
     from helpers import ulp_sweep
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
@@ -1104,20 +1177,17 @@ def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     emitted = set(sweep._sweep_ops())
     monkeypatch.setattr(ulp_sweep, "EMIT", False)
-    monkeypatch.setattr(
-        sweep.sys, "argv", [a for a in sweep.sys.argv if a != "--ulp-emit"]
-    )
     gated = set(sweep._sweep_ops())
 
     keyed = {op for op in _SFPU_ACCURACY_BUDGET if op in sfpu_unary_ops()}
     assert emitted == keyed - set(_UNARY_OPS_NOT_SWEPT)
-    assert gated <= emitted
+    assert gated == emitted
     tolerance_only = {
         op
-        for op in emitted
+        for op in keyed
         if not any(c.metric == Metric.ULP for c in _SFPU_ACCURACY_BUDGET[op].values())
     }
-    assert tolerance_only.isdisjoint(gated)
+    assert tolerance_only <= gated, "an op on tolerance everywhere is still measured"
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
@@ -1131,8 +1201,8 @@ def test_emit_writes_on_a_clean_wormhole_session(table):
 
 def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch):
     """Every op the emit sweeps, measured on every cell, written into a copy of the
-    checked-in table. The ops whose blocks carry a hand-maintained row -- a
-    `near_zero_atol` floor, an op-wide `atol`/`rtol` anchor -- are kept verbatim by
+    checked-in table. The ops whose blocks carry a hand-maintained row -- an
+    op-wide `atol`/`rtol` anchor (GeluAppx, SigmoidAppx) -- are kept verbatim by
     design, so they are named in the summary rather than failing the run: as a refusal
     they turned every whole-table emit red, and threw the rest of its verdict away."""
     import shutil
@@ -1216,14 +1286,16 @@ def test_the_claim_is_the_singularity_not_the_sampling_guard_band(op, inside, ou
         ), value
 
 
-def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum():
+def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
     """Demoting a cell for a few non-finite lanes used to drop what the other ~64,000
-    lanes measured, and the headroom report (#57527) then held them to nothing. The
-    note carries both figures, each where its reader looks: the lane count right after
-    ``not measurable:`` and the maximum as ``max N ULP``, the shape every measured row
-    already has."""
+    lanes measured, and the headroom report then held them to nothing. The note carries
+    both figures, and the readers that judge them -- ulp_budget_diff's
+    ``recorded_nonfinite`` and ``recorded_max`` -- must find each in the row the emitter
+    actually writes. Read through them rather than through copies of their patterns: a
+    copy kept this test green while the reader's own pattern moved."""
     from helpers.ulp import ulp_distance, ulp_stats
-    from helpers.ulp_sweep import nonfinite_reason
+    from helpers.ulp_budget_diff import parse_table, recorded_max, recorded_nonfinite
+    from helpers.ulp_sweep import nonfinite_reason, record_unmeasurable
 
     src = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
@@ -1231,18 +1303,20 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum():
     overflowed = torch.tensor([False, True, False, False])
     mask = ~overflowed
     stats = ulp_stats(ulp_distance(golden, result), mask)
-    note = "not measurable: " + nonfinite_reason(
-        overflowed, src, golden, result, stats, int(mask.sum())
-    )
-    # The two readers' own patterns (ulp_budget_diff._RECORDED_NONFINITE / _RECORDED_MAX
-    # from #57527 on); spelled out here so this PR pins the shape they will read.
-    lanes = re.search(
-        r"not measurable: (\d+) lane\(s\) disagreeing with the golden", note
-    )
-    assert lanes and lanes.group(1) == "1", note
-    worst = re.search(r"\bmax (\d+) ULP", note)
-    assert worst and worst.group(1) == "1", note  # 3.0 -> 3.015625 is one bf16 step
-    assert "x=2: 2 -> inf" in note and "over the 3 measurable lanes" in note
+    reason = nonfinite_reason(overflowed, src, golden, result, stats, int(mask.sum()))
+    assert "x=2: 2 -> inf" in reason and "over the 3 measurable lanes" in reason
+
+    record("Gelu", _CELL, 5)
+    record_unmeasurable("Gelu", ("Float16", "Float16", "Yes", "No"), reason)
+    write_table(table, "today")
+    (row,) = [
+        row
+        for row in parse_table(table.read_text(encoding="utf-8")).values()
+        if "not measurable" in row.provenance
+    ]
+    assert recorded_nonfinite(row) == 1, row.provenance
+    # 3.0 -> 3.015625 is one bf16 step.
+    assert recorded_max(row) == 1, row.provenance
 
 
 def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
@@ -1276,12 +1350,13 @@ def test_emit_refuses_a_partly_measured_grid(table):
 
 
 def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_path):
-    """A floor row the sweep covers cannot be re-derived from a measurement. Its op
-    keeps its block verbatim, every other op is written, and the caller is told."""
+    """An op-wide or pinned ``atol``/``rtol`` row the sweep covers cannot be re-derived
+    from a measurement. Its op keeps its block verbatim, every other op is written,
+    and the caller is told."""
     path = tmp_path / "budget.yaml"
     path.write_text(
         "Erfinv:\n"
-        "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 1.0e-07}  # floor\n"
+        "  - {in: Float16, out: Float16, metric: tolerance, atol: 0.2}  # hand atol\n"
         "\n"
         "Gelu:\n"
         "  - {in: Float16, out: Float16, max_ulp: 7}  # superseded\n",
@@ -1294,7 +1369,7 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
     MEASURED.clear()
     text = path.read_text()
     assert (written, kept) == (1, ["Erfinv"])
-    assert "near_zero_atol: 1.0e-07}  # floor" in text
+    assert "atol: 0.2}  # hand atol" in text
     assert "max_ulp: 7" not in text and "max_ulp: 6" in text
 
 
@@ -1302,3 +1377,313 @@ def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
     record("Gelu", _CELL, 5)
     write_table(table, "today")
     assert "\n\n\n" not in table.read_text()
+
+
+def test_the_claim_excludes_the_poles_of_the_gamma_family():
+    """Digamma, Lgamma and Polygamma have a pole at every non-positive integer; the
+    claim leaves those lanes out (torch's trigamma answers a finite 4e15 at -6.0, the
+    kernel inf, and neither is a measurement). -0.0 is the pole at 0; -2.5 is not a
+    pole; an op without the lattice keeps every lane."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([-3.0, -2.5, -0.0, 0.0, 0.5, 2.0], dtype=torch.float32)
+    for op in (MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma):
+        assert claimed_lanes(op, src, DataFormat.Float32).tolist() == [
+            False,
+            True,
+            False,
+            False,
+            True,
+            True,
+        ], op.name
+    assert claimed_lanes(MathOperation.Abs, src, DataFormat.Float32).all()
+
+
+def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
+    """-8326436.5 truncates to the bf16 pole -8323072 at ``dest_acc=No``; a 32-bit
+    Dest keeps it off the lattice."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([-8326436.5, -2.5], dtype=torch.float32)
+    op, fmt = MathOperation.Polygamma, DataFormat.Float32
+    for out in (DataFormat.Float16_b, DataFormat.Float32):
+        assert claimed_lanes(op, src, fmt, out, DestAccumulation.No).tolist() == [
+            False,
+            True,
+        ], out.name
+        assert claimed_lanes(op, src, fmt, out, DestAccumulation.Yes).all(), out.name
+
+
+def test_the_polygamma_golden_is_the_pole_on_every_nonpositive_integer():
+    """+inf for an odd order (every term of the series is positive), NaN for an even one
+    (no limit); torch answers a large finite number there. Off the lattice, torch."""
+    from helpers.golden_generators import UnarySFPUGolden
+
+    golden = UnarySFPUGolden()
+    golden.data_format = DataFormat.Float32
+    for order in (1, 2, 3):
+        golden._polygamma_order = order
+        for pole in (-6.0, 0.0, -0.0, -1048576.0):
+            value = golden._polygamma(pole)
+            assert (value == math.inf) if order % 2 else math.isnan(value), (
+                order,
+                pole,
+            )
+        want = torch.polygamma(order, torch.tensor(-2.5, dtype=torch.float64)).item()
+        assert golden._polygamma(-2.5) == want, order
+
+
+def test_a_lane_the_dest_lost_is_neither_ranked_nor_a_failure():
+    """A Float16 input runs on an fp16 Dest. Under a Float32 output a golden past 65504
+    answered with its sign in the Dest's top binade (65536, inf, or I0's 65440 for a true
+    65772), or with NaN, is the Dest's overflow, not the op's; the golden's finite 131008
+    for an fp16 infinity is the overflow in disguise. So is a flush across 2**-14, either way round. Under a
+    Float16 output the Dest is as wide as the output and nothing is excluded, and a
+    bf16 Dest has fp32's range."""
+    from helpers.ulp_sweep import dest_holds
+
+    tiny = 2.0**-14
+    golden = torch.tensor(
+        [70000.0, 131008.0, -131008.0, 131008.0, tiny, 0.0, 1.0, 65504.0],
+        dtype=torch.float32,
+    )
+    result = torch.tensor(
+        [65536.0, math.inf, math.nan, 65440.0, 0.0, tiny, 1.0, 65504.0],
+        dtype=torch.float32,
+    )
+    lost = [False] * 6 + [True, True]
+    fp16, fp32, no = DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    assert dest_holds(golden, result, fp16, fp32, no).tolist() == lost
+    assert dest_holds(golden, result, fp16, fp16, no).all()
+    assert dest_holds(golden, result, DataFormat.Float16_b, fp32, no).all()
+    assert dest_holds(golden, result, fp16).all()  # variant not named
+
+    src = torch.full((8,), 2.0, dtype=torch.float16)
+    assert measurable_mask(src, golden, result, fp16, fp32, no).tolist() == lost
+    # The overflow lanes disagree about being non-finite, and the Dest excuses them.
+    assert not nonfinite_failures(
+        MathOperation.Exp, src, golden, result, fp16, fp32, dest_acc=no
+    ).any()
+
+
+def test_an_answer_the_dest_did_not_saturate_to_stays_judged():
+    """Only an answer at the Dest's edge is excused. A wrong-signed answer against an
+    overflowed golden (Expm1Cw's #54770: 131008 against -1 or -131008), a same-signed
+    one more than 2x short of the edge, an answer 0 where the golden is a normal 1e-4,
+    and a pair that are both nonzero are the op's, and ranked; an inf against a golden of 1.0, or of the wrong
+    sign against 131008, is a non-finite failure."""
+    from helpers.ulp_sweep import dest_holds
+
+    tiny = 2.0**-14
+    golden = torch.tensor(
+        [131008.0, 131008.0, 70000.0, 1e-4, tiny, 1.0, 131008.0], dtype=torch.float32
+    )
+    result = torch.tensor(
+        [-1.0, -131008.0, 30000.0, 0.0, 3 * tiny, math.inf, -math.inf],
+        dtype=torch.float32,
+    )
+    fp16, fp32, no = DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    assert dest_holds(golden, result, fp16, fp32, no).all()
+
+    src = torch.full((7,), 2.0, dtype=torch.float16)
+    ranked = measurable_mask(src, golden, result, fp16, fp32, no)
+    assert ranked.tolist() == [True] * 5 + [False, False]
+    assert nonfinite_failures(
+        MathOperation.Exp, src, golden, result, fp16, fp32, dest_acc=no
+    ).tolist() == [False] * 5 + [True, True]
+
+
+def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
+    """A cell demoted only by near-zero lanes gets the floor that covers them -- the
+    band's largest absolute error with headroom, two figures -- and the budget of the
+    lanes outside it. A cell that fits gets none; one whose band error is past the cap
+    stays demoted; a lane outside the band (|golden| >= 1% of the cell's maximum) is
+    never rescued."""
+    from helpers.ulp_sweep import EMIT_MAX_NEAR_ZERO_ATOL, near_zero_floor
+
+    fmt = DataFormat.Float16_b
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    golden[30], golden[31] = 1e-6, 0.5
+    result = golden.clone()
+    result[1] = 1.5078125  # one bf16 step above 1.5
+    result[30] = 0.0  # the hardware flushed a 1e-6 answer: ~14,000 steps, 1e-6 absolute
+    mask = torch.ones(32, dtype=torch.bool)
+
+    def floor(res):
+        from helpers.ulp import ulp_distance
+
+        return near_zero_floor(
+            golden, res, ulp_distance(golden, res, flush_subnormals=True), mask, fmt
+        )
+
+    residual, atol = floor(result)
+    assert residual == 1
+    assert atol == pytest.approx(
+        1.1e-6, rel=1e-6
+    )  # 9.98e-7 (bf16's 1e-6) x 1.1, rounded up
+
+    fits = golden.clone()
+    fits[1] = 1.5078125
+    assert floor(fits) is None  # under the ceiling without a floor
+
+    past_cap = golden.clone()
+    past_cap[30] = 0.01  # 0.01 absolute, past EMIT_MAX_NEAR_ZERO_ATOL
+    assert 0.01 > EMIT_MAX_NEAR_ZERO_ATOL
+    # The capped floor is still returned, with the lanes it leaves past the ceiling, so
+    # the demotion note can name the floor that was tried.
+    residual, atol = floor(past_cap)
+    assert atol == EMIT_MAX_NEAR_ZERO_ATOL and residual > 6
+
+    outside_band = golden.clone()
+    outside_band[31] = 0.0  # |golden| = 0.5 is not under 1% of 1.5
+    assert floor(outside_band) is None
+
+
+def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
+    """The row carries `max_ulp` for the lanes outside the floor and `near_zero_atol`
+    for the floor; the note leads with the residual, which is the figure the
+    provenance audit and the headroom report compare against, and records the
+    unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
+    from helpers.sfpu_accuracy_budget import _load_table
+
+    _record_full_grid("Gelu", "Float16", "Float16", _WORST, floor=_FLOOR)
+    assert write_table(table, "today") == (1, [])
+    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
+    assert row.startswith(
+        "- {in: Float16, out: Float16, max_ulp: 3, near_zero_atol: 2.40e-07}"
+    )
+    assert row.endswith(
+        "# max 2 ULP outside a 2.40e-07 near-zero floor (14337 steps over every lane)"
+    )
+    contracts = _load_table(table)[MathOperation.Gelu]
+    (contract,) = [
+        c for k, c in contracts.items() if k.input_format is DataFormat.Float16
+    ]
+    assert (contract.max_ulp, contract.near_zero_atol) == (3, 2.4e-7)
+
+
+def test_a_32bit_or_bf16_dest_holds_every_answer_the_output_can():
+    """Only an fp16 Dest at dest_acc=No narrows. At dest_acc=Yes the Dest is 32-bit,
+    and a bf16 Dest has fp32's exponent range although bfloat16.max < float32.max: an
+    infinite golden there is the kernel's answer to judge, not the Dest's overflow."""
+    from helpers.ulp_sweep import dest_holds
+
+    golden = torch.tensor([70000.0, math.inf, 3.4e38, 1e-5], dtype=torch.float32)
+    result = torch.zeros_like(golden)  # what an fp16 Dest's flush would hand back
+    for in_fmt, dest in (
+        (DataFormat.Float16, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DestAccumulation.No),
+    ):
+        assert dest_holds(golden, result, in_fmt, DataFormat.Float32, dest).all(), (
+            in_fmt,
+            dest,
+        )
+
+
+def test_a_floor_short_of_the_ceiling_is_returned_for_the_demotion_note():
+    """near_zero_floor hands back the floor it tried even when the lanes outside it stay
+    past the ceiling, so _decide can demote the cell and say what it would have needed.
+    """
+    from helpers.ulp_sweep import near_zero_floor
+
+    golden = torch.tensor([1.0, 1e-6, 2.0], dtype=torch.float32)
+    result = torch.tensor([1.0, 0.0, 2.5], dtype=torch.float32)
+    distance = torch.tensor([0, 14000, 9000])
+    mask = torch.ones(3, dtype=torch.bool)
+    residual, atol = near_zero_floor(
+        golden, result, distance, mask, DataFormat.Float16_b
+    )
+    assert residual == 9000 and atol > 0
+
+
+def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
+    """A floor rescues lanes, so on an equal worst lane the reading without one wins."""
+    from helpers.ulp_sweep import MEASURED, Floored, record
+
+    key = ("Float16_b", "Float16_b", "No", "No")
+    outcomes = []
+    for order in ((None, _FLOOR), (_FLOOR, None)):
+        MEASURED.clear()
+        for floor in order:
+            record("Abs", key, _WORST, floor)
+        outcomes.append(MEASURED["Abs"][key])
+    MEASURED.clear()
+    assert outcomes == [_WORST, _WORST] and not isinstance(outcomes[0], Floored)
+
+
+def test_the_trig_claim_reaches_65504_on_a_wide_input():
+    """Sin/Cos/Tan are accurate out to 65504, so the ranking mask keeps those lanes;
+    past it the range reduction breaks and the lanes leave the claim."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([3.0, 4.0, 60000.0, 70000.0], dtype=torch.bfloat16)
+    claimed = claimed_lanes(
+        MathOperation.Sin,
+        src,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        DestAccumulation.No,
+    )
+    assert claimed.tolist() == [True, True, True, False]
+    # ranked_mask is the measurable lanes within that claim -- what the sweep ranks.
+    golden = torch.zeros(4, dtype=torch.bfloat16)
+    ranked = ranked_mask(
+        MathOperation.Sin,
+        src,
+        golden,
+        golden.clone(),
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        DestAccumulation.No,
+    )
+    assert ranked.tolist() == [True, True, True, False]
+
+
+def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):
+    _record_full_grid("Gelu", "Float16", "Float16", _WORST, floor=(100, 1e-3))
+    write_table(table, "today")
+    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
+    assert "metric: tolerance}" in row and "near_zero_atol" not in row
+    assert row.endswith(
+        "# max 14337 ULP, budget 15771 > ceiling 51; 100 ULP outside a 1.00e-03 near-zero floor"
+    )
+
+
+def test_floored_measurements_survive_the_xdist_merge():
+    """A worker exports a floored cell as a dict and the controller folds it back as
+    `Floored`; the same reading again keeps it."""
+    from helpers.ulp_sweep import Floored
+
+    MEASURED.clear()
+    key = ("Float16", "Float16", "No", "No")
+    record("Gelu", key, _WORST, floor=_FLOOR)
+    exported = export_measured()
+    MEASURED.clear()
+    merge_measured(exported)
+    assert MEASURED["Gelu"][key] == Floored(_WORST, *_FLOOR)
+    merge_measured(exported)
+    assert MEASURED["Gelu"][key] == Floored(_WORST, *_FLOOR)
+    MEASURED.clear()
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ((_WORST, _FLOOR), (5, None)),
+        ((5, None), (_WORST, _FLOOR)),
+        ((_WORST, _FLOOR), (_WORST, (3, 1e-7))),
+        ((5, (1, 1e-7)), (_WORST, _FLOOR)),
+    ],
+)
+def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
+    """The floor came from one reading's lanes: a budget of 1.1x its residual would
+    reject a plain 5 the other reading measured. Either order keeps the worst lane
+    unfloored."""
+    MEASURED.clear()
+    key = ("Float16", "Float16", "No", "No")
+    for max_ulp, floor in (first, second):
+        record("Gelu", key, max_ulp, floor=floor)
+    assert MEASURED["Gelu"][key] == _WORST
+    MEASURED.clear()

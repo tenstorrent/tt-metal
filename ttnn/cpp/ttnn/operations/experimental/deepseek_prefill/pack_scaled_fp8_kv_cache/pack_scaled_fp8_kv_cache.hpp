@@ -5,7 +5,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include "packed_kv_layout.hpp"
+#include "shared_with_host/packed_kv_layout.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache {
 
