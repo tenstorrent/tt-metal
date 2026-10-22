@@ -1740,3 +1740,9 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F155 device validation (2026-10-22, DS41 2x2, P.19 code, last chunk): real-time vs device profiler per section within
   0.2 % in total (91.94 vs 91.74 ms), program counts identical (3776), every section within ±2 % except moe_add +9 %
   (its reduce-scatter waits inside the program); per-op profile of all 8 layers in 6 min (device-profiler op mode ~13).
+
+## F157: agents run the repo's commit hooks on their changes before they finish (2026-10-22)
+- DeepSeek-V4.1 P.18 and P.19: both gates passed and both commits were refused by prefer-expect-error (new fork unit
+  tests with pytest.raises); F154 committed them without a re-run, but the overseer had to fix 11 lines by hand.
+- agents/bringup-engineer.md rule 12: run `pre-commit run --files <changed and new files>` and fix every failure before
+  finishing; use the expect_error fixture with the real message text.
