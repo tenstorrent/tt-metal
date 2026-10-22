@@ -3,7 +3,7 @@
 
 """Kimi-K3's DSpark taps against the GPU taps the drafter golden was built from.
 
-DSpark taps target layer L at layer L+1's AttnRes read before attention (`attn_input_tap`), not at the
+DSpark taps target layer L at layer L+1's AttnRes read before attention (`on_layer_hidden`), not at the
 running sum `layer_tap` gives. This runs K3's first layers once and scores every tap they reach against
 `tap_layer_{L}.safetensors` in `$PREFILL_DFLASH_GOLDEN_TAPS_DIR`. The tokens come from the 1M trace, which
 is the same prompt: its first 1024 positions match the taps to bf16 rounding, the rest to PCC 0.9998
@@ -129,13 +129,13 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
 
     got = {}
 
-    def tap(local_idx, hidden):
-        if local_idx - 1 in targets:
-            logger.info(f"tap {local_idx - 1}: per-device {tuple(hidden.shape)} {hidden.dtype} {hidden.layout}")
-            got[local_idx - 1] = _compose(mesh_device, hidden)
+    def tap(layer, hidden):
+        if layer in targets:
+            logger.info(f"tap {layer}: per-device {tuple(hidden.shape)} {hidden.dtype} {hidden.layout}")
+            got[layer] = _compose(mesh_device, hidden)
 
     try:
-        model.forward(tokens_tt, kvpe_cache=kvpe, attn_input_tap=tap)
+        model.forward(tokens_tt, kvpe_cache=kvpe, on_layer_hidden=tap)
     finally:
         if model.kda_states is not None:
             model.kda_states.deallocate()
