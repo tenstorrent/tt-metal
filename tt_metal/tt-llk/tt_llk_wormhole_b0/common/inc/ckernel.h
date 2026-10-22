@@ -659,7 +659,6 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Reads the configured dest accumulation mode from ALU_ACC_CTRL_Fp32_enabled.
- *        Lets assert sites check a passed is_fp32_dest_acc_en against the hardware.
  *        Only ever evaluated inside LLK_ASSERT (compiled out in production via sizeof).
  */
 inline bool is_fp32_dest_acc_en_rt()

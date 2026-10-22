@@ -52,3 +52,13 @@
 
 // Inverse of LLK_ASSERT: Triggers when the condition is true (failure condition)
 #define LLK_PANIC(condition, message) LLK_ASSERT(!(condition), message)
+
+// Dest accumulation mode as last configured on this TRISC (math / pack hw_configure, _llk_set_fp32_dest_acc_).
+// Kept in software rather than read from ALU_ACC_CTRL_Fp32_enabled: that bit is MATH-owned, toggled transiently
+// (transpose_dest, 32b datacopy, fast_tilize), and a RISC cfg_read is not ordered behind queued CFG writes.
+// Only written through LLK_ASSERT_BLOCK, so production builds never store to it.
+inline bool llk_assert_fp32_dest_acc_en = false;
+
+// Asserts that a passed is_fp32_dest_acc_en matches the configured dest accumulation mode.
+#define LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en) \
+    LLK_ASSERT(((is_fp32_dest_acc_en) == llk_assert_fp32_dest_acc_en), "is_fp32_dest_acc_en does not match the configured dest accumulation mode")
