@@ -1,0 +1,73 @@
+{
+ "overseer": [
+  {
+   "id": "OV-26",
+   "answer": "done",
+   "evidence": "The overseer's framework fix holds: test_c_swa_experts.py no longer KeyErrors on component_col_factor; it runs every check (log of this attempt: /tmp/fix9_swa_experts.log)."
+  },
+  {
+   "id": "OV-27",
+   "answer": "done",
+   "evidence": "Ran the re-rendered frozen tests, one gate command per call: the 4 shared_expert tests PASS, L.last PASS; the 4 experts tests FAIL only on the vs-CPU / second-input checks, with err_experts within its noise-floor limit (L00 0.130 <= 0.337, L02 0.161 <= 0.507, L20 0.184 <= 0.882, L21 0.183 <= 0.958)."
+  },
+  {
+   "id": "FIX.9",
+   "answer": "done",
+   "evidence": "Attempt 1's deletions kept (separate combine, pieces, loop / unified / fp4_decode, EXPERTS_DECODE, linear shared expert; fork options routing_weights / fp8_act_quant and both test_ds41_h_options.py). Rebuilt; fork option tests 3 + 3 passed. Shipped numerics unchanged: every err_* equals the baseline (experts L00 0.130168, shared L00 0.0151197, L.last err_layer = FIX.8's). The 4 experts tests still fail. The cause is the shipped bfp4 weights, not this change: with the new hooks.devfmt_component, the CPU step at the device's formats is 0.128-0.181 from native and the device is 0.015-0.018 from it (a precision gap, DS41-95). They need an owner waiver or EXPERTS_IMPL=bfp8 (CPU: bfp8 + glm 0.017)."
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-74",
+   "how": "modelled the device's bfp4 weights in hooks.devfmt_component with tt/experts.py:_bfp4_round and identified bfp4 as the experts tests' gap (bfp4 vs bfp8 CPU comparison)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-77",
+   "how": "modelled the flat op's bfp8 x / h / y tiles with ties rounded away from zero (hooks.py:_bfp_round ties_away)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-10",
+   "how": "devfmt_component leaves bfp8 weights unrounded (exact in the [N, K] orientation)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "ran L.last with --no-precompile so it fits one 10-minute foreground call",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-95",
+   "evidence": "Its Fix ('re-render / re-freeze them, not the model') did not hold: the tests re-rendered by the overseer (bce8e4535e3 etc.) still fail, on the bfp4 format gap (devfmt CPU 0.128 from native, device 0.0149 from it at L00). Rewritten in place (the entry was uncommitted, from attempt 1).",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the model had no devfmt_component hook (F137), so any per-step failure caused by a weight block format (bfp4 experts) was diagnosed as 'a logic bug'; the default models bf16 activations only"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.9",
+  "role": "overseer",
+  "attempt": 5,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T03:57:48",
+  "head": "a0de3b8bee8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.9.overseer.5.json"
+  ]
+ }
+}

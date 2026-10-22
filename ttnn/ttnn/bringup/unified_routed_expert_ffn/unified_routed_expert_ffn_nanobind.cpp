@@ -78,15 +78,6 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 default only GeluTanh does; the others run LoFi with a bf16 dest), and x
                 (tilized in-kernel), the intermediates and the output stay bf16 instead of
                 bf8_b. Needs a ROW_MAJOR bf16 dispatched_buffer; returns a TILE bf16 buffer.
-            routing_weights (ttnn.Tensor, optional): default None. FLOAT32 ROW_MAJOR [rows of
-                dispatched_buffer, C >= experts_per_chip]: local expert le multiplies the activation of its
-                dispatched row i by routing_weights[i, le] (fp32, SFPU) before the down projection
-                (DeepSeek-V4: down(r * act(gate, up))). Needs high_precision, fp32_dest_acc_en and a fused
-                binary activation (SwiGluOai, SituGlu, ClampedSiluGlu).
-            fp8_act_quant (bool, optional): default False. fp8 e4m3 quantize-dequantize of the activation
-                (after the routing weight) per 32 hidden values with a power-of-two (ue8m0) scale
-                2^ceil(log2(max(amax, 1e-4) / 448)), round to nearest even, before the down projection
-                (DeepSeek act_quant(h, 32, 'ue8m0')). Same requirements as routing_weights.
             weights_transposed (bool, optional): default False. gate/up/down are given as stored by
                 nn.Linear, [N, K] (gate/up [hidden, emb], down [emb, hidden]); the op reads their tiles in
                 transposed order and transposes each tile in the matmul (a bfp8 [N, K] weight keeps its
@@ -117,8 +108,6 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("min_active_tokens") = 0,
         nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
         nb::arg("high_precision") = false,
-        nb::arg("routing_weights") = nb::none(),
-        nb::arg("fp8_act_quant") = false,
         nb::arg("weights_transposed") = false);
 }
 

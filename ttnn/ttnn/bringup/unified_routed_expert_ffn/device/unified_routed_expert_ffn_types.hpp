@@ -111,20 +111,11 @@ struct UnifiedRoutedExpertFfnParams {
     // kernel config, so it belongs to the program-cache key.
     bool high_precision = false;
 
-    // Opt-in DeepSeek-V4.1 expert numerics (deepseek_v41_flash_d_p P.2; every default keeps today's program):
-    //   fuse_routing_weight  (derived from the presence of the routing_weights input) multiplies the activated h by
-    //                        each dispatched row's own routing weight (fp32, SFPU) before the down projection:
-    //                        down(r * act(gate, up)). A ROUTED_ROW_WEIGHT define.
-    //   fp8_act_quant        fp8 e4m3 quantize-dequantize of h (after the weight) per 32 values along the hidden
-    //                        dim with a power-of-two (ue8m0) scale, before the down projection (DeepSeek's
-    //                        act_quant(h, 32, 'ue8m0')). An FP8_ACT_QUANT define.
+    // Opt-in (deepseek_v41_flash_d_p P.2; the default keeps today's program):
     //   weights_transposed   gate/up/down are given as stored by nn.Linear, [N, K] (gate/up [hidden, emb], down
     //                        [emb, hidden]); the kernels read their tiles in transposed order and the matmuls
     //                        transpose each in1 tile. A WEIGHTS_NK define.
-    // Both h options need high_precision, an fp32 dest and a fused binary activation; with either one the gate/up
-    // accumulators reach DEST unpacked at full fp32 (UnpackToDestFp32) instead of through SrcA (TF32).
-    bool fuse_routing_weight = false;
-    bool fp8_act_quant = false;
+    // (FIX.9 removed P.2's DeepSeek-only h options fuse_routing_weight / fp8_act_quant: no model used them.)
     bool weights_transposed = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -137,8 +128,6 @@ struct UnifiedRoutedExpertFfnParams {
         "max_active_tokens",
         "compute_kernel_config",
         "high_precision",
-        "fuse_routing_weight",
-        "fp8_act_quant",
         "weights_transposed");
     // compute_kernel_config is part of the key because GeluTanh honours its math_fidelity and
     // fp32_dest_acc_en (the other variants ignore it unless high_precision is set).
@@ -153,8 +142,6 @@ struct UnifiedRoutedExpertFfnParams {
             max_active_tokens,
             compute_kernel_config,
             high_precision,
-            fuse_routing_weight,
-            fp8_act_quant,
             weights_transposed);
     }
 };
@@ -202,10 +189,6 @@ struct UnifiedRoutedExpertFfnInputs {
     std::vector<Tensor> gate_biases;
     std::vector<Tensor> up_biases;
     std::vector<Tensor> down_biases;
-    // Optional per-dispatched-row routing weights (DeepSeek-V4.1): FLOAT32 ROW_MAJOR [rows of x, C], C >=
-    // experts_per_chip; row i column le is the weight of dispatched row i for local expert le (the kernels read
-    // column le for expert le's rows). Present iff fuse_routing_weight.
-    std::optional<Tensor> routing_weights;
 };
 
 }  // namespace ttnn::operations::bringup::unified_routed_expert_ffn

@@ -154,3 +154,38 @@ shapes, mesh, row-major y).
   DeepSeek-V4.1 routing_weights / fp8_act_quant path uses). Always on (a bug fix).
 - Needed by: deepseek_v41_flash_d_p (2026-10-20, overseer), test_ds41_h_options 7/7.
 - Files: device/kernels/se5_recv.cpp
+
+### Removed: the DeepSeek-V4.1 h options `routing_weights`, `fp8_act_quant` and the plan's `routed` (2026-10-22, FIX.9)
+- What: the two `flat_routed_expert` / `FlatRoutedExpert.__call__` arguments added in P.3, `flat_routed_expert_plan(...,
+  routed=)` / `FlatRoutedExpert(routed=)` and the plan dict's `routed`, and everything only they used: the config's
+  `routed_weight` / `fp8_act_quant` (and their program-cache and plan-cache key fields), the `routing_weights` input,
+  its validation and `AddrSrc::RoutingWeights`, the plan's h-options branch (mt 1, 4 fp32 DST tiles, no row passes) and
+  its 36 KB gate/up arena region (`kRhXd`, `kRhTiles`, `rh_off`), the factory's RH_* CBs / semaphores / runtime args /
+  defines and the compute CBs unpacked to fp32 DEST (`cp`'s `fp32_unpack_cbs`), the kernels' `SE_RH_W` / `SE_RH_Q` /
+  `SE_RH_X` blocks (se3_compute.cpp: weight tile into DEST, SFPU multiply and fp8 q-dq, split-tile merge; se5_recv.cpp:
+  routing-weight tile staging, the partner-half ring), and `device/kernels/se_rh.hpp`. `weights_nk` and `hidden` stay.
+  Against the commit before P.3 (`git diff 2bbb41e2bb8^`) the factory and kernels now differ only by weights_nk /
+  hidden and the later syncs.
+- Why: deepseek_v41_flash_d_p FIX.9 (overseer, precision_debt_report.md J2): the options existed only for DeepSeek's
+  official arithmetic (q(r h) before w2), which the model no longer emulates (agent rule 17, F137); its separate
+  combine path (the only caller of routing_weights) is deleted, the routed experts run flat_routed_expert_with_program
+  + the weighted combine. No other model calls them (grep of every model's code and the forks' tests, 2026-10-22).
+  Option-off behaviour unchanged: every removed line was behind `p.routed`, `cfg.routed_weight` / `cfg.fp8_act_quant`
+  or an SE_RH define; the weight-cache key never contained `routed` (WEIGHT_LAYOUT_KEYS), so existing caches stay
+  valid.
+- Tests: `tests/unit/test_ds41_h_options.py` deleted; `tests/unit/test_weights_nk.py` keeps the remaining P.3 options'
+  checks without the h options: [N, K] with weights_nk == [K, N] bit for bit, DeepSeek-V4.1 shapes (H 5120, I 2304, 24
+  experts, e2m1 x 2^e, wide x rows via hidden) vs float64, block_float_exact.
+- Regression (options off, 2026-10-22, after the build, 2x2 QuietBox, --no-precompile per file): the five carried
+  `tests/unit/` files 19 passed / 13 failed, the recorded baseline exactly (12 x TT_FATAL `p.nsg == 1` in the TP2 / TP4
+  subgrid cases of test_flat_routed_expert_op / _yrm / _indexed_shapes, and the MiMo indexed_perf band, DS41-63);
+  test_flat_expert_mesh and test_flat_uneven_split all pass; `tests/unit/test_weights_nk.py` 3 passed (V4.1 shapes rel
+  0.0024, PCC 0.9999971 on dev 0 expert 0). GLM-5.3's case (`tests/test_flat_bench.py`, glm53flash): 2048 rows
+  9.556 ms, 5120 rows 23.725 ms (9.558 / 23.721 before). deepseek_v41_flash_d_p: its 8 expert / shared-expert
+  component tests print the same check values as before the change (bit-identical metrics), L.last per-layer errors
+  equal FIX.8's, plain profile device 104.28 ms a chunk (104.31), 7800 programs.
+- Needed by: deepseek_v41_flash_d_p FIX.9
+- Files: `flat_routed_expert.{hpp,cpp}`, `flat_routed_expert_nanobind.cpp`, `flat_expert.py`,
+  `device/flat_routed_expert_{plan.hpp,plan.cpp,types.hpp,device_operation.cpp,program_factory.hpp,program_factory.cpp}`,
+  `device/kernels/{se3_compute.cpp,se5_recv.cpp}`, `device/kernels/se_rh.hpp` (deleted),
+  `tests/unit/test_ds41_h_options.py` (deleted), `tests/unit/test_weights_nk.py`
