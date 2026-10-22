@@ -9,6 +9,11 @@ F114: the gate first runs it with the device profiler off and BRINGUP_PROFILE_WA
 runs: chunk_wall_ms = the median after WALL_WARM warm-up runs (F114b), chunk_wall_clean = 1; F119: the harness's
 golden-input uploads at layer gaps are timed apart, chunk_wall_gap_ms, and not counted); the profiled run then keeps that chunk_wall_ms and records
 its own as chunk_wall_ms_profiled (instrumented kernels and buffer dumps make it slower and noisier).
+F155 (owner 2026-10-22): device time comes from the program real-time profiler (testing/profiler.py ``backend()``,
+default "rt"): one profiled run, no syncs, gives the sections, the per-op rows of every layer (op mode) and the
+pipelined timeline; its wall is recorded as chunk_wall_ms_rt (without op mode, whose per-call bookkeeping is host
+work). The device profiler (perf.profiler: device) keeps the old runs (a synced section run, op mode on the
+representative layers, a timeline run) for cross-checks.
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
 chunk_wall_ms, host_transfers_per_layer, pcc_chunk_out (last layer's output vs the golden), prefill_ms_full (opt-in), prefill_tok_s,
 prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs,
@@ -103,16 +108,20 @@ def want_ops(s) -> bool:
     return bool(s.get("perf.op_profile")) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
 
 
-def op_layers(s, layers: list[int]) -> list[int]:
-    """The layers the per-op breakdown runs on: one representative layer per block type by default, or the list in
-    BRINGUP_PROFILE_LAYERS ("2" or "0,2"). Op mode syncs and reads the profiler after every ttnn call (about a minute
-    per layer), so it never runs over the whole model: the section times of the plain profile already cover every
-    layer. A perf change is judged by the e2e chunk time and its own section's time, before and after."""
+def op_layers(s, layers: list[int], rt: bool = False) -> list[int]:
+    """The layers the per-op breakdown covers: BRINGUP_PROFILE_LAYERS ("2" or "0,2") if set; else every layer on the
+    real-time profiler (F155: no syncs, the op rows come from the same run as the sections), and one representative
+    layer per block type on the device profiler, whose op mode syncs and reads the profiler after every ttnn call
+    (about a minute per layer). A perf change is judged by the e2e chunk time and its own section's time."""
     env = os.environ.get("BRINGUP_PROFILE_LAYERS", "").strip()
     if env:
         want = sorted({int(x) for x in env.split(",") if x.strip()})
         bad = [i for i in want if i not in layers]
         assert not bad, f"BRINGUP_PROFILE_LAYERS={env}: layers {bad} are not in the profiled rung's layers"
+        if rt:
+            return want
+    elif rt:
+        return list(layers)
     else:
         want = sorted({s.representative_layer(bt) for bt in s.data.get("block_types", {})} & set(layers))
     assert (
@@ -221,8 +230,36 @@ def op_profile(mesh, run) -> tuple[dict, dict | None]:
     return out, summary
 
 
+def rt_ops(prof: dict, sel: list[int] | None) -> dict:
+    """F155: the real-time run's op rows in the op-mode schema (profile.json "ops"), timeline columns included; only
+    the layers in ``sel``."""
+    keep = None if sel is None else {f"L{i}." for i in sel}
+    out = {}
+    for sec, rows in prof["op_ns"].items():
+        if keep is not None and not any(sec.startswith(k) for k in keep):
+            continue
+        out[sec] = [
+            {
+                "op": r["op"],
+                "shape": r["shape"],
+                "mem": r.get("mem", ""),
+                "calls": r["calls"],
+                "programs": r["programs"],
+                "ms": round(r["ns"] / 1e6, 4),
+                "ms_per_chip": {str(c): round(v / 1e6, 4) for c, v in sorted(r["ns_dev"].items())},
+                "gap_ms": round(r["gap_ns"] / 1e6, 4),
+                "slot_ms": round(r["slot_ns"] / 1e6, 4),
+                "host_ms": round(r["host_ns"] / 1e6, 4),
+                "timeline_kernel_ms": round(r["kernel_ns"] / 1e6, 4),
+            }
+            for r in rows
+        ]
+    return out
+
+
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     accuracy_guard.check(s)  # accuracy first: a perf pick whose frozen test failed in this attempt is not profiled
+    backend = profiler.backend(s)  # F155: "rt" unless the spec / BRINGUP_PROFILER asks for the device profiler
     rung_name = rung_name or profile_rung(s)
     rung = s.rung(rung_name)
     metrics.record("scaled_run", int(getattr(s, "scaled", False)))  # F64: the reduced model of a scaled run
@@ -341,20 +378,43 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     want_full = s.get("perf.full_prefill") or os.environ.get("BRINGUP_FULL_PREFILL") == "1"
     full = full_prefill(s, model, state, layers, rung, g.tokens()) if want_full else None
 
+    ops, timeline = None, None
     reload()
-    profiler.enable(mesh)
-    run()
-    profiler.signpost("end")
-    prof = profiler.result()
-    profiler.disable()
-    if want_ops(s):
-        sel = op_layers(s, layers)
-        print(f"op profile on layers {sel} (of {len(layers)})")
-        metrics.record("op_layers", len(sel))
-        reload()
-        ops, timeline = op_profile(mesh, lambda: run(only=sel))
+    if backend == "rt":  # F155: one run, no syncs: sections, and with op mode the op rows and the timeline
+        ops_on = want_ops(s)
+        gap[0] = 0.0
+        profiler.enable(mesh, rt=True, calls=ops_on)
+        try:
+            t0 = time.time()
+            run()
+            rt_wall = time.time() - t0 - gap[0]
+            profiler.set_layer(None)
+            profiler.signpost("end")
+            profiler.finish_rt()
+            prof = profiler.result()
+        finally:
+            profiler.disable()
+        if not ops_on:  # op mode's per-call bookkeeping is host work: then the wall is not the model's
+            metrics.record("chunk_wall_ms_rt", round(rt_wall * 1e3, 1))
+        if ops_on:
+            sel = op_layers(s, layers, rt=True)
+            print(f"op profile (real-time profiler, same run) on layers {sel} (of {len(layers)})")
+            metrics.record("op_layers", len(sel))
+            ops = rt_ops(prof, sel)
+            timeline = dict(prof["timeline_rt"], host_wall_ms=round(rt_wall * 1e3, 3))
     else:
-        ops, timeline = None, None
+        profiler.require_device_profiler()
+        profiler.enable(mesh)
+        run()
+        profiler.signpost("end")
+        prof = profiler.result()
+        profiler.disable()
+        if want_ops(s):
+            sel = op_layers(s, layers)
+            print(f"op profile on layers {sel} (of {len(layers)})")
+            metrics.record("op_layers", len(sel))
+            reload()
+            ops, timeline = op_profile(mesh, lambda: run(only=sel))
     if ops is not None:
         metrics.record("op_rows", sum(len(v) for v in ops.values()))
         attached = all("gap_ms" in r for rows in ops.values() for r in rows)  # every op row got its timeline columns
@@ -364,7 +424,12 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
                 metrics.record(f"timeline_{k}", timeline[k])
 
     total = sum(prof["kernel_ns"].values())
-    assert total > 0, f"device profiler returned no durations; set {profiler.PROFILER_ENV}"
+    assert total > 0, (
+        "the real-time profiler returned no program records in any section"
+        if backend == "rt"
+        else f"device profiler returned no durations; set {profiler.PROFILER_ENV}"
+    )
+    metrics.record("profiler_rt", int(backend == "rt"))  # F155: where device_ms_* came from
     phases = defaultdict(float)
     for sec, ns in prof["kernel_ns"].items():
         phases[profiler.phase_of(sec)] += ns
@@ -403,6 +468,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         "sections_ms": {k: v / 1e6 for k, v in sorted(prof["kernel_ns"].items(), key=lambda x: -x[1])},
         "sections_ms_per_chip": {k: {str(c): v / 1e6 for c, v in d.items()} for k, d in prof["kernel_ns_dev"].items()},
         "programs": prof["programs"],
+        "profiler": backend,  # F155: "rt" = dispatch start to end per program; "device" = kernel time
         "settings": getattr(model, "perf_settings", lambda: {})(),
         "full_prefill": full,
         "bridged_steps": bridged["steps"],  # deferred to op-gen: host time in the wall, not device work

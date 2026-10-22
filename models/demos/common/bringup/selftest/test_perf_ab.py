@@ -134,7 +134,9 @@ def test_the_ab_report_runs_off_and_on_then_waits_for_the_owner(mk):
     assert all(c["ab"] == "1" for c in mk.calls)  # the profile guard lets the orchestrator's own profile through
     assert [c["rung"] for c in mk.calls if "test_ladder.py" in c["cmd"]] == ["last", "full", "last", "full"]
     prof = [c["cmd"] for c in mk.calls if "test_profile.py" in c["cmd"]]
-    assert len(prof) == 2 and all("BRINGUP_PROFILE_OPS" not in c and "TT_METAL_DEVICE_PROFILER=1" in c for c in prof)
+    # F155: the profile measures with the real-time profiler (a clean wall run first, no device profiler build)
+    assert len(prof) == 2 and all("BRINGUP_PROFILE_OPS" not in c and "TT_METAL_DEVICE_PROFILER" not in c for c in prof)
+    assert all("BRINGUP_PROFILE_WALL=1" in c and "BRINGUP_WALL_CLEAN=1" in c for c in prof)
     rec = st["ab"]
     assert rec["table"] == str(d / "table.md") and rec["env"] == {"TOY_FIDELITY": "hifi4"}
     assert rec["ladder"]["last"]["new"]["min layer PCC"] == 0.990 and rec["ladder"]["last"]["new"]["min layer"] == "L01"
