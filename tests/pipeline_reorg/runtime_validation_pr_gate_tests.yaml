@@ -28,3 +28,14 @@
   team: runtime
   budget_type: pr_gate
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
+
+# Host SIMD coverage needs a stable CPU capability. The Loudbox pool supplies
+# the AVX-512 leg; the test fails rather than silently skipping on another CPU.
+- name: runtime validation bfp avx512
+  cmd: TT_METAL_TEST_REQUIRE_AVX512=1 TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P150.yaml /usr/bin/tt-metalium-validation-smoke --gtest_filter='*BfpSimdRows*/3:*BfpSimdTiles*:*BfpTaskLifetime*'
+  skus:
+    bh_loudbox:
+      timeout: 5
+  team: runtime
+  budget_type: pr_gate
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar

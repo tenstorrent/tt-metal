@@ -8,9 +8,11 @@
 #include <array>
 #include <bit>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <future>
 #include <chrono>
+#include <cstdlib>
 #include <latch>
 #include <stdexcept>
 #include "common/executor.hpp"
@@ -124,7 +126,7 @@ template <int bits, typename T>
 void check_simd_rows(int isa) {
     auto encode = tt::tt_metal::bfp_simd::select_row_packer<bits, T>(isa);
     if (!encode) {
-        return;  // Unsupported ISAs must never execute on this host.
+        GTEST_SKIP() << "Requested BFP ISA " << isa << " is unavailable on this CPU";
     }
     constexpr auto format = [] {
         if constexpr (bits == 7) {
@@ -196,6 +198,10 @@ void check_packed_tiles() {
 
 class BfpSimdRows : public ::testing::TestWithParam<int> {};
 TEST_P(BfpSimdRows, CPU_MatchesOriginalIntegerConverter) {
+    if (GetParam() == 3 && std::getenv("TT_METAL_TEST_REQUIRE_AVX512") != nullptr) {
+        ASSERT_TRUE((tt::tt_metal::bfp_simd::select_row_packer<7, float>(3)))
+            << "This CI leg requires AVX-512; missing CPU coverage is a failure";
+    }
     check_simd_rows<7, float>(GetParam());
     check_simd_rows<3, float>(GetParam());
     check_simd_rows<1, float>(GetParam());
@@ -243,9 +249,28 @@ TEST(BfpSimdTiles, CPU_CallsFromSaturatedExecutor) {
         graph.emplace([&] {
             started.arrive_and_wait();
             EXPECT_EQ((pack_as_bfp_tiles<tt::DataFormat::Bfp4_b, float>(input, true, false, std::nullopt)), expected);
+            // The legacy specialization shares the pool and must also execute
+            // nested calls inline, including exponent-A and integer inputs.
+            EXPECT_EQ((pack_as_bfp_tiles<tt::DataFormat::Bfp4, float>(input, true, false, std::nullopt)), expected);
         });
     }
     executor.run(graph).get();
+}
+
+TEST(BfpSimdTiles, CPU_LegacyIntegerAndExponentAParallelPacking) {
+    // Repeated tiles let a single-tile serial result serve as an independent
+    // ordering reference for the legacy parallel fan-out.
+    std::vector<uint32_t> one_tile(1024);
+    std::iota(one_tile.begin(), one_tile.end(), 1u);
+    for (const bool exponent_a : {false, true}) {
+        const auto single = pack_as_bfp_tiles<tt::DataFormat::Bfp8, uint32_t>(one_tile, true, exponent_a, std::nullopt);
+        std::vector<uint32_t> input, expected;
+        for (size_t t = 0; t < 257; ++t) {
+            input.insert(input.end(), one_tile.begin(), one_tile.end());
+            expected.insert(expected.end(), single.begin(), single.end());
+        }
+        EXPECT_EQ((pack_as_bfp_tiles<tt::DataFormat::Bfp8, uint32_t>(input, true, exponent_a, std::nullopt)), expected);
+    }
 }
 
 class BfpTaskLifetime : public ::testing::TestWithParam<bool> {};

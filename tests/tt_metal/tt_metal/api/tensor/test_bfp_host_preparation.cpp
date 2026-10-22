@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include "common/executor.hpp"
+#include "impl/data_format/blockfloat_common.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -40,10 +41,13 @@ void check_factory(const Shape& shape, DataType dtype, const Tile& tile = Tile{}
     const auto spec = TensorSpec(shape, TensorLayout(dtype, page, memory));
     const auto source_dtype = std::is_same_v<T, float> ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto source_spec = TensorSpec(shape, TensorLayout(source_dtype, page, memory));
-    // Independent staged path: first materialize source-type tiles, then pack.
+    // The exponent-A template retains the original scalar converter. Passing
+    // is_exp_a=false gives B-format bytes without using any SIMD row encoder.
     const auto tiled = HostTensor::from_span<T>(data, source_spec);
-    const auto expected = to_dtype(tiled, dtype);
-    const auto expected_words = host_buffer::get_as<uint32_t>(expected);
+    const auto source_words = host_buffer::get_as<T>(tiled);
+    const auto expected_words = dtype == DataType::BFLOAT8_B
+                                    ? pack_as_bfp_tiles<tt::DataFormat::Bfp8, T>(source_words, false, false, tile)
+                                    : pack_as_bfp_tiles<tt::DataFormat::Bfp4, T>(source_words, false, false, tile);
     auto check = [&](const HostTensor& actual) {
         EXPECT_EQ(actual.tensor_spec(), spec);
         EXPECT_EQ(

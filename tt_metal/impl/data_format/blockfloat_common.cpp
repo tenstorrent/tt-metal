@@ -14,8 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "blockfloat_common.hpp"
-#include "bfp_simd.hpp"
-#include "bfp_tasks.hpp"
+#include "bfp_tile_encode.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
@@ -393,44 +392,10 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                     return 1;
                 }
             }();
-            const uint32_t rows = tile_HW / 16;
-            const uint32_t exponent_bytes = exponent_padding ? tt::round_up(rows, l1_alignment) : rows;
-            const uint32_t packed_bytes = exponent_bytes + tile_HW * (bits + 1) / 8;
-            std::vector<uint32_t> result(static_cast<size_t>(num_tiles) * packed_bytes / 4, 0);
-            const auto pack_row = tt::tt_metal::bfp_simd::select_row_packer<bits, T>();
-            auto process = [&](uint32_t begin, uint32_t end) {
-                for (uint32_t t = begin; t < end; ++t) {
-                    const T* input = input_data.data() + static_cast<size_t>(t) * tile_HW;
-                    auto* output = reinterpret_cast<uint8_t*>(result.data()) + static_cast<size_t>(t) * packed_bytes;
-                    uint32_t row = 0;
-                    for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
-                        for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                            for (uint32_t r = 0; r < face_H; ++r, ++row) {
-                                const uint32_t offset =
-                                    row_major_input ? (tr * face_H + r) * tile_W + tc * face_W : row * face_W;
-                                pack_row(input + offset, output + row, output + exponent_bytes + row * 2 * (bits + 1));
-                            }
-                        }
-                    }
-                }
-            };
-            // A Taskflow graph may occupy every worker with one topology.
-            // Finish nested packing inline so no worker waits on its own pool.
-            if (num_tiles < 256 || tt::tt_metal::detail::GetExecutor().this_worker_id() != -1) {
-                process(0, num_tiles);
-                return result;
-            }
-            const uint32_t workers = static_cast<uint32_t>(tt::tt_metal::detail::GetExecutor().num_workers());
-            const uint32_t chunks = std::max(1u, std::min(workers, num_tiles / 128));
-            if (chunks == 1) {
-                process(0, num_tiles);
-            } else {
-                tt::tt_metal::detail::run_bfp_tasks(chunks, [&](size_t chunk) {
-                    const uint32_t begin = static_cast<uint64_t>(num_tiles) * chunk / chunks;
-                    const uint32_t end = static_cast<uint64_t>(num_tiles) * (chunk + 1) / chunks;
-                    return tt::tt_metal::detail::async([&, begin, end] { process(begin, end); });
-                });
-            }
+            const tt::tt_metal::detail::BfpTileGeometry geometry(tile.value_or(tt::tt_metal::Tile{}));
+            std::vector<uint32_t> result(static_cast<size_t>(num_tiles) * geometry.packed_bytes<bits>() / 4);
+            tt::tt_metal::detail::encode_bfp_tiles<bits>(
+                input_data.data(), reinterpret_cast<uint8_t*>(result.data()), num_tiles, geometry, row_major_input);
             return result;
         }
     }
@@ -549,8 +514,8 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
     num_chunks = std::max(1u, num_chunks);
 
-    if (num_chunks == 1) {
-        // Single-threaded execution
+    if (num_chunks == 1 || tt::tt_metal::detail::GetExecutor().this_worker_id() != -1) {
+        // A nested legacy conversion must not wait on its own executor.
         return process_tile_range(0, num_tiles);
     }
 
@@ -562,29 +527,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_tiles / num_chunks);
 
     std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
-    std::vector<std::shared_future<void>> futures;
-    futures.reserve(num_chunks);
-
-    uint32_t tiles_per_chunk = num_tiles / num_chunks;
-    uint32_t remainder = num_tiles % num_chunks;
-
-    uint32_t start_tile = 0;
-    for (uint32_t t = 0; t < num_chunks; ++t) {
-        uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
-        uint32_t end_tile = start_tile + tiles_for_this_chunk;
-
-        futures.emplace_back(
-            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
-                chunk_results[t] = process_tile_range(start_tile, end_tile);
-            }));
-
-        start_tile = end_tile;
-    }
-
-    // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
-    for (auto& future : futures) {
-        future.get();
-    }
+    const uint32_t tiles_per_chunk = num_tiles / num_chunks;
+    const uint32_t remainder = num_tiles % num_chunks;
+    tt::tt_metal::detail::run_bfp_tasks(num_chunks, [&](size_t chunk) {
+        const uint32_t start_tile = chunk * tiles_per_chunk + std::min<size_t>(chunk, remainder);
+        const uint32_t end_tile = start_tile + tiles_per_chunk + (chunk < remainder ? 1 : 0);
+        return tt::tt_metal::detail::async(
+            [&, chunk, start_tile, end_tile] { chunk_results[chunk] = process_tile_range(start_tile, end_tile); });
+    });
 
     // Concatenate results from all chunks
     std::vector<uint32_t> packed_result;
