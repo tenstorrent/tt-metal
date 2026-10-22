@@ -371,7 +371,7 @@ def _binary_op_enumerators(arch_dir: str) -> set:
     from pathlib import Path
 
     header = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / arch_dir
         / "common"
         / "inc"
