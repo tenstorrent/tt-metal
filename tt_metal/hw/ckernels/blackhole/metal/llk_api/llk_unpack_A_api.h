@@ -90,7 +90,7 @@ template <
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+    std::uint32_t offset_address = get_operand_unpack_tile_size(operand_id) * tile_index;
     std::uint32_t address = base_address + offset_address;
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
@@ -127,7 +127,7 @@ inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
+    std::uint32_t offset_address = get_operand_unpack_tile_size(operand_id);
     std::uint32_t address = base_address + start_tile_index * offset_address;
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");

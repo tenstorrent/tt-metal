@@ -23,7 +23,7 @@ inline void llk_unpack_hadamard_h128_init(
         "Hadamard H128 unpack requires single-face input operand");
 
     const std::uint32_t base_address = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    const std::uint32_t address = base_address + get_local_cb_interface(operandA_id).fifo_page_size * h16_tile_index;
+    const std::uint32_t address = base_address + get_operand_unpack_tile_size(operandA_id) * h16_tile_index;
     _llk_unpack_hadamard_h128_init_(address);
 }
 
@@ -42,8 +42,8 @@ inline void llk_unpack_hadamard_h128(
     const std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     const std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    const std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
-    const std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t tile_size_a = get_operand_unpack_tile_size(operandA_id);
+    const std::uint32_t tile_size_b = get_operand_unpack_tile_size(operandB_id);
 
     WAYPOINT("UPHW");
     _llk_unpack_hadamard_h128_(base_address_a, base_address_b, tile_index_a, tile_index_b, tile_size_a, tile_size_b);

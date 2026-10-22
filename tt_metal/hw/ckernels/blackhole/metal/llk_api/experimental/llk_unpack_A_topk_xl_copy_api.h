@@ -35,7 +35,7 @@ inline void llk_unpack_topk_xl_copy_one_tile_unpack(
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    const std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * in_tile_index;
+    const std::uint32_t offset_address = get_operand_unpack_tile_size(operand_id) * in_tile_index;
     const std::uint32_t address = base_address + offset_address;
 
     ckernel::_llk_unpack_topk_xl_copy_(

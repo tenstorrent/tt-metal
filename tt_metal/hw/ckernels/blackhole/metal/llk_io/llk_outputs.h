@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_io.h"
 
 // Metal specific overrides -- No support for partial tiles so hard-code to fixed 32x32 sizes
 inline uint32_t get_output_id(uint32_t output) { return (output); }
@@ -39,4 +40,8 @@ inline const uint32_t get_output_tile_r_dim(const std::uint32_t output_id) {
 
 inline const uint32_t get_output_tile_c_dim(const std::uint32_t output_id) {
     return (uint32_t)pack_tile_c_dim[output_id];
+}
+
+inline uint32_t get_output_pack_tile_size(const uint32_t output_id) {
+    return get_cb_page_size(output_id, pack_tile_size[output_id]);
 }

@@ -46,7 +46,7 @@ inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
 
     const std::uint32_t base_address_A = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     const std::uint32_t tile_index_A = tile_index_1;
-    const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t tile_size_A = get_operand_unpack_tile_size(operandA_id);
 
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
         base_address_A, tile_index_A, tile_size_A, kt_dim, nt_dim, in1_k_stride);

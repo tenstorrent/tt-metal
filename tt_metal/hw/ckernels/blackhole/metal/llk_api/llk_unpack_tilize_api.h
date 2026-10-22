@@ -241,7 +241,7 @@ inline void llk_unpack_tilizeA_B(
 
     const std::uint32_t base_address_b =
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
-    const std::uint32_t offset_address_b = tile_index_b * get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t offset_address_b = tile_index_b * get_operand_unpack_tile_size(operandB_id);
     const std::uint32_t address_b = base_address_b + offset_address_b;
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(

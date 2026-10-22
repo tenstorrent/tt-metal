@@ -21,8 +21,7 @@ inline void llk_unpack_untilize_init(std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
 
-    _llk_unpack_untilize_init_(
-        unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim);
+    _llk_unpack_untilize_init_(unpack_dst_format[operand_id], get_operand_unpack_tile_size(operand_id), face_r_dim);
 }
 
 inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {

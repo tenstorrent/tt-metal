@@ -25,17 +25,6 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
-inline std::uint32_t get_operand_unpack_tile_size(const std::uint32_t operand_id) {
-    const std::uint32_t tile_bytes = unpack_tile_size[operand_id];
-    if (tile_bytes % DRAM_ALIGNMENT != 0) {
-        return get_local_cb_interface(operand_id).fifo_page_size;
-    }
-    LLK_ASSERT(
-        (tile_bytes >> 4) == get_local_cb_interface(operand_id).fifo_page_size,
-        "CB page size differs from the descriptor tile size");
-    return tile_bytes >> 4;
-}
-
 /**
  * Configure the unpacker hardware for operands A and B.
  *
