@@ -25,6 +25,8 @@ fi
 TEMP_ROOT="${RUNNER_TEMP:-$(mktemp -d)}"
 export LLK_OBJ_CACHE="$TEMP_ROOT/placement-objects"
 mkdir -p "$LLK_OBJ_CACHE"
+# Collect only the files of the listed tests: collecting the whole suite is most of a session's time.
+mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
 PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --node-list "$NODE_LIST")
 STATUS=0
 
@@ -33,8 +35,8 @@ for SHIFT in 0 4 20 36 52; do
   export RUNNER_TEMP="$TEMP_ROOT/placement-p$SHIFT"
   export PERF_RUN_TAG="p$SHIFT"
   if [[ "$SHIFT" == 0 ]]; then export LLK_WINDOW_HASH=1; else unset LLK_WINDOW_HASH; fi
-  pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-p${SHIFT}-1-compile.xml" . || STATUS=1
-  pytest "${PYTEST_EXTRA[@]}" --compile-consumer --dist loadgroup -n 15 --junitxml="pytest-report-placement-p${SHIFT}-1-run.xml" . || STATUS=1
+  pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-p${SHIFT}-1-compile.xml" "${FILES[@]}" || STATUS=1
+  pytest "${PYTEST_EXTRA[@]}" --compile-consumer --dist loadgroup -n 15 --junitxml="pytest-report-placement-p${SHIFT}-1-run.xml" "${FILES[@]}" || STATUS=1
 done
 
 # A test that failed at one position is reported as unclear; the comparison still runs.

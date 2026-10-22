@@ -74,8 +74,8 @@ def _candidates(tmp_path, delta_pct=20.0):
     return read_candidates(path)
 
 
-def _decide(tmp_path, base, cur):
-    return decide(_candidates(tmp_path), base, cur, 0.05, 30, {})
+def _decide(tmp_path, base, cur, over_cap=()):
+    return decide(_candidates(tmp_path), base, cur, 0.05, 30, {}, over_cap)
 
 
 def test_values_match_across_csv_and_typed_forms():
@@ -161,8 +161,27 @@ def test_nodes_maps_candidates_to_their_test(tmp_path):
     _side(tmp_path / "cur", [_BASE] * 5)
     window_map = read_window_map([tmp_path / "cur" / "p0" / "perf_x.1.windowhash"])
 
-    assert nodes(_candidates(tmp_path), window_map, cap=10) == [_NODE]
-    assert nodes(_candidates(tmp_path), window_map, cap=0) == []
+    assert nodes(_candidates(tmp_path), window_map, cap=10) == ([_NODE], [])
+    assert nodes(_candidates(tmp_path), window_map, cap=0) == ([], [0])
+
+
+def test_the_cap_is_shared_across_modules():
+    def cand(module, delta, tile):
+        return {
+            "module": module,
+            "run_type": "L1_TO_L1",
+            "config": [("tile_cnt", str(tile))],
+            "delta_pct": delta,
+        }
+
+    candidates = [cand("perf_a", 50, 1), cand("perf_a", 40, 2), cand("perf_b", 5, 1)]
+    window_map = {
+        ("perf_a", "L1_TO_L1", frozenset({("tile_cnt", "1")})): {"nodeid": "a1"},
+        ("perf_a", "L1_TO_L1", frozenset({("tile_cnt", "2")})): {"nodeid": "a2"},
+        ("perf_b", "L1_TO_L1", frozenset({("tile_cnt", "1")})): {"nodeid": "b1"},
+    }
+
+    assert nodes(candidates, window_map, cap=2) == (["a1", "b1"], [1])
 
 
 def test_report_shows_every_outcome(tmp_path):
@@ -208,3 +227,18 @@ def test_nothing_measured_is_not_called_clean(tmp_path):
     report = render(_decide(tmp_path, base, cur), "wormhole")
 
     assert "⚠️ no confirmed regression, 1 not re-measured" in report
+
+
+def test_over_the_limit_makes_the_count_a_lower_bound(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5)
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+
+    results = _decide(tmp_path, base, cur, over_cap=[0])
+    report = render(results, "wormhole", "Run the full check.")
+
+    assert (results[0]["outcome"], results[0]["why"]) == (
+        "unmeasured",
+        "over the test limit",
+    )
+    assert "**The confirmed count is a lower bound.** 1 stage-1 regression(s)" in report
+    assert "Run the full check." in report

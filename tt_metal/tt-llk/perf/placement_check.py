@@ -113,16 +113,27 @@ def read_candidates(path):
 
 
 def nodes(candidates, window_map, cap):
-    ranked = sorted(candidates, key=lambda c: -c["delta_pct"])
-    selected, seen = [], set()
-    for c in ranked:
-        if len(selected) >= cap:
-            break
+    """(test node ids to re-measure, indices of the candidates left out by the cap).
+
+    The cap is shared evenly across the test modules, largest slowdown first within each, so every module
+    with a candidate is re-measured.
+    """
+    queues = collections.defaultdict(list)
+    for i, c in sorted(enumerate(candidates), key=lambda ic: -ic[1]["delta_pct"]):
         entry = window_map.get(_config_key(c["module"], c["run_type"], c["config"]))
-        if entry and entry["nodeid"] not in seen:
-            seen.add(entry["nodeid"])
-            selected.append(entry["nodeid"])
-    return selected
+        if entry:
+            queues[c["module"]].append((i, entry["nodeid"]))
+    selected, chosen = [], {}
+    while len(selected) < cap and any(queues.values()):
+        for module in list(queues):
+            if not queues[module] or len(selected) >= cap:
+                continue
+            i, nodeid = queues[module].pop(0)
+            if nodeid not in chosen:
+                chosen[nodeid] = True
+                selected.append(nodeid)
+    over = sorted(i for q in queues.values() for i, nodeid in q if nodeid not in chosen)
+    return selected, over
 
 
 def _side(root):
@@ -155,7 +166,9 @@ def decide(
     threshold,
     min_cycles,
     module_thresholds,
+    over_cap=(),
 ):
+    over_cap = set(over_cap)
     base, base_windows = _side(baseline_root)
     cur, cur_windows = _side(current_root)
     results = []
@@ -167,7 +180,7 @@ def decide(
         index[
             (module, run_type, frozenset((k, _value(v)) for k, v in config.items()))
         ] = key
-    for c in candidates:
+    for i, c in enumerate(candidates):
         limit = module_thresholds.get(c["module"], threshold)
         lookup = index.get(
             (
@@ -177,6 +190,10 @@ def decide(
             )
         )
         row = dict(c, deltas=[], threads=[], slower=0)
+        if i in over_cap:
+            row.update(outcome="unmeasured", why="over the test limit")
+            results.append(row)
+            continue
         if lookup is None or not all(lookup in side for side in base + cur):
             row.update(
                 outcome="unmeasured", why="not measured at every position on both sides"
@@ -274,7 +291,7 @@ _SECTIONS = (
 )
 
 
-def render(results, arch):
+def render(results, arch, limit_note=""):
     by = collections.defaultdict(list)
     for r in results:
         by[r["outcome"]].append(r)
@@ -304,6 +321,13 @@ def render(results, arch):
     lines += [f"- {title}: {len(by[key])}" for key, title, _, _ in _SECTIONS if by[key]]
     unmeasured = collections.Counter(r["why"] for r in by["unmeasured"])
     lines += [f"  - {why}: {n}" for why, n in unmeasured.most_common()]
+    over = sum(r["why"] == "over the test limit" for r in by["unmeasured"])
+    if over:
+        lines += [
+            "",
+            f"> **The confirmed count is a lower bound.** {over} stage-1 regression(s) were over the test limit "
+            f"and were not re-measured. {limit_note}".rstrip(),
+        ]
     if results:
         lines += ["", note]
     for key, title, text, folded in _SECTIONS:
@@ -343,18 +367,29 @@ def main(argv=None):
     d.add_argument("--min-cycles", type=float, default=DEFAULT_MIN_CYCLES)
     d.add_argument("--module-threshold", default="")
     d.add_argument("--arch", default="")
+    d.add_argument(
+        "--over-cap", default="", help="file of candidate indices left out by the cap"
+    )
+    d.add_argument(
+        "--limit-note", default="", help="shown when candidates were over the cap"
+    )
     d.add_argument("--report", required=True)
     a = ap.parse_args(argv)
     candidates = read_candidates(a.candidates)
     if a.cmd == "nodes":
-        selected = nodes(
+        selected, over = nodes(
             candidates, read_window_map(glob.glob(a.map, recursive=True)), a.cap
         )
-        Path(a.out).write_text("\n".join(selected) + ("\n" if selected else ""))
+        Path(a.out).write_text("".join(f"{n}\n" for n in selected))
+        Path(a.out).with_suffix(".over").write_text("".join(f"{i}\n" for i in over))
         print(
-            f"{len(selected)} test(s) for stage 2 from {len(candidates)} candidate point(s)"
+            f"{len(selected)} test(s) for stage 2 from {len(candidates)} candidate point(s), "
+            f"{len(over)} over the cap of {a.cap}"
         )
         return 0
+    over_cap = []
+    if a.over_cap and Path(a.over_cap).exists():
+        over_cap = [int(x) for x in Path(a.over_cap).read_text().split()]
     results = decide(
         candidates,
         a.baseline,
@@ -362,8 +397,9 @@ def main(argv=None):
         a.threshold,
         a.min_cycles,
         _module_thresholds(a.module_threshold),
+        over_cap,
     )
-    Path(a.report).write_text(render(results, a.arch) + "\n")
+    Path(a.report).write_text(render(results, a.arch, a.limit_note) + "\n")
     Path(a.report).with_suffix(".json").write_text(json.dumps(results, default=str))
     counts = collections.Counter(r["outcome"] for r in results)
     print("stage2", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
