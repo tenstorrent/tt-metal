@@ -434,9 +434,11 @@ void kernel_main() {
                         constexpr std::uint32_t inv_std_dst = 2;
                         tile_regs_acquire();
 #ifdef TILIZE_IN
+                        reconfig_data_format_srca(dfb_in_welford_id);
                         copy_init(dfb_in_welford_id);
                         copy_tile(dfb_in_welford_id, tile_id, data_dst);
 #else
+                        reconfig_data_format_srca(dfb_in0_welford_id);
                         copy_init(dfb_in0_welford_id);
                         copy_tile(dfb_in0_welford_id, tile_id, data_dst);
 #endif
