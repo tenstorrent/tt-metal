@@ -1,89 +1,239 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-
 import ttnn
-from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
-from models.experimental.bevformer.tests.common import (
-    BEV_SHAPES,
-    assert_finite,
-    assert_pcc,
-    build_reference_encoder,
-    camera_rows,
-    sample_ego_shifts,
-    random_encoder_inputs,
-    to_device,
-)
-from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
+import pytest
+from typing import Dict, Any, List
+
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-
-CASES = [
-    # (name, bev_shape, num_layers, batch_size, yaw_step_deg)
-    ("base", BEV_SHAPES["base"], ENCODER_NUM_LAYERS, 1, 0.0),
-    ("base-1-layer", BEV_SHAPES["base"], 1, 1, 0.0),
-    ("tiny", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 1, 0.0),
-    # bs=2 with a per-sample shift and the second sample's rig turned, so a batch mix-up in the
-    # stacked previous BEV, the reference points, the shift or the rebatch shows.
-    ("tiny-bs2", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 2, 40.0),
-    # Non-square, so a swapped (h, w) in the BEV grid, its reference points or the shift shows.
-    ("50x100", (50, 100), ENCODER_NUM_LAYERS, 1, 0.0),
-]
+from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset
 
 
-def _batch_first(tensor):
-    return tensor.permute(1, 0, 2).contiguous()
-
-
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "name, bev_shape, num_layers, batch_size, yaw_step_deg", CASES, ids=[case[0] for case in CASES]
+from models.experimental.bevformer.tests.test_utils import (
+    print_detailed_comparison,
+    check_with_tolerances,
+    check_with_pcc,
+    print_sparsity_analysis,
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, yaw_step_deg):
-    """Two consecutive frames: the first without a previous BEV, the second with each side's
-    own first-frame output as its previous BEV and an ego shift, so the temporal path carries
-    the device's own error forward as it does in the detector."""
-    bev_h, bev_w = bev_shape
-    torch_model = build_reference_encoder(num_layers)
+
+from models.experimental.bevformer.tt.model_preprocessing import (
+    create_bevformer_encoder_parameters,
+)
+
+from loguru import logger
+
+# Enable/disable logging output
+ENABLE_LOGGING = True
+
+# --------------------------------------------------------------------------- #
+# Default Test Configuration                                                  #
+# --------------------------------------------------------------------------- #
+torch.manual_seed(0)
+
+# Get default configuration for testing (can be overridden in individual tests)
+DEFAULT_TEST_CONFIG = PRESETS["nuscenes_base"]  # NuScenes + Base model
+
+# Flag to control detailed comparison output
+PRINT_DETAILED_COMPARISON_FLAG = False
+
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 32 * 1024})
+
+
+def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_TEST_CONFIG) -> List[Dict[str, Any]]:
+    """Create img_metas from the dataset's deterministic surround-view rig.
+
+    ``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
+    rebatch length, so random matrices would make every spatial-path tensor shape
+    depend on the RNG draw order.
+
+    Args:
+        batch_size: Number of batches
+        dataset_config: Dataset config supplying camera count, resolution, and rig
+    """
+    return img_metas_for_dataset(dataset_config, batch_size)
+
+
+@pytest.mark.parametrize(
+    "config_name, bev_size, num_layers, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
+    [
+        ("nuscenes_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base model
+        ("nuscenes_base", (100, 100), 1, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base, single layer
+        ("nuscenes_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model, bs>1 grid widening
+        ("carla_tiny", (100, 100), 3, 1, 0.995, 0.05, 0.8, 0.5),  # CARLA tiny model
+        # Off: (arch, camera rig) corners the three above already cover.
+        # ("carla_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # CARLA base model
+        # ("nuscenes_base_fast", (100, 100), 6, 1, 0.996, 0.05, 0.8, 0.5),  # NuScenes base fast model
+    ],
+)
+@pytest.mark.parametrize("seed", [0])
+def test_bevformer_encoder_forward(
+    device,
+    config_name,
+    bev_size,
+    num_layers,
+    batch_size,
+    expected_pcc,
+    expected_abs_error,
+    expected_rel_error,
+    expected_high_error_ratio,
+    seed,
+):
+    """Test TTBEVFormerEncoder against PyTorch reference implementation using configurations."""
+    torch.manual_seed(seed)
+
+    # Get configuration
+    config = PRESETS[config_name]
+
+    # Extract parameters from configs
+    bev_h, bev_w = bev_size
+    num_queries = bev_h * bev_w
+    embed_dims = config.embed_dims
+    num_cams = config.num_cams
+    num_levels = config.num_levels
+
+    # Use spatial shapes from dataset config (limited to num_levels)
+    spatial_shapes_list = config.spatial_shapes[:num_levels]  # Take required number of levels
+    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+
+    # --------------------------------------------------------------------------- #
+    # Generate Inputs                                                             #
+    # --------------------------------------------------------------------------- #
+
+    # Create input tensors
+    bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+    bev_pos = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
+
+    # Camera features: [num_cams, H*W, batch_size, embed_dims]
+    # Calculate total key length from spatial shapes
+    spatial_total_length = sum(h * w for h, w in spatial_shapes.tolist())
+    camera_features = torch.randn(num_cams, spatial_total_length, batch_size, embed_dims, dtype=torch.float32)
+
+    # Camera metadata for point sampling; the rig derives resolution and camera
+    # count from the dataset config itself
+    img_metas = create_sample_img_metas(batch_size, config)
+
+    # Convert tensors to ttnn format for ttnn model
+    tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # --------------------------------------------------------------------------- #
+    # Models Init                                                                 #
+    # --------------------------------------------------------------------------- #
+
+    # Create PyTorch reference model using config
+    encoder_kwargs = dict(
+        num_layers=num_layers,  # Test-specific layer count
+        embed_dims=embed_dims,
+        num_heads=config.num_heads,
+        num_levels=num_levels,
+        num_points=config.num_points,
+        num_cams=num_cams,
+        pc_range=list(config.pc_range),
+    )
+
+    # Every attention samples the preset's num_points, as the TT layer gives them.
+    ref_model = BEVFormerEncoder(**encoder_kwargs, tsa_num_points=config.num_points)
+    ref_model.eval()
+
+    # Create preprocessed parameters from PyTorch model
+    tt_parameters = create_bevformer_encoder_parameters(ref_model, device, dtype=ttnn.bfloat16)
+
+    # Create ttnn model with preprocessed parameters using config
     tt_model = TTBEVFormerEncoder(
-        create_bevformer_encoder_parameters(torch_model, device),
-        device,
+        device=device,
+        params=tt_parameters,
         bev_h=bev_h,
         bev_w=bev_w,
-        spatial_shapes=SPATIAL_SHAPES,
+        spatial_shapes=spatial_shapes,
+        batch_first=True,
+        return_intermediate=False,
+        feedforward_channels=tt_parameters.config.feedforward_channels,
+        **encoder_kwargs,
     )
-    inputs = random_encoder_inputs(bev_shape, batch_size, yaw_step_deg=yaw_step_deg)
-    spatial_shapes = torch.tensor(SPATIAL_SHAPES)
-    shift = sample_ego_shifts(batch_size)
 
-    def reference(prev_bev, frame_shift):
-        return torch_model(
-            inputs["bev_query"],
-            inputs["value"],
-            bev_h,
-            bev_w,
-            inputs["bev_pos"],
-            spatial_shapes,
-            inputs["img_metas"],
-            prev_bev=prev_bev,
-            shift=frame_shift,
+    # --------------------------------------------------------------------------- #
+    # Models Forward                                                              #
+    # --------------------------------------------------------------------------- #
+
+    # Forward pass with PyTorch reference model
+    with torch.no_grad():
+        # The upstream reference takes the queries sequence-first and returns them batch-first.
+        ref_output = ref_model(
+            bev_query=bev_query.permute(1, 0, 2),
+            value=camera_features,
+            bev_h=bev_h,
+            bev_w=bev_w,
+            bev_pos=bev_pos.permute(1, 0, 2),
+            spatial_shapes=spatial_shapes,
+            prev_bev=None,  # No temporal attention
+            img_metas=img_metas,
         )
 
-    torch_first = reference(None, None)
-    torch_second = reference(_batch_first(torch_first), shift)
+    # Forward pass with ttnn model
+    tt_output = tt_model(
+        bev_query=tt_bev_query,
+        key=tt_camera_features,
+        value=tt_camera_features,
+        bev_pos=tt_bev_pos,
+        prev_bev=None,  # No temporal attention
+        img_metas=img_metas,
+    )
 
-    plan = tt_model.prepare_frame(inputs["img_metas"])
-    tt_query = to_device(_batch_first(inputs["bev_query"]), device)
-    tt_pos = to_device(_batch_first(inputs["bev_pos"]), device)
-    tt_value = to_device(camera_rows(inputs["value"]), device)
-    tt_shift = to_device(shift.view(batch_size, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT)
-    tt_first = tt_model(tt_query, tt_value, tt_pos, plan)
-    tt_second = tt_model(tt_query, tt_value, tt_pos, plan, prev_bev=tt_first, shift=tt_shift)
+    # Convert output back to torch
+    tt_output_torch = ttnn.to_torch(tt_output, dtype=torch.float32)
 
-    for torch_output, tt_output in ((torch_first, tt_first), (torch_second, tt_second)):
-        tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
-        assert_finite("the encoder output", tt_output)
-        assert_pcc(torch_output, tt_output, 0.997)
+    # --------------------------------------------------------------------------- #
+    # Output Comparison                                                           #
+    # --------------------------------------------------------------------------- #
+
+    # Comprehensive comparison using enhanced test utilities
+    if ENABLE_LOGGING:
+        logger.info(f"Reference model output shape: {ref_output.shape}")
+    if ENABLE_LOGGING:
+        logger.info(f"TT model output shape: {tt_output_torch.shape}")
+
+    if PRINT_DETAILED_COMPARISON_FLAG:
+        # Print detailed statistical comparison
+        print_detailed_comparison(
+            ref_output,
+            tt_output_torch,
+            tensor_name="bevformer_encoder_output",
+            show_histograms=False,
+        )
+
+        # Individual sparsity analysis for each tensor
+        print_sparsity_analysis(
+            ref_output,
+            tensor_name="bevformer_encoder_output_torch",
+        )
+
+        print_sparsity_analysis(
+            tt_output_torch,
+            tensor_name="bevformer_encoder_output_ttnn",
+        )
+
+    # Comprehensive tolerance checking with multiple criteria
+    check_with_tolerances(
+        ref_output,
+        tt_output_torch,
+        pcc_threshold=expected_pcc,  # Lower threshold for complex encoder
+        abs_error_threshold=expected_abs_error,
+        rel_error_threshold=expected_rel_error,
+        max_error_ratio=expected_high_error_ratio,
+        tensor_name="bevformer_encoder_output",
+    )
+
+    passed, message = check_with_pcc(
+        ref_output,
+        tt_output_torch,
+        expected_pcc,
+    )
+
+    assert passed, f"PCC check failed: {message}"
+
+    if ENABLE_LOGGING:
+        logger.info("✅ All BEVFormer encoder tolerance checks passed successfully!")

@@ -4,20 +4,14 @@
 """TTNN port of the BEVFormer detector (``reference/bevformer.py``): the ResNet101-DCN backbone,
 the FPN, the perception transformer and the detection head, on device end to end.
 
-A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the cameras' rebatch
-plan) are prepared by :meth:`TTBEVFormer.prepare_frame` into buffers refilled in place, so the
-forward runs on device only and a trace captured with a frame replays on the next one. The caller
-carries the previous BEV between frames, as upstream's ``forward_test`` does. A trace reads the
-buffers it was captured with, so under a trace:
+A frame's host-derived inputs (CAN bus, ego shift, previous-BEV rotation, the cameras' metas) are
+prepared by :meth:`TTBEVFormer.prepare_frame`. The caller carries the previous BEV between frames,
+as upstream's ``forward_test`` does. The encoder projects the cameras and reads their visibility on
+the host inside its forward, so the detector runs live, not under a trace.
 
-- capture it on a frame that has a previous BEV: without one the encoder runs other programs;
-- before each replay, refill the frame with :meth:`TTBEVFormer.prepare_frame` and copy the new
-  BEV into the captured ``prev_bev`` with ``ttnn.copy``; rebinding the name does not reach the
-  trace, which then reads the stale BEV without any error.
-
-:meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device, in the forward's trace: the
-coder's top-k, the box decoding, the range test as a validity mask and z moved to the box's bottom
-face, all fixed ``(bs, max_num)`` tensors. :meth:`TTBEVFormer.get_bboxes` only drops the invalid
+:meth:`TTBEVFormer.detect` runs upstream's ``get_bboxes`` on device: the coder's top-k, the box
+decoding, the range test as a validity mask and z moved to the box's bottom face, all fixed
+``(bs, max_num)`` tensors. :meth:`TTBEVFormer.get_bboxes` only drops the invalid
 boxes on the host, as no device tensor can hold a data-dependent count (see ``TTNMSFreeCoder``).
 """
 
@@ -57,14 +51,12 @@ class TTBEVFormer:
         self.bev_pos = bev_pos
         self.coder = TTNMSFreeCoder(device, **vars(params.coder))
 
-    def prepare_frame(self, img_metas, frame=None, capacity=None):
-        """See ``TTPerceptionTransformer.prepare_frame``. By default the frame's rebatch plan fits
-        these cameras only; a frame refilled for later frames needs a ``capacity`` that covers
-        their cameras too (see ``TTBEVFormerEncoder.prepare_frame``)."""
+    def prepare_frame(self, img_metas, frame=None):
+        """See ``TTPerceptionTransformer.prepare_frame``."""
         assert (
             len(img_metas) == self.batch_size
         ), f"{len(img_metas)} samples, the detector is built for {self.batch_size}"
-        return self.transformer.prepare_frame(img_metas, frame, capacity)
+        return self.transformer.prepare_frame(img_metas, frame)
 
     def __call__(self, img, frame, prev_bev=None):
         """``img`` the ``bs * num_cams`` normalized images, ``(1, 1, bs * num_cams * H * W, 3)``

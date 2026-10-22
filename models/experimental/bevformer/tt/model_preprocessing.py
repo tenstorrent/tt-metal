@@ -131,35 +131,43 @@ def create_temporal_self_attention_parameters(tsa, device, dtype=WEIGHT_DTYPE):
 
 
 def create_bevformer_layer_parameters(layer, device, dtype=WEIGHT_DTYPE):
-    """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it."""
+    """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it, whose FFN reads its
+    Linears as dicts."""
+    ffn = preprocess_ffn_parameters(layer.ffns[0], device=device, dtype=dtype)
+    norm1, norm2, norm3 = (preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms)
     return SimpleNamespace(
-        tsa=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
-        sca=create_spatial_cross_attention_parameters(layer.attentions[1], device, dtype),
-        ffn=preprocess_ffn_parameters(layer.ffns[0], device=device, dtype=dtype),
-        norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
+        temporal_self_attention=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
+        spatial_cross_attention=create_spatial_cross_attention_parameters(layer.attentions[1], device, dtype),
+        ffn=SimpleNamespace(linear1=vars(ffn.linear1), linear2=vars(ffn.linear2)),
+        norm1=norm1,
+        norm2=norm2,
+        norm3=norm3,
     )
 
 
 def create_bevformer_encoder_parameters(encoder, device, dtype=WEIGHT_DTYPE):
-    """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it: one entry per layer,
-    and the encoder's configuration, so the port cannot disagree with the model it was built from."""
+    """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it: ``layer_{i}`` per
+    layer, and in ``config`` the constructor's arguments the encoder was built with, so the port
+    cannot disagree with the model."""
     config = SimpleNamespace(
-        **{
-            name: getattr(encoder, name)
-            for name in (
-                "embed_dims",
-                "num_heads",
-                "num_levels",
-                "num_points",
-                "num_cams",
-                "tsa_num_points",
-                "num_points_in_pillar",
-                "pc_range",
-            )
-        }
+        num_layers=len(encoder.layers),
+        embed_dims=encoder.embed_dims,
+        num_heads=encoder.num_heads,
+        num_levels=encoder.num_levels,
+        # The layer gives every attention num_points; the self-attention takes its own.
+        num_points=encoder.num_points,
+        temporal_num_points=encoder.tsa_num_points,
+        num_cams=encoder.num_cams,
+        pc_range=list(encoder.pc_range),
+        num_points_in_pillar=encoder.num_points_in_pillar,
+        feedforward_channels=encoder.layers[0].ffns[0].layers[0][0].out_features,
     )
     return SimpleNamespace(
-        config=config, layers=[create_bevformer_layer_parameters(layer, device, dtype) for layer in encoder.layers]
+        config=config,
+        **{
+            f"layer_{i}": create_bevformer_layer_parameters(layer, device, dtype)
+            for i, layer in enumerate(encoder.layers)
+        },
     )
 
 
@@ -555,9 +563,8 @@ def create_bevformer_parameters(model, img, device, dtype=WEIGHT_DTYPE):
 
 # --- Frame inputs -------------------------------------------------------------------------------
 
-# Host-side inputs the encoder and the perception transformer derive from the BEV grid, the
-# cameras and the CAN bus, in float32 as upstream computes them: once per grid, or once per frame
-# into buffers the forward reads.
+# Host-side inputs the perception transformer derives from the BEV grid and the CAN bus, in
+# float32 as upstream computes them, once per frame into buffers the forward reads.
 
 
 def bev_grid_length(pc_range, bev_h, bev_w):
@@ -579,62 +586,3 @@ def ego_shift(img_metas, bev_h, bev_w, grid_length):
         shift_x = translation_length * math.sin(bev_angle) / grid_length[1] / bev_w
         shifts.append([shift_x, shift_y])
     return torch.tensor(shifts, dtype=torch.float32)
-
-
-# Depth below which upstream's point_sampling takes a point as behind the camera.
-PROJECTION_EPS = 1e-5
-
-
-def bev_reference_points(bev_h, bev_w, batch_size=1):
-    """BEV cell centres ``(bs, bev_h * bev_w, 1, 2)`` in [0, 1], as (x, y), x along ``bev_w``: the
-    temporal self-attention's reference points."""
-    ref_y, ref_x = torch.meshgrid(
-        torch.linspace(0.5, bev_h - 0.5, bev_h), torch.linspace(0.5, bev_w - 0.5, bev_w), indexing="ij"
-    )
-    ref_2d = torch.stack((ref_x.reshape(-1)[None] / bev_w, ref_y.reshape(-1)[None] / bev_h), -1)
-    return ref_2d.repeat(batch_size, 1, 1).unsqueeze(2)
-
-
-def camera_geometry(img_metas, bev_h, bev_w, num_points_in_pillar, pc_range):
-    """One frame's pillar points in every camera, in float32 as upstream's ``point_sampling``:
-    ``reference_points_cam`` ``(num_cams, bs, bev_h * bev_w, num_points_in_pillar, 2)`` in normalized
-    image coordinates, and ``bev_mask`` ``(num_cams, bs, bev_h * bev_w, num_points_in_pillar)``,
-    whether each point lands in front of the camera and inside its image. The image size is
-    ``img_shape``'s, the padded one."""
-    lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
-    bs, num_cams = lidar2img.shape[:2]
-    num_queries = bev_h * bev_w
-    height = pc_range[5] - pc_range[2]
-    ref_y, ref_x = torch.meshgrid(
-        torch.linspace(0.5, bev_h - 0.5, bev_h) / bev_h, torch.linspace(0.5, bev_w - 0.5, bev_w) / bev_w, indexing="ij"
-    )
-    ref_z = torch.linspace(0.5, height - 0.5, num_points_in_pillar) / height
-    points = torch.stack(
-        (
-            ref_x.flatten()[:, None].expand(num_queries, num_points_in_pillar),
-            ref_y.flatten()[:, None].expand(num_queries, num_points_in_pillar),
-            ref_z[None].expand(num_queries, num_points_in_pillar),
-        ),
-        -1,
-    )
-    points = points[None].repeat(bs, 1, 1, 1)
-    # [0, 1] to metres, then homogeneous, (D, bs, num_queries, 4).
-    for axis in range(3):
-        points[..., axis : axis + 1] = (
-            points[..., axis : axis + 1] * (pc_range[axis + 3] - pc_range[axis]) + pc_range[axis]
-        )
-    points = torch.cat((points, torch.ones_like(points[..., :1])), -1).permute(2, 0, 1, 3)
-    depth_points = points.shape[0]
-    points = points.view(depth_points, bs, 1, num_queries, 4).repeat(1, 1, num_cams, 1, 1).unsqueeze(-1)
-    lidar2img = lidar2img.view(1, bs, num_cams, 1, 4, 4).repeat(depth_points, 1, 1, num_queries, 1, 1)
-    cam = torch.matmul(lidar2img, points).squeeze(-1)
-
-    depth = cam[..., 2:3]
-    bev_mask = depth > PROJECTION_EPS
-    cam = cam[..., 0:2] / torch.maximum(depth, torch.ones_like(depth) * PROJECTION_EPS)
-    img_h, img_w = img_metas[0]["img_shape"][0][:2]
-    cam[..., 0] /= img_w
-    cam[..., 1] /= img_h
-    # Inside the image, open bounds as upstream.
-    bev_mask = bev_mask & (cam[..., 0:1] > 0.0) & (cam[..., 0:1] < 1.0) & (cam[..., 1:2] > 0.0) & (cam[..., 1:2] < 1.0)
-    return cam.permute(2, 1, 3, 0, 4), bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)
