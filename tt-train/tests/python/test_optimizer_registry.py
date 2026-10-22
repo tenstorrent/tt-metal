@@ -113,19 +113,18 @@ def _param_dtypes(model) -> set:
     return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
-def test_create_optimizer_applies_param_dtype():
+@pytest.mark.parametrize(
+    "precision, expected",
+    [
+        ({"param_dtype": "float32"}, ttnn.DataType.FLOAT32),
+        (None, ttnn.DataType.BFLOAT16),
+        ({}, ttnn.DataType.BFLOAT16),
+        ({"param_dtype": None}, ttnn.DataType.BFLOAT16),
+    ],
+)
+def test_create_optimizer_applies_param_dtype(precision, expected):
     """With a full config, create_optimizer first stores the trainable parameters in precision.param_dtype, so every
-    runner that calls it gets fp32 master weights for float32."""
-    model = ttml.modules.LinearLayer(32, 32)
-    config = {"training_config": {"precision": {"param_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
-
-    create_optimizer(model, config)
-
-    assert _param_dtypes(model) == {ttnn.DataType.FLOAT32}
-
-
-@pytest.mark.parametrize("precision", [None, {}, {"param_dtype": None}])
-def test_create_optimizer_without_param_dtype_keeps_the_parameters(precision):
+    runner that calls it gets fp32 master weights for float32; without the key they keep the model's dtype."""
     model = ttml.modules.LinearLayer(32, 32)
     training_config = {"optimizer": {"type": "AdamW"}}
     if precision is not None:
@@ -133,7 +132,7 @@ def test_create_optimizer_without_param_dtype_keeps_the_parameters(precision):
 
     create_optimizer(model, {"training_config": training_config})
 
-    assert _param_dtypes(model) == {ttnn.DataType.BFLOAT16}
+    assert _param_dtypes(model) == {expected}
 
 
 def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):

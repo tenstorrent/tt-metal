@@ -654,8 +654,11 @@ def run_training(
         ("lr", f"{optimizer.get_lr():.2e}"),
         ("schedule", schedule_str),
     ]
-    if training_cfg.param_dtype is not None:
-        optimizer_fields.append(("params", training_cfg.param_dtype))
+    native = ttml.autograd.PreferredPrecision.NATIVE
+    param_dtypes = {
+        t.get_value(native).dtype.name.lower() for t in model.parameters().values() if t.get_requires_grad()
+    }
+    optimizer_fields.append(("param dtype", ", ".join(sorted(param_dtypes))))
     if training_cfg.use_clip_grad_norm:
         optimizer_fields.append(("clip", f"max-norm {training_cfg.clip_grad_norm_max_norm}"))
 

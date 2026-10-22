@@ -55,4 +55,13 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
     }
 }
 
+std::optional<ttnn::DataType> apply_precision_config(
+    const YAML::Node& training_config, const serialization::NamedParameters& parameters) {
+    const auto param_dtype = param_dtype_from_config(training_config);
+    if (param_dtype) {
+        store_trainable_parameters_as(parameters, *param_dtype);
+    }
+    return param_dtype;
+}
+
 }  // namespace ttml::core

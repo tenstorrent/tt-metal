@@ -14,9 +14,7 @@
 #include "optimizers/adamw.hpp"
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct AdamWFp32ParameterCase {
@@ -66,26 +64,14 @@ static ttnn::Tensor to_tt_bf16(const xt::xarray<bfloat16>& x) {
     return ttml::core::from_xtensor<bfloat16, ttnn::DataType::BFLOAT16>(x, &ttml::autograd::ctx().get_device());
 }
 
-// NOTE: ttml::core::from_xtensor() performs fp32 -> bf16 conversion, that's why this function exists
 static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
-    auto* device = &ttml::autograd::ctx().get_device();
-    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(x);
-    auto buffer_span = ttml::core::xtensor_to_span(x);
-
-    ttnn::MemoryConfig output_mem_config{};
-    const auto tensor_layout = tt::tt_metal::TensorLayout(
-        ttnn::DataType::FLOAT32, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
-    auto output = ttnn::Tensor::from_span<float>(buffer_span, tt::tt_metal::TensorSpec(shape, tensor_layout));
-
-    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
-    output = ttnn::to_device(output, device, output_mem_config);
-    return output;
+    return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(x, &ttml::autograd::ctx().get_device());
 }
 
 // CPU reference: AdamW on fp32 weights, with bf16 gradients
 class CPUAdamWFp32 {
 public:
-    CPUAdamWFp32(float lr, float beta1, float beta2, float epsilon, float weight_decay = 0.0f, bool amsgrad = false) :
+    CPUAdamWFp32(float lr, float beta1, float beta2, float epsilon, float weight_decay, bool amsgrad) :
         m_lr(lr),
         m_beta1(beta1),
         m_beta2(beta2),
@@ -101,21 +87,19 @@ public:
         const xt::xarray<float>& first_moment,
         const xt::xarray<float>& second_moment,
         size_t steps,
-        const xt::xarray<float>& max_second_moment = {}) {
+        const xt::xarray<float>& max_second_moment) {
         m_master_weights = master_weights;
         m_first_moment = first_moment;
         m_second_moment = second_moment;
         m_steps = steps;
-        if (m_amsgrad && max_second_moment.size() > 0) {
+        if (m_amsgrad) {
             m_max_second_moment = max_second_moment;
-        } else if (m_amsgrad) {
-            m_max_second_moment = xt::zeros_like(master_weights);
         }
     }
 
     // Perform one optimization step
     // grads should be bf16 precision (truncated)
-    xt::xarray<float> step(const xt::xarray<float>& grads) {
+    void step(const xt::xarray<float>& grads) {
         m_steps++;
 
         // m_t = beta1 * m_{t-1} + (1 - beta1) * grad
@@ -141,8 +125,6 @@ public:
         // Update master weights (fp32): params = params - lr * m_hat / denom - lr * weight_decay * params
         m_master_weights =
             m_master_weights - m_lr * first_moment_hat / denom - m_lr * m_weight_decay * m_master_weights;
-
-        return m_master_weights;
     }
 
     const xt::xarray<float>& get_master_weights() const {
@@ -192,7 +174,7 @@ static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t ste
 
     // CPU reference implementation with fp32 master weights
     CPUAdamWFp32 cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
-    cpu_opt.set_state(w0_fp32, m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
+    cpu_opt.set_state(w0_fp32, m0, v0, initial_steps, max_v0);
 
     // The parameter is stored in fp32: it is the master weight, and fused AdamW updates it with fp32 moments.
     auto theta = autograd::create_tensor(to_tt_fp32(w0_fp32), true);

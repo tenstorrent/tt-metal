@@ -766,18 +766,6 @@ def test_linear_layer_setstate_keeps_the_layer_dtype():
         np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), state[name], err_msg=name)
 
 
-def test_store_trainable_parameters_as_fp32_keeps_the_values():
-    """ttml.core.store_trainable_parameters_as stores a layer's trainable parameters in fp32; bf16 to fp32 is exact."""
-    layer = ttml.modules.LinearLayer(32, 32)
-    before = {name: t.to_numpy(precision=_NATIVE).astype(np.float32) for name, t in layer.parameters().items()}
-
-    ttml.core.store_trainable_parameters_as(layer.parameters(), ttnn.DataType.FLOAT32)
-
-    for name, tensor in layer.parameters().items():
-        assert tensor.get_value(_NATIVE).dtype == ttnn.DataType.FLOAT32, name
-        np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), before[name], err_msg=name)
-
-
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
 def test_dtype_is_the_storage_dtype(dtype):
     tensor = ttml.autograd.Tensor.from_numpy(np.zeros((1, 1, 32, 32), dtype=np.float32), new_type=dtype)

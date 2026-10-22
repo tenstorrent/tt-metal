@@ -6,7 +6,6 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
-#include <optional>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 
@@ -126,7 +125,7 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
-        auto tensor = tensor_ptr->get_value();
+        const auto &tensor = tensor_ptr->get_value(ttml::autograd::PreferredPrecision::NATIVE);
         auto params_in_tensor = tensor.logical_volume();
         if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
             auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
@@ -172,8 +171,6 @@ struct TrainingConfig {
     std::string scheduler_type = "identity";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    // precision.param_dtype: the dtype trainable parameters are stored in. Unset keeps the dtype the model builds.
-    std::optional<ttnn::DataType> param_dtype;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -195,7 +192,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    config.param_dtype = ttml::core::param_dtype_from_config(training_config);
 
     return config;
 }
@@ -723,9 +719,11 @@ int main(int argc, char **argv) {
 
     // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
     // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
-    if (training_config.param_dtype && !is_three_tier_training(multihost_config)) {
-        ttml::core::store_trainable_parameters_as(get_model_parameters(model), *training_config.param_dtype);
-        fmt::print("Parameter dtype: {}\n", *training_config.param_dtype);
+    if (!is_three_tier_training(multihost_config)) {
+        if (auto param_dtype =
+                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
+            fmt::print("Parameter dtype: {}\n", *param_dtype);
+        }
     }
 
     // Load model parameters if in eval mode and model path exists

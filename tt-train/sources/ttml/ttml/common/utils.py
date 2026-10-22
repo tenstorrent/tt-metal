@@ -202,9 +202,9 @@ def create_optimizer(model, yaml_config: dict):
         optimizer_cfg = tc.get("optimizer")
         if optimizer_cfg is None:
             raise ValueError("training_config must contain an 'optimizer' section")
-        param_dtype = (tc.get("precision") or {}).get("param_dtype")
-        if param_dtype is not None:
-            ttml.core.store_trainable_parameters_as(model.parameters(), ttml.core.parse_param_dtype(param_dtype))
+        params = model.parameters()
+        ttml.optimizers.apply_precision_config(tc, params)
+        return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 

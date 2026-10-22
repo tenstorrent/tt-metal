@@ -4,12 +4,14 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/trampoline.h>
 
+#include "core/parameter_dtype.hpp"
 #include "serialization/serializable.hpp"
 
 // Make NamedParameters opaque - must be before unordered_map include
@@ -142,6 +144,16 @@ void py_module(nb::module_& m) {
         nb::arg("config"),
         nb::arg("params"),
         "Create an optimizer from a config dict and named parameters");
+
+    m.def(
+        "apply_precision_config",
+        [](nb::dict training_config, const serialization::NamedParameters& params) {
+            return ttml::core::apply_precision_config(obj_to_yaml(training_config), params);
+        },
+        nb::arg("training_config"),
+        nb::arg("params"),
+        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
+        "Returns the dtype applied, or None.");
 
     m.def(
         "register_optimizer",

@@ -93,10 +93,6 @@ class TrainingConfig:
 
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
-        # precision.param_dtype: the dtype trainable parameters are stored in, "bfloat16" or "float32". None (unset)
-        # keeps the dtype the model builds them in. create_optimizer applies it, and its C++ parser rejects other names.
-        self.param_dtype = (tc.get("precision") or {}).get("param_dtype")
-
 
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""

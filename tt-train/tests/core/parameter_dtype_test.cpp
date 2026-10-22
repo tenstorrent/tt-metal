@@ -54,12 +54,22 @@ TEST_F(ParameterDtypeTest, ParsesTheTwoNames) {
 // Unset or null means "keep the dtype the model builds", as in Python.
 TEST_F(ParameterDtypeTest, ReadsParamDtypeFromTheTrainingConfig) {
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: float32}")), ttnn::DataType::FLOAT32);
-    EXPECT_EQ(
-        core::param_dtype_from_config(YAML::Load("precision: {param_dtype: bfloat16}")), ttnn::DataType::BFLOAT16);
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("seed: 5489")), std::nullopt);
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: }")), std::nullopt);
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: ~}")), std::nullopt);
-    EXPECT_ANY_THROW((void)core::param_dtype_from_config(YAML::Load("precision: {param_dtype: float16}")));
+}
+
+TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
+    auto parameter = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    const serialization::NamedParameters parameters{{"parameter", parameter}};
+
+    EXPECT_EQ(core::apply_precision_config(YAML::Load("seed: 5489"), parameters), std::nullopt);
+    EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
+
+    EXPECT_EQ(
+        core::apply_precision_config(YAML::Load("precision: {param_dtype: float32}"), parameters),
+        ttnn::DataType::FLOAT32);
+    EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::FLOAT32);
 }
 
 // bf16 to fp32 is exact, so a trainable parameter keeps its values. Frozen parameters and non-float tensors stay.

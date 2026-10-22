@@ -190,15 +190,3 @@ def _mesh(**axes):
 )
 def test_data_parallel_size_counts_only_batch_sharding_axes(axes, expected_axes, expected_size):
     assert resolve_data_parallel_axes(_mesh(**axes)) == (expected_axes, expected_size)
-
-
-# ── precision.param_dtype ─────────────────────────────────────────────────────
-
-
-def test_param_dtype_is_unset_by_default():
-    assert _config().param_dtype is None
-
-
-@pytest.mark.parametrize("name", ["bfloat16", "float32"])
-def test_param_dtype_is_read_from_the_precision_section(name):
-    assert _config(precision={"param_dtype": name}).param_dtype == name
