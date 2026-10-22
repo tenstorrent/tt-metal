@@ -163,5 +163,7 @@ fetch("timeline.json").then(response => {
   byId("run-info").innerHTML = `${tuned ? "JSON global tuning" : "Prior heuristic global tuning"} · ${escapeHTML(data.started_at.slice(0, 10))} · <a href="${tuned ? "../" : "tuned/"}">${tuned ? "View prior run" : "View JSON tuning run"}</a>`;
   byId("status").hidden = true; byId("content").hidden = false; setPrefix(prefix);
 }).catch(error => {
+  byId("status").hidden = false;
+  byId("content").hidden = true;
   byId("status").textContent = `Could not load timeline.json (${error.message}). Serve this directory with python -m http.server 8280.`;
 });
