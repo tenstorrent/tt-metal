@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -61,6 +62,30 @@ static bool topology_sat_log_solves() {
     static const bool on =
         std::getenv("TT_TOPO_SAT_CONFLICT_CAP") != nullptr || std::getenv("TT_TOPO_SAT_LOG_SOLVES") != nullptr;
     return on;
+}
+
+// Incremental mode control. A session that runs NON-incrementally lets kissat's bounded-variable-elimination
+// run on the ~tens-of-thousands of assignment variables instead of freezing them with protect_variable -- the
+// 5-8x "incremental tax" the standalone experiments measured (standalone kissat itself defaults incremental=0).
+// Non-incremental is only sound for a single solution (no post-solve blocking clause), so the caller sets it
+// per solve session (SatSearchBackend::set_incremental, default true): single-solution solves off, multi-solution
+// enumeration on. TT_TOPO_SAT_INCREMENTAL overrides that for A/B testing and keeps the default SAFE:
+//   unset / "1" -> always incremental (the historical behavior; goldens unchanged) -- DEFAULT
+//   "auto"      -> honor the per-session request (single-solution sessions run one-shot)
+//   "0"         -> never incremental (one-shot wherever it is sound)
+// Returns: 1 = force incremental, 0 = force one-shot, -1 = per-session.
+static int topology_sat_incremental_mode() {
+    static const int mode = [] {
+        const char* e = std::getenv("TT_TOPO_SAT_INCREMENTAL");
+        if (e == nullptr || e[0] == '\0') {
+            return 1;  // safe default: historical always-incremental behavior
+        }
+        if (std::strcmp(e, "auto") == 0) {
+            return -1;
+        }
+        return (e[0] == '0') ? 0 : 1;
+    }();
+    return mode;
 }
 
 // Scale the per-solve conflict budget to BOTH the CNF size and the PSD (physical-space) tightness:
@@ -130,6 +155,11 @@ struct SatSearchBackend::Impl {
     // Per-solve conflict budget applied uniformly to every solve() call. Default 1M; adjustable per session.
     int conflict_cap = kDefaultConflictCap;
     size_t solve_calls = 0;
+    // One-shot (non-incremental): engine runs a single assumption-free solve with no blocking clause; next()
+    // serves it once. Set when the session requested incremental=false and it is sound (see start()).
+    // one_shot_done guards a second next() (nothing more to give).
+    bool one_shot = false;
+    bool one_shot_done = false;
     int symmetry_lit = 0;
     int preferred_lit = 0;
     int minimize_lit = 0;
@@ -1832,6 +1862,18 @@ bool SatSearchBackend::start(
     s.soft_encoded = constraint_data.allow_unmatched_target_edges;
     s.seams_hard = false;
     s.enc = {};
+    // One-shot: decide BEFORE encoding (engine options freeze at the first add()). Engage only where next()
+    // will do a single assumption-free solve with no post-solve clause: not a unique-shape enumeration (needs
+    // blocking clauses), not a soft/zero-link encoding (needs multi-solve maximization), and not a soft
+    // host-minimization (whose objective is asserted as an assumption we would have to drop). The hard
+    // host-group cap lives in the CNF (not an assumption), so the real min-host problem is still solved.
+    const int inc_mode = topology_sat_incremental_mode();
+    const bool want_incremental = (inc_mode == 0) ? false : (inc_mode == -1) ? incremental_ : true;
+    s.one_shot = !want_incremental && !unique_shapes && !s.soft_encoded &&
+                 !(constraint_data.max_same_rank_groups_used == 0 && constraint_data.minimize_same_rank_groups_used);
+    if (s.one_shot) {
+        s.solver.set_incremental(false);  // unlock variable elimination for the single one-shot solve
+    }
     if (!topology_sat_encode_hard_constraints(s.solver, graph_data, constraint_data, s.enc, validation_mode)) {
         if (error_out != nullptr) {
             *error_out = s.enc.trivial_reason;
@@ -2012,9 +2054,14 @@ bool SatSearchBackend::start(
     // (both the per-mapping and unique-shape paths) is built solely from these literals, so an engine that
     // eliminated one during an earlier solve would make a later blocking clause unsound. No-op on CaDiCaL;
     // real on kissat_extras (KISSAT_SWAP_PLAN.md §3.5). Done once here, before the first next()/solve().
-    for (const auto& target_lits : s.enc.assign_lit) {
-        for (int lit : target_lits) {
-            s.solver.protect_variable(std::abs(lit));
+    // SKIPPED under one-shot: that path adds no blocking clause, so protecting these -- which is exactly what
+    // freezes elimination and costs the 5-8x -- would defeat the whole purpose (kissat_value still extends the
+    // eliminated variables when the single model is decoded).
+    if (!s.one_shot) {
+        for (const auto& target_lits : s.enc.assign_lit) {
+            for (int lit : target_lits) {
+                s.solver.protect_variable(std::abs(lit));
+            }
         }
     }
 
@@ -2107,6 +2154,40 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         return false;
     }
     auto& s = *impl_;
+    // One-shot-first (#1): a single non-incremental solve of the base CNF -- no symmetry hint, no stage
+    // assumptions (incremental=0 forbids assuming unprotected literals), and no blocking clause. The hard
+    // host-group cap is in the CNF, so this is the real min-host solve; preference/soft objectives (if any)
+    // are simply not asserted, so the model stays valid. A second next() has nothing more to give.
+    if (s.one_shot) {
+        if (s.one_shot_done) {
+            return false;
+        }
+        s.one_shot_done = true;
+        ++s.solve_calls;
+        const auto t0 = std::chrono::steady_clock::now();
+        const int status = s.solver.solve_limited(s.conflict_cap);
+        if (topology_sat_log_solves()) {
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+            const char* st = status == TopologySatSolver::kSat     ? "SAT"
+                             : status == TopologySatSolver::kUnsat ? "UNSAT"
+                                                                   : "BUDGET_EXHAUSTED";
+            log_info(
+                tt::LogFabric,
+                "[sat-solve] call#{} nt={} ng={} clauses={} one_shot=on cap={} status={} t={}ms",
+                s.solve_calls,
+                s.n_target,
+                s.n_global,
+                s.encode_clauses,
+                s.conflict_cap,
+                st,
+                static_cast<long long>(ms));
+        }
+        if (status != TopologySatSolver::kSat) {
+            return false;
+        }
+        return topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out);
+    }
     // Hard seams on a soft-capable encoding: pruned pairs off, every realized literal on.
     auto assume_mode = [&]() {
         if (s.soft_encoded && s.seams_hard) {
@@ -2256,5 +2337,7 @@ void SatSearchBackend::set_conflict_cap(int cap) {
         impl_->conflict_cap = cap;
     }
 }
+
+void SatSearchBackend::set_incremental(bool on) { incremental_ = on; }
 
 }  // namespace tt::tt_fabric::detail

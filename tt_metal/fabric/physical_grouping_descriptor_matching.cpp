@@ -1157,7 +1157,9 @@ std::vector<MappingResult<LogicalChipId, tt::tt_metal::experimental::PhysicalNod
                 validation_mode,
                 /*quiet_mode=*/true,
                 TopologyMappingSolverEngine::Auto,
-                unique_shapes);
+                unique_shapes,
+                /*conflict_cap=*/0,
+                /*incremental=*/(max_solutions != 1));  // single placement (PGD->PSD) solves one-shot
         if (state.session == nullptr || !state.session->started()) {
             state.exhausted = true;
             return {};

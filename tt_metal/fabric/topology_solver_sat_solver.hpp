@@ -68,6 +68,12 @@ struct TopologySatSolver {
      */
     void configure_for_blocking_clause_enumeration();
 
+    // One-shot-first (#1): before any add(), switch to non-incremental solving so the engine runs full
+    // bounded-variable-elimination for a single solve. Only valid when no clause will be added after solve()
+    // (no blocking-clause enumeration) and no assumptions are made over unprotected variables. Pass true to
+    // restore incremental (the default). Deterministic; single-threaded.
+    void set_incremental(bool on);
+
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;
 
