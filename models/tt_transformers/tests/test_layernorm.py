@@ -44,7 +44,7 @@ def torch_layernorm_ref(x, weight, eps):
 )
 @pytest.mark.parametrize(
     "norm_types",
-    (LayerNormTypes.PREFILL, LayerNormTypes.RMSNORM),
+    (LayerNormTypes.LAYERNORM, LayerNormTypes.RMSNORM),
 )
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
