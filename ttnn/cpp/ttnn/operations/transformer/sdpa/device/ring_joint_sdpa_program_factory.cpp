@@ -2168,8 +2168,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // it, so the score scratch holds (chunks x Sq_chunk_t) rows of kSolBlockTiles columns (a pooled entry still
     // steps one chunk at full width: at least qk_tiles), and the new-max / alpha scratches hold one tile row per
     // resident chunk.
+    // M5: one step covers one piece for a sub-group of up to kSolResidentGroup resident chunks, each with its own
+    // kept blocks; the scores of every member use the full piece width as their row stride, so the scratch holds
+    // kSolResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles. The compute kernel derives the same capacity
+    // (sdpa_ring_resident, kGroupCap) and ASSERTs the page count.
+    constexpr uint32_t kSolResidentGroup = 4;
     const uint32_t qk_im_cb_tiles =
-        sol_resident ? std::max(qk_tiles, max_q_per_core * Sq_chunk_t * kSolBlockTiles) : qk_tiles;
+        sol_resident ? std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t)
+                     : qk_tiles;
     const uint32_t res_stats_tiles = statistics_tiles * (sol_resident ? max_q_per_core : 1u);
     const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);

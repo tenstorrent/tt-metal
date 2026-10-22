@@ -3655,48 +3655,29 @@ void sdpa_ring_v2(
     }
 }
 
-// ===================== Sol-Attn resident mode (M3): in-place slot state, block-major steps =====================
+// ============ Sol-Attn resident mode (M3-M5): in-place slot state, frozen max, fused per-piece steps ============
 
+// ---- M5 fused per-piece step ----
 /**
- * One step of the Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, milestone M3): one group of resident Q
- * chunks against one run table of key columns of the staged K^T / V entry.
+ * One step of the Sol-Attn resident mode (M5): one K/V piece against a sub-group of resident Q chunks, each with
+ * its own list of kept 64-key blocks of the piece. Replaces the block-major step (one call per kept block over
+ * the chunks keeping it): per chunk the output accumulator is now packed once per PIECE instead of once per
+ * block, and the row sum is a matmul of the probabilities with the column-identity tile (rows sums in column 0,
+ * zeros elsewhere: the writer zeroes that tile before it writes column 0) instead of one L1-accumulate pack per
+ * probability tile. The rest of the state contract is the M3 one (see sdpa_ring_resident).
  *
- * State contract. Every resident Q chunk owns one SLOT in each of three state CBs. The CBs are filled once (reserved
- * and pushed at full capacity with cb_push_back_hold_wr_ptr) and neither pushed nor popped again until the final
- * normalization, so the unpacker's read index and the packer's write index name the same L1 tile: both pointers sit
- * at the CB base and every access is an absolute tile index (copy_tile / sub_tiles / mul_tiles_bcast_cols read at
- * rd_ptr + index * page, pack_tile<true> writes at wr_ptr + index * page).
- *   cb_max_in    slot i at tiles [i*Sq_chunk_t, +Sq_chunk_t):            running row max (first column)
- *   cb_sum_in    slot i at tiles [i*Sq_chunk_t, +Sq_chunk_t):            running sum tile (column-reduced by normalize)
- *   cb_prev_out  slot i at tiles [i*Sq_chunk_t*vDHt, +Sq_chunk_t*vDHt):  running unnormalized output, row-major
- * Q of chunk i sits in cb_q_in at tile i*Sq_chunk_t*DHt. A slot whose bit is clear in initialized_mask holds garbage:
- * its max is not folded in, its sum and out are written instead of accumulated.
+ * Score scratch layout: group member g, Q tile row r, column c at (g * Sq_chunk_t + r) * Sk_chunk_t + c, i.e. a
+ * uniform row stride of the full piece width Sk_chunk_t; member g uses columns [0, W_g) with W_g = n_runs[g] *
+ * run_w. run_cols[g * kMaxRuns + s] is the K^T column tile (= V row tile) where run s of member g starts in the
+ * entry; run s lands at score columns [s * run_w, +run_w). A piece step has run_w = kBlockTiles and up to
+ * kMaxRuns = Sk_chunk_t / kBlockTiles runs per member; a pooled entry is one member, one run of its active width
+ * from column 0, with apply_col_bias (one bias row of Sk_chunk_t tiles in cb_sol_bias, waited for and popped).
+ * The step never pops cb_kt_in / cb_v_in.
  *
- * Ordering of in-place writes. CB push/wait pairs order nothing for the slot CBs, so the step posts one PACK_DONE
- * token (STALL_PACK: the packer's L1 writes have drained) after its last pack and takes it on the unpack thread
- * before returning, so no unpack of a later step (or of the final normalization) can see a stale slot tile. The
- * token never outlives the step: init_sdpa_streaming_semaphores() re-initializes the T6 semaphores on the pack
- * thread at the start of every ring iteration, and a token left dangling across that reset is lost (the 2026-10-21
- * hang at 1024 rows, tau 2: 13 cores stuck in the take). Inside the step the only stage that unpacks what an earlier
- * stage of the same step packed in place is the V matmul (S6) reading the exp'd scores of S5, ordered by the same
- * handshake as the Phase 2 drain of sdpa_inner_loop_step; everything else goes through per-step scratches with
- * push/wait, or is a packer-side L1 accumulate onto tiles the same packer wrote earlier in the step.
- *
- * Per-step scratches, reserved/pushed/popped at FULL capacity every step so their pointers always return to base:
- *   cb_qkt_im        scores, group-contiguous: group member g, Q tile row r, column c at (g*Sq_chunk_t + r)*W + c
- *                    with W = n_runs*run_w the row stride (qk_cap tiles)
- *   cb_max_scratch   the new max of each slot, slot-indexed like cb_max_in (stats_cap tiles)
- *   cb_exp_max_diff  alpha = exp((old max - new max) * scale) of each slot, slot-indexed (stats_cap tiles)
- *
- * Run table: run s covers K^T column tiles (= V row tiles) run_cols[s] .. run_cols[s] + run_w - 1 of the entry and
- * lands at score columns [s*run_w, +run_w). A 64-key block step is n_runs = 1, run_w = kBlockTiles; a pooled entry
- * is n_runs = 1, run_cols[0] = 0, run_w = its active width, with apply_col_bias (one bias row of Sk_chunk_t tiles in
- * cb_sol_bias is waited for and popped). The step never pops cb_kt_in / cb_v_in.
- *
- * Stages: S1 Q@K^T for every (slot, run) into the score scratch (+ column bias); S2 row max over the W columns,
- * eltwise-max with the slot max; S3 alpha into cb_exp_max_diff and the new max into the slot; S4 slot sum and slot
- * out *= alpha in place; S5 in-place exp of the scores, the exp'd tiles accumulated into the slot sum; S6 P@V
- * accumulated into the slot out. Every stage batches DEST (DEST_AUTO_LIMIT tiles).
+ * Frozen max (static_max): S2 + the S3 copy run only on a step whose group is entirely uninitialized (the first
+ * step of a head on the forced block 0 of piece 0), S4 never; see the M4 notes in the status doc. Dynamic path:
+ * S2-S4 every step. Per-step scratches are reserved / pushed / popped at full capacity (pointers back at base);
+ * the in-place slot packs of a step are drained (PACK_DONE post + take) before the step returns.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -3711,6 +3692,7 @@ template <
     uint32_t cb_v_in,
     uint32_t cb_qkt_im,
     uint32_t cb_identity_scale_in,
+    uint32_t cb_col_identity,
     uint32_t cb_max_scratch,
     uint32_t cb_exp_max_diff,
     uint32_t cb_max_in,
@@ -3721,23 +3703,24 @@ template <
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
     uint32_t stats_cap,
-    // M4: frozen max. A slot's max is set by its first step and never updated, so S2-S4 (row max, alpha, rescale)
-    // run once per slot instead of every step; the exp of every later step subtracts the frozen slot max.
-    bool static_max = false>
-static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
+    bool static_max>
+static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     const uint8_t* slots,
     const uint32_t n_slots,
     const uint8_t* run_cols,
-    const uint32_t n_runs,
+    const uint8_t* n_runs,
     const uint32_t run_w,
     const uint32_t initialized_mask,
     const bool apply_col_bias) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t kBlockTiles = 2;
+    constexpr uint32_t kMaxRuns = Sk_chunk_t / kBlockTiles;
+    constexpr uint32_t Wmax = Sk_chunk_t;  // score row stride
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
     constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
     static_assert(v_cb_physical_width_t == vDHt, "resident mode addresses V rows at a vDHt tile stride");
-    // DEST batching: a unit is Sq_chunk_t rows by a column batch; several units share one acquire.
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
     constexpr uint32_t max_cols_per_acq = kDst / Sq_chunk_t;
     static_assert(max_cols_per_acq >= 1, "one Q chunk row of one tile column must fit DEST");
     constexpr uint32_t qk_cw_cap = qkt_subblock_w < max_cols_per_acq ? qkt_subblock_w : max_cols_per_acq;
@@ -3752,21 +3735,26 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     static_assert(Sq_chunk_t <= kDst, "salad_correct_fused needs one Q chunk column in DEST");
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    const uint32_t W = n_runs * run_w;  // score row stride (tiles)
-    ASSERT(n_slots >= 1 && n_slots <= 32 && n_runs >= 1 && run_w >= 1 && W <= Sk_chunk_t);
-    ASSERT(n_slots * Sq_chunk_t * W <= qk_cap);
+    ASSERT(n_slots >= 1 && n_slots * Sq_chunk_t * Wmax <= qk_cap && run_w >= 1);
     const auto slot_init = [&](uint32_t g) -> bool { return ((initialized_mask >> slots[g]) & 1u) != 0; };
+    const auto width_of = [&](uint32_t g) -> uint32_t { return static_cast<uint32_t>(n_runs[g]) * run_w; };
+    const auto run_col = [&](uint32_t g, uint32_t s) -> uint32_t {
+        return static_cast<uint32_t>(run_cols[g * kMaxRuns + s]);
+    };
+    uint32_t group_mask = 0;
+    uint32_t q_wait_tiles = 0;
+    for (uint32_t g = 0; g < n_slots; ++g) {
+        ASSERT(n_runs[g] >= 1 && width_of(g) <= Wmax);
+        group_mask |= 1u << slots[g];
+        const uint32_t t = (static_cast<uint32_t>(slots[g]) + 1) * q_chunk_tiles;
+        q_wait_tiles = t > q_wait_tiles ? t : q_wait_tiles;
+    }
 
-    // ---- S1: Q@K^T into the score scratch. Units: (slot, run, column batch of cw1 K^T columns). ----
+    // ---- S1: Q@K^T into the score scratch. Units: (member, run, column batch of cw1 K^T columns). ----
     const uint32_t cw1 = largest_factor_le(run_w, qk_cw_cap);
     const uint32_t units_per_run = run_w / cw1;
     const uint32_t unit1_tiles = Sq_chunk_t * cw1;
     const uint32_t units1_per_acq = kDst / unit1_tiles;
-    uint32_t q_wait_tiles = 0;
-    for (uint32_t g = 0; g < n_slots; ++g) {
-        const uint32_t t = (static_cast<uint32_t>(slots[g]) + 1) * q_chunk_tiles;
-        q_wait_tiles = t > q_wait_tiles ? t : q_wait_tiles;
-    }
     CircularBuffer(cb_qkt_im).reserve_back(qk_cap);
     CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
     CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
@@ -3783,7 +3771,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
             tile_regs_wait();
             for (uint32_t u = 0; u < uu; ++u) {
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = (unit_g[u] * Sq_chunk_t + r) * W + unit_col[u];
+                    const uint32_t idx = (unit_g[u] * Sq_chunk_t + r) * Wmax + unit_col[u];
                     const uint32_t dst = u * unit1_tiles + r * cw1;
                     if (blocked1) {
                         sdpa_pack_tile_ooo(dst, cb_qkt_im, idx);
@@ -3798,13 +3786,13 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
             uu = 0;
         };
         for (uint32_t g = 0; g < n_slots; ++g) {
-            for (uint32_t s = 0; s < n_runs; ++s) {
+            for (uint32_t s = 0; s < n_runs[g]; ++s) {
                 for (uint32_t q = 0; q < units_per_run; ++q) {
                     if (uu == 0) {
                         tile_regs_acquire();
                     }
                     uint32_t in0 = slots[g] * q_chunk_tiles;
-                    uint32_t in1 = run_cols[s] + q * cw1;
+                    uint32_t in1 = run_col(g, s) + q * cw1;
                     for (uint32_t d = 0; d < DHt; ++d) {
                         sdpa_matmul_block_no_mop(
                             cb_q_in, cb_kt_in, in0, in1, uu * unit1_tiles, true, cw1, Sq_chunk_t, DHt);
@@ -3825,29 +3813,18 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     }
     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
     if (apply_col_bias) {
-        // Pooled entry: one slot, one contiguous run from column 0; the same bias tile row for every Q tile row.
-        ASSERT(n_slots == 1 && n_runs == 1 && run_cols[0] == 0);
+        // Pooled entry: one member, one contiguous run from column 0; the same bias tile row for every Q tile row.
+        ASSERT(n_slots == 1 && n_runs[0] == 1 && run_col(0, 0) == 0);
         CircularBuffer(cb_sol_bias).wait_front(Sk_chunk_t);
         begin_mask_l1_accumulate<false>(cb_qkt_im, cb_sol_bias);
         for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-            l1_acc_tile_run(cb_sol_bias, 0, cb_qkt_im, r * W, W);
+            l1_acc_tile_run(cb_sol_bias, 0, cb_qkt_im, r * Wmax, width_of(0));
         }
         end_mask_l1_accumulate();
         CircularBuffer(cb_sol_bias).pop_front(Sk_chunk_t);
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
-    // Frozen max (static_max, M4): a slot's max is the row max of its FIRST step (the forced block 0 of piece 0, so
-    // the sink keys are in it) and never moves again: S2 + the S3 copy run only on a step whose group is entirely
-    // uninitialized (the first step of a head), S4 (alpha, rescale) never. The exp argument then stays within a
-    // few units of the true max, which bf16 represents well, while a later key above the frozen max only makes
-    // its term exceed 1 (no overflow short of ~85 units). A loose a-priori bound (||q|| max||k||, the first M4
-    // attempt) put the arguments at -10 to -20 scaled units, where bf16's absolute resolution on (score - max)
-    // cost 0.001-0.008 of PCC. Dynamic path: S2-S4 every step.
-    uint32_t group_mask = 0;
-    for (uint32_t g = 0; g < n_slots; ++g) {
-        group_mask |= 1u << slots[g];
-    }
     const bool run_stats = static_max ? (initialized_mask & group_mask) == 0 : true;
     ASSERT(!static_max || run_stats || (initialized_mask & group_mask) == group_mask);
     // The max the exp of S5 subtracts: this step's row max (fresh in the scratch) or the slot's frozen max.
@@ -3855,8 +3832,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     if (!run_stats) {
         CircularBuffer(cb_qkt_im).wait_front(qk_cap);
     } else {
-        // ---- S2: row max over the W columns, eltwise-max with the slot's stored max, into cb_max_scratch. ----
-        // (The previous step's in-place packs were taken at the end of that step: slot state is current here.)
+        // ---- S2: row max over each member's W_g columns, eltwise-max with the slot's stored max, into the scratch.
         CircularBuffer(cb_qkt_im).wait_front(qk_cap);
         CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
         configure_single_tile_pack(cb_max_scratch);
@@ -3868,7 +3844,6 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
                 any_init |= slot_init(g0 + gg);
             }
             if (any_init) {
-                // Same preload as reduce_c_row_group's do_eltwise_max: the reduce folds the row max into it.
                 sdpa_reduce_copy_tile_to_dst_init_short(cb_max_in);
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
                     if (!slot_init(g0 + gg)) {
@@ -3879,13 +3854,22 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
                     }
                 }
             }
-            reduce_block_max_row_init_runtime(cb_max_scratch, W, cb_qkt_im, cb_identity_scale_in, false);
+            // Members may differ in width: re-init the reduce whenever the width changes.
+            uint32_t last_w = 0;
             for (uint32_t gg = 0; gg < n_g; ++gg) {
+                const uint32_t w = width_of(g0 + gg);
+                if (w != last_w) {
+                    if (last_w != 0) {
+                        reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+                    }
+                    reduce_block_max_row_init_runtime(cb_max_scratch, w, cb_qkt_im, cb_identity_scale_in, false);
+                    last_w = w;
+                }
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                     reduce_block_max_row_runtime(
                         cb_qkt_im,
                         cb_identity_scale_in,
-                        ((g0 + gg) * Sq_chunk_t + r) * W,
+                        ((g0 + gg) * Sq_chunk_t + r) * Wmax,
                         gg * Sq_chunk_t + r,
                         false,
                         false);
@@ -3910,7 +3894,6 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
         for (uint32_t g0 = 0; g0 < n_slots; g0 += alpha_slots_per_acq) {
             const uint32_t n_g = n_slots - g0 < alpha_slots_per_acq ? n_slots - g0 : alpha_slots_per_acq;
             tile_regs_acquire();
-            // DEST: [0, n_alpha*Sq_chunk_t) old - new of the initialized slots, then the new max of every slot.
             uint32_t n_alpha = 0;
             bool any_init = false;
             for (uint32_t gg = 0; gg < n_g; ++gg) {
@@ -3966,7 +3949,6 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
         cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
 
         // ---- S4: slot sum and slot out *= alpha, in place (initialized slots only; L1 accumulate is off). ----
-        // (Frozen max: this block only runs with every slot uninitialized, so the loop does nothing there.)
         CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
         for (uint32_t g = 0; g < n_slots; ++g) {
             if (!slot_init(g)) {
@@ -3977,17 +3959,15 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
         }
     }  // run_stats: S2-S4
 
-    // ---- S5: in-place exp of the scores (sub_exp_block_bcast_cols pattern); the tiles summed into the slot. ----
+    // ---- S5: in-place exp of the scores (sub_exp_block_bcast_cols pattern), per member over its W_g columns. ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-    const uint32_t cw5 = largest_factor_le(W, max_cols_per_acq);
-    const uint32_t nq5 = W / cw5;
-    const uint32_t unit5_tiles = Sq_chunk_t * cw5;
-    const uint32_t units5_per_acq = kDst / unit5_tiles;
-    sub_bcast_cols_init_short_custom(cb_qkt_im, cb_step_max, cw5);
     {
         uint8_t unit_g[kDst];
-        uint8_t unit_q[kDst];
+        uint8_t unit_c0[kDst];
+        uint8_t unit_cw[kDst];
         uint32_t uu = 0;
+        uint32_t uu_tiles = 0;
+        uint32_t init_cw = 0;
         const auto flush = [&]() {
             tile_regs_commit();
             tile_regs_wait();
@@ -3995,53 +3975,42 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
             {
                 constexpr int iterations = 32;
                 constexpr VectorMode vector_mode_exp = VectorMode::None;
-                const uint32_t n_tiles = uu * unit5_tiles;
-                for (uint32_t i = 0; i < n_tiles; ++i) {
+                for (uint32_t i = 0; i < uu_tiles; ++i) {
                     exp_packthread_tile<true, false, InputClamping::None, iterations>(i, vector_mode_exp);
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             }
-            // Scores back to their own positions.
-            const bool blocked5 = configure_row_pack_width(cb_qkt_im, cw5);
+            // Scores back to their own positions (single-tile packs: the widths vary per unit).
+            configure_single_tile_pack(cb_qkt_im);
+            uint32_t dst = 0;
             for (uint32_t u = 0; u < uu; ++u) {
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = (unit_g[u] * Sq_chunk_t + r) * W + unit_q[u] * cw5;
-                    const uint32_t dst = u * unit5_tiles + r * cw5;
-                    if (blocked5) {
-                        sdpa_pack_tile_ooo(dst, cb_qkt_im, idx);
-                    } else {
-                        for (uint32_t c = 0; c < cw5; ++c) {
-                            sdpa_pack_tile_ooo(dst + c, cb_qkt_im, idx + c);
-                        }
+                    const uint32_t idx = (unit_g[u] * Sq_chunk_t + r) * Wmax + unit_c0[u];
+                    for (uint32_t c = 0; c < unit_cw[u]; ++c) {
+                        sdpa_pack_tile_ooo(dst++, cb_qkt_im, idx + c);
                     }
                 }
             }
-            // Sum: every exp'd tile of a row accumulates onto the slot's sum tile. The first tile of an
-            // uninitialized slot's row (first column batch) overwrites it instead.
-            configure_single_tile_pack(cb_sum_in);
-            for (uint32_t u = 0; u < uu; ++u) {
-                const uint32_t sum_row0 = slots[unit_g[u]] * Sq_chunk_t;
-                const bool accumulate_first = slot_init(unit_g[u]) || unit_q[u] > 0;
-#pragma GCC unroll 1
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    PACK((llk_pack_reconfig_l1_acc(accumulate_first ? 1 : 0)));
-                    const uint32_t dst = u * unit5_tiles + r * cw5;
-#pragma GCC unroll 1
-                    for (uint32_t c = 0; c < cw5; ++c) {
-                        pack_tile<true>(dst + c, cb_sum_in, sum_row0 + r);  // HOT: softmax exp, keep inline
-                        if (c == 0) {
-                            PACK((llk_pack_reconfig_l1_acc(1)));
-                        }
-                    }
-                }
-            }
-            PACK((llk_pack_reconfig_l1_acc(0)));
             PACK((llk_pack_relu_config(ReluConfig::none())));
             tile_regs_release();
             uu = 0;
+            uu_tiles = 0;
         };
         for (uint32_t g = 0; g < n_slots; ++g) {
-            for (uint32_t q = 0; q < nq5; ++q) {
+            const uint32_t w = width_of(g);
+            const uint32_t cw = largest_factor_le(w, max_cols_per_acq);
+            if (cw != init_cw) {
+                // The bcast-subtract MOP is configured for a column width: flush the open batch before changing it.
+                if (uu > 0) {
+                    flush();
+                }
+                sub_bcast_cols_init_short_custom(cb_qkt_im, cb_step_max, cw);
+                init_cw = cw;
+            }
+            for (uint32_t c0 = 0; c0 < w; c0 += cw) {
+                if (uu_tiles + Sq_chunk_t * cw > kDst) {
+                    flush();
+                }
                 if (uu == 0) {
                     tile_regs_acquire();
                 }
@@ -4049,46 +4018,66 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
                     sub_tiles_bcast_cols_custom(
                         cb_qkt_im,
                         cb_step_max,
-                        (g * Sq_chunk_t + r) * W + q * cw5,
+                        (g * Sq_chunk_t + r) * Wmax + c0,
                         slots[g] * Sq_chunk_t + r,
-                        uu * unit5_tiles + r * cw5,
-                        cw5);
+                        uu_tiles + r * cw,
+                        cw);
                 }
                 unit_g[uu] = static_cast<uint8_t>(g);
-                unit_q[uu] = static_cast<uint8_t>(q);
-                if (++uu == units5_per_acq) {
-                    flush();
-                }
+                unit_c0[uu] = static_cast<uint8_t>(c0);
+                unit_cw[uu] = static_cast<uint8_t>(cw);
+                ++uu;
+                uu_tiles += Sq_chunk_t * cw;
             }
         }
         if (uu > 0) {
             flush();
         }
     }
-    // Pack->unpack barrier: the in-place exp packs above are unpacked by the V matmul below (same hazard as the
+    // Pack->unpack barrier: the in-place exp packs above are unpacked by the matmuls below (same hazard as the
     // Phase 2 drain of sdpa_inner_loop_step: without it UNPACK can read stale L1).
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-
-    // ---- S6: P@V accumulated into the slot out (overwritten for an uninitialized slot). ----
-    CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
-    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_qkt_im, cb_qkt_im>();
-    // The score rows are W tiles apart; inner_dim below walks the W columns run by run.
-    sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, Sq_chunk_t, W);
-    const bool blocked6 = configure_row_pack_width(cb_prev_out, qktv_subblock_w);
     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-    {
-        uint8_t unit_g[kDst];
-        uint8_t unit_v0[kDst];
-        uint32_t uu = 0;
-        const auto flush = [&]() {
+
+    // ---- S6: per member, P@V over its runs accumulated into the slot out, and the row sum P@e0 (column-identity
+    //      tile: ones in column 0) accumulated into the slot sum; both overwritten for an uninitialized slot. ----
+    CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+    CircularBuffer(cb_col_identity).wait_front(1);
+    for (uint32_t g = 0; g < n_slots; ++g) {
+        const uint32_t in0_row0 = g * Sq_chunk_t * Wmax;
+        const uint32_t out_row0 = slots[g] * Sq_chunk_t;
+        const bool acc = slot_init(g);
+        // P@V: one DEST batch of up to pv_units_per_acq column sub-blocks at a time.
+        sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_qkt_im, cb_qkt_im>();
+        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, Sq_chunk_t, Wmax);
+        const bool blocked6 = configure_row_pack_width(cb_prev_out, qktv_subblock_w);
+        for (uint32_t v_base = 0; v_base < vDHt; v_base += pv_units_per_acq * qktv_subblock_w) {
+            tile_regs_acquire();
+            uint32_t uu = 0;
+            for (uint32_t v0 = v_base; v0 < vDHt && uu < pv_units_per_acq; v0 += qktv_subblock_w, ++uu) {
+                for (uint32_t s = 0; s < n_runs[g]; ++s) {
+                    for (uint32_t t = 0; t < run_w; ++t) {
+                        sdpa_matmul_block_no_mop(
+                            cb_qkt_im,
+                            cb_v_in,
+                            in0_row0 + s * run_w + t,
+                            (run_col(g, s) + t) * vDHt + v0,
+                            uu * pv_unit_tiles,
+                            false,
+                            qktv_subblock_w,
+                            Sq_chunk_t,
+                            Wmax);
+                    }
+                }
+            }
             tile_regs_commit();
             tile_regs_wait();
+            PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
             for (uint32_t u = 0; u < uu; ++u) {
-                const uint32_t out_row0 = slots[unit_g[u]] * Sq_chunk_t;
-                PACK((llk_pack_reconfig_l1_acc(slot_init(unit_g[u]) ? 1 : 0)));
+                const uint32_t v0 = v_base + u * qktv_subblock_w;
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = (out_row0 + r) * vDHt + unit_v0[u];
+                    const uint32_t idx = (out_row0 + r) * vDHt + v0;
                     const uint32_t dst = u * pv_unit_tiles + r * qktv_subblock_w;
                     if (blocked6) {
                         sdpa_pack_tile_ooo(dst, cb_prev_out, idx);
@@ -4101,44 +4090,30 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
             tile_regs_release();
-            uu = 0;
-        };
-        for (uint32_t g = 0; g < n_slots; ++g) {
-            const uint32_t in0_row0 = g * Sq_chunk_t * W;
-            for (uint32_t v0 = 0; v0 < vDHt; v0 += qktv_subblock_w) {
-                if (uu == 0) {
-                    tile_regs_acquire();
-                }
-                for (uint32_t s = 0; s < n_runs; ++s) {
-                    for (uint32_t t = 0; t < run_w; ++t) {
-                        sdpa_matmul_block_no_mop(
-                            cb_qkt_im,
-                            cb_v_in,
-                            in0_row0 + s * run_w + t,
-                            (static_cast<uint32_t>(run_cols[s]) + t) * vDHt + v0,
-                            uu * pv_unit_tiles,
-                            false,
-                            qktv_subblock_w,
-                            Sq_chunk_t,
-                            W);
-                    }
-                }
-                unit_g[uu] = static_cast<uint8_t>(g);
-                unit_v0[uu] = static_cast<uint8_t>(v0);
-                if (++uu == pv_units_per_acq) {
-                    flush();
-                }
-            }
         }
-        if (uu > 0) {
-            flush();
+        // Row sum: P (Sq_chunk_t x W_g) @ e0 (the same identity tile for every inner index) -> Sq_chunk_t tiles
+        // with the row sums in column 0 and zeros elsewhere, accumulated onto the slot's sum tiles.
+        sdpa_maybe_reconfig_data_format<cb_v_in, cb_col_identity, cb_qkt_im, cb_qkt_im>();
+        sdpa_pv_mm_setup(cb_qkt_im, cb_col_identity, false, 1, Sq_chunk_t, Wmax);
+        configure_single_tile_pack(cb_sum_in);
+        tile_regs_acquire();
+        for (uint32_t c = 0; c < width_of(g); ++c) {
+            sdpa_matmul_block_no_mop(cb_qkt_im, cb_col_identity, in0_row0 + c, 0, 0, false, 1, Sq_chunk_t, Wmax);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            sdpa_pack_tile_ooo(r, cb_sum_in, out_row0 + r);
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        tile_regs_release();
     }
-    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+    sdpa_maybe_reconfig_data_format<cb_col_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
 
-    // Scratches back to empty (their pointers at base again). Then the in-place packs of this step (max, sum, out)
-    // are drained before the unpack thread leaves the step: post on the pack thread after its last pack, take on the
-    // unpack thread here, so the token never outlives the step (see the ordering note above).
+    // Scratches back to empty (pointers at base), then the in-place packs of this step (max, sum, out) are drained
+    // before the unpack thread leaves the step: post on the pack thread after its last pack, take on the unpack
+    // thread here, so the token never outlives the step.
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
     if (run_stats) {
         CircularBuffer(cb_max_scratch).pop_front(stats_cap);
@@ -4155,15 +4130,16 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
  * Every K/V entry the reader pushes is consumed by the steps that need it and popped once, after the last of them.
  * The per-chunk flash state (running sum, running max, output accumulator) lives in the restore CBs {cb_sum_in,
  * cb_max_in, cb_prev_out}, one SLOT per resident chunk in Q-chunk order, updated in place (see
- * sdpa_resident_block_step for the contract). The slot CBs are filled once, on the first active ring iteration
+ * sdpa_resident_piece_step for the contract). The slot CBs are filled once, on the first active ring iteration
  * (exactly full, write pointer held at the base), and are neither pushed nor popped until the last ring iteration,
  * where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are popped.
  *
- * Steps are block-major (M3): per streamed piece, one step per kept 64-token block over every resident chunk of the
- * head that keeps that block (the group's Q rows against the block's 2 K^T columns / V rows, addressed in place in
- * the staged entry). A piece streamed only for another chain member is drained. The reader forces block 0 of every
- * shard kept for every chunk, so the first step of a head on piece 0 creates every slot's state before any other
- * block. Dropped blocks are pooled by the column bias of the pooled chunks that follow the local pieces on the first
+ * Steps are per piece (M5): per streamed piece, one step per sub-group of up to kGroupCap resident chunks of the
+ * head that keep a block of it, each chunk with its own run table of kept 64-token blocks (its Q rows against those
+ * blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for another chain
+ * member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of a head
+ * on piece 0 creates every slot's state (and, with the frozen max, fixes every slot's max) before any other piece.
+ * Dropped blocks are pooled by the column bias of the pooled chunks that follow the local pieces on the first
  * active ring iteration: one full-width step per resident chunk of the head, each with its own bias row (pushed by
  * the reader in Q-chunk order after the pooled K/V entry).
  *
@@ -4273,10 +4249,12 @@ void sdpa_ring_resident(
     // scratch holds max(qk_tiles, slots x Sq_chunk_t x kBlockTiles); the max/alpha scratches and the max/sum slot
     // CBs hold Sq_chunk_t per slot; the out slot CB holds Sq_chunk_t x vDHt per slot. The step pushes and pops the
     // scratches at full capacity and the slot CBs are filled at full capacity, so the counts must match exactly.
+    // M5: a step covers one piece for a sub-group of up to kGroupCap resident chunks at the full piece width
+    // (the factory's kSolResidentGroup).
+    constexpr uint32_t kGroupCap = sol_resident_slots < 4 ? sol_resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t kQkCap = kQkTiles > sol_resident_slots * Sq_chunk_t * kBlockTiles
-                                    ? kQkTiles
-                                    : sol_resident_slots * Sq_chunk_t * kBlockTiles;
+    constexpr uint32_t kQkCap =
+        kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t ? kQkTiles : kGroupCap * Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t kStatsCap = sol_resident_slots * Sq_chunk_t;
     constexpr uint32_t kOutCap = sol_resident_slots * out_tiles;
 #ifdef TRISC_PACK
@@ -4322,7 +4300,7 @@ void sdpa_ring_resident(
     uint32_t initialized = is_first_active_iter ? 0u : acc_state.last_call_k_chunks;
 
     if (is_first_active_iter) {
-        // Fill the slot CBs once, exactly full, write pointers held at the base (sdpa_resident_block_step's state
+        // Fill the slot CBs once, exactly full, write pointers held at the base (sdpa_resident_piece_step's state
         // contract). Their contents are written by each slot's first step (with the frozen max of M4 the max slot
         // is written once, by that first step, and read by every later one).
         CircularBuffer(cb_max_in).reserve_back(kStatsCap);
@@ -4338,14 +4316,16 @@ void sdpa_ring_resident(
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
+    // One piece (or pooled entry) for a sub-group of resident chunks: run_cols[g * kBlocksPerPiece + s] is the K^T
+    // column tile of run s of member g, n_runs[g] its run count, run_w the tiles per run.
     const auto run_step = [&](const uint8_t* slots,
                               const uint32_t n_slots,
                               const uint8_t* run_cols,
-                              const uint32_t n_runs,
+                              const uint8_t* n_runs,
                               const uint32_t run_w,
                               const bool apply_col_bias) {
         MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
-        sdpa_resident_block_step<
+        sdpa_resident_piece_step<
             Sq_chunk_t,
             Sk_chunk_t,
             DHt,
@@ -4358,6 +4338,7 @@ void sdpa_ring_resident(
             cb_v_in,
             cb_qkt_im,
             cb_identity_scale_in,
+            cb_col_identity,
             cb_max_scratch,
             cb_exp_max_diff,
             cb_max_in,
@@ -4419,53 +4400,49 @@ void sdpa_ring_resident(
             if (!bit(union_lo[i0], union_hi[i0], k)) {
                 continue;  // nobody on this head's chain needs the piece: nothing was pushed
             }
-#ifndef SOL_RES_CHUNK_MAJOR
-            // Block-major: one step per kept block over the chunks of the head that keep it.
-            for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
-                uint8_t group[sol_resident_slots];
-                uint32_t n_group = 0;
-                uint32_t group_mask = 0;
-                for (uint32_t i = i0; i < n_res; ++i) {
-                    if (((head_mask >> i) & 1u) && block_kept(i, k * kBlocksPerPiece + j)) {
-                        group[n_group++] = static_cast<uint8_t>(i);
-                        group_mask |= 1u << i;
-                    }
-                }
-                if (n_group == 0) {
-                    continue;
-                }
-                // Kept blocks are full blocks: never in the padded tail of the piece.
-                ASSERT((j + 1) * kBlockTiles <= active_Sk_param);
-                // Block 0 of piece 0 is forced kept for every chunk, so it creates every slot of the head before any
-                // other block touches one, and no later step meets an uninitialized slot.
-                ASSERT(k != 0 || j != 0 || group_mask == head_mask);
-                ASSERT((k == 0 && j == 0) || (initialized & group_mask) == group_mask);
-                const uint8_t col = static_cast<uint8_t>(j * kBlockTiles);
-                run_step(group, n_group, &col, 1, kBlockTiles, false);
-            }
-#else
-            // Chunk-major (debugging variant): one step per chunk with its run table of kept blocks of the piece.
+            // The piece's group: every chunk of the head that keeps a block of it, with its run table (M5: one
+            // step per sub-group of up to kGroupCap chunks; SOL_RES_CHUNK_MAJOR: one step per chunk, for debugging).
+            uint8_t group[sol_resident_slots];
+            uint8_t runs[sol_resident_slots * kBlocksPerPiece];
+            uint8_t n_runs[sol_resident_slots];
+            uint32_t n_group = 0;
+            uint32_t group_mask = 0;
             for (uint32_t i = i0; i < n_res; ++i) {
                 if (((head_mask >> i) & 1u) == 0) {
                     continue;
                 }
-                uint8_t run_cols[kBlocksPerPiece];
-                uint32_t n_runs = 0;
+                uint32_t cnt = 0;
                 for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
                     if (block_kept(i, k * kBlocksPerPiece + j)) {
+                        // Kept blocks are full blocks: never in the padded tail of the piece.
                         ASSERT((j + 1) * kBlockTiles <= active_Sk_param);
-                        run_cols[n_runs++] = static_cast<uint8_t>(j * kBlockTiles);
+                        runs[n_group * kBlocksPerPiece + cnt++] = static_cast<uint8_t>(j * kBlockTiles);
                     }
                 }
-                if (n_runs == 0) {
+                if (cnt == 0) {
                     continue;
                 }
-                ASSERT(k != 0 || block_kept(i, 0));
-                ASSERT(k == 0 || ((initialized >> i) & 1u));
-                const uint8_t one = static_cast<uint8_t>(i);
-                run_step(&one, 1, run_cols, n_runs, kBlockTiles, false);
+                group[n_group] = static_cast<uint8_t>(i);
+                n_runs[n_group] = static_cast<uint8_t>(cnt);
+                ++n_group;
+                group_mask |= 1u << i;
             }
+            if (n_group > 0) {
+                // Block 0 of piece 0 is forced kept for every chunk, so piece 0 creates every slot of the head
+                // before any other piece touches one, and no later step meets an uninitialized slot.
+                ASSERT(k != 0 || group_mask == head_mask);
+                ASSERT(k == 0 || (initialized & group_mask) == group_mask);
+#ifndef SOL_RES_CHUNK_MAJOR
+                for (uint32_t g0 = 0; g0 < n_group; g0 += kGroupCap) {
+                    const uint32_t n = n_group - g0 < kGroupCap ? n_group - g0 : kGroupCap;
+                    run_step(group + g0, n, runs + g0 * kBlocksPerPiece, n_runs + g0, kBlockTiles, false);
+                }
+#else
+                for (uint32_t g = 0; g < n_group; ++g) {
+                    run_step(group + g, 1, runs + g * kBlocksPerPiece, n_runs + g, kBlockTiles, false);
+                }
 #endif
+            }
             pop_kv();
             KV_chunks_processed_in_iter++;
         }
@@ -4489,12 +4466,13 @@ void sdpa_ring_resident(
             for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
                 const uint32_t active_width = (pc + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
                 const uint8_t col0 = 0;
+                const uint8_t one_run = 1;
                 for (uint32_t i = i0; i < n_res; ++i) {
                     if (((head_mask >> i) & 1u) == 0) {
                         continue;
                     }
                     const uint8_t one = static_cast<uint8_t>(i);
-                    run_step(&one, 1, &col0, 1, active_width, true);
+                    run_step(&one, 1, &col0, &one_run, active_width, true);
                 }
                 pop_kv();
                 KV_chunks_processed_in_iter++;
