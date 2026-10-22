@@ -142,11 +142,22 @@ class Fpu:
     def warn_split_unmodelled(self, op_name: str, stacklevel: int = 3) -> None:
         """Say so when a multiply here falls back to the exact product.
 
+        Silent unless this architecture's multiplier is genuinely unmodelled.
+        A caller reaches this whenever it skipped the phase loop, but skipping
+        it is not by itself a gap: an integer multiply has no mantissa to
+        split and is exact on the device too. Warning there would accuse
+        Quasar of not modelling a split it models perfectly well, and the
+        message -- "math_fidelity is ignored" -- would be false, since
+        fidelity does not apply to an integer multiply in the first place.
+        Deciding that here keeps every call site free of the rule.
+
         `stacklevel` is counted from the warning itself, so the default 3
         blames whoever called *this* method -- the chain builder that selected
         the fallback -- rather than this method or the helper behind it. A
         caller that adds a frame of its own raises it.
         """
+        if self.mantissa_split is not None:
+            return
         warn_unmodelled_split(op_name, self.l1.name, stacklevel=stacklevel)
 
     def operand_halves(
