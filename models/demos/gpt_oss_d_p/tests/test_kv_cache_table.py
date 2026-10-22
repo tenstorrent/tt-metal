@@ -43,6 +43,8 @@ SP_AXIS = 0
 TP_AXIS = 1
 
 # Small mesh: TP cols == num_kv_heads (table maps head h -> column h).
+# These local DRAM checks do not need fabric. The full-Galaxy acceptance test
+# below retains FABRIC_1D coverage.
 KV_TABLE_MESH_PARAMS = [
     pytest.param((2, 4), id="2x4"),
 ]
@@ -123,8 +125,8 @@ def _expected_chunk_from_device(
 @pytest.mark.parametrize("mesh_device", KV_TABLE_MESH_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
+    [{"fabric_config": ttnn.FabricConfig.DISABLED}],
+    ids=["local"],
     indirect=True,
 )
 @pytest.mark.parametrize("num_users, num_layers", [(1, 2), (2, 2)], ids=["u1xl2", "u2xl2"])
@@ -176,8 +178,8 @@ def test_gpt_oss_kv_chunk_table_smoke(mesh_device, num_users, num_layers, seq_le
 @pytest.mark.parametrize("mesh_device", KV_TABLE_MESH_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
+    [{"fabric_config": ttnn.FabricConfig.DISABLED}],
+    ids=["local"],
     indirect=True,
 )
 @pytest.mark.parametrize("num_users, num_layers", [(2, 2)], ids=["u2xl2"])
@@ -245,8 +247,8 @@ def test_gpt_oss_kv_chunk_table_protobuf_roundtrip(
 @pytest.mark.parametrize("mesh_device", KV_TABLE_MESH_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
+    [{"fabric_config": ttnn.FabricConfig.DISABLED}],
+    ids=["local"],
     indirect=True,
 )
 @pytest.mark.parametrize("num_users, num_layers", [(2, 2)], ids=["u2xl2"])
