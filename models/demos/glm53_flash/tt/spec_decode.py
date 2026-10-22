@@ -1,0 +1,945 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Speculative decoding for GLM-5.3-Flash on the resident mesh model: the MTP module (``tt/mtp.py``, checkpoint
+layer 45) drafts ``K`` tokens, the main model verifies them in ONE batched decode step, the longest matching
+prefix is accepted (lossless greedy: every committed token is the main model's own greedy id).
+
+Row layout of a verify step (per mesh row, ``B`` user slots, ``K`` drafts): ``R = B (K + 1)`` candidate-major
+rows, row ``j B + u`` = user ``u``, candidate ``j`` (``j = 0`` the anchor token, ``j >= 1`` draft ``d_j``) at
+position ``p_u + j``. Candidate-major keeps every candidate a contiguous ``[B]`` slab (the per-candidate latent
+appends, the KDA launches and the index commit address the real user slots with ``[B]`` tensors). Policy:
+``R <= 32`` keeps the rows inside one tile row (free head-major views, one-row-per-core programs, the
+weight-bandwidth-bound regime): ``K = min(K_ctx, 32 // B - 1)`` (``spec_draft_len``), 0 = plain decode.
+
+One iteration (host loop ``GreedySpecLoop``; device graphs ``SpecDecoder``):
+
+1. **V (verify)**: embedding of the ``R`` tokens -> every layer on ``R`` rows (mHC / norms / router / experts /
+   head row-wise; DSA: latent appended per candidate, dense flash-MLA over the user's pages through a page table
+   whose user rows are replicated per candidate with ``cur_pos = p_u + j`` (causal among the candidates for
+   free); KDA: ``K + 1`` sequential ``kda_decode`` launches on the candidate slabs, state backed up first) ->
+   greedy ids of all rows -> MTP level 1 on ALL rows (teacher-forced with the row's greedy id, MTP position
+   ``p_u + j``) -> its draft ids and normed hidden. Outputs copied into persistent buffers.
+2. host accept: ``m_u`` = matched prefix; committed = ``d_1 .. d_m`` + the bonus ``g_m``; next anchor ``g_m`` at
+   ``p_u + m_u + 1``; the next level-1 draft is row ``m_u``'s MTP output.
+3. **C (commit)**: KDA: replay the candidate rows on the backup from the projections cached in V, per-user
+   masks hand each user's live state the replay after its own ``m_u`` (``KdaSpecState.commit``); DSA: the
+   pooled-key index maintenance of the committed rows in order (``DsaSpecState.commit``).
+4. **D (draft chain)**: MTP levels ``2 .. K`` from the selected row (one-hot matmul gather of the level-1 hidden,
+   exact), each level a decode row at ``p_u + m_u + k - 1``.
+
+State discipline (plan section 2c, refined):
+
+* DSA latent cache: position-indexed writes, attention bounded by ``cur_pos``: tentative rows (rejected
+  candidates, chain rows) are overwritten by the next committed tokens, no rollback.
+* pooled-key index: a tentative row must NEVER reach the ring (``[slots, 1, 32, D]``, rows ``0..3`` = the last 4
+  positions): a rejected row at position 8 overwrites the slot still holding committed position 4 before pool 1
+  (positions 4..7) completes, and pool 1 would be built from ``{8, 5, 6, 7}`` for ever. So V and D do not touch
+  the rings / pools at all (the dense-range attention never reads them); the raw k / gate rows of the candidates
+  are cached in V and C writes the committed rows ``0 .. m_u`` in order (ring row, pool rewrite) with the
+  rejected rows routed to the ring's dead rows ``4 .. 31`` (unused tile rows of the ring block) and their pool
+  rewrite landing on a not-yet-complete pool (rewritten at completion, never selectable before).
+* KDA recurrent + conv: the only non-idempotent state. V backs up ``S_0`` (``ttnn.copy`` of the recurrent
+  ``[B, H, K, V]`` fp32 and the tap-major conv history ``[3, B, W]`` bf16) before its ``K + 1`` launches leave
+  the live state at ``S_{K+1}``; C replays launches ``0 .. K`` ON the backup from the cached ``qkv`` / gate
+  projections (the same programs on the same inputs) and after launch ``j`` blends ``live = live * keep_j +
+  backup * take_j`` (``take_j[u] = 1`` iff ``m_u == j``; 1.0 / 0.0 products and adds are exact; binary_ng
+  computes fp32 tensors in fp32 DST), so every user's live state ends as ``S_{m_u + 1}``. One commit per verify.
+
+Trace safety: every per-iteration input is a persistent tensor refreshed with ``copy_host_to_device_tensor``
+(ids, positions, ring slots, pool ids, masks, the select matrix); every buffer the graphs write for the host or
+for another graph predates the first capture (allocated in ``SpecDecoder.__init__``: backups, projection
+caches, output copies); the compile pass (``warmup``) is the identical op set; nothing allocated after a capture
+is persistent; reshaped id rows (views) are never deallocated.
+
+Scope of v1 (device validation pending): dense range only (``max position + K <= 2050``), non-partitioned
+caches, block-mode KDA (``GLM53_KDA_FUSED=1``, the default), greedy. The sparse-range verify needs the index
+scorer with ``K + 1`` rows per user (plan item 4) and is refused.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable
+
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, _meta_mapper, _meta_upload
+from models.demos.glm53_flash.tt.functional_decoder import FunctionalDecoder
+from models.demos.glm53_flash.tt.mesh import GLMMesh
+from models.demos.glm53_flash.tt.mtp import TtMTPBlock
+
+if TYPE_CHECKING:  # no import cycle at runtime (mesh_model does not import this module)
+    from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
+
+TILE = 32
+MAX_VERIFY_ROWS = TILE  # B (K + 1) <= 32: one tile row of candidates per mesh row
+
+
+# ============================================================================================ host-side policy
+def spec_draft_len(users_per_row: int, k_ctx: int, max_rows: int = MAX_VERIFY_ROWS) -> int:
+    """The draft length for ``users_per_row`` user slots per mesh row: ``min(k_ctx, max_rows // B - 1)``; 0 means
+    plain decode (at ``B (K + 1) > 32`` the verify leaves the weight-bandwidth-bound regime and every K lost)."""
+    if users_per_row <= 0:
+        raise ValueError(f"users_per_row must be positive, got {users_per_row}")
+    return max(0, min(int(k_ctx), max_rows // users_per_row - 1))
+
+
+def candidate_rows(users_per_row: int, draft_len: int) -> int:
+    """``R = B (K + 1)`` verify rows per mesh row (refused above ``MAX_VERIFY_ROWS``)."""
+    R = users_per_row * (draft_len + 1)
+    if R > MAX_VERIFY_ROWS or draft_len < 0:
+        raise ValueError(f"B={users_per_row} K={draft_len}: B (K + 1) = {R} exceeds {MAX_VERIFY_ROWS} rows")
+    return R
+
+
+def dead_ring_row(j: int, kpool: int) -> int:
+    """A ring-block row (``kpool .. 31``) no reader looks at: where a rejected candidate's ring write goes."""
+    return kpool + (j % (TILE - kpool))
+
+
+def accept_greedy(
+    drafts: torch.Tensor, verify: torch.Tensor, valid: int | None = None
+) -> tuple[torch.Tensor, list[list[int]], torch.Tensor]:
+    """Greedy acceptance. ``drafts`` ``[N, K]`` the drafted ids, ``verify`` ``[N, K + 1]`` the main model's greedy id
+    of every candidate row (row ``j`` = the prediction after ``[anchor, d_1 .. d_j]``), ``valid`` = how many
+    leading drafts are real (0 on the first iteration: the rows carry placeholders). Returns ``(m [N], committed,
+    bonus [N])``: ``m_u`` = the longest prefix with ``d_j == verify[u, j - 1]``, ``committed[u] = d_1 .. d_m +
+    [verify[u, m]]`` (the bonus token is the main model's own prediction after the accepted prefix, so the result
+    is the plain greedy continuation), ``bonus = verify[u, m]`` = the next anchor."""
+    drafts, verify = drafts.long(), verify.long()
+    N, K = drafts.shape
+    if tuple(verify.shape) != (N, K + 1):
+        raise ValueError(f"verify {tuple(verify.shape)} does not match drafts {tuple(drafts.shape)}")
+    valid = K if valid is None else int(valid)
+    if valid:
+        miss = drafts[:, :valid] != verify[:, :valid]
+        m = torch.where(miss.any(1), miss.long().argmax(1), torch.full((N,), valid, dtype=torch.long))
+    else:
+        m = torch.zeros(N, dtype=torch.long)
+    bonus = verify[torch.arange(N), m]
+    committed = [drafts[u, : int(m[u])].tolist() + [int(bonus[u])] for u in range(N)]
+    return m, committed, bonus
+
+
+def verify_row_positions(positions: list[int], users_per_row: int, draft_len: int, rows: int = 1) -> list[int]:
+    """The ``cur_pos`` of every verify row, mesh-row-major then candidate-major: for mesh row ``r``, candidate
+    ``j``, user ``u``: ``positions[r B + u] + j`` (``positions`` lists the ``rows * B`` anchor positions)."""
+    B, K = users_per_row, draft_len
+    if len(positions) != rows * B:
+        raise ValueError(f"{len(positions)} positions for {rows} x {B} user slots")
+    out = []
+    for r in range(rows):
+        for j in range(K + 1):
+            out += [positions[r * B + u] + j for u in range(B)]
+    return out
+
+
+def verify_tokens_row_major(tokens: torch.Tensor, users_per_row: int, rows: int = 1) -> torch.Tensor:
+    """``tokens`` ``[rows B, K + 1]`` (user-major: row ``u`` = ``[anchor_u, d_1 .. d_K]``) -> the flat candidate-major
+    id list ``[rows B (K + 1)]`` the verify embeds (mesh row r's block first, inside it candidate j's ``B`` users)."""
+    B = users_per_row
+    N, P = tokens.shape
+    if N != rows * B:
+        raise ValueError(f"{N} token rows for {rows} x {B} user slots")
+    return tokens.reshape(rows, B, P).permute(0, 2, 1).reshape(-1).long()
+
+
+def verify_ids_user_major(flat: torch.Tensor, users_per_row: int, draft_len: int, rows: int = 1) -> torch.Tensor:
+    """The inverse of ``verify_tokens_row_major`` for the verify's outputs: flat ``[rows R]`` -> ``[rows B, K + 1]``."""
+    B, P = users_per_row, draft_len + 1
+    return flat.reshape(rows, P, B).permute(0, 2, 1).reshape(rows * B, P).long()
+
+
+def select_rows(m: torch.Tensor, users_per_row: int) -> list[int]:
+    """The verify row (inside the user's mesh row block) holding user ``u``'s accept point: ``m_u B + (u mod B)``."""
+    return [int(m[u]) * users_per_row + (u % users_per_row) for u in range(len(m))]
+
+
+def select_onehot(m: torch.Tensor, users_per_row: int, draft_len: int, rows: int = 1) -> torch.Tensor:
+    """``[rows, 1, B, R]`` one-hot rows (mesh row ``r``'s block ``[1, B, R]``): user ``u``'s row picks verify row
+    ``m_u B + u``; the matmul ``onehot @ hidden`` is an exact row gather (one 1.0 product, fp32 accumulation)."""
+    B, R = users_per_row, users_per_row * (draft_len + 1)
+    sel = torch.zeros(rows, 1, B, R)
+    for n, r_idx in enumerate(select_rows(m, B)):
+        sel[n // B, 0, n % B, r_idx] = 1.0
+    return sel
+
+
+def kda_commit_masks(m: torch.Tensor, draft_len: int) -> torch.Tensor:
+    """``[K + 1, N]`` fp32: ``take[j, u] = 1.0`` iff ``m_u == j`` (the launch after which user ``u``'s state is the
+    committed one, ``S_{m_u + 1}``)."""
+    N = len(m)
+    take = torch.zeros(draft_len + 1, N)
+    for u in range(N):
+        take[int(m[u]), u] = 1.0
+    return take
+
+
+def ring_slots_masked(positions: list[int], m: torch.Tensor, j: int, kpool: int) -> list[int]:
+    """The ring row candidate ``j`` of every user writes in the commit: ``(p_u + j) mod P`` when the candidate is
+    committed (``j <= m_u``), else a dead row of the ring block."""
+    return [(p + j) % kpool if j <= int(m[u]) else dead_ring_row(j, kpool) for u, p in enumerate(positions)]
+
+
+# ================================================================================== host loop (device-free)
+@dataclass
+class SpecStats:
+    iterations: int = 0
+    tokens: int = 0  # committed tokens over all users (excluding the seed token)
+    accepted: list[int] = field(default_factory=list)  # m per (iteration, user)
+    seconds: float = 0.0
+
+    @property
+    def tokens_per_iteration(self) -> float:
+        return self.tokens / self.iterations if self.iterations else 0.0
+
+    @property
+    def mean_accepted(self) -> float:
+        return sum(self.accepted) / len(self.accepted) if self.accepted else 0.0
+
+    def summary(self) -> str:
+        return (
+            f"{self.iterations} iterations, {self.tokens} tokens ({self.tokens_per_iteration:.2f} per iteration "
+            f"over all users), mean accepted drafts {self.mean_accepted:.2f}, {self.seconds:.2f} s"
+        )
+
+
+class GreedySpecLoop:
+    """The lossless greedy speculative loop over three callables (the device graphs, or fakes in the host test):
+
+    * ``verify(tokens [N, K + 1] long, positions [N]) -> (ids [N, K + 1], d1 [N, K + 1])``: the main model's greedy
+      id of every candidate row and the MTP level-1 draft of every row (teacher-forced with that id), the row's
+      context = the committed context + ``tokens[u, : j + 1]``;
+    * ``commit(m [N] long, positions [N])``: make the committed rows ``0 .. m_u`` permanent (states / index);
+    * ``draft_chain(m [N] long, d1 [N] long, positions [N]) -> [N, K - 1]`` (``K > 1`` only): MTP levels
+      ``2 .. K`` chained from the level-1 output of verify row ``m_u`` (its draft ``d1[u]``), ``positions`` the
+      anchor positions of that verify (level ``k`` sits at ``p_u + m_u + k - 1``).
+
+    Every iteration verifies ``[anchor, d_1 .. d_K]`` and commits ``m_u + 1`` tokens per user (the accepted drafts
+    plus the main model's bonus token, which is the next anchor). The first iteration carries placeholder drafts
+    (``valid = 0``): it is a plain step that also seeds the drafts. ``eos``: a user stops after producing it (its
+    later rows keep running as padding and are dropped)."""
+
+    def __init__(
+        self,
+        users_per_row: int,
+        draft_len: int,
+        *,
+        verify: Callable,
+        commit: Callable,
+        draft_chain: Callable | None = None,
+        rows: int = 1,
+    ):
+        self.B, self.K, self.rows = users_per_row, draft_len, rows
+        self.N = users_per_row * rows
+        candidate_rows(users_per_row, draft_len)
+        if draft_len > 1 and draft_chain is None:
+            raise ValueError("K > 1 needs the draft chain (MTP levels 2 .. K)")
+        self.verify, self.commit, self.draft_chain = verify, commit, draft_chain
+
+    def run(
+        self, anchors: list[int], positions: list[int], max_new_tokens: int, eos: int | None = None
+    ) -> tuple[list[list[int]], SpecStats]:
+        """``anchors``: the committed token every user decodes next (the prompt's first generated token),
+        ``positions``: its position (= the prompt length). Returns the committed continuation of every user
+        (``max_new_tokens`` ids after the anchor, or up to and including ``eos``) and the statistics."""
+        N, K = self.N, self.K
+        if len(anchors) != N or len(positions) != N:
+            raise ValueError(f"{len(anchors)} anchors / {len(positions)} positions for {N} users")
+        anchors_t = torch.tensor(anchors, dtype=torch.long)
+        pos = list(positions)
+        drafts = anchors_t[:, None].repeat(1, K) if K else torch.zeros(N, 0, dtype=torch.long)
+        valid = 0
+        out: list[list[int]] = [[] for _ in range(N)]
+        done = [False] * N
+        stats = SpecStats()
+        t0 = time.perf_counter()
+        while not all(done):
+            tokens = torch.cat([anchors_t[:, None], drafts], dim=1)  # [N, K + 1]
+            ids, d1 = self.verify(tokens, pos)
+            m, committed, bonus = accept_greedy(drafts, ids, valid)
+            for u in range(N):
+                if done[u]:
+                    continue
+                for t in committed[u]:
+                    out[u].append(t)
+                    stats.tokens += 1
+                    if len(out[u]) >= max_new_tokens or (eos is not None and t == eos):
+                        done[u] = True
+                        break
+                stats.accepted.append(int(m[u]))
+            stats.iterations += 1
+            self.commit(m, pos)
+            if all(done):
+                break
+            # the next iteration: anchor = the bonus token at p + m + 1, drafts = the MTP chain from row m
+            next_pos = [pos[u] + int(m[u]) + 1 for u in range(N)]
+            if K:
+                d1_sel = d1[torch.arange(N), m]
+                rest = self.draft_chain(m, d1_sel, pos) if K > 1 else torch.zeros(N, 0, dtype=torch.long)
+                drafts = torch.cat([d1_sel[:, None], rest.long().reshape(N, K - 1)], dim=1)
+                valid = K
+            anchors_t = bonus
+            pos = next_pos
+        stats.seconds = time.perf_counter() - t0
+        return [o[:max_new_tokens] for o in out], stats
+
+
+# ==================================================================================== device helpers
+def _mapper(mesh: GLMMesh, rows_dim: int | None):
+    if mesh.is_single:
+        return None
+    if rows_dim is not None and mesh.rows > 1:
+        return mesh.shard_rows(rows_dim)
+    return mesh.replicate()
+
+
+def _upload(mesh: GLMMesh, t: torch.Tensor, dtype, layout, rows_dim: int | None = None) -> ttnn.Tensor:
+    """Persistent device tensor from host values; ``rows_dim`` = the host dim split over the mesh rows."""
+    return ttnn.from_torch(
+        t.contiguous(),
+        dtype=dtype,
+        layout=layout,
+        device=mesh.device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_mapper(mesh, rows_dim),
+    )
+
+
+def _refresh(mesh: GLMMesh, t: torch.Tensor, dst: ttnn.Tensor, rows_dim: int | None = None):
+    """Host values -> the persistent device tensor ``dst`` (same shape / dtype / layout / placement)."""
+    host = ttnn.from_torch(t.contiguous(), dtype=dst.dtype, layout=dst.layout, mesh_mapper=_mapper(mesh, rows_dim))
+    ttnn.copy_host_to_device_tensor(host, dst)
+
+
+def _up_i32(mesh: GLMMesh, vals: list[int]) -> ttnn.Tensor:
+    """``[n]`` int32 ROW_MAJOR per chip from a ``rows * n`` host list (row-sharded like the decode positions)."""
+    return _meta_upload(mesh.device, torch.tensor(vals, dtype=torch.int32), ttnn.int32, mesh, False)
+
+
+def _set_i32(mesh: GLMMesh, vals: list[int], dst: ttnn.Tensor):
+    host = ttnn.from_torch(
+        torch.tensor(vals, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_meta_mapper(mesh, False),
+    )
+    ttnn.copy_host_to_device_tensor(host, dst)
+
+
+def _zeros_like(t: ttnn.Tensor, device) -> ttnn.Tensor:
+    return ttnn.zeros(
+        tuple(t.shape), dtype=t.dtype, layout=t.layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _zeros(shape, dtype, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
+    return ttnn.zeros(tuple(shape), dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _rows(t: ttnn.Tensor, j: int, B: int) -> ttnn.Tensor:
+    """Candidate ``j``'s ``[1, 1, B, W]`` slab of a ``[1, 1, R, W]`` tensor (a fresh tensor)."""
+    W = int(t.shape[-1])
+    return ttnn.slice(t, [0, 0, j * B, 0], [1, 1, (j + 1) * B, W])
+
+
+def _hifi4_fp32(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+# ================================================================================== per-iteration inputs
+class VerifyInputs:
+    """The persistent inputs of the verify (V) and commit (C) graphs for one mesh: the candidate-major ids, the
+    per-row ``cur_pos``, per-candidate ``[B]`` positions (latent appends), and the commit's per-candidate ring
+    rows (masked) and pool ids. Refreshed on the host before every replay."""
+
+    def __init__(self, mesh: GLMMesh, cfg, users_per_row: int, draft_len: int, max_dense_pos: int):
+        self.mesh, self.cfg = mesh, cfg
+        self.B, self.K = users_per_row, draft_len
+        self.R = candidate_rows(users_per_row, draft_len)
+        self.rows = mesh.rows
+        self.N = self.B * self.rows
+        self.P = cfg.index_kpool
+        self.max_dense_pos = max_dense_pos
+        zeros_pos = [0] * self.N
+        self.ids = _upload(
+            mesh, torch.zeros(1, 1, 1, self.rows * self.R, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3
+        )
+        self.rows_pos = _up_i32(mesh, verify_row_positions(zeros_pos, self.B, self.K, self.rows))
+        self.pos = [_up_i32(mesh, zeros_pos) for _ in range(self.K + 1)]
+        self.ring = [_up_i32(mesh, zeros_pos) for _ in range(self.K + 1)]
+        self.pool = [_up_i32(mesh, zeros_pos) for _ in range(self.K + 1)]
+        self.host_positions: list[int] = zeros_pos
+
+    def check_positions(self, positions: list[int]):
+        if len(positions) != self.N:
+            raise ValueError(f"{len(positions)} positions for {self.N} user slots")
+        top = max(positions) + self.K
+        if top > self.max_dense_pos:
+            raise NotImplementedError(
+                f"verify rows reach position {top} > {self.max_dense_pos} (the dense range of the DSA decode and the "
+                "caches' max_seq_len): the sparse-range verify (index scorer with K + 1 rows per user) is not "
+                "wired; use plain decode beyond"
+            )
+
+    def set_verify(self, tokens: torch.Tensor, positions: list[int]):
+        """``tokens`` ``[N, K + 1]`` (user-major), ``positions`` the ``N`` anchor positions."""
+        self.check_positions(positions)
+        flat = verify_tokens_row_major(tokens, self.B, self.rows).to(torch.int32)
+        if int(flat.min()) < 0 or int(flat.max()) >= self.cfg.vocab_size:
+            raise ValueError("token id out of range")
+        _refresh(self.mesh, flat.reshape(1, 1, 1, -1), self.ids, 3)
+        _set_i32(self.mesh, verify_row_positions(positions, self.B, self.K, self.rows), self.rows_pos)
+        for j in range(self.K + 1):
+            _set_i32(self.mesh, [p + j for p in positions], self.pos[j])
+        self.host_positions = list(positions)
+
+    def set_commit(self, m: torch.Tensor, positions: list[int]):
+        """Per-candidate ring rows (rejected candidates to dead rows) and pool ids of the committed rows."""
+        for j in range(self.K + 1):
+            _set_i32(self.mesh, ring_slots_masked(positions, m, j, self.P), self.ring[j])
+            _set_i32(self.mesh, [(p + j) // self.P for p in positions], self.pool[j])
+
+
+# ============================================================================= DSA layers (and the MTP block)
+class DsaSpecState:
+    """One DSA attention (``TtDSA`` + its ``TtLatentCache``: a main layer or the MTP block) under speculation.
+
+    * ``verify_attention(h, vin)``: the composite decode stems on the ``R`` rows, the latent appended per candidate
+      (``[B]`` positions, the real page table), the raw indexer k / gate rows of all candidates copied into the
+      persistent ``k_all`` / ``g_all`` (for the commit), then the dense flash-MLA decode over the user's pages
+      through ``table`` (the page table with every user row replicated ``K + 1`` times, rows candidate-major)
+      with ``cur_pos = p_u + j`` per row. No ring / pool write.
+    * ``chain_attention(h, pos)``: a ``[B]``-row tentative step (MTP levels 2 .. K): latent append + dense
+      attention over the real table at ``pos``; no index write, nothing cached.
+    * ``commit(vin)``: the pooled-key maintenance of candidates ``0 .. K`` in order from ``k_all`` / ``g_all``
+      (``TtDSAIndexer.maintain_decode``: k LayerNorm, ring row write at ``vin.ring[j]``, pool rewrite at
+      ``vin.pool[j]``); the rejected candidates' ring rows land on dead rows, their pool rewrite on an
+      incomplete pool.
+
+    Tensors read / written: ``cache.cache`` (latent pages: written per candidate), ``cache.page_table`` (read),
+    ``cache.index.ring_k`` / ``ring_g`` / ``pool_cache`` (commit only, through the indexer's own methods), the
+    attention weights of ``attn`` (read)."""
+
+    def __init__(self, attn: TtDSA, cache: TtLatentCache, mesh: GLMMesh, users_per_row: int, draft_len: int):
+        if cache.partition:
+            raise NotImplementedError("the speculative verify is not wired for the user-partitioned cache")
+        self.attn, self.cache, self.mesh = attn, cache, mesh
+        self.B, self.K = users_per_row, draft_len
+        self.R = candidate_rows(users_per_row, draft_len)
+        if cache.users_per_chip != users_per_row:
+            raise ValueError(f"cache has {cache.users_per_chip} user slots, the verify {users_per_row}")
+        D = attn.indexer.D
+        self.k_all = _zeros((1, 1, self.R, D), ttnn.bfloat16, mesh.device)
+        self.g_all = _zeros((1, 1, self.R, D), ttnn.bfloat16, mesh.device)
+        self.table = self._replicated_table()
+
+    def _replicated_table(self) -> ttnn.Tensor:
+        """``[R, blocks_per_seq]`` int32 (replicated on every chip): row ``j B + u`` = the page-table row of user ``u``."""
+        pt = self.cache.page_table_host[: self.B]
+        rep = pt.repeat(self.K + 1, 1).contiguous()  # candidate-major: [pt; pt; ...]
+        return _upload(self.mesh, rep, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _stems(self, h: ttnn.Tensor):
+        attn = self.attn
+        T = int(h.shape[-2])
+        stem = attn.lin_stem(h, dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi2)
+        parts = {k: ttnn.slice(stem, [0, 0, 0, a], [1, 1, T, b]) for k, (a, b) in attn.stem_bounds.items()}
+        ttnn.deallocate(stem)
+        q_resid = ttnn.rms_norm(
+            parts["qa"], epsilon=attn.cfg.rms_norm_eps, weight=attn.qa_norm, compute_kernel_config=attn.hifi4
+        )
+        c = ttnn.rms_norm(
+            parts["kva"], epsilon=attn.cfg.rms_norm_eps, weight=attn.kva_norm, compute_kernel_config=attn.hifi4
+        )
+        for k in ("qa", "kva", "w"):
+            ttnn.deallocate(parts[k])
+        return q_resid, c, parts["k"], parts["g"]
+
+    def _dense_attention(self, q_resid: ttnn.Tensor, table: ttnn.Tensor, cur_pos: ttnn.Tensor) -> ttnn.Tensor:
+        attn = self.attn
+        T = int(q_resid.shape[-2])
+        q = attn._q(q_resid)  # [1,1,T,H*Dq]
+        q_lat = attn._absorb_q(q)  # [1,H,T,L]
+        ttnn.deallocate(q)
+        q_dec = ttnn.transpose(q_lat, 1, 2)  # [1,T,H,L]
+        ttnn.deallocate(q_lat)
+        o_lat = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q_dec,
+            self.cache.cache,
+            head_dim_v=attn.L,
+            page_table_tensor=table,
+            cur_pos_tensor=cur_pos,
+            scale=attn.scale,
+            program_config=attn._decode_sdpa_config(T),
+            compute_kernel_config=attn.sdpa_compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,T,H,L]
+        ttnn.deallocate(q_dec)
+        oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,T,L]
+        ttnn.deallocate(o_lat)
+        y = attn._o_proj(attn._o_lat_to_heads(oh))
+        ttnn.deallocate(oh)
+        return y
+
+    def verify_attention(self, h: ttnn.Tensor, vin: VerifyInputs) -> ttnn.Tensor:
+        """``h`` ``[1, 1, R, 4096]`` bf16 (input_layernorm applied) -> ``[1, 1, R, 4096]`` bf16."""
+        B, K, L = self.B, self.K, self.attn.L
+        if int(h.shape[-2]) != self.R:
+            raise ValueError(f"verify rows {int(h.shape[-2])} != R {self.R}")
+        q_resid, c, k_raw, g_raw = self._stems(h)
+        ttnn.copy(k_raw, self.k_all)
+        ttnn.copy(g_raw, self.g_all)
+        ttnn.deallocate(k_raw)
+        ttnn.deallocate(g_raw)
+        for j in range(K + 1):  # one paged write per candidate: a user's rows share a block (multi-row writes race)
+            c_j = _rows(c, j, B)
+            self.cache.update(ttnn.reshape(c_j, [1, B, 1, L]), vin.pos[j])
+            ttnn.deallocate(c_j)
+        ttnn.deallocate(c)
+        y = self._dense_attention(q_resid, self.table, vin.rows_pos)
+        ttnn.deallocate(q_resid)
+        return y
+
+    def chain_attention(self, h: ttnn.Tensor, pos: ttnn.Tensor) -> ttnn.Tensor:
+        """``h`` ``[1, 1, B, 4096]`` bf16 at the ``[B]`` positions ``pos`` (a tentative row per user)."""
+        B, L = self.B, self.attn.L
+        if int(h.shape[-2]) != B:
+            raise ValueError(f"chain rows {int(h.shape[-2])} != B {B}")
+        q_resid, c, k_raw, g_raw = self._stems(h)
+        ttnn.deallocate(k_raw)
+        ttnn.deallocate(g_raw)
+        self.cache.update(ttnn.reshape(c, [1, B, 1, L]), pos)
+        ttnn.deallocate(c)
+        y = self._dense_attention(q_resid, self.cache.page_table, pos)
+        ttnn.deallocate(q_resid)
+        return y
+
+    def commit(self, vin: VerifyInputs):
+        """Ring rows + pool rewrites of the committed candidates in order (the sequential decode's index state)."""
+        for j in range(self.K + 1):
+            k_j = _rows(self.k_all, j, self.B)
+            g_j = _rows(self.g_all, j, self.B)
+            # ``x`` is unused when ``kg`` is given; the indexer deallocates k_j / g_j itself
+            self.attn.indexer.maintain_decode(k_j, self.cache.index, vin.pool[j], vin.ring[j], kg=(k_j, g_j))
+
+
+# ============================================================================================ KDA layers
+class KdaSpecState:
+    """One KDA layer (``FunctionalDecoder`` with its persistent ``kda_batched`` state) under speculation.
+
+    ``verify_attention(h)``: the block decode's projections on all ``R`` rows (``lin_qkv``, ``lin_g1`` ->
+    ``lin_g2``: the weights read once), copied into the persistent ``qkv_all`` ``[1, 1, R, 3 H K]`` bf16 and
+    ``g2_all`` ``[1, 1, R, H K + H V + Hb]`` fp32; the live state backed up (``bk``); then ``K + 1`` sequential
+    ``kda_decode`` launches on the candidate slabs (launch ``j`` reads the state after candidates ``< j``: the
+    causal recurrence of every row) leaving the live state at ``S_{K+1}``; the per-launch outputs concatenated
+    (``[1, 1, R, H V]``) feed one ``o_proj`` + TP all-reduce.
+
+    ``commit()`` (after ``set_masks(m)``): for ``j = 0 .. K``: launch ``j`` on ``bk`` (``S_0`` advancing to
+    ``S_{j+1}``) from the cached slab, then ``live = live * keep_j + bk * take_j`` (recurrent with ``[B, H, K, 1]``
+    fp32 masks, conv with ``[3, B, 1]`` bf16 masks: exact products / adds); afterwards live = ``S_{m_u + 1}`` per
+    user and ``bk`` is spent (one commit per verify). Tensors read: ``qkv_all``, ``g2_all``, the masks, the layer's
+    ``taps_blk`` / ``chan_consts`` / ``o_norm_w32`` / ``selectors``; read and written in place: ``bk.recurrent`` /
+    ``bk.convolution`` (the replay) and ``kda_batched.recurrent`` / ``.convolution`` (the blend)."""
+
+    def __init__(self, dec: FunctionalDecoder, mesh: GLMMesh, users_per_row: int, draft_len: int):
+        if not dec.is_kda or dec.kda_batched is None:
+            raise ValueError(f"layer {dec.layer_idx} is not a KDA layer")
+        attn = dec._require_weights().attn
+        if attn.fused_decode != "block":
+            raise NotImplementedError("the speculative verify needs the block KDA decode (GLM53_KDA_FUSED=1)")
+        self.dec, self.attn, self.mesh = dec, attn, mesh
+        self.state: KdaState = dec.kda_batched
+        self.B, self.K = users_per_row, draft_len
+        self.R = candidate_rows(users_per_row, draft_len)
+        if int(self.state.recurrent.shape[0]) != users_per_row:
+            raise ValueError(f"KDA state holds {int(self.state.recurrent.shape[0])} slots, the verify {users_per_row}")
+        device = mesh.device
+        H, Kd, V = attn.H, attn.K, attn.V
+        Hb = -(-H // TILE) * TILE
+        self.taps = int(self.state.convolution.shape[0])
+        self.bk = KdaState(
+            recurrent=_zeros_like(self.state.recurrent, device), convolution=_zeros_like(self.state.convolution, device)
+        )
+        self.qkv_all = _zeros((1, 1, self.R, 3 * H * Kd), ttnn.bfloat16, device)
+        self.g2_all = _zeros((1, 1, self.R, H * Kd + H * V + Hb), ttnn.float32, device)
+        N = users_per_row * mesh.rows
+        rec_mask = torch.zeros(N, H, Kd, 1)
+        conv_mask = torch.zeros(self.taps, N, 1)
+        self.take_rec = [_upload(mesh, rec_mask, ttnn.float32, ttnn.TILE_LAYOUT, 0) for _ in range(self.K + 1)]
+        self.keep_rec = [_upload(mesh, rec_mask, ttnn.float32, ttnn.TILE_LAYOUT, 0) for _ in range(self.K + 1)]
+        self.take_conv = [_upload(mesh, conv_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT, 1) for _ in range(self.K + 1)]
+        self.keep_conv = [_upload(mesh, conv_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT, 1) for _ in range(self.K + 1)]
+
+    def set_masks(self, m: torch.Tensor):
+        """``m`` ``[N]``: user ``u``'s state is taken after launch ``m_u``."""
+        take = kda_commit_masks(m, self.K)  # [K+1, N]
+        H, Kd = self.attn.H, self.attn.K
+        for j in range(self.K + 1):
+            t = take[j]
+            rec = t.reshape(-1, 1, 1, 1).expand(-1, H, Kd, 1)
+            conv = t.reshape(1, -1, 1).expand(self.taps, -1, 1)
+            _refresh(self.mesh, rec, self.take_rec[j], 0)
+            _refresh(self.mesh, 1.0 - rec, self.keep_rec[j], 0)
+            _refresh(self.mesh, conv, self.take_conv[j], 1)
+            _refresh(self.mesh, 1.0 - conv, self.keep_conv[j], 1)
+
+    def _launch(self, qkv_j: ttnn.Tensor, g2_j: ttnn.Tensor, st: KdaState) -> ttnn.Tensor:
+        """One ``kda_decode`` program on a candidate slab against the state ``st`` (updated in place)."""
+        attn = self.attn
+        o = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.B, attn.H * attn.V]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn.kda_decode(
+            qkv_j,
+            g2_j,
+            st.convolution,
+            st.recurrent,
+            attn.taps_blk,
+            attn.chan_consts,
+            attn.o_norm_w32,
+            attn.selectors,
+            o,
+        )
+        return o
+
+    def backup(self):
+        """``bk`` := the live state (``S_0`` of the iteration; a whole-tensor copy, fp32 / bf16 preserved)."""
+        ttnn.copy(self.state.recurrent, self.bk.recurrent)
+        ttnn.copy(self.state.convolution, self.bk.convolution)
+
+    def verify_attention(self, h: ttnn.Tensor) -> ttnn.Tensor:
+        """``h`` ``[1, 1, R, 4096]`` bf16 (input_layernorm applied) -> ``[1, 1, R, 4096]`` bf16."""
+        attn, B, K = self.attn, self.B, self.K
+        if int(h.shape[-2]) != self.R:
+            raise ValueError(f"verify rows {int(h.shape[-2])} != R {self.R}")
+        qkv = attn.lin_qkv(h, dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi2)  # [1,1,R,3HK]
+        g1 = attn.lin_g1(h, dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi2)
+        g2 = attn.lin_g2(g1, dtype=ttnn.float32, compute_kernel_config=attn.fp32)  # [1,1,R,HK+HV+Hb]
+        ttnn.deallocate(g1)
+        ttnn.copy(qkv, self.qkv_all)
+        ttnn.copy(g2, self.g2_all)
+        self.backup()  # S_0 of this iteration
+        outs = []
+        for j in range(K + 1):
+            qkv_j, g2_j = _rows(qkv, j, B), _rows(g2, j, B)
+            outs.append(self._launch(qkv_j, g2_j, self.state))
+            ttnn.deallocate(qkv_j)
+            ttnn.deallocate(g2_j)
+        ttnn.deallocate(qkv)
+        ttnn.deallocate(g2)
+        if K == 0:
+            o_all = outs[0]
+        else:
+            o_all = ttnn.concat(outs, dim=-2)  # [1,1,R,HV] candidate-major
+            for o in outs:
+                ttnn.deallocate(o)
+        y = attn.lin_o(o_all, dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi2)
+        ttnn.deallocate(o_all)
+        return attn.mesh.all_reduce_cols(y)
+
+    def commit(self):
+        """live := ``S_{m_u + 1}`` per user (``set_masks`` first): the backup ``bk`` (``S_0``) is advanced in place
+        by the launches ``0 .. K`` on the cached projections (the same programs on the same inputs as the verify's)
+        and after launch ``j`` the live state takes ``bk`` for the users with ``m_u == j`` (``live = live * keep_j
+        + bk * take_j``: exact products / adds). Every user is taken exactly once, so the live state's post-verify
+        content never survives. The backup is consumed: one commit per verify (the next verify backs up again)."""
+        st, bk = self.state, self.bk
+        for j in range(self.K + 1):
+            qkv_j, g2_j = _rows(self.qkv_all, j, self.B), _rows(self.g2_all, j, self.B)
+            o = self._launch(qkv_j, g2_j, bk)
+            ttnn.deallocate(o)
+            ttnn.deallocate(qkv_j)
+            ttnn.deallocate(g2_j)
+            ttnn.multiply(st.recurrent, self.keep_rec[j], output_tensor=st.recurrent)
+            t = ttnn.multiply(bk.recurrent, self.take_rec[j])
+            ttnn.add(st.recurrent, t, output_tensor=st.recurrent)
+            ttnn.deallocate(t)
+            ttnn.multiply(st.convolution, self.keep_conv[j], output_tensor=st.convolution)
+            t = ttnn.multiply(bk.convolution, self.take_conv[j])
+            ttnn.add(st.convolution, t, output_tensor=st.convolution)
+            ttnn.deallocate(t)
+
+
+# ====================================================================================== the decoder
+def prefill_with_mtp(
+    model: "GLM53MeshModel", mtp: TtMTPBlock, prompt_ids: torch.Tensor, user: int = 0
+) -> tuple[int, int]:
+    """The prompt through the main model's eager prefill (every layer, the head on the last token) and the MTP
+    cache / index of ``user`` from the prompt rows (row i: the main model's normed hidden at i and token
+    ``t_{i+1}``; the last row takes the prompt's first generated token). On a multi-row mesh the MTP sees the
+    same slabs the layers left their streams in. Returns ``(first token, its position = S)``."""
+    mesh = model.mesh
+    S = int(prompt_ids.numel())
+    streams, logits, owner = model.prefill(prompt_ids, user=user)
+    tok = model.first_token(logits, owner)
+    T_pad = int(streams.shape[-2]) * mesh.rows
+    next_ids = torch.cat([prompt_ids.reshape(-1).long()[1:], torch.tensor([tok])])
+    host = model.embedding.tokens_to_host(next_ids, pad_to=T_pad)  # [1,1,1,T_pad]
+    ids_dev = _upload(mesh, host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3 if mesh.rows > 1 else None)
+    h = model.head.collapse(streams)  # this row's slab [1,1,T_loc,H] fp32
+    hidden = model.head.norm(h)  # bf16: the LM-head input of every prompt row
+    if h is not streams:
+        ttnn.deallocate(h)
+    out = mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=S)
+    for t in (out, hidden, ids_dev, streams, logits):
+        ttnn.deallocate(t)
+    return tok, S
+
+
+def verify_layer(
+    dec: FunctionalDecoder,
+    streams: ttnn.Tensor,
+    state: DsaSpecState | KdaSpecState,
+    vin: VerifyInputs,
+    *,
+    collapse: bool,
+) -> ttnn.Tensor:
+    """One decoder layer on the ``R`` candidate rows: ``TtDecoderLayer.decode_forward`` with the speculative
+    attention (the mHC wraps, norms and the FFN are row-wise and unchanged)."""
+    layer = dec._require_weights()
+    if dec.is_kda:
+        attention = lambda h: state.verify_attention(h)
+    else:
+        attention = lambda h: state.verify_attention(h, vin)
+    streams = layer._hc_call(layer.attn_hc, streams, attention, layer.input_norm_w)
+    return layer._hc_call(layer.ffn_hc, streams, layer.mlp, layer.post_norm_w, collapse=collapse)
+
+
+class SpecDecoder:
+    """The device side of speculative decoding on a ``GLM53MeshModel`` with an attached ``TtMTPBlock``.
+
+    Construction allocates every persistent tensor (states, inputs, outputs) -- before any trace capture of the
+    model. ``warmup`` compiles the three graphs eagerly (consuming dummy tokens: re-prefill afterwards, like
+    ``GLM53MeshModel.capture``), ``capture`` traces them, ``prefill`` fills the main and MTP caches of a user,
+    ``generate`` runs the ``GreedySpecLoop`` over the traced (or eager) graphs."""
+
+    def __init__(self, model: "GLM53MeshModel", mtp: TtMTPBlock, draft_len: int, *, keep_logits: bool = True):
+        if model.head is None:
+            raise ValueError("the speculative decoder needs the model's head")
+        self.model, self.mtp, self.K = model, mtp, int(draft_len)
+        self.mesh: GLMMesh = model.mesh
+        self.cfg = model.cfg
+        self.B = model.max_batch
+        self.rows = self.mesh.rows
+        self.N = model.total_users
+        self.R = candidate_rows(self.B, self.K)
+        if mtp.max_batch != self.B or mtp.mesh.rows != self.rows:
+            raise ValueError(f"MTP block ({mtp.max_batch} users/row) does not match the model ({self.B})")
+        if mtp.max_seq_len < model.max_seq_len:
+            raise ValueError("the MTP cache must hold at least the model's max_seq_len positions")
+        dsa_layers = [d for d in model.layers if not d.is_kda]
+        dense_max = min([d.layer.attn.dense_exact_max_pos for d in dsa_layers] + [mtp.attn.dense_exact_max_pos])
+        self.vin = VerifyInputs(self.mesh, self.cfg, self.B, self.K, min(dense_max, model.max_seq_len - 1))
+        self.states: dict[int, DsaSpecState | KdaSpecState] = {}
+        for dec in model.layers:
+            if dec.is_kda:
+                self.states[dec.layer_idx] = KdaSpecState(dec, self.mesh, self.B, self.K)
+            else:
+                self.states[dec.layer_idx] = DsaSpecState(dec.layer.attn, dec.cache, self.mesh, self.B, self.K)
+        self.mtp_state = DsaSpecState(mtp.attn, mtp.cache, self.mesh, self.B, self.K)
+        H, V = self.cfg.hidden_size, self.cfg.vocab_size
+        device = self.mesh.device
+        rm, u32 = ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32
+        # V outputs (persistent copies): the main greedy ids, the MTP level-1 ids and normed hidden of every row
+        self.out_ids = _zeros((1, 1, self.R, 1), u32, device, rm)
+        self.out_d1 = _zeros((1, 1, self.R, 1), u32, device, rm)
+        self.out_hidden = _zeros((1, 1, self.R, H), ttnn.bfloat16, device)
+        self.out_logits = _zeros((1, 1, self.R, V), ttnn.bfloat16, device) if keep_logits else None
+        # D inputs / outputs: the select matrix, the selected level-1 draft ids, the per-level MTP positions
+        self.sel = _upload(self.mesh, torch.zeros(self.rows, 1, self.B, self.R), ttnn.bfloat16, ttnn.TILE_LAYOUT, 0)
+        self.d1_ids = _upload(self.mesh, torch.zeros(1, 1, 1, self.N, dtype=torch.int32), u32, rm, 3)
+        self.level_pos = {k: _up_i32(self.mesh, [0] * self.N) for k in range(2, self.K + 1)}
+        self.out_draft = {k: _zeros((1, 1, self.B, 1), u32, device, rm) for k in range(2, self.K + 1)}
+        self.hifi4 = _hifi4_fp32(device)
+        self.trace_v = self.trace_c = self.trace_d = None
+        self.compiled = False
+
+    # ------------------------------------------------------------------------------------------ graphs
+    def _verify_graph(self):
+        """V: the main model on the R rows + MTP level 1 on every row; outputs copied into the persistent buffers."""
+        m, vin = self.model, self.vin
+        streams = m.embedding(vin.ids)  # [1,1,R,16384] fp32
+        last = len(m.layers) - 1
+        for k, dec in enumerate(m.layers):
+            collapse = k == last and dec.supports_collapse
+            out = verify_layer(dec, streams, self.states[dec.layer_idx], vin, collapse=collapse)
+            ttnn.deallocate(streams)
+            streams = out
+        hn, logits, ids = m.head_forward_with_hidden(streams)
+        ttnn.deallocate(streams)
+        ttnn.copy(ids, self.out_ids)
+        if self.out_logits is not None:
+            ttnn.copy(logits, self.out_logits)
+        ttnn.deallocate(logits)
+        # MTP level 1 on all rows, teacher-forced with the row's greedy id (the id row is a view of ``ids``)
+        x = self.mtp.project(self.mtp.ids_row(ids), hn)
+        ttnn.deallocate(hn)
+        ttnn.deallocate(ids)
+        out = self.mtp.block_rows(x, lambda h: self.mtp_state.verify_attention(h, vin))
+        normed, mlogits, mids = self.mtp.head_forward(out)
+        ttnn.copy(mids, self.out_d1)
+        ttnn.copy(normed, self.out_hidden)
+        for t in (out, normed, mlogits, mids):
+            ttnn.deallocate(t)
+
+    def _commit_graph(self):
+        """C: the KDA state commit of every KDA layer, the index commit of every DSA layer and of the MTP."""
+        for dec in self.model.layers:
+            st = self.states[dec.layer_idx]
+            if dec.is_kda:
+                st.commit()
+            else:
+                st.commit(self.vin)
+        self.mtp_state.commit(self.vin)
+
+    def _draft_graph(self):
+        """D: MTP levels 2 .. K from the selected level-1 rows (exact one-hot gather of the level-1 hidden)."""
+        if self.K < 2:
+            return
+        hid = ttnn.matmul(self.sel, self.out_hidden, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,1,B,H]
+        ids = self.d1_ids  # [1,1,1,B] persistent
+        garbage: list[ttnn.Tensor] = []
+        for k in range(2, self.K + 1):
+            x = self.mtp.project(ids, hid)
+            pos = self.level_pos[k]
+            out = self.mtp.block_rows(x, lambda h, pos=pos: self.mtp_state.chain_attention(h, pos))
+            normed, logits, dids = self.mtp.head_forward(out)
+            ttnn.copy(dids, self.out_draft[k])
+            garbage += [out, logits, hid]
+            hid = normed
+            ids = self.mtp.ids_row(dids)  # a view of dids: dids is freed after the next level consumed it
+            garbage.append(dids)
+        garbage.append(hid)
+        for t in garbage:
+            ttnn.deallocate(t)
+
+    # ------------------------------------------------------------------------------------ compile / trace
+    def warmup(self, positions: list[int] | None = None, cq_id: int = 0):
+        """Run V, C and D once eagerly on placeholder inputs (program compile, lazily built constants). Advances
+        the KDA states by one anchor row and writes placeholder rows into the caches: re-prefill afterwards."""
+        positions = [0] * self.N if positions is None else list(positions)
+        tokens = (torch.arange(self.N * (self.K + 1)) % 1000 + 1000).reshape(self.N, self.K + 1)
+        self.vin.set_verify(tokens, positions)
+        m = torch.zeros(self.N, dtype=torch.long)
+        self._set_commit(m, positions)
+        self._set_draft(m, torch.zeros(self.N, dtype=torch.long), positions)
+        t0 = time.perf_counter()
+        self._verify_graph()
+        self._commit_graph()
+        self._draft_graph()
+        ttnn.synchronize_device(self.mesh.device)
+        self.compiled = True
+        logger.info(
+            f"spec decode: graphs compiled in {time.perf_counter() - t0:.1f} s (B {self.B} K {self.K} R {self.R})"
+        )
+
+    def capture(self, cq_id: int = 0):
+        """Capture V, C and D (after ``warmup``; every persistent tensor already exists)."""
+        if not self.compiled:
+            self.warmup(cq_id=cq_id)
+        dev = self.mesh.device
+        for name, fn in (("V", self._verify_graph), ("C", self._commit_graph), ("D", self._draft_graph)):
+            if name == "D" and self.K < 2:
+                continue
+            t0 = time.perf_counter()
+            tid = ttnn.begin_trace_capture(dev, cq_id=cq_id)
+            fn()
+            ttnn.end_trace_capture(dev, tid, cq_id=cq_id)
+            ttnn.synchronize_device(dev)
+            setattr(self, {"V": "trace_v", "C": "trace_c", "D": "trace_d"}[name], tid)
+            logger.info(f"spec decode: trace {name} captured in {time.perf_counter() - t0:.1f} s")
+
+    def release(self):
+        for attr in ("trace_v", "trace_c", "trace_d"):
+            tid = getattr(self, attr)
+            if tid is not None:
+                ttnn.release_trace(self.mesh.device, tid)
+                setattr(self, attr, None)
+
+    def _run(self, trace_id, fn, cq_id: int = 0):
+        if trace_id is not None:
+            ttnn.execute_trace(self.mesh.device, trace_id, cq_id=cq_id, blocking=True)
+        else:
+            fn()
+
+    # ------------------------------------------------------------------------------------- the three steps
+    def _ids_host(self, t: ttnn.Tensor) -> torch.Tensor:
+        return self.model.ids_to_host(t)
+
+    def verify_forward(self, tokens: torch.Tensor, positions: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
+        """``tokens`` ``[N, K + 1]`` long (user-major ``[anchor, d_1 .. d_K]``), ``positions`` the ``N`` anchor
+        positions -> ``(ids [N, K + 1], d1 [N, K + 1])``: the main model's greedy id and the MTP level-1 draft of
+        every candidate row. Traced after ``capture``, eager before."""
+        self.vin.set_verify(tokens, positions)
+        self._run(self.trace_v, self._verify_graph)
+        ids = verify_ids_user_major(self._ids_host(self.out_ids), self.B, self.K, self.rows)
+        d1 = verify_ids_user_major(self._ids_host(self.out_d1), self.B, self.K, self.rows)
+        return ids, d1
+
+    def verify_logits(self) -> torch.Tensor | None:
+        """The last verify's main logits ``[N, K + 1, V]`` fp32 (``keep_logits``): acceptance diagnostics."""
+        if self.out_logits is None:
+            return None
+        t = self.mesh.to_host(self.out_logits, rows=2 if self.rows > 1 else None).float()[0, 0]  # [rows R, V]
+        V = t.shape[-1]
+        return t.reshape(self.rows, self.K + 1, self.B, V).permute(0, 2, 1, 3).reshape(self.N, self.K + 1, V)
+
+    def _set_commit(self, m: torch.Tensor, positions: list[int]):
+        self.vin.set_commit(m, positions)
+        for st in self.states.values():
+            if isinstance(st, KdaSpecState):
+                st.set_masks(m)
+
+    def commit(self, m: torch.Tensor, positions: list[int]):
+        """Make candidates ``0 .. m_u`` of every user permanent (KDA states, pooled-key index)."""
+        self._set_commit(m, positions)
+        self._run(self.trace_c, self._commit_graph)
+
+    def _set_draft(self, m: torch.Tensor, d1: torch.Tensor, positions: list[int]):
+        _refresh(self.mesh, select_onehot(m, self.B, self.K, self.rows), self.sel, 0)
+        _refresh(self.mesh, d1.to(torch.int32).reshape(1, 1, 1, -1), self.d1_ids, 3)
+        for k in range(2, self.K + 1):  # level k of the next iteration sits at p + m + k - 1 = next anchor + k - 2
+            _set_i32(self.mesh, [p + int(mu) + k - 1 for p, mu in zip(positions, m)], self.level_pos[k])
+
+    def draft_chain(self, m: torch.Tensor, d1: torch.Tensor, positions: list[int]) -> torch.Tensor:
+        """MTP levels ``2 .. K`` from verify row ``m_u`` of every user (its level-1 hidden and draft ``d1``), at the
+        anchor positions ``positions`` of the verify that produced them -> ``[N, K - 1]`` draft ids."""
+        if self.K < 2:
+            return torch.zeros(self.N, 0, dtype=torch.long)
+        self._set_draft(m, d1, positions)
+        self._run(self.trace_d, self._draft_graph)
+        return torch.stack([self._ids_host(self.out_draft[k]) for k in range(2, self.K + 1)], dim=1)
+
+    # ------------------------------------------------------------------------------------------ prefill
+    def prefill(self, prompt_ids: torch.Tensor, user: int = 0) -> tuple[int, int]:
+        """``prefill_with_mtp`` on this decoder's model and drafter."""
+        return prefill_with_mtp(self.model, self.mtp, prompt_ids, user=user)
+
+    # ----------------------------------------------------------------------------------------- generation
+    def loop(self) -> GreedySpecLoop:
+        return GreedySpecLoop(
+            self.B, self.K, verify=self.verify_forward, commit=self.commit, draft_chain=self.draft_chain, rows=self.rows
+        )
+
+    def generate(
+        self, anchors: list[int], positions: list[int], max_new_tokens: int, eos: int | None = None
+    ) -> tuple[list[list[int]], SpecStats]:
+        """Lossless greedy speculative generation for every user slot from its committed ``anchors`` at
+        ``positions`` (``prefill`` gives both). The caller keeps ``max(positions) + max_new_tokens + K + 1``
+        below the dense range / ``max_seq_len``."""
+        return self.loop().run(anchors, positions, max_new_tokens, eos=eos)
