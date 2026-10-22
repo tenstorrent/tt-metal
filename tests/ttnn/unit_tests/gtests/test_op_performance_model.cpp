@@ -21,7 +21,7 @@ TEST_F(OpPerformanceModelDramTest, BandwidthUsesDecimalGigabytesPerSecond) {
         ttnn::Shape({1, 1, 512, 1024}), DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, ttnn::DRAM_MEMORY_CONFIG);
     const tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> model({tensor}, tensor, 1);
 
-    const double peak_dram_gb_per_s = device_->arch() == tt::ARCH::BLACKHOLE ? 512.0 : 258.0;
+    const double peak_dram_gb_per_s = tt::tt_metal::operation::peak_dram_bandwidth_gb_per_s(device_->arch());
     const double size_bytes = static_cast<double>(tensor.physical_volume() * tensor.element_size());
     EXPECT_EQ(model.get_bandwidth_ns(), static_cast<int>(size_bytes / peak_dram_gb_per_s));
 }

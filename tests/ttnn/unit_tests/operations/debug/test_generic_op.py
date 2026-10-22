@@ -436,3 +436,20 @@ def test_point_to_point(mesh_device):
     logger.info(f"Output at receiver: {output_tensor_cpu}")
 
     assert torch.allclose(output_tensor_cpu, sender_data), "Receiver should have sender's data after transfer"
+
+
+def _program_with_cb(face_geometry):
+    fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=2048)
+    fmt.face_geometry = face_geometry
+    cb = ttnn.CBDescriptor(
+        total_size=2048,
+        core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+        format_descriptors=[fmt],
+    )
+    return ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[cb])
+
+
+def test_generic_op_hash_includes_cb_face_geometry():
+    default = ttnn.compute_program_descriptor_hash(_program_with_cb(None))
+    assert default == ttnn.compute_program_descriptor_hash(_program_with_cb(None))
+    assert default != ttnn.compute_program_descriptor_hash(_program_with_cb(ttnn.FaceGeometry(1, 4)))
