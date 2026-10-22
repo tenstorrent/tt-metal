@@ -85,6 +85,7 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import raise_nproc_limit
 from models.demos.gpt_oss_d_p.tests.galaxy_prefill_kv_pcc import COLS, ROWS, chunk_alignment
 
@@ -196,6 +197,20 @@ def cache_traffic_note(hf_config, num_layers, cache, chunk, kv_bytes_per_elem):
     )
 
 
+class DrainSink(LayerCompletionSink):
+    """Layer-completion sink that drains the device profiler every `read_every` layers and stays silent
+    inside the profiled chunk unless `read_in_chunk` (the drain policy is explained in main())."""
+
+    def __init__(self, drain, state, read_every, read_in_chunk):
+        self.drain, self.state, self.read_every, self.read_in_chunk = drain, state, read_every, read_in_chunk
+
+    def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
+        if self.state["in_chunk"] and not self.read_in_chunk:
+            return
+        if self.read_every > 0 and layer_end % self.read_every == 0:
+            self.drain()
+
+
 def main():
     # The zone flag is read when utils/profiler_utils is imported, and the model modules import it —
     # so it goes on before anything under models.demos.gpt_oss_d_p.tt is imported (all of those imports
@@ -259,12 +274,6 @@ def main():
             read_profiler(mesh)
             state["reads"] += 1
 
-        def layer_sink(global_layer_idx, request_id):
-            if state["in_chunk"] and not read_in_chunk:
-                return
-            if read_every > 0 and (global_layer_idx + 1) % read_every == 0:
-                drain()
-
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
         # too, but outside the `profiled_chunk` zone, so the parser drops them. The sink can only be
         # registered after compile(), so the warmup itself is covered by the drain right after it.
@@ -272,7 +281,7 @@ def main():
         t0 = time.perf_counter()
         runtime.compile()
         drain()
-        runtime.set_layer_completion_sink(layer_sink)
+        runtime.set_layer_completion_sink(DrainSink(drain, state, read_every, read_in_chunk))
         print(f"[zone-prof] warmup done in {(time.perf_counter() - t0):.1f}s", flush=True)
 
         tokens = load_tokens(total)

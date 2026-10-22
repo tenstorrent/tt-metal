@@ -188,7 +188,9 @@ run_cfg () {  # $1=label  $2=cache_tokens
   if [ -n "$csv" ]; then
     # Park the CSV under RESULTS_DIR so generated/profiler/ can be wiped between experiments. The log
     # is copied in once the whole run has finished (see the end of the script).
-    local dest="$RESULTS_DIR/${STAMP}_gptoss_layers${LAYERS}_cache${cache}_${EXPERT_DTYPE}${PROFILE_READ_IN_CHUNK:+_readinchunk}"
+    local ric=""
+    [ "${PROFILE_READ_IN_CHUNK:-0}" = "1" ] && ric=_readinchunk
+    local dest="$RESULTS_DIR/${STAMP}_gptoss_layers${LAYERS}_cache${cache}_${EXPERT_DTYPE}${ric}"
     if mkdir -p "$dest" && mv "$csv" "$dest/"; then
       csv="$dest/$(basename "$csv")"
       DESTS+=("$dest")
