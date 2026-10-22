@@ -66,7 +66,8 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    // One Q chunk and its K/V stream in Sk_chunk_t-tile steps; causal K count rounds up to a step boundary.
+    // Reads one Q chunk (Sq_chunk_t query tile-rows) and then the K/V tiles it attends to, in steps of
+    // Sk_chunk_t tiles. The push order must match the cb_wait_front order in the compute kernel.
     auto read_q_chunk = [&](const uint32_t global_q_chunk_idx) {
         const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
         const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
@@ -91,7 +92,8 @@ void kernel_main() {
         for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // K col-major in cb_key (feat outer, seq inner) for matmul_block transpose=1.
+            // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
+            // the order matmul_block walks when it multiplies by K^T.
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK

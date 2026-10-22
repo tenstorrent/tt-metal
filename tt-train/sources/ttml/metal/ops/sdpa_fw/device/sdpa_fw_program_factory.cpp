@@ -66,7 +66,8 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 
 const std::string kHasGateDefKey = "HAS_GATE";
 
-// k_chunk_size = 0: largest of 4/2/1 tiles dividing St (4 tiles = one fp32 DST cycle).
+// K/V tiles per step when k_chunk_size is 0: the largest of 4, 2, 1 that divides St. Four tiles
+// is what the math unit's register file (DST) holds in fp32, so one row's exp pass fits in one go.
 uint32_t pick_default_sk_chunk_t(uint32_t St) {
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
@@ -77,21 +78,29 @@ uint32_t pick_default_sk_chunk_t(uint32_t St) {
     return 1U;
 }
 
-// Largest rt_dim x ct_dim dividing (rows, cols) with product <= dst_size; ties prefer more columns.
-std::pair<uint32_t, uint32_t> pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t dst_size) {
-    std::pair<uint32_t, uint32_t> best{1U, 1U};
-    for (uint32_t h = 1U; h <= rows; ++h) {
-        if (rows % h != 0U) {
+// One matmul_block call produces a rectangle of output tiles (block_rows x block_cols) that must fit
+// in DST (dst_size tiles). The full output is rows x cols tiles, so the rectangle sides must divide
+// those. Take the biggest rectangle; between equal sizes take the wider one, because the tiles of
+// one output row are consecutive in memory and a wider rectangle re-reads the left operand less.
+struct MatmulBlockDims {
+    uint32_t block_rows;
+    uint32_t block_cols;
+};
+
+MatmulBlockDims pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t dst_size) {
+    MatmulBlockDims best{1U, 1U};
+    for (uint32_t block_rows = 1U; block_rows <= rows; ++block_rows) {
+        if (rows % block_rows != 0U) {
             continue;
         }
-        for (uint32_t w = 1U; w <= cols; ++w) {
-            if (cols % w != 0U || h * w > dst_size) {
+        for (uint32_t block_cols = 1U; block_cols <= cols; ++block_cols) {
+            if (cols % block_cols != 0U || block_rows * block_cols > dst_size) {
                 continue;
             }
-            const uint32_t area = h * w;
-            const uint32_t best_area = best.first * best.second;
-            if (area > best_area || (area == best_area && w > best.second)) {
-                best = {h, w};
+            const uint32_t tiles = block_rows * block_cols;
+            const uint32_t best_tiles = best.block_rows * best.block_cols;
+            if (tiles > best_tiles || (tiles == best_tiles && block_cols > best.block_cols)) {
+                best = {block_rows, block_cols};
             }
         }
     }
@@ -234,7 +243,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
-    // Chunk geometry in tiles (0 = default: 1 Q row, up to 4 K tiles).
+    // The two knobs in tiles (_t): Sq_chunk_t query tile-rows are processed together against one
+    // pass over K/V, Sk_chunk_t K/V tiles are consumed per step. 0 = default (1 Q row, up to 4 K tiles).
     const uint32_t Sq_chunk_t = args.q_chunk_size == 0U ? 1U : args.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t =
         args.k_chunk_size == 0U ? pick_default_sk_chunk_t(St) : args.k_chunk_size / tt::constants::TILE_HEIGHT;
@@ -294,17 +304,22 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_units_per_core_group_2 = std::get<5>(work_split);
     }
 
-    // DST budget: 4 tiles (fp32 acc) or 8 (bf16). block_size (SFPU, needs 1 scratch), the qk/pv
-    // matmul_block rectangles and sm_block_size (exp pass tiles per DST cycle) derive from it.
+    // DST is the register file the math unit computes in: 4 tiles in fp32 mode (8 in bf16).
+    // Everything below is "how many tiles go through DST per pass":
+    //   block_size     output tiles per pass in the element-wise loops (one slot stays free for the
+    //                  broadcast factor they multiply by)
+    //   qk_block_*     Q rows x K tiles per QK^T matmul_block call
+    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call
+    //   sm_block_size  score tiles of one row per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
     const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
-    const auto qk_block_dims = pick_matmul_block_dims(Sq_chunk_t, Sk_chunk_t, dst_size);
-    const uint32_t qk_block_h = qk_block_dims.first;
-    const uint32_t qk_block_w = qk_block_dims.second;
-    const auto pv_block_dims = pick_matmul_block_dims(Sq_chunk_t, vWt, dst_size);
-    const uint32_t pv_block_h = pv_block_dims.first;
-    const uint32_t pv_block_w = pv_block_dims.second;
+    const auto qk_block = pick_matmul_block_dims(Sq_chunk_t, Sk_chunk_t, dst_size);
+    const uint32_t qk_block_h = qk_block.block_rows;
+    const uint32_t qk_block_w = qk_block.block_cols;
+    const auto pv_block = pick_matmul_block_dims(Sq_chunk_t, vWt, dst_size);
+    const uint32_t pv_block_h = pv_block.block_rows;
+    const uint32_t pv_block_w = pv_block.block_cols;
     const uint32_t sm_block_size = get_block_size(Sk_chunk_t, dst_size);
 
     const auto data_format = input_data_format;
@@ -314,7 +329,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    // Q/K/V/gate/mask double-buffered; per-row softmax state is Sq_chunk_t deep.
+    // Circular buffers (CBs) are the L1 queues between the reader, compute and writer kernels.
+    // Inputs hold two chunks so the reader fetches the next one while compute works on the current.
+    // The per-row softmax state (max, sum, ...) is one tile per Q row of the chunk.
     const uint32_t cb_query_tiles = 2U * Sq_chunk_t * qWt;
     const uint32_t cb_key_tiles = 2U * Sk_chunk_t * kWt;
     const uint32_t cb_value_tiles = 2U * Sk_chunk_t * vWt;
@@ -574,7 +591,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto make_compute_args = [&](uint32_t units_per_core) {
         return std::vector<uint32_t>{
             units_per_core,  // per_core unit count (Q chunks, or pairs in balanced mode)
-            block_size,      // SFPU per-row block size (cap = dst_size - 1, needs scratch)
+            block_size,      // output tiles per DST pass in the element-wise loops
             qWt,             // num tile in inner dim in query/key (d_qk/TILE_W)
             vWt,             // num tile in inner dim in value (d_v/TILE_W)
             St,              // num_seq_len / TILE_H
@@ -582,13 +599,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             minus_one,       // used to transform mask from 1/0 to 0/-1
             custom_inf,      // used to transform mask from 0/-1 to 0/-1e9F
             Sk_chunk_t,      // K/V tiles per inner-loop step
-            pv_block_w,      // PV matmul_block ct_dim (V feature tiles per call)
+            pv_block_w,      // V feature tiles per PV matmul_block call
             scaler_bf16,     // BF16 (RNE) scale for the WH fused scale+exp path
             Sq_chunk_t,      // query tile-rows per Q chunk
-            qk_block_h,      // QK^T matmul_block rt_dim (Q rows per call)
-            qk_block_w,      // QK^T matmul_block ct_dim (K tiles per call)
-            pv_block_h,      // PV matmul_block rt_dim (Q rows per call)
-            sm_block_size,   // score tiles per DST cycle in the softmax exp pass
+            qk_block_h,      // Q rows per QK^T matmul_block call
+            qk_block_w,      // K tiles per QK^T matmul_block call
+            pv_block_h,      // Q rows per PV matmul_block call
+            sm_block_size,   // score tiles of one row per DST pass in the exp step
         };
     };
     const auto make_compute_config = [&](std::vector<uint32_t> compile_args) {

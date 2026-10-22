@@ -144,8 +144,9 @@ void update_cur_row_max_value(
     tile_regs_release();
 }
 
-// exp(scale * (score - max)) in place on row `row`; the row's partial sum is built in
-// cb_cur_exp_sum[row] via packer L1-accumulate, in Sk_chunk_t / sm_block_size DST cycles.
+// P = exp(scale * (score - max)) written over row `row` of the score CB, sm_block_size tiles per DST
+// pass. The row's sum of P is built in cb_cur_exp_sum[row] by the packer: the first tile is packed
+// normally, the rest with L1-accumulate on, which adds the tile onto the one already in that slot.
 template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t, uint32_t sm_block_size>
 void apply_exp_inplace_and_find_exp_sum(
     uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t row) {
@@ -176,7 +177,7 @@ void apply_exp_inplace_and_find_exp_sum(
             pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ row * Sk_chunk_t + n0 + i);
         }
 
-        // first tile overwrites the slot, the rest L1-accumulate
+        // row sum: first tile overwrites the slot, the rest add onto it
         pack_reconfig_data_format(cb_cur_exp_sum);
         uint32_t i = 0;
         if (n0 == 0U) {
@@ -194,8 +195,9 @@ void apply_exp_inplace_and_find_exp_sum(
     }
 }
 
-// attention_weights (Sq_chunk_t x Sk_chunk_t, row-major) @ V (Sk_chunk_t x Wt) for the whole chunk,
-// block_h x block_w output tiles per matmul_block call (block_h * block_w <= dst_size).
+// O_step = P @ V for the whole chunk: P is Sq_chunk_t x Sk_chunk_t tiles (row-major), V is
+// Sk_chunk_t x Wt tiles (row-major, as read from DRAM). Each matmul_block call produces a
+// block_h x block_w rectangle of output tiles and accumulates over Sk_chunk_t inside DST.
 template <uint32_t Sk_chunk_t, uint32_t Sq_chunk_t>
 void matmul_qk_by_v(
     uint32_t Wt,
@@ -219,15 +221,15 @@ void matmul_qk_by_v(
         /* rt_dim */ block_h,
         /* kt_dim */ Sk_chunk_t);
 
-    for (uint32_t qb = 0; qb < Sq_chunk_t; qb += block_h) {
-        for (uint32_t vb = 0; vb < Wt; vb += block_w) {
+    for (uint32_t row0 = 0; row0 < Sq_chunk_t; row0 += block_h) {
+        for (uint32_t col0 = 0; col0 < Wt; col0 += block_w) {
             tile_regs_acquire();
-            for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
+            for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
                 matmul_block(
                     cb_attention_weights,
                     cb_value,
-                    /* in0 (A) tile_idx */ qb * Sk_chunk_t + k_in_chunk,
-                    /* in1 (B) tile_idx */ k_in_chunk * Wt + vb,
+                    /* in0 (P) tile_idx */ row0 * Sk_chunk_t + k,
+                    /* in1 (V) tile_idx */ k * Wt + col0,
                     /* dst_idx */ 0,
                     /* transpose */ 0,
                     /* ct_dim */ block_w,
@@ -238,7 +240,8 @@ void matmul_qk_by_v(
             tile_regs_wait();
             for (uint32_t i = 0; i < block_h; ++i) {
                 for (uint32_t j = 0; j < block_w; ++j) {
-                    pack_tile</* out_of_order */ true>(i * block_w + j, cb_cur_mm_out, /* offset */ (qb + i) * Wt + vb + j);
+                    pack_tile</* out_of_order */ true>(
+                        i * block_w + j, cb_cur_mm_out, /* offset */ (row0 + i) * Wt + col0 + j);
                 }
             }
             tile_regs_release();
@@ -249,7 +252,8 @@ void matmul_qk_by_v(
 
 // exp(scale * (prev_max - cur_max)) for row `row` -> cb_exp_max_diff[row].
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row) {
+void update_exp_max_diff(
+    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row) {
     const uint32_t exp_max_diff_dst_idx = 0;
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     tile_regs_acquire();
@@ -310,7 +314,8 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
         cb_col_vec)));
 }
 
-// cur_mm_out[row] += prev_mm_out[row] * exp_max_diff[row] (column broadcast), via packer L1-accumulate.
+// cur_mm_out[row] += prev_mm_out[row] * exp_max_diff[row]. The factor is one value per tile row
+// (column 0), broadcast across the tile; the add is done by the packer with L1-accumulate on.
 template <uint32_t Sq_chunk_t>
 void update_cur_mm_out(
     uint32_t Wt, uint32_t block_size, uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
@@ -344,9 +349,11 @@ void update_cur_mm_out(
 
             tile_regs_commit();
             tile_regs_wait();
-            // CB is exactly Sq_chunk_t * Wt deep: write pointer wrapped onto the fronted tiles
+            // The CB holds exactly one chunk, so the write pointer sits on the tiles already pushed:
+            // with L1-accumulate on this adds onto them.
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                pack_tile</* out_of_order */ true>(block_idx, cb_cur_mm_out, /* offset */ row * Wt + tile_idx + block_idx);
+                pack_tile</* out_of_order */ true>(
+                    block_idx, cb_cur_mm_out, /* offset */ row * Wt + tile_idx + block_idx);
             }
             tile_regs_release();
         }
