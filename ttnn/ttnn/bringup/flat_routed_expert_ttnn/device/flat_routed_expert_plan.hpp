@@ -152,6 +152,8 @@ struct FlatRoutedExpertPlan {
     // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
     // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
     bool gu_full_sync = false;
+    // gate/up K blocks per CB handshake in the row-pass K loop (layout.gu_kgroup; 1 without row passes)
+    uint32_t gu_kg = 1;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
     // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), the schedule
     // inputs (9), gate/up CB 16 and h_local (3) when not in the arena. A caller sizing the arena leaves this much L1

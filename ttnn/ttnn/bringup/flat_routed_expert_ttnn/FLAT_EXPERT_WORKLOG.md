@@ -1528,3 +1528,39 @@ K-block size, stream, fp32: 2 x 2 kblk 4 / 8 / 16 / 24: 21.33 / 19.75 / 18.86 / 
   folding the per-tile software step (dest base + MOP run) into one MOP over CT, bounded by the measured ~1.3 cycles a
   product (<= ~7.5%). custom_mm's other tricks (split accumulation and dense packing in the empty rows of <= 8-row
   tiles) do not apply to 32-row tiles. Not worth building into se3_compute ahead of the handshakes and the stalls.
+
+### Bigger gate/up compute K-blocks: decoupled K groups vs larger DRISC blocks (2026-10-22)
+Why: the gate/up microbench (above) put ~2 cycles per tile product in the per-K-block CB handshake (wait / pop of x and
+weights, ~55-65 cycles a block of 8 K tiles): streamed K-block 8 / 16 / 24 = 81 / 85 / 86.5% of LoFi vs 90% resident.
+- **A, decoupled** (se3_compute row-pass loop, `SE_GU_KG`): wait for / pop G blocks at once, the matmul still walks them
+  block by block (same accumulation order: y bit-exact vs G 1 at GLM-5.3 M 128, G 2 and 3). DRISC blocks unchanged; the
+  x ring (a whole sub-block) and the weight ring (2 loads) already hold G blocks. Typed `layout.gu_kgroup` (-1: 2), plan
+  `gu_kg` (logged with the plan: "gate/up row passes .. K group .."), probe `MIMO_FL_GU_KG` overrides.
+- **B, larger DRISC blocks**, emulated as A + `MIMO_FL_DRISC_UB=G` (each DRISC unit carries G blocks, the consumer pops G):
+  the full form (KBLK beyond 8 in every kernel: relays, receivers, DRISC chunks, h layout) was not built because the
+  emulation already loses.
+us per call, Galaxy experts per chip, rows_hint = M (E 8 GLM-5.3, E 28 K3):
+| variant | GLM-5.3 M 32 / 128 / 160 / 384 / 1024 | K3 M 32 / 160 / 384 / 1024 |
+|---|---|---|
+| today (G 1) | 403 / 498 / 523 / 788 / 1723 | 1111 / 1439 / 2247 / 5000 |
+| A, G 2 | 403 / 499 / 523 / 784 / 1677 | 1111 / 1441 / 2233 / 5001 |
+| A, G 3 | 404 / 500 / 524 / 786 / 1704 | - |
+| A, G 4 | - / - / - / 786 / 1671 | 1111 / 1439 / 2253 / 4987 |
+| B (UB 2 + G 2) | 389 / 500 / 569 / 847 / 1738 | 1111 / 1593 / 2419 / 5111 |
+| B + LEAN 3 | 394 / - / 566 / 846 / 1722 | - |
+B loses 7-11% at M 160-384 (the shallower DRISC pipeline next to x, as UB 2 alone did) and only wins GLM M 32 (-3.5%).
+A: a few % at M >= 1024, nothing below 512 (there the handshake is not the bound). Full 66-point sweep, G 4: GLM-5.3
+-2.6 / -2.8% at 1024 / 2048, DSv4.1 -1.0..-2.1% from 512, but M3 +1.7% at 2048 (rerun: +1.6%); G 2 (default):
+| model | M 512 / 1024 / 2048 vs G 1 (us) | rest |
+|---|---|---|
+| GLM-5.3 | 967->960 / 1722->1676 / 3300->3188 (-0.7 / -2.7 / -3.4%) | within +-0.5% |
+| GLM-5.3-Flash | 717->721 / 1283->1294 / 2462->2487 (+0.6 / +0.9 / +1.0%) | within +-0.5% |
+| K3 | 2792->2785 / 4999->5006 / 9855->9854 | within +-0.6% |
+| K2.7 | flat | within +-0.4% |
+| M3 | 662->664 / 1156->1161 / 2131->2135 | within +-0.7% |
+| DSv4.1-Flash | 1344->1330 / 2589->2556 / 5067->5002 (-1.0 / -1.3 / -1.3%) | within +-0.7% |
+GLM-5.3-Flash at large M is noisy: a rerun gave G 1 / 2 / 4 = 1283 / 1290 / 1342 at 1024 and 2462 / 2476 / 2426 at 2048
+(the earlier G 4 sweep: 1266 / 2405) - G 2 is within that noise. Correctness: test_closeout_flat 9/9, test_flat_combine_
+closeout 9/9, test_closeout_plans pass (G 2 in every row-pass plan). Logs: /localdev/mstaletovic/gu_kblk/.
+Takeaway: the handshake is a real but small cost in the op (the microbench's 81 -> 86% does not carry over: below M 512
+the gate/up loop is not the bound, above it G 2 buys ~3% on the pair-split GLM-5.3 and ~1.3% on DSv4.1's units).

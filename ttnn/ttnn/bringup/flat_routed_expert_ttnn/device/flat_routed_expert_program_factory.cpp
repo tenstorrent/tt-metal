@@ -1293,6 +1293,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (gu_rp) {
             cdef["SE_GU_RP"] = std::to_string(std::max(1u, 4 / p.gwt));
             cdef["SE_XSLOTS"] = std::to_string(p.x_slots);
+            if (p.gu_kg > 1) {  // gate/up K blocks per CB handshake (layout.gu_kgroup)
+                cdef["SE_GU_KG"] = std::to_string(p.gu_kg);
+            }
         }
         if (p.gu_l1acc) {
             cdef["SE_GU_L1ACC"] = "1";

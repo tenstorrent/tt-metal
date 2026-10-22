@@ -55,6 +55,10 @@ struct FlatLayoutOptions {
     // pass a sub-block (the x ring no longer pins a whole sub-block until its last pass) and half the drain after the
     // last weights land; -1.2 .. -3.3% at M 32 .. 256, but +3 .. +7% at M >= 512 (FLAT_EXPERT_WORKLOG.md)
     int32_t rows_hint = -1;
+    // gate/up K blocks (8 K tiles each) waited for / popped at once in the row-pass K loop: one CB handshake per group
+    // instead of per block, the matmul order unchanged (bit-exact). -1: 2 (GLM-5.3 E 8 M 1024 / 2048 -2.7 / -3.4%,
+    // DSv4.1 -1.2 / -1.3%, neutral below M 512 and for K3 / K2.7 / M3; 4 regressed M3 at 2048, FLAT_EXPERT_WORKLOG.md)
+    int32_t gu_kgroup = -1;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;
@@ -126,6 +130,7 @@ struct FlatProbes {
     std::optional<std::string> fwd_vc;              // MIMO_FL_FWD_VC
     std::optional<std::string> gu_bf16;             // MIMO_FL_GU_BF16
     std::optional<std::string> gu_full_sync;        // MIMO_FL_GU_FULL_SYNC
+    std::optional<std::string> gu_kg;               // MIMO_FL_GU_KG: gate/up K blocks per handshake (row passes)
     std::optional<std::string> gu_noread;           // MIMO_FL_GU_NOREAD
     std::optional<std::string> gu_nreg;             // MIMO_FL_GU_NREG
     std::optional<std::string> gu_split;            // MIMO_FL_GU_SPLIT

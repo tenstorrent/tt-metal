@@ -52,6 +52,12 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         log_info(tt::LogOp, "flat_routed_expert plan: layout {}", c.layout.str());
         it = cache.emplace(key, std::make_shared<const FlatRoutedExpertPlan>(make_flat_routed_expert_plan(device, c)))
                  .first;
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert plan: gate/up row passes {} K group {} sub-block rows {}",
+            it->second->gu_rp,
+            it->second->gu_kg,
+            it->second->mt * 32);
     }
     return it->second;
 }

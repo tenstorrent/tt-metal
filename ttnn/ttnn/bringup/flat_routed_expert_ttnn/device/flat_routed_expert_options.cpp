@@ -13,7 +13,7 @@ std::vector<uint32_t> FlatLayoutOptions::key() const {
     return {drisc,       drisc_dual,      drisc_in_overlap, u(drisc_pure),  u(max_down),      u(x_helpers),
             half_width,  u(hg_units),     u(row0),          u(row1),        u(x_path),        u(x_snakes),
             u(x_pieces), u(x_fwd_ncrisc), u(x_fwd_noc),     u(x_fwd_depth), u(x_relay_depth), x_once,
-            u(dw_batch), pin_ratio,       single_subgrid,   even_split,     u(rows_hint)};
+            u(dw_batch), pin_ratio,       single_subgrid,   even_split,     u(rows_hint),     u(gu_kgroup)};
 }
 
 std::string FlatLayoutOptions::str() const {
@@ -21,7 +21,7 @@ std::string FlatLayoutOptions::str() const {
         "drisc {} dual {} in_overlap {} pure {} max_down {} x_helpers {} half_width {} hg_units {} rows {}..{} x_path "
         "{} "
         "snakes {} pieces {} fwd_ncrisc {} fwd_noc {} fwd_depth {} relay_depth {} x_once {} dw_batch {} pin_ratio {} "
-        "single_subgrid {} even_split {} rows_hint {}",
+        "single_subgrid {} even_split {} rows_hint {} gu_kgroup {}",
         drisc,
         drisc_dual,
         drisc_in_overlap,
@@ -44,7 +44,8 @@ std::string FlatLayoutOptions::str() const {
         pin_ratio,
         single_subgrid,
         even_split,
-        rows_hint);
+        rows_hint,
+        gu_kgroup);
 }
 
 FlatProbes FlatProbes::from_env() {
@@ -97,6 +98,7 @@ FlatProbes FlatProbes::from_env() {
     p.fwd_vc = read("MIMO_FL_FWD_VC");
     p.gu_bf16 = read("MIMO_FL_GU_BF16");
     p.gu_full_sync = read("MIMO_FL_GU_FULL_SYNC");
+    p.gu_kg = read("MIMO_FL_GU_KG");
     p.gu_noread = read("MIMO_FL_GU_NOREAD");
     p.gu_nreg = read("MIMO_FL_GU_NREG");
     p.gu_split = read("MIMO_FL_GU_SPLIT");
