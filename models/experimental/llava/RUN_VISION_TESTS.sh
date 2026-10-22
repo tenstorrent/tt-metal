@@ -137,7 +137,7 @@ echo "Test 1/4: Output Shape Validation"
 echo "This test verifies the encoder produces correct output dimensions"
 echo ""
 run_test "Shape Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" || {
     echo "⚠️  Shape test failed. This is critical - debug before continuing."
     exit 1
 }
@@ -148,7 +148,7 @@ echo "This test compares TTNN output vs PyTorch reference"
 echo "Target: PCC >= 0.90"
 echo ""
 run_test "PCC Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" || {
     echo "⚠️  PCC test failed. This may require iteration."
     echo "   - Check PCC value in output"
     echo "   - If PCC < 0.90, debug QuickGELU or attention"
@@ -160,7 +160,7 @@ echo "Test 3/4: Determinism Validation"
 echo "This test verifies reproducibility (same input → same output)"
 echo ""
 run_test "Determinism Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" || {
     echo "⚠️  Determinism test failed. Check for random operations."
 }
 
@@ -170,7 +170,7 @@ echo "This test verifies encoder works on single-chip n150"
 echo ""
 export MESH_DEVICE=N150
 run_test "Single Chip Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" || {
     echo "⚠️  Single chip test failed. Check tensor replication logic."
 }
 

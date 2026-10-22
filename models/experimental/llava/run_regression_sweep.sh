@@ -5,7 +5,7 @@
 # Regression sweep for all LLaVA tests. Run from tt-metal root.
 #
 # Usage:
-#   bash models/demos/llava/run_regression_sweep.sh
+#   bash models/experimental/llava/run_regression_sweep.sh
 #
 # This script runs all component-level tests (vision encoders, projectors,
 # token handlers, vision pipeline, end-to-end) in sequence, using the
@@ -54,31 +54,31 @@ run_test() {
 }
 
 # CLIP + SigLIP vision encoder tests (component)
-run_test "CLIP encoder PCC" "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc"
-run_test "CLIP encoder shape" "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape"
-run_test "CLIP encoder determinism" "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic"
-run_test "CLIP encoder single-chip" "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip"
-run_test "SigLIP encoder PCC" "models/demos/llava/tests/test_vision_encoders.py::test_siglip_encoder_pcc"
-run_test "SigLIP encoder shape" "models/demos/llava/tests/test_vision_encoders.py::test_siglip_encoder_output_shape"
-run_test "SigLIP encoder determinism" "models/demos/llava/tests/test_vision_encoders.py::test_siglip_encoder_deterministic"
-run_test "SigLIP encoder single-chip" "models/demos/llava/tests/test_vision_encoders.py::test_siglip_encoder_single_chip"
+run_test "CLIP encoder PCC" "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc"
+run_test "CLIP encoder shape" "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape"
+run_test "CLIP encoder determinism" "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic"
+run_test "CLIP encoder single-chip" "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip"
+run_test "SigLIP encoder PCC" "models/experimental/llava/tests/test_vision_encoders.py::test_siglip_encoder_pcc"
+run_test "SigLIP encoder shape" "models/experimental/llava/tests/test_vision_encoders.py::test_siglip_encoder_output_shape"
+run_test "SigLIP encoder determinism" "models/experimental/llava/tests/test_vision_encoders.py::test_siglip_encoder_deterministic"
+run_test "SigLIP encoder single-chip" "models/experimental/llava/tests/test_vision_encoders.py::test_siglip_encoder_single_chip"
 
 # Projector tests
-run_test "MLP projector PCC" "models/demos/llava/tests/test_projectors.py::test_mlp_projector_pcc"
-run_test "MLP projector shape" "models/demos/llava/tests/test_projectors.py::test_mlp_projector_output_shape"
-run_test "MLP projector determinism" "models/demos/llava/tests/test_projectors.py::test_mlp_projector_deterministic"
-run_test "MLP projector single-chip" "models/demos/llava/tests/test_projectors.py::test_mlp_projector_single_chip"
+run_test "MLP projector PCC" "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_pcc"
+run_test "MLP projector shape" "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_output_shape"
+run_test "MLP projector determinism" "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_deterministic"
+run_test "MLP projector single-chip" "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_single_chip"
 
 # Token handler tests
-run_test "Token interleaver shape" "models/demos/llava/tests/test_token_handlers.py::test_interleaver_shape_single_image"
+run_test "Token interleaver shape" "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_shape_single_image"
 
 # Vision pipeline tests
-run_test "Vision pipeline CLIP PCC" "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_clip_pcc"
-run_test "Vision pipeline end-to-end PCC" "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_end_to_end_pcc"
+run_test "Vision pipeline CLIP PCC" "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_clip_pcc"
+run_test "Vision pipeline end-to-end PCC" "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_end_to_end_pcc"
 
 # Qwen1-MoE converter self-test (CPU-only, no device needed)
 echo "--- Running: Qwen1-MoE checkpoint converter self-test ---"
-if python models/demos/llava/tt/qwen1_moe_checkpoint.py 2>&1 | tail -3; then
+if python models/experimental/llava/tt/qwen1_moe_checkpoint.py 2>&1 | tail -3; then
     echo "  PASS: Qwen1-MoE converter"
     PASS=$((PASS + 1))
 else
@@ -90,7 +90,7 @@ echo
 
 # MoE-LLaVA integration and device PCC gates. The device tests require a
 # healthy mesh and handle the n150/n300 fabric setup in the test fixture.
-run_test "MoE-LLaVA integration (CPU)" "models/demos/llava/tests/test_moe_llava.py"
+run_test "MoE-LLaVA integration (CPU)" "models/experimental/llava/tests/test_moe_llava.py"
 
 echo "============================================"
 echo "Regression Sweep Summary"

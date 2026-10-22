@@ -16,7 +16,7 @@ PyTorch top-2 routing block that matches the eval-time math.
 All dumps are saved under ``./reference_cache/qwen_moe/`` by default.
 
 Usage:
-    python models/demos/llava/reference/qwen_moe_reference.py \\
+    python models/experimental/llava/reference/qwen_moe_reference.py \\
         --ckpt LanguageBind/MoE-LLaVA-Qwen-1.8B-4e \\
         --seq-len 32 --batch 1 --out-dir ./reference_cache/qwen_moe
 

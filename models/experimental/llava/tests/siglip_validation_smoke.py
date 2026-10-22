@@ -12,8 +12,8 @@ repeated UMD topology discovery overhead on the flaky n300:
   3. Output shape ([1, 729, 1152])
 
 Usage:
-    MESH_DEVICE=N300 python models/demos/llava/tests/siglip_validation_smoke.py
-    MESH_DEVICE=N150 python models/demos/llava/tests/siglip_validation_smoke.py
+    MESH_DEVICE=N300 python models/experimental/llava/tests/siglip_validation_smoke.py
+    MESH_DEVICE=N150 python models/experimental/llava/tests/siglip_validation_smoke.py
 """
 
 import os
@@ -25,9 +25,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.vision_encoders.siglip_encoder import create_siglip_encoder as create_siglip_encoder_ttnn
+from models.experimental.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.vision_encoders.siglip_encoder import (
+    create_siglip_encoder as create_siglip_encoder_ttnn,
+)
 
 PCC_THRESHOLD = 0.92
 

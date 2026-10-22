@@ -15,16 +15,16 @@ Test Strategy:
 
 Usage:
     # Run all projector tests
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_projectors.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_projectors.py -v
 
     # Run only PCC test
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_projectors.py::test_mlp_projector_pcc -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_projectors.py::test_mlp_projector_pcc -v
 
     # With device config
-    MESH_DEVICE=N300 scripts/run_safe_pytest.sh models/demos/llava/tests/test_projectors.py -v
+    MESH_DEVICE=N300 scripts/run_safe_pytest.sh models/experimental/llava/tests/test_projectors.py -v
 
 Reference:
-    - models/demos/llava/tests/test_vision_encoders.py (test patterns)
+    - models/experimental/llava/tests/test_vision_encoders.py (test patterns)
     - models/common/utility_functions.comp_pcc
 """
 
@@ -34,9 +34,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
 
 
 def _create_random_projector_state_dict(vision_hidden_size=1024, llm_hidden_size=4096, seed=42):
@@ -355,4 +355,4 @@ def test_mlp_projector_single_chip(mesh_device):
 if __name__ == "__main__":
     logger.info("Projector Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_projectors.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_projectors.py -v")

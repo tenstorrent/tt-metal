@@ -22,8 +22,8 @@ Architecture:
     Phase 3 (LLM):     Load LLM (TP across chips) → chunked prefill → decode
 
 Reference:
-    - models/demos/llava/demo/demo_llava_full.py (original inline implementation)
-    - models/demos/llava/tt/llm_wrapper.py (LlavaLlmTransformer)
+    - models/experimental/llava/demo/demo_llava_full.py (original inline implementation)
+    - models/experimental/llava/tt/llm_wrapper.py (LlavaLlmTransformer)
     - models/demos/qwen25_vl/tt/model.py (multimodal LLM pattern)
 """
 
@@ -38,11 +38,11 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.demo.demo_utils import preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 NUM_PATCHES = 576
@@ -479,9 +479,9 @@ class LlavaModel(LightweightModule):
             str: Generated text
         """
         if self.llm_backbone == "qwen-moe":
-            from models.demos.llava.tt.llm_wrapper import create_qwen_moe_llm as create_llm
+            from models.experimental.llava.tt.llm_wrapper import create_qwen_moe_llm as create_llm
         else:
-            from models.demos.llava.tt.llm_wrapper import create_llava_llm as create_llm
+            from models.experimental.llava.tt.llm_wrapper import create_llava_llm as create_llm
 
         logger.info(f"\n=== Phase 3: LLM Inference ({self.llm_model_config} on device) ===")
 

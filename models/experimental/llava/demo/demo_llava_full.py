@@ -18,16 +18,16 @@ The LLM runs on CPU using Qwen2-1.5B-Instruct (non-gated, ~3GB).
 
 Usage:
     # Recommended: use wrapper script (handles env setup automatically)
-    bash models/demos/llava/run_demo.sh --image /path/to/image.jpg --question "What color is the sky?"
+    bash models/experimental/llava/run_demo.sh --image /path/to/image.jpg --question "What color is the sky?"
 
     # Direct: from tt-metal root
-    MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py
+    MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py
 
     # Direct: from anywhere (script auto-configures environment)
-    python /path/to/tt-metal/models/demos/llava/demo/demo_llava_full.py --image img.jpg
+    python /path/to/tt-metal/models/experimental/llava/demo/demo_llava_full.py --image img.jpg
 
     # On n150 (single chip)
-    MESH_DEVICE=N150 python models/demos/llava/demo/demo_llava_full.py
+    MESH_DEVICE=N150 python models/experimental/llava/demo/demo_llava_full.py
 """
 
 import atexit
@@ -89,16 +89,16 @@ import torch
 from loguru import logger
 
 # Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-# (see models/demos/llava/ttnn_tools_shim.py; a no-op unless trace-alloc
+# (see models/experimental/llava/ttnn_tools_shim.py; a no-op unless trace-alloc
 # tracking is explicitly enabled).
-import models.demos.llava.ttnn_tools_shim  # noqa: F401
+import models.experimental.llava.ttnn_tools_shim  # noqa: F401
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import download_sample_image, preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.tt.llava_model import enable_fabric_if_needed, release_mesh_device
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.demo.demo_utils import download_sample_image, preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.tt.llava_model import enable_fabric_if_needed, release_mesh_device
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 
@@ -393,7 +393,7 @@ def run_full_demo(
     }
 
     # Create TTNN projector (runs on n300)
-    from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+    from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
 
     ttnn_projector = create_mlp_projector_ttnn(
         args=args,
@@ -527,7 +527,7 @@ def run_full_demo_ttnn_llm(
     """
     Run LLaVA demo with ALL components on n300 using load/unload pattern.
 
-    Thin wrapper around ``LlavaModel`` (see ``models/demos/llava/tt/llava_model.py``)
+    Thin wrapper around ``LlavaModel`` (see ``models/experimental/llava/tt/llava_model.py``)
     which encapsulates the full pipeline:
         CLIP (TTNN) → Projector (TTNN) → Interleaver (host) → LLM (TTNN)
 
@@ -555,7 +555,7 @@ def run_full_demo_ttnn_llm(
     Returns:
         Generated text
     """
-    from models.demos.llava.tt.llava_model import LlavaModel
+    from models.experimental.llava.tt.llava_model import LlavaModel
 
     logger.info("=" * 80)
     logger.info(f"LLaVA Full Demo - ALL ON n300 (load/unload pattern, {llm_backbone})")
@@ -687,7 +687,7 @@ def run_full_demo_moe(
     logger.info(f"  CLIP output: {clip_features.shape}  (PCC: {pcc:.4f})")
 
     # Step 2: TTNN MLP projector (trained weights, 1024 → 2048 → 2048)
-    from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+    from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
 
     proj_sd = {
         "mm_projector.0.weight": projector.linear_1.weight.data,
@@ -701,7 +701,7 @@ def run_full_demo_moe(
     logger.info(f"  Projector output: {projected.shape}  (on device)")
 
     # Step 3: Tokenize with the MoE-LLaVA phi-style conversation template and interleave
-    from models.demos.llava.tt.llava_model import build_moe_llava_prompt
+    from models.experimental.llava.tt.llava_model import build_moe_llava_prompt
 
     prompt_text = build_moe_llava_prompt(question)
     text_parts = prompt_text.split("<image>")
@@ -714,7 +714,7 @@ def run_full_demo_moe(
     logger.info(f"  Prompt tokens: {input_ids.shape[1]} (includes 576 image placeholders)")
 
     # Step 4: Load MoE-LLaVA on CPU (DeepSpeed stubbed out — pure top-2 routing)
-    from models.demos.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
+    from models.experimental.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
 
     logger.info("Loading MoE-LLaVA-Qwen-1.8B-4e on CPU (DeepSpeed-stubbed reference)...")
     cpu_llm, moe_config = load_moe_reference_model("LanguageBind/MoE-LLaVA-Qwen-1.8B-4e", dtype=torch.float32)

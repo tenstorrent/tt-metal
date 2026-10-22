@@ -6,7 +6,7 @@ Decision gate:
   HANG -> investigate the mesh/fabric path before relying on the NPU demo
 
 Run from the repository root (defaults to a 1x2 mesh):
-  REPRO_SEQ_LEN=128 timeout 600 python models/demos/llava/tools/prefill_go_no_go.py
+  REPRO_SEQ_LEN=128 timeout 600 python models/experimental/llava/tools/prefill_go_no_go.py
 Single-chip isolation: REPRO_MESH=1,1
 """
 

@@ -35,7 +35,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from models.demos.llava.tt.vision_encoders.base_encoder import BaseVisionEncoder
+from models.experimental.llava.tt.vision_encoders.base_encoder import BaseVisionEncoder
 
 
 class CLIPVisionTransformerBlock(torch.nn.Module):

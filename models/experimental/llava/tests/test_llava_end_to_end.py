@@ -18,11 +18,11 @@ Test Strategy:
     7. Single-chip (n150) compatibility
 
 Usage:
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_llava_end_to_end.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_llava_end_to_end.py -v
 
 Reference:
-    - models/demos/llava/demo/demo_llava_full.py
-    - models/demos/llava/tests/test_vision_pipeline.py
+    - models/experimental/llava/demo/demo_llava_full.py
+    - models/experimental/llava/tests/test_vision_pipeline.py
 """
 
 import os
@@ -34,16 +34,18 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import download_sample_image, preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
-from models.demos.llava.reference.llava_reference import create_standard_interleaver as create_interleaver_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
-from models.demos.llava.tt.token_handlers.standard_interleaver import (
+from models.experimental.llava.demo.demo_utils import download_sample_image, preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
+from models.experimental.llava.reference.llava_reference import (
+    create_standard_interleaver as create_interleaver_pytorch,
+)
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.tt.token_handlers.standard_interleaver import (
     create_standard_interleaver as create_interleaver_ttnn,
 )
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 NUM_PATCHES = 576
@@ -468,7 +470,7 @@ def test_e2e_single_chip(mesh_device):
     reason=(
         "LLaVA-MORE/Llama-3.1 e2e: DEPRECATED — superseded by the qwen-moe "
         "backbone (MoE-LLaVA-Qwen-1.8B-4e), which has working device coverage "
-        "in models/demos/llava/tests/test_moe_llava.py "
+        "in models/experimental/llava/tests/test_moe_llava.py "
         "(test_moe_llava_qwen_prefill_pcc / test_moe_llava_qwen_decode_pcc / "
         "test_moe_layer_single_block_pcc, passing on n150; 2-chip PCC gates "
         "run with MESH_DEVICE=N300). The earlier blocker (upstream 2-chip "
@@ -500,14 +502,14 @@ def test_e2e_ttnn_llm_decode_pcc(mesh_device):
     """
     from transformers import AutoModelForCausalLM
 
-    from models.demos.llava.tt.llava_model import LlavaModel
+    from models.experimental.llava.tt.llava_model import LlavaModel
 
     logger.info("=" * 80)
     logger.info("E2E Test: TTNN LLM Decode PCC (n300)")
     logger.info("=" * 80)
 
     # Load trained LLaVA-MORE weights (projector + LLaMA 3.1 8B LLM)
-    from models.demos.llava.demo.demo_llava_full import load_llava_model
+    from models.experimental.llava.demo.demo_llava_full import load_llava_model
 
     llava_state_dict, projector, tokenizer, llm_hidden_size, model_path = load_llava_model()
 
@@ -562,4 +564,4 @@ def test_e2e_ttnn_llm_decode_pcc(mesh_device):
 if __name__ == "__main__":
     logger.info("E2E Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_llava_end_to_end.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_llava_end_to_end.py -v")

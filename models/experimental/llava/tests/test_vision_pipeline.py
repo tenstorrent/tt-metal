@@ -9,12 +9,12 @@ against PyTorch reference, validating PCC at each stage and for the
 combined pipeline.
 
 Usage:
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_pipeline.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_pipeline.py -v
 
 Reference:
-    - models/demos/llava/demo/demo_vision_pipeline.py
-    - models/demos/llava/tests/test_vision_encoders.py
-    - models/demos/llava/tests/test_projectors.py
+    - models/experimental/llava/demo/demo_vision_pipeline.py
+    - models/experimental/llava/tests/test_vision_encoders.py
+    - models/experimental/llava/tests/test_projectors.py
 """
 
 import os
@@ -26,16 +26,18 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import download_sample_image, preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
-from models.demos.llava.reference.llava_reference import create_standard_interleaver as create_interleaver_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
-from models.demos.llava.tt.token_handlers.standard_interleaver import (
+from models.experimental.llava.demo.demo_utils import download_sample_image, preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
+from models.experimental.llava.reference.llava_reference import (
+    create_standard_interleaver as create_interleaver_pytorch,
+)
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.tt.token_handlers.standard_interleaver import (
     create_standard_interleaver as create_interleaver_ttnn,
 )
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 HIDDEN_SIZE = 4096
@@ -365,4 +367,4 @@ def test_vision_pipeline_single_chip(mesh_device):
 if __name__ == "__main__":
     logger.info("Vision Pipeline Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_pipeline.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_pipeline.py -v")

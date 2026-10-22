@@ -9,11 +9,11 @@ This module provides pytest-based demos for LLaVA inference on Tenstorrent hardw
 Usage:
     # LLaVA 1.5 with CLIP encoder
     MESH_DEVICE=N300 HF_MODEL=liuhaotian/llava-v1.5-7b \
-      scripts/run_safe_pytest.sh models/demos/llava/demo/demo_llava.py::test_single_image -v
+      scripts/run_safe_pytest.sh models/experimental/llava/demo/demo_llava.py::test_single_image -v
 
     # LLaVA-MORE with SigLIP encoder
     MESH_DEVICE=N300 VISION_ENCODER=siglip \
-      scripts/run_safe_pytest.sh models/demos/llava/demo/demo_llava.py::test_single_image -v
+      scripts/run_safe_pytest.sh models/experimental/llava/demo/demo_llava.py::test_single_image -v
 
 Reference:
     - models/demos/qwen25_vl/demo/demo.py
@@ -27,10 +27,10 @@ from loguru import logger
 from PIL import Image
 
 # Import demo utilities
-from models.demos.llava.demo.demo_utils import create_conversation_prompt, download_sample_image
+from models.experimental.llava.demo.demo_utils import create_conversation_prompt, download_sample_image
 
 # Note: Model implementation to be completed in Week 4
-# from models.demos.llava.tt.llava_model import LlavaModel
+# from models.experimental.llava.tt.llava_model import LlavaModel
 
 
 @pytest.mark.parametrize(
@@ -179,8 +179,8 @@ if __name__ == "__main__":
     Direct execution for debugging
 
     Usage:
-        python models/demos/llava/demo/demo_llava.py
+        python models/experimental/llava/demo/demo_llava.py
     """
     logger.info("LLaVA Demo - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/demo/demo_llava.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/demo/demo_llava.py -v")

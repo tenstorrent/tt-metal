@@ -286,7 +286,7 @@ def extract_qwen_moe_state_dict_from_llava(llava_state_dict, moe_layer_ids, n_la
     Returns:
         state_dict in Meta format (layers.*, embed_tokens, norm, lm_head)
     """
-    from models.demos.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta
+    from models.experimental.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta
 
     # Keep only the LLM keys (skip vision tower + projector), then hand a copy
     # to the converter (it consumes keys via pop()).

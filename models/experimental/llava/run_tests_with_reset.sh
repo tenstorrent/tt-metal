@@ -114,10 +114,10 @@ cd "$TT_METAL_ROOT"
 
 if [ -z "$TEST_PATTERN" ]; then
     # Run all vision encoder tests
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -v
 else
     # Run specific test pattern
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -k "$TEST_PATTERN" -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -k "$TEST_PATTERN" -v
 fi
 
 EXIT_CODE=$?

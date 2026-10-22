@@ -16,10 +16,10 @@ arithmetic), tests focus on:
     5. Single-chip (n150) and dual-chip (n300) compatibility
 
 Usage:
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_token_handlers.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_token_handlers.py -v
 
 Reference:
-    - models/demos/llava/tests/test_vision_encoders.py (test patterns)
+    - models/experimental/llava/tests/test_vision_encoders.py (test patterns)
     - LLaVA/llava/model/llava_arch.py:prepare_inputs_labels_for_multimodal
 """
 
@@ -28,9 +28,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llava.reference.llava_reference import StandardInterleaver as PyTorchInterleaver
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.token_handlers.standard_interleaver import StandardInterleaver as TTNNInterleaver
+from models.experimental.llava.reference.llava_reference import StandardInterleaver as PyTorchInterleaver
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.token_handlers.standard_interleaver import StandardInterleaver as TTNNInterleaver
 
 IMAGE_TOKEN_INDEX = -200
 IGNORE_INDEX = -100
@@ -353,4 +353,4 @@ def test_interleaver_single_chip(mesh_device):
 if __name__ == "__main__":
     logger.info("Token Handler Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_token_handlers.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_token_handlers.py -v")

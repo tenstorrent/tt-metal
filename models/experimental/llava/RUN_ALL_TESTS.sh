@@ -3,8 +3,8 @@
 # Runs component, end-to-end, and MoE-LLaVA integration/PCC tests.
 #
 # Usage:
-#   bash models/demos/llava/RUN_ALL_TESTS.sh
-#   SKIP_E2E=1 bash models/demos/llava/RUN_ALL_TESTS.sh  # Skip slow E2E tests
+#   bash models/experimental/llava/RUN_ALL_TESTS.sh
+#   SKIP_E2E=1 bash models/experimental/llava/RUN_ALL_TESTS.sh  # Skip slow E2E tests
 
 echo "============================================"
 echo "LLaVA All Component Tests"
@@ -96,76 +96,76 @@ echo "=== Vision Encoder Tests (Week 1) ==="
 echo ""
 
 run_test "CLIP PCC (n300)" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" "N300"
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" "N300"
 
 run_test "CLIP Shape (n300)" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" "N300"
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" "N300"
 
 run_test "CLIP Determinism (n300)" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" "N300"
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" "N300"
 
 run_test "CLIP Single Chip (n150)" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" "N150"
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" "N150"
 
 # === Projector Tests (4 tests) ===
 echo "=== Projector Tests (Week 2) ==="
 echo ""
 
 run_test "MLP PCC (n300)" \
-  "models/demos/llava/tests/test_projectors.py::test_mlp_projector_pcc" "N300"
+  "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_pcc" "N300"
 
 run_test "MLP Shape (n300)" \
-  "models/demos/llava/tests/test_projectors.py::test_mlp_projector_output_shape" "N300"
+  "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_output_shape" "N300"
 
 run_test "MLP Determinism (n300)" \
-  "models/demos/llava/tests/test_projectors.py::test_mlp_projector_deterministic" "N300"
+  "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_deterministic" "N300"
 
 run_test "MLP Single Chip (n150)" \
-  "models/demos/llava/tests/test_projectors.py::test_mlp_projector_single_chip" "N150"
+  "models/experimental/llava/tests/test_projectors.py::test_mlp_projector_single_chip" "N150"
 
 # === Token Handler Tests (7 tests) ===
 echo "=== Token Handler Tests (Week 3) ==="
 echo ""
 
 run_test "Interleaver Shape (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_shape_single_image" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_shape_single_image" "N300"
 
 run_test "Interleaver Correctness (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_correctness" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_correctness" "N300"
 
 run_test "Interleaver vs PyTorch (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_matches_pytorch" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_matches_pytorch" "N300"
 
 run_test "Interleaver Determinism (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_deterministic" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_deterministic" "N300"
 
 run_test "Interleaver Multi-Image (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_multi_image" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_multi_image" "N300"
 
 run_test "Interleaver Batch Padding (n300)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_batch_padding" "N300"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_batch_padding" "N300"
 
 run_test "Interleaver Single Chip (n150)" \
-  "models/demos/llava/tests/test_token_handlers.py::test_interleaver_single_chip" "N150"
+  "models/experimental/llava/tests/test_token_handlers.py::test_interleaver_single_chip" "N150"
 
 # === Vision Pipeline Tests (5 tests) ===
 echo "=== Vision Pipeline Tests (Week 4) ==="
 echo ""
 
 run_test "Pipeline CLIP PCC (n300)" \
-  "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_clip_pcc" "N300"
+  "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_clip_pcc" "N300"
 
 run_test "Pipeline Projector PCC (n300)" \
-  "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_projector_pcc" "N300"
+  "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_projector_pcc" "N300"
 
 run_test "Pipeline E2E PCC (n300)" \
-  "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_end_to_end_pcc" "N300"
+  "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_end_to_end_pcc" "N300"
 
 run_test "Pipeline Shapes (n300)" \
-  "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_shapes" "N300"
+  "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_shapes" "N300"
 
 run_test "Pipeline Single Chip (n150)" \
-  "models/demos/llava/tests/test_vision_pipeline.py::test_vision_pipeline_single_chip" "N150"
+  "models/experimental/llava/tests/test_vision_pipeline.py::test_vision_pipeline_single_chip" "N150"
 
 # === End-to-End Tests (7 tests, slow — downloads LLaVA model) ===
 if [ "${SKIP_E2E:-0}" != "1" ]; then
@@ -173,25 +173,25 @@ echo "=== End-to-End Tests (Week 4, slow) ==="
 echo ""
 
 run_test "E2E CLIP PCC (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_clip_pcc" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_clip_pcc" "N300"
 
 run_test "E2E Projector PCC (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_projector_pcc" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_projector_pcc" "N300"
 
 run_test "E2E Interleaver PCC (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_interleaver_pcc" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_interleaver_pcc" "N300"
 
 run_test "E2E Full Pipeline PCC (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_full_pipeline_pcc" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_full_pipeline_pcc" "N300"
 
 run_test "E2E LLM Generation (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_llm_generation" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_llm_generation" "N300"
 
 run_test "E2E Shapes (n300)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_shapes" "N300"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_shapes" "N300"
 
 run_test "E2E Single Chip (n150)" \
-  "models/demos/llava/tests/test_llava_end_to_end.py::test_e2e_single_chip" "N150"
+  "models/experimental/llava/tests/test_llava_end_to_end.py::test_e2e_single_chip" "N150"
 else
 echo "=== End-to-End Tests SKIPPED (SKIP_E2E=1) ==="
 echo ""
@@ -202,7 +202,7 @@ echo "=== MoE-LLaVA Integration and PCC Tests ==="
 echo ""
 
 run_test "MoE-LLaVA Integration and PCC (n300)" \
-  "models/demos/llava/tests/test_moe_llava.py" "N300"
+  "models/experimental/llava/tests/test_moe_llava.py" "N300"
 
 # === Summary ===
 echo "============================================"

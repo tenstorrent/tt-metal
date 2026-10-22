@@ -2,10 +2,10 @@
 # LLaVA Demo Runner — handles environment setup automatically
 #
 # Usage:
-#   bash models/demos/llava/run_demo.sh                              # Full demo (image → text)
-#   bash models/demos/llava/run_demo.sh --vision-only                 # Vision pipeline only
-#   bash models/demos/llava/run_demo.sh --image img.jpg --question "?" # Custom image + question
-#   bash models/demos/llava/run_demo.sh --mesh N150                   # Single chip
+#   bash models/experimental/llava/run_demo.sh                              # Full demo (image → text)
+#   bash models/experimental/llava/run_demo.sh --vision-only                 # Vision pipeline only
+#   bash models/experimental/llava/run_demo.sh --image img.jpg --question "?" # Custom image + question
+#   bash models/experimental/llava/run_demo.sh --mesh N150                   # Single chip
 
 set -e
 

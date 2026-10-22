@@ -15,10 +15,10 @@ The output multimodal embeddings are ready to feed into a LLaMA 3.1 LLM
 
 Usage:
     # Recommended: use wrapper script (handles env setup automatically)
-    bash models/demos/llava/run_demo.sh --vision-only
+    bash models/experimental/llava/run_demo.sh --vision-only
 
     # Direct: from anywhere (script auto-configures environment)
-    MESH_DEVICE=N300 python /path/to/tt-metal/models/demos/llava/demo/demo_vision_pipeline.py
+    MESH_DEVICE=N300 python /path/to/tt-metal/models/experimental/llava/demo/demo_vision_pipeline.py
 """
 
 import atexit
@@ -73,16 +73,22 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llava.demo.demo_utils import create_conversation_prompt, download_sample_image, preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
-from models.demos.llava.reference.llava_reference import create_standard_interleaver as create_interleaver_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
-from models.demos.llava.tt.token_handlers.standard_interleaver import (
+from models.experimental.llava.demo.demo_utils import (
+    create_conversation_prompt,
+    download_sample_image,
+    preprocess_image,
+)
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.reference.llava_reference import create_mlp_projector as create_mlp_projector_pytorch
+from models.experimental.llava.reference.llava_reference import (
+    create_standard_interleaver as create_interleaver_pytorch,
+)
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.tt.token_handlers.standard_interleaver import (
     create_standard_interleaver as create_interleaver_ttnn,
 )
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 HIDDEN_SIZE = 4096

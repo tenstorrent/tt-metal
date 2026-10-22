@@ -26,11 +26,11 @@ Device tests cover the dense block, single MoE layer, full prefill, and decode
 PCC gates. They require a healthy n150 or n300 mesh.
 
 Usage:
-    python -m pytest models/demos/llava/tests/test_moe_llava.py -v
+    python -m pytest models/experimental/llava/tests/test_moe_llava.py -v
 
 Reference:
-    - models/demos/llava/tt/qwen1_moe_checkpoint.py
-    - models/demos/llava/tt/llm_wrapper.py (extract_qwen_moe_state_dict_from_llava)
+    - models/experimental/llava/tt/qwen1_moe_checkpoint.py
+    - models/experimental/llava/tt/llm_wrapper.py (extract_qwen_moe_state_dict_from_llava)
 """
 
 import os
@@ -41,11 +41,11 @@ import torch
 from loguru import logger
 
 # Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-import models.demos.llava.ttnn_tools_shim  # noqa: F401
-from models.demos.llava.tt.llava_model import build_moe_llava_prompt
-from models.demos.llava.tt.llm_wrapper import extract_qwen_moe_state_dict_from_llava
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta, qwen_mlp_to_meta
+import models.experimental.llava.ttnn_tools_shim  # noqa: F401
+from models.experimental.llava.tt.llava_model import build_moe_llava_prompt
+from models.experimental.llava.tt.llm_wrapper import extract_qwen_moe_state_dict_from_llava
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta, qwen_mlp_to_meta
 
 QWEN1_MOE_CONFIG_DIR = str(
     Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / "Qwen1-1.8B-moe"
@@ -257,7 +257,7 @@ def test_qwen_swiglu_remap_numeric():
 
 
 def _make_llava_model(llava_state_dict, llm_backbone, tmp_path):
-    from models.demos.llava.tt.llava_model import LlavaModel
+    from models.experimental.llava.tt.llava_model import LlavaModel
 
     args = VisionModelArgs(mesh_device=None, max_batch_size=1, llm_backbone=llm_backbone)
     return LlavaModel(
@@ -383,7 +383,7 @@ def _load_real_checkpoint():
 
 def _reference_logits(n_layers, tokens):
     """Last-token logits from the CPU PyTorch reference, truncated to n_layers."""
-    from models.demos.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
+    from models.experimental.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
 
     model, _config = load_moe_reference_model(MOE_LLAVA_CKPT, dtype=torch.float32)
     if n_layers is not None and n_layers < len(model.transformer.h):
@@ -396,7 +396,7 @@ def _reference_logits(n_layers, tokens):
 def _device_prefill_logits(mesh_device, moe_sd, n_layers, tokens):
     """Build the TTNN Qwen1-MoE model and run chunked prefill; return host logits."""
     import ttnn
-    from models.demos.llava.tt.llm_wrapper import create_qwen_moe_llm
+    from models.experimental.llava.tt.llm_wrapper import create_qwen_moe_llm
 
     llm_dtype = ttnn.bfloat8_b
     tt_model, tt_model_args, tt_kv_cache, page_table = create_qwen_moe_llm(

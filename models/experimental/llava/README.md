@@ -47,7 +47,7 @@ the demo and MoE tests do this automatically.
 3. Install the demo dependencies:
 
    ```bash
-   pip install -r models/demos/llava/requirements.txt
+   pip install -r models/experimental/llava/requirements.txt
    ```
 
 4. Authenticate with Hugging Face if the model is not already cached:
@@ -62,14 +62,14 @@ Use an absolute image path when running the demo directly:
 
 ```bash
 # n150, single chip
-MESH_DEVICE=N150 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N150 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe --use-ttnn-llm \
   --image /path/to/image.jpg \
   --question "Describe this image in one sentence." \
   --max-tokens 24
 
 # n300, two chips
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe --use-ttnn-llm \
   --image /path/to/image.jpg \
   --question "Describe this image in one sentence." \
@@ -79,7 +79,7 @@ MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
 The wrapper can configure the environment automatically:
 
 ```bash
-bash models/demos/llava/run_demo.sh \
+bash models/experimental/llava/run_demo.sh \
   --image /path/to/image.jpg \
   --question "What is in this image?"
 ```
@@ -93,7 +93,7 @@ To run the TTNN vision path with a CPU Qwen reference LLM, omit
 `--use-ttnn-llm`:
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe \
   --image /path/to/image.jpg
 ```
@@ -101,14 +101,14 @@ MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
 The legacy LLaVA-MORE LLaMA 3.1 path also remains CPU-only:
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --image /path/to/image.jpg
 ```
 
 ### Vision-Only Demo
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_vision_pipeline.py
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_vision_pipeline.py
 ```
 
 This runs CLIP, the LLaVA-MORE-sized projector, and token interleaving without
@@ -148,7 +148,7 @@ therefore:
 Run the regression sweep from the repository root:
 
 ```bash
-bash models/demos/llava/run_regression_sweep.sh
+bash models/experimental/llava/run_regression_sweep.sh
 ```
 
 The sweep covers CLIP, SigLIP, projector, token interleaver, vision pipeline,
@@ -157,15 +157,15 @@ checkpoint conversion, CPU integration, and MoE device PCC tests.
 The component runner is also available:
 
 ```bash
-bash models/demos/llava/RUN_ALL_TESTS.sh
-SKIP_E2E=1 bash models/demos/llava/RUN_ALL_TESTS.sh
-bash models/demos/llava/RUN_VISION_TESTS.sh
+bash models/experimental/llava/RUN_ALL_TESTS.sh
+SKIP_E2E=1 bash models/experimental/llava/RUN_ALL_TESTS.sh
+bash models/experimental/llava/RUN_VISION_TESTS.sh
 ```
 
 For CPU-only MoE integration checks that avoid device PCC tests:
 
 ```bash
-pytest -q models/demos/llava/tests/test_moe_llava.py \
+pytest -q models/experimental/llava/tests/test_moe_llava.py \
   -k 'not tokenizer and not pcc'
 ```
 
