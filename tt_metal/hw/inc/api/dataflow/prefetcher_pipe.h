@@ -795,6 +795,7 @@ public:
     // as an untyped DataflowBufferAnyPattern and binds it exactly like the typed form below.
     FORCE_INLINE RelayView bind_relay() {
         ASSERT(!relay_dfb_.has_value());
+        ASSERT(interface_.receiver.relay_id != RELAY_DFB_INVALID);
         // Construct first: Quasar DataflowBuffer ctor runs dfb_ensure_ready (resets slots).
         // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
         // same relay id; STRIDED pap partitions producer slots.
