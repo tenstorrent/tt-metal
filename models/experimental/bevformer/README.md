@@ -9,7 +9,7 @@ BEVFormer detects 3D objects from multi-camera images through a Bird's-Eye-View 
 3. **Decoder and head**: 900 object queries go through six decoder layers of self-attention and deformable cross-attention into the BEV, each layer refining the queries' 3D reference points. Per layer, a classification branch emits class logits and a regression branch the box codes.
 4. **Box coder**: the last layer's top 300 (query, class) pairs by score become 3D boxes `(cx, cy, cz, w, l, h, yaw, vx, vy)`, without NMS.
 
-Every stage runs on device. The host projects the BEV pillars into the cameras and reads which cameras see each cell, inside the encoder's forward, so the detector runs live, not under a trace; it also prepares the ego motion per frame and drops the boxes the coder marks invalid.
+Every stage runs on device. The host reads which cameras see each BEV cell inside the encoder's forward, so the detector runs live, not under a trace; it also prepares the ego motion per frame and drops the boxes the coder marks invalid.
 
 ## Model Architecture
 
@@ -36,10 +36,12 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   the two. On the first frame it samples the queries twice.
 - The spatial cross-attention gathers each query into the cameras its pillar projects into and
   attends to the four FPN levels there with 8 points split over the pillar's 4 heights.
-- Every forward projects the pillars into the cameras on the host in float32, as upstream does:
-  in bfloat16 the projection's matmul and homogeneous divide move the points by several pixels and
-  flip some of the visibility mask. `build_rebatch_plan` then reads the mask to the host to size the
-  cross-attention's per-camera gather, so the encoder cannot be traced.
+- Every forward projects the pillars into the cameras on device in float32
+  (`tt/tt_point_sampling_3d_2d.py`), the 4x4 camera matrix as multiply-adds: in bfloat16 the
+  projection moves the points by several pixels and flips some of the visibility mask, and a matmul
+  truncates float32 to tf32. The points go to the cross-attention in bfloat16, the dtype its gather
+  takes. `build_rebatch_plan` reads the mask to the host to size that per-camera gather, so the
+  encoder cannot be traced.
 - As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
   see, and divides by the cameras its own mask counts; the temporal self-attention reads
   `value[:bs]`. Both are exact at batch size 1, which BEVFormer runs.
@@ -504,9 +506,8 @@ pytest models/experimental/bevformer/tests/pcc/test_fused_msda.py
 ```
 
 #### test_point_sampling_3d_2d.py
-Tests the bfloat16 TTNN port of the pillar-point projection, which the encoder does not use (it
-projects on the host in float32): the BEV grid's 3D reference points exactly, and the projection
-into the tiny, base and CARLA rigs' cameras at PCC 0.999.
+Tests the encoder's float32 pillar-point projection: the BEV grid's 3D reference points exactly, and
+the projection into the tiny, base and CARLA rigs' cameras at PCC 0.999.
 
 **Usage:**
 ```bash
