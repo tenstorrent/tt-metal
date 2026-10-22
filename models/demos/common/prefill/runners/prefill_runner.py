@@ -30,11 +30,11 @@ from models.demos.common.prefill.runners.runner_utils import (
     build_h2d_service,
     compute_layer_split,
 )
-from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import (
     indexer_indices_global_spec,
     make_h2d_spec,
+    mtp_id_segment_specs,
     num_mtp_tokens,
     open_mesh_device,
 )
@@ -229,16 +229,24 @@ def build_d2d_pipeline_endpoints(
     d2d_width: int,
     inbound_planes: int = 1,
     outbound_planes: int = 1,
+    extra_specs: tuple = (),
+    inbound_tail: tuple = (),
+    outbound_tail: tuple = (),
 ):
+    # extra_specs: global specs of further segments sent with the activation, sharded like the H2D ids.
+    # inbound_tail / outbound_tail: (spec, mapper config) segments after those, in one direction only;
+    # the indexer top-k rides there, since only some boundaries carry it.
     # Separate specs per direction: a model whose boundary payload grows with depth (Kimi-K3 carries
     # one AttnRes snapshot per completed block) sends more planes than it received. This rank's
     # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
     workers = d2d_worker_cores(mesh_device)
 
-    def _common(planes):
+    def _common(planes, tail):
+        extras = [(spec, H2D_MAPPER_CONFIG) for spec in extra_specs] + list(tail)
         return dict(
             global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
+            extra_tensors=[(spec, ttnn.create_mesh_mapper(mesh_device, cfg)) for spec, cfg in extras],
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=workers,
             receiver_worker_cores=workers,
@@ -251,91 +259,46 @@ def build_d2d_pipeline_endpoints(
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes)
+            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes, inbound_tail)
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes)
+            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes, outbound_tail)
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
-        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={workers}, "
-        f"fifo={D2D_FIFO_SIZE_BYTES}B)"
+        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, extra segments={len(extra_specs)}"
+        f"+{len(inbound_tail)}in/+{len(outbound_tail)}out, "
+        f"workers={workers}, fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
 
 
-def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound: bool, outbound: bool):
-    def _common():
-        return dict(
-            global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
-            mapper=ttnn.create_mesh_mapper(mesh_device, INDEX_MAPPER_CONFIG),
-            fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
-            sender_worker_cores=SYNC_WORKER_CORES,
-            receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=METADATA_SIZE_BYTES,
-            share_fabric_links=True,
-            socket_buffer_type=ttnn.BufferType.L1,
-        )
-
-    idx_in = None
-    if inbound:
-        logger.info(f"[pp rank {rank}] [d2d-idx] creating inbound index receiver from rank {rank - 1}")
-        idx_in = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
-        )
-    idx_out = None
-    if outbound:
-        logger.info(f"[pp rank {rank}] [d2d-idx] creating outbound index sender to rank {rank + 1}")
-        idx_out = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
-        )
-    logger.info(
-        f"[pp rank {rank}] [d2d-idx] endpoints up (inbound={'yes' if idx_in else 'no'} "
-        f"outbound={'yes' if idx_out else 'no'}, per-chip indices {tuple(per_chip_shape)})"
-    )
-    return idx_in, idx_out
-
-
-def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
-    if d2d_in is not None:
-        d2d_in.wait_for_fabric_links()
-    idx_in.release_fabric_links()
-    t0 = time.perf_counter()
-    indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=METADATA_SIZE_BYTES
-    )
-    ttnn.deallocate(metadata_msg)
-    logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
-    return indices
-
-
-def _d2d_send_indices(
-    d2d_out, idx_out, indices: ttnn.Tensor, rank: int, meta: Optional[dict], metadata_msg=None
-) -> None:
-    d2d_out.wait_for_fabric_links()
-    backing_cfg = idx_out.get_backing_tensor().memory_config()
-    staged = indices if indices.memory_config() == backing_cfg else ttnn.to_memory_config(indices, backing_cfg)
-    _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
+def _stage_for(t: ttnn.Tensor, backing: ttnn.Tensor) -> ttnn.Tensor:
+    cfg = backing.memory_config()
+    return t if t.memory_config() == cfg else ttnn.to_memory_config(t, cfg)
 
 
 def _d2d_recv(inbound) -> tuple:
+    """Return ``(activation, extra segments, decoded metadata, metadata tensor)``."""
     t0 = time.perf_counter()
-    act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    act, *extras, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
     meta = _decode_metadata(metadata_msg, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
-    return act, meta, metadata_msg
+    return act, extras, meta, metadata_msg
 
 
 def _d2d_send(
-    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+    outbound, segments, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
 ) -> None:
+    """``segments``: the activation, or a list of it followed by the outbound's extra segments."""
     t0 = time.perf_counter()
+    segments = list(segments) if isinstance(segments, (list, tuple)) else [segments]
 
     if metadata_msg is not None:
         md_tensor = metadata_msg
@@ -355,9 +318,12 @@ def _d2d_send(
                 ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
             ),
         )
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
+        outbound, segments if len(segments) > 1 else segments[0], metadata=md_tensor
+    )
     if deallocate:
-        ttnn.deallocate(activation)
+        for t in segments:
+            ttnn.deallocate(t)
     where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
     logger.info(f"[pp rank {rank}] SEND-d2d {where} [xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms")
 
@@ -368,8 +334,6 @@ def _forward_shutdown(
     d2d_rows: int,
     d2d_width: int,
     planes: int = 1,
-    idx_out=None,
-    idx_shape: Optional[tuple] = None,
 ) -> None:
     # `planes` must match this rank's OUTBOUND spec, not its inbound one.
     dev = d2d_out.get_backing_tensor().device()
@@ -381,53 +345,45 @@ def _forward_shutdown(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
     )
+    extras = [ttnn.zeros_like(b) for b in d2d_out.get_backing_tensors()[1:]]
     sentinel = {
         "slot_id": SHUTDOWN_METADATA_WORD,
         "actual_start": SHUTDOWN_METADATA_WORD,
         "actual_end": SHUTDOWN_METADATA_WORD,
         "provided_levels": 0,
     }
-    _d2d_send(d2d_out, dummy, rank, sentinel)
+    _d2d_send(d2d_out, [dummy, *extras], rank, sentinel)
     d2d_out.release_fabric_links()
-    if idx_out is not None:
-        _, _, rows, k = idx_shape
-        sp, tp = GLOBAL_MESH_SHAPE
-        idx_dummy = ttnn.from_torch(
-            torch.zeros(1, 1, sp * rows, tp * k, dtype=torch.int64),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.create_mesh_mapper(dev, INDEX_MAPPER_CONFIG),
-        )
-        d2d_out.wait_for_fabric_links()
-        _d2d_send(idx_out, idx_dummy, rank, sentinel)
-        idx_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
-def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
+def _forward_send_warmup(runtime, d2d_out, rank: int, send_indices: bool = False) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ())
     inputs = get_inputs(words) if get_inputs is not None else None
     if inputs is None:
         return
-    activation, md_tensor = inputs
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2d_out, activation, metadata=md_tensor)
+    segments, md_tensor = inputs
+    segments = list(segments) if isinstance(segments, (list, tuple)) else [segments]
+    idx_src = runtime.outbound_indexer_indices if send_indices else None
+    idx_staged = _stage_for(idx_src, d2d_out.get_backing_tensors()[-1]) if send_indices else None
+    send_segments = segments + ([idx_staged] if send_indices else [])
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
+        d2d_out, send_segments if len(send_segments) > 1 else send_segments[0], metadata=md_tensor
+    )
     d2d_out.release_fabric_links()
     d2d_out.wait_for_fabric_links()
-    if idx_out is not None:
-        _d2d_send_indices(d2d_out, idx_out, runtime.outbound_indexer_indices, rank, None, metadata_msg=md_tensor)
-        idx_out.release_fabric_links()
-        idx_out.wait_for_fabric_links()
-    ttnn.deallocate(activation)
+    for t in segments:
+        ttnn.deallocate(t)
+    if idx_staged is not idx_src:
+        ttnn.deallocate(idx_staged)
     ttnn.deallocate(md_tensor)
     logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
-def _lease_reclaim(d2d_in, d2d_out, idx_in=None, idx_out=None) -> None:
-    for service in (d2d_in, idx_in, d2d_out, idx_out):
+def _lease_reclaim(d2d_in, d2d_out) -> None:
+    for service in (d2d_in, d2d_out):
         if service is not None:
             service.wait_for_fabric_links()
     if d2d_in is not None:
@@ -463,7 +419,8 @@ def _compute_and_send(
     metadata_msg=None,
     mtp_tokens=None,
     indices=None,
-    idx_out=None,
+    send_indices: bool = False,
+    mtp_id_segments=(),
 ) -> float:
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -475,7 +432,11 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}"
     )
 
-    mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
+    mtp_kwargs = (
+        {"mtp_tokens": mtp_tokens, "mtp_id_segments": mtp_id_segments, "provided_levels": meta["provided_levels"]}
+        if MTP_LEVELS
+        else {}
+    )
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -498,27 +459,30 @@ def _compute_and_send(
         if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
             persistent_md = getattr(runtime, "trace_metadata_msg", None)
             forward_md = persistent_md if persistent_md is not None else metadata_msg
+        segments = list(out) if isinstance(out, (list, tuple)) else [out]
+        idx_src = runtime.outbound_indexer_indices if send_indices else None
+        idx_staged = _stage_for(idx_src, d2d_out.get_backing_tensors()[-1]) if send_indices else None
         _d2d_send(
             d2d_out,
-            out,
+            segments + ([idx_staged] if send_indices else []),
             rank,
             meta,
-            deallocate=not runtime.config.use_trace,
+            deallocate=False,
             metadata_msg=forward_md,
         )
+        if not runtime.config.use_trace:
+            for t in segments:
+                ttnn.deallocate(t)
+        if idx_staged is not idx_src:
+            ttnn.deallocate(idx_staged)
     if d2d_out is not None:
         d2d_out.release_fabric_links()
-    if idx_out is not None:
-        _d2d_send_indices(d2d_out, idx_out, runtime.outbound_indexer_indices, rank, meta, metadata_msg=forward_md)
-        idx_out.release_fabric_links()
     return t_start
 
 
-def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
+def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
-    if idx_out is not None:
-        idx_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
@@ -540,8 +504,8 @@ def run_request_loop(
     d2h_service=None,
     layer_ack_service=None,
     before_first_chunk=None,
-    idx_in=None,
-    idx_out=None,
+    recv_indices: bool = False,
+    send_indices: bool = False,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -554,37 +518,32 @@ def run_request_loop(
     c = 0
     first = None
     while not _shutdown:
-        _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
+        _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+            mtp_id_segments = []
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+            inp, mtp_id_segments, meta, metadata_msg = _d2d_recv(d2d_in)
             mtp_tokens = None
-        indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
+        indices = mtp_id_segments.pop() if recv_indices else None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
-            if mtp_tokens is not None:
-                ttnn.deallocate(mtp_tokens)
+            for t in mtp_id_segments + ([mtp_tokens] if mtp_tokens is not None else []):
+                ttnn.deallocate(t)
             if indices is not None:
                 ttnn.deallocate(indices)
             if d2d_out is not None:
-                _forward_shutdown(
-                    d2d_out,
-                    rank,
-                    d2d_rows,
-                    d2d_width,
-                    outbound_planes,
-                    idx_out,
-                    runtime.indexer_indices_shape() if idx_out is not None else None,
-                )
+                _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
         warmup = _is_warmup_sentinel(meta)
         if warmup:
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
+            for t in mtp_id_segments + ([mtp_tokens] if mtp_tokens is not None else []):
+                ttnn.deallocate(t)
             if indices is not None:
                 ttnn.deallocate(indices)
         if before_first_chunk is not None:
@@ -604,14 +563,15 @@ def run_request_loop(
             metadata_msg=metadata_msg,
             mtp_tokens=mtp_tokens,
             indices=indices,
-            idx_out=idx_out,
+            send_indices=send_indices,
+            mtp_id_segments=mtp_id_segments,
         )
         if first is None:
             first = t
         c += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
 def _print_config() -> None:
@@ -771,7 +731,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = CHUNK_SIZE
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
@@ -803,18 +763,28 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
 
-    d2d_in = d2d_out = idx_in = idx_out = None
+    d2d_in = d2d_out = None
+    recv_indices = send_indices = False
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
+        recv_indices = getattr(runtime, "receives_indexer_indices", False)
+        send_indices = getattr(runtime, "forwards_indexer_indices", False)
+        idx_tail = ()
+        if recv_indices or send_indices:
+            idx_spec = indexer_indices_global_spec(runtime.indexer_indices_shape(), GLOBAL_MESH_SHAPE)
+            idx_tail = ((idx_spec, INDEX_MAPPER_CONFIG),)
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(
-            mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
+            mesh_device,
+            rank,
+            num_ranks,
+            d2d_activation_rows,
+            d2d_activation_width,
+            d2d_in_planes,
+            d2d_out_planes,
+            extra_specs=mtp_id_segment_specs(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS),
+            inbound_tail=idx_tail if recv_indices else (),
+            outbound_tail=idx_tail if send_indices else (),
         )
-        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
-        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
-        if idx_inbound or idx_outbound:
-            idx_in, idx_out = build_d2d_index_endpoints(
-                mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound
-            )
         ttnn.distributed_context_barrier()
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -932,7 +902,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     def _capture_trace() -> None:
         if d2d_out is not None:
-            _forward_send_warmup(runtime, d2d_out, rank, idx_out)
+            _forward_send_warmup(runtime, d2d_out, rank, send_indices)
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -963,8 +933,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service=d2h_service,
             layer_ack_service=layer_ack_service,
             before_first_chunk=_capture_trace if traced else None,
-            idx_in=idx_in,
-            idx_out=idx_out,
+            recv_indices=recv_indices,
+            send_indices=send_indices,
         )
     finally:
         import gc
@@ -972,7 +942,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if layer_ack_service is not None:
             layer_ack_service.stop()
             layer_ack_service = None
-        h2d_service = d2d_in = d2d_out = idx_in = idx_out = d2h_service = None
+        h2d_service = d2d_in = d2d_out = d2h_service = None
         gc.collect()
         if producer is not None:
             producer.shutdown()

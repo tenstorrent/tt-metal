@@ -14,12 +14,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
-from models.demos.common.prefill.runners.runner_utils import (
-    MTP_ID_ROWS,
-    d2d_activation_rows,
-    d2d_activation_width,
-    num_mtp_tokens,
-)
+from models.demos.common.prefill.runners.runner_utils import d2d_activation_width, num_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
@@ -27,7 +22,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scal
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.id_transport import pack_ids, unpack_ids
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceGeometry
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
@@ -190,7 +184,8 @@ class TtPrefillRuntime:
         self._trace_d2h_service = None
         self._trace_output = None
         self._trace_partial_in = None  # DFlash, non-first rank: persistent home of the imported drafter partial
-        self._trace_mtp_tokens = None  # MTP, first rank: persistent home of the lookahead ids
+        self._trace_mtp_tokens = None  # MTP: persistent home of the lookahead ids
+        self._trace_mtp_chunk_ids = None  # MTP, non-first rank: persistent home of the chunk ids
         self._trace_mtp_geometry = None  # MTP, last rank: per-chunk level geometry the replay reads
         self._send_warmup_activation = None
         self._trace_indices_in = None
@@ -485,50 +480,34 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
-    def _mtp_pack_activation(self, hidden: ttnn.Tensor, ids_block: ttnn.Tensor) -> ttnn.Tensor:
-        """Fuse this rank's output hidden and the chunk's MTP id block into one D2D activation, stacking
-        them on the row axis. Consumes the hidden, not the block."""
-        packed = ttnn.concat([hidden, ids_block], dim=2)
-        ttnn.deallocate(hidden)
-        return packed
-
-    def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Inverse of :meth:`_mtp_pack_activation`: ``(hidden, id block)``. Does not free ``packed``."""
-        rows = self.config.chunk_size // self.config.sp_factor
-        s0, s1, s2, s3 = packed.shape
-        assert s2 == rows + MTP_ID_ROWS, (
-            f"D2D activation is {s2} rows per chip, expected L + {MTP_ID_ROWS} id rows = {rows + MTP_ID_ROWS}. "
-            "The sending rank and this one disagree on PREFILL_MTP_LEVELS, or the socket was built "
-            "without it."
+    def _mtp_zero_ids(self) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Zero ``(chunk ids, lookahead ids)`` with the specs of the H2D split and the D2D id segments."""
+        chunk = self.config.chunk_size
+        stream = [0] * (chunk + self._num_mtp_tokens())
+        chunk_ids = prepare_prefill_input_tensor(
+            stream[:chunk],
+            self.mesh_device,
+            self.config.sp_factor,
+            False,
+            self.config.mesh_shape,
+            self.config.sp_axis,
         )
-        hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, rows, s3])
-        ids_block = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
-        return hidden, ids_block
+        return chunk_ids, self._make_mtp_tokens(stream)
 
-    def _mtp_ids_block(self, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor) -> ttnn.Tensor:
-        """Pack the first rank's ids for the next rank."""
-        width = d2d_activation_width(self.hf_config.hidden_size) // self.config.tp_factor
-        return pack_ids(chunk_ids, mtp_ids, vocab_size=self.hf_config.vocab_size, width=width)
+    def _mtp_id_buffers(self) -> list:
+        """The persistent ``[chunk ids, lookahead ids]`` the traced path forwards as D2D id segments."""
+        if self.config.is_first_rank:
+            return [self._trace_input, self._trace_mtp_tokens]
+        return [self._trace_mtp_chunk_ids, self._trace_mtp_tokens]
 
-    def _mtp_union_from_ids_block(self, ids_block: ttnn.Tensor) -> MTPUnionEmbedding:
-        """Gather the last rank's union from the id block. Does not free the block."""
-        chunk_ids, mtp_ids = unpack_ids(
-            ids_block,
-            num_chunk_ids=self.config.chunk_size // self.config.sp_factor,
-            num_mtp_ids=self._num_mtp_tokens(),
-        )
-        union = MTPUnionEmbedding.from_ids(
-            chunk_ids, mtp_ids, self.model.mtp_embed_ids, num_levels=self.config.mtp_levels
-        )
-        ttnn.deallocate(chunk_ids)
-        ttnn.deallocate(mtp_ids)
-        return union
+    def _mtp_prepare_input(
+        self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor], mtp_id_segments: tuple
+    ) -> tuple:
+        """Return ``(union or None, model input, id segments to forward or None)``.
 
-    def _mtp_prepare_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
-        """Return ``(union or None, model input, id block to forward or None)``.
-
-        First rank: gather the union from the H2D ids and use its trunk as the model input. Downstream:
-        unpack the id block; only the last rank gathers the union from it.
+        First rank: gather the union from the H2D ids and use its trunk as the model input; the ids go
+        downstream unchanged. Downstream: the ids arrive as their own D2D segments; only the last rank
+        gathers the union from them. Whatever is not forwarded is freed here.
         """
         k = self.config.mtp_levels
         if self.config.is_first_rank:
@@ -537,33 +516,33 @@ class TtPrefillRuntime:
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
             union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
-            ids_block = None if self.config.is_last_rank else self._mtp_ids_block(input_tensor, mtp_tokens)
+            if not self.config.is_last_rank:
+                return union, union.trunk, [input_tensor, mtp_tokens]
             ttnn.deallocate(input_tensor)
             ttnn.deallocate(mtp_tokens)
-            return union, union.trunk, ids_block
+            return union, union.trunk, None
         assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
-        hidden, ids_block = self._mtp_unpack_activation(input_tensor)
-        ttnn.deallocate(input_tensor)
+        assert len(mtp_id_segments) == 2, (
+            f"expected the (chunk ids, lookahead ids) D2D segments with the activation, got "
+            f"{len(mtp_id_segments)}; the sending rank and this one disagree on PREFILL_MTP_LEVELS"
+        )
         if not self.config.is_last_rank:
-            return None, hidden, ids_block
-        union = self._mtp_union_from_ids_block(ids_block)
-        ttnn.deallocate(ids_block)
-        return union, hidden, None
+            return None, input_tensor, list(mtp_id_segments)
+        chunk_ids, mtp_ids = mtp_id_segments
+        union = MTPUnionEmbedding.from_ids(chunk_ids, mtp_ids, self.model.mtp_embed_ids, num_levels=k)
+        ttnn.deallocate(chunk_ids)
+        ttnn.deallocate(mtp_ids)
+        return union, input_tensor, None
 
     def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
         """Allocate a zero activation matching what the D2D socket delivers, per chip.
 
-        Stand-in input for a non-first rank until the upstream sync op overwrites it in place. Both
-        packed forms are sized here -- DFlash widens, MTP heightens -- and `_prepare_trace` captures it.
+        Stand-in input for a non-first rank until the upstream sync op overwrites it in place. DFlash's
+        widened form is sized here, and `_prepare_trace` captures it.
 
         ``dflash_packed=False`` asks for the hidden-only width under DFlash, which the traced path needs.
         """
-        rows = (
-            d2d_activation_rows(
-                self.config.chunk_size, sp_factor=self.config.sp_factor, mtp_levels=self.config.mtp_levels
-            )
-            // self.config.sp_factor
-        )
+        rows = self.config.chunk_size // self.config.sp_factor
         emb_per_tp = d2d_activation_width(
             self.hf_config.hidden_size, dflash=(self.config.dflash_enabled and dflash_packed)
         ) // (self.config.tp_factor)
@@ -634,6 +613,9 @@ class TtPrefillRuntime:
         `chunk_size + num_mtp_tokens` list. First rank only.
         """
         assert self.config.is_first_rank, "only the first rank builds an MTP token input"
+        return self._make_mtp_tokens(token_ids)
+
+    def _make_mtp_tokens(self, token_ids: list[int]) -> ttnn.Tensor:
         return prepare_prefill_mtp_tokens(
             token_ids,
             self.mesh_device,
@@ -667,6 +649,7 @@ class TtPrefillRuntime:
             stream = [0] * (chunk + n_mtp)
             tt_input = self.make_chunk_input(stream[:chunk])
             tt_mtp_tokens = self.make_mtp_tokens_input(stream) if n_mtp and self.config.is_first_rank else None
+            mtp_id_segments = self._mtp_zero_ids() if n_mtp and not self.config.is_first_rank else ()
             # Warm with a NO-OP completion sink rather than none at all. `zero_pad_and_ack`'s whole
             # body is gated on an ack transport being wired (tt/kv_ack.py), and the real sink is only
             # registered after compile(), so a warm pass with no sink silently skips it and leaves
@@ -689,6 +672,7 @@ class TtPrefillRuntime:
                     actual_end=chunk,
                     mtp_tokens=tt_mtp_tokens,
                     indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
+                    mtp_id_segments=mtp_id_segments,
                 )
                 ttnn.synchronize_device(self.mesh_device)
             finally:
@@ -794,13 +778,23 @@ class TtPrefillRuntime:
             ttnn.deallocate(word)
 
     def _stage_trace_inputs(
-        self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor] = None
+        self,
+        input_tensor: ttnn.Tensor,
+        metadata_msg: ttnn.Tensor,
+        mtp_tokens: Optional[ttnn.Tensor] = None,
+        mtp_id_segments: tuple = (),
     ) -> None:
         """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
-        if self._trace_mtp_tokens is not None:
-            assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-            ttnn.copy(mtp_tokens, self._trace_mtp_tokens)
-            ttnn.deallocate(mtp_tokens)
+        if self.config.mtp_levels:
+            if self.config.is_first_rank:
+                assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
+                staged = [(mtp_tokens, self._trace_mtp_tokens)]
+            else:
+                assert len(mtp_id_segments) == 2, "MTP is on but the id segments did not arrive with this chunk"
+                staged = list(zip(mtp_id_segments, (self._trace_mtp_chunk_ids, self._trace_mtp_tokens)))
+            for src, dst in staged:
+                ttnn.copy(src, dst)
+                ttnn.deallocate(src)
         model_input = input_tensor
         if self.config.dflash_enabled and not self.config.is_first_rank:
             model_input, partial = self._unpack_activation(input_tensor)
@@ -821,13 +815,17 @@ class TtPrefillRuntime:
         ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
         return self._trace_metadata_msg
 
-    def send_warmup_inputs(self, words: tuple) -> Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]:
-        """Pre-capture operands with the traced send's specs, to compile the send once. Caller frees them;
-        None on the last rank or once taken."""
+    def send_warmup_inputs(self, words: tuple) -> Optional[tuple]:
+        """Pre-capture operands with the traced send's specs, to compile the send once: ``(segments,
+        metadata)``, where segments is the activation, or under MTP the activation and the id segments.
+        Caller frees them all; None on the last rank or once taken."""
         activation, self._send_warmup_activation = self._send_warmup_activation, None
         if activation is None:
             return None
-        return activation, self._meta_words_dev(tuple(w & 0xFFFFFFFF for w in words))
+        md = self._meta_words_dev(tuple(w & 0xFFFFFFFF for w in words))
+        if not self.config.mtp_levels:
+            return activation, md
+        return [activation, *(ttnn.zeros_like(b) for b in self._mtp_id_buffers())], md
 
     def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
@@ -840,32 +838,24 @@ class TtPrefillRuntime:
         tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
         if it were to land inside begin_capture().
 
-        MTP: the union is rebuilt from the persistent inputs on every replay; a non-last rank returns it
-        packed under the hidden. DFlash: the drafter runs in the same capture; a non-last rank returns the
-        packed [hidden | partial]."""
+        MTP: the first and last ranks rebuild the union from the persistent ids on every replay; the ids
+        themselves travel as separate D2D segments (see :meth:`_mtp_id_buffers`). DFlash: the drafter
+        runs in the same capture; a non-last rank returns the packed [hidden | partial]."""
         dflash = self.config.dflash_enabled
         if dflash:
             self.drafter.reset()
             if not self.config.is_first_rank:
                 self.drafter.import_partial(self._trace_partial_in, owned=False)
         model_input = self._trace_input
-        union = ids_block = None
+        union = None
         mtp = bool(self.config.mtp_levels)
-        if mtp:
-            k = self.config.mtp_levels
+        if mtp and (self.config.is_first_rank or self.config.is_last_rank):
+            chunk_ids, mtp_ids = self._mtp_id_buffers()
+            union = MTPUnionEmbedding.from_ids(
+                chunk_ids, mtp_ids, self.model.mtp_embed_ids, num_levels=self.config.mtp_levels
+            )
             if self.config.is_first_rank:
-                union = MTPUnionEmbedding.from_ids(
-                    self._trace_input, self._trace_mtp_tokens, self.model.mtp_embed_ids, num_levels=k
-                )
                 model_input = union.trunk
-                if not self.config.is_last_rank:
-                    ids_block = self._mtp_ids_block(self._trace_input, self._trace_mtp_tokens)
-            else:
-                model_input, ids_block = self._mtp_unpack_activation(self._trace_input)
-                if self.config.is_last_rank:
-                    union = self._mtp_union_from_ids_block(ids_block)
-                    ttnn.deallocate(ids_block)
-                    ids_block = None
         out = self.model.forward(
             model_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
@@ -890,15 +880,9 @@ class TtPrefillRuntime:
             input_is_embedded=union is not None and self.config.is_first_rank,
         )
         if mtp:
-            if not self.config.is_first_rank:
-                ttnn.deallocate(model_input)
             if union is not None:
                 union.deallocate()
-            if self.config.is_last_rank:
-                return None
-            packed = self._mtp_pack_activation(out, ids_block)
-            ttnn.deallocate(ids_block)
-            return packed
+            return None if self.config.is_last_rank else out
         if not dflash:
             return out
         if self.config.is_last_rank:
@@ -964,8 +948,11 @@ class TtPrefillRuntime:
             self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
-        if self.config.mtp_levels and self.config.is_first_rank:
-            self._trace_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
+        if self.config.mtp_levels:
+            if self.config.is_first_rank:
+                self._trace_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
+            else:
+                self._trace_mtp_chunk_ids, self._trace_mtp_tokens = self._mtp_zero_ids()
         if self.mtp_predictor is not None:
             self._trace_mtp_geometry = MTPTraceGeometry(
                 self.mesh_device,
@@ -1004,9 +991,15 @@ class TtPrefillRuntime:
 
         # Warm the staging ops too: a program compiled after the capture can land on trace memory.
         warm_mtp_tokens = None
-        if self._trace_mtp_tokens is not None:
-            warm_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
-        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta_words_dev(words), warm_mtp_tokens)
+        warm_mtp_id_segments = ()
+        if self.config.mtp_levels:
+            if self.config.is_first_rank:
+                warm_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
+            else:
+                warm_mtp_id_segments = self._mtp_zero_ids()
+        self._stage_trace_inputs(
+            self.make_chunk_input([0] * chunk), self._meta_words_dev(words), warm_mtp_tokens, warm_mtp_id_segments
+        )
         # Keep the output: send_warmup_inputs needs its spec.
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
@@ -1036,7 +1029,8 @@ class TtPrefillRuntime:
         on_mtp_complete=None,
         provided_levels: int = 0,
         indexer_indices: Optional[ttnn.Tensor] = None,
-    ) -> Optional[ttnn.Tensor]:
+        mtp_id_segments: tuple = (),
+    ) -> Union[None, ttnn.Tensor, list]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
         On the last rank (and single-rank) this returns None — the populated cache is
@@ -1090,6 +1084,13 @@ class TtPrefillRuntime:
             indexer_indices: the upstream rank's last ``full`` layer top-k indices, required exactly when
                 receives_indexer_indices (this rank starts on a GLM-5.3 ``shared`` layer). Deallocated here.
                 When forwards_indexer_indices, read outbound_indexer_indices after this call.
+            mtp_id_segments: a non-first rank's ``(chunk ids, lookahead ids)``, received as D2D segments
+                with the activation. Deallocated here. Non-first ranks only, when MTP is on.
+
+        Returns:
+            None on the last rank. Otherwise the activation to send downstream, or with MTP on the list
+            ``[activation, chunk ids, lookahead ids]`` matching the D2D segments. Eager: the caller owns
+            them. Traced: persistent buffers the next replay overwrites.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -1194,7 +1195,7 @@ class TtPrefillRuntime:
                         f"_prepare_llama4_scale_offsets)."
                     )
                 ttnn.copy(src, self._trace_metadata.llama4_scale)
-            self._stage_trace_inputs(input_tensor, metadata_msg, mtp_tokens)
+            self._stage_trace_inputs(input_tensor, metadata_msg, mtp_tokens, mtp_id_segments)
             if indexer_indices is not None:
                 ttnn.copy(indexer_indices, self._trace_indices_in)
                 ttnn.deallocate(indexer_indices)
@@ -1202,12 +1203,16 @@ class TtPrefillRuntime:
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
-            return None if self.config.is_last_rank else self._trace_output
+            if self.config.is_last_rank:
+                return None
+            if self.config.mtp_levels:
+                return [self._trace_output, *self._mtp_id_buffers()]
+            return self._trace_output
 
         on_layer_complete = self._layer_complete_cb(slot_id, actual_start, actual_end)
 
         model_input = input_tensor
-        mtp_union = mtp_ids_block = None
+        mtp_union = mtp_ids_fwd = None
         mtp_owns_input = False
         if self.config.dflash_enabled:
             self.drafter.reset()
@@ -1216,7 +1221,7 @@ class TtPrefillRuntime:
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
         elif self.config.mtp_levels:
-            mtp_union, model_input, mtp_ids_block = self._mtp_prepare_input(input_tensor, mtp_tokens)
+            mtp_union, model_input, mtp_ids_fwd = self._mtp_prepare_input(input_tensor, mtp_tokens, mtp_id_segments)
             mtp_owns_input = self.config.is_first_rank
 
         out = self.model.forward(
@@ -1269,9 +1274,7 @@ class TtPrefillRuntime:
                 mtp_union.deallocate()
             if self.config.is_last_rank:
                 return None
-            packed = self._mtp_pack_activation(out, mtp_ids_block)
-            ttnn.deallocate(mtp_ids_block)
-            return packed
+            return [out, *mtp_ids_fwd]
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
         # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
