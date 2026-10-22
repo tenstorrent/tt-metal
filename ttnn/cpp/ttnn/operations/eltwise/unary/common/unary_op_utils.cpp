@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <cctype>
 #include <optional>
 #include <type_traits>
 #include <tt_stl/assert.hpp>
@@ -1262,5 +1263,76 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
             TT_THROW("Unsupported parameter type for index {}", index);
         },
         op.base);
+}
+
+std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    // SOFTCAP validates its beta on a cache miss only, so its value has to stay in the program key. ROUND and
+    // POLYGAMMA keep their parameters compiled in: the compiler folds them (a constant 0 drops ROUND's scaling
+    // multiplies, which otherwise turn -0.0 into +0.0), and the runtime form rounds differently.
+    const auto type = op_chain.empty() ? UnaryOpType::IDENTITY : op_chain[0].type();
+    if (op_chain.size() != 1 || op_chain[0].empty() || type == UnaryOpType::SOFTCAP || type == UnaryOpType::ROUND ||
+        type == UnaryOpType::POLYGAMMA || uses_dedicated_compute_kernel(type, input_dtype)) {
+        return std::nullopt;
+    }
+    RuntimeScalarDefines out{.defines = get_block_defines(op_chain, "0", "0", input_dtype)};
+    const auto is_ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    uint32_t count = 0;
+    for (const char* name : {"SFPU_OP_CHAIN_0_INIT_0", "SFPU_OP_CHAIN_0_FUNC_0"}) {
+        auto it = out.defines.find(name);
+        if (it == out.defines.end()) {
+            continue;
+        }
+        const std::string& src = it->second;
+        std::string dst;
+        int template_depth = 0;
+        size_t i = 0;
+        while (i < src.size()) {
+            const char c = src[i];
+            const bool starts_token = i == 0 || !is_ident(src[i - 1]);
+            if (!starts_token || !std::isdigit(static_cast<unsigned char>(c))) {
+                template_depth += c == '<' ? 1 : (c == '>' ? -1 : 0);
+                dst += c;
+                ++i;
+                continue;
+            }
+            const bool hex = c == '0' && i + 1 < src.size() && (src[i + 1] == 'x' || src[i + 1] == 'X');
+            size_t j = hex ? i + 2 : i;
+            while (j < src.size() && (hex ? std::isxdigit(static_cast<unsigned char>(src[j]))
+                                          : std::isdigit(static_cast<unsigned char>(src[j])))) {
+                ++j;
+            }
+            // Only a function argument can take a runtime value; template arguments stay in the source. A literal
+            // counts when it carries the u suffix, or is a bare decimal after a comma (the first argument is the
+            // Dest index and stays).
+            const bool has_digits = j > (hex ? i + 2 : i);
+            const bool suffixed = j < src.size() && src[j] == 'u' && (j + 1 == src.size() || !is_ident(src[j + 1]));
+            size_t p = i;
+            while (p > 0 && src[p - 1] == ' ') {
+                --p;
+            }
+            const bool bare_after_comma =
+                !hex && p > 0 && src[p - 1] == ',' && (j == src.size() || (!is_ident(src[j]) && src[j] != '.'));
+            if (template_depth != 0 || !has_digits || !(suffixed || bare_after_comma)) {
+                dst.append(src, i, j - i);
+                i = j;
+                continue;
+            }
+            if (count == out.scalars.size()) {
+                return std::nullopt;
+            }
+            out.scalars[count] = static_cast<uint32_t>(std::stoul(src.substr(i, j - i), nullptr, hex ? 16 : 10));
+            dst += fmt::format("packed_scalar{}", count + 1);
+            ++count;
+            i = suffixed ? j + 1 : j;
+        }
+        out.key += dst;
+        out.key += ';';
+        it->second = std::move(dst);
+    }
+    if (count == 0) {
+        return std::nullopt;
+    }
+    return out;
 }
 }  // namespace ttnn::operations::unary::utils
