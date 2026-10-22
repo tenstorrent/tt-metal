@@ -279,6 +279,32 @@ def abort(bringup_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.kil
     return {**agent, "note": note["id"]}
 
 
+# ---- F169: the overseer's classification of a gate failure: anything but "model" means no agent attempt for it
+KINDS = ("framework", "waiver", "infra", "model")
+
+
+def classify(bringup_dir: Path, tid: str, kind: str, why: str = "") -> dict:
+    if kind not in KINDS:
+        raise ValueError(f"kind {kind!r}: one of {', '.join(KINDS)}")
+    data = _read(bringup_dir)
+    rec = {"kind": kind, "why": why, "t": now()}
+    data["classified"] = {**(data.get("classified") or {}), tid: rec}
+    _write(bringup_dir, data)
+    return rec
+
+
+def classification(bringup_dir: Path, tid: str) -> dict | None:
+    return (_read(bringup_dir).get("classified") or {}).get(tid)
+
+
+def clear_classification(bringup_dir: Path, tid: str) -> None:
+    data = _read(bringup_dir)
+    c = dict(data.get("classified") or {})
+    if c.pop(tid, None) is not None:
+        data["classified"] = c
+        _write(bringup_dir, data)
+
+
 STATUS_FILE = "OVERSEER_STATUS.json"  # in the run dir: why the overseer has the run stopped (the dashboard shows it)
 
 
@@ -309,7 +335,7 @@ def _dirs(spec_path: str):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("note", "close", "list", "abort", "fix", "release", "status"):
+    for name in ("note", "close", "list", "abort", "fix", "release", "status", "classify"):
         p = sub.add_parser(name)
         p.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
         if name in ("note", "abort"):
@@ -336,6 +362,10 @@ def main(argv=None) -> int:
             p.add_argument("text")
         if name == "release":
             p.add_argument("id")
+        if name == "classify":  # F169
+            p.add_argument("--task", required=True)
+            p.add_argument("--as", dest="kind", required=True, choices=KINDS)
+            p.add_argument("--why", default="")
         if name == "status":
             p.add_argument("text", nargs="?", default="", help="why the run is stopped; empty clears it")
     a = ap.parse_args(argv)
@@ -364,6 +394,10 @@ def main(argv=None) -> int:
         else:
             clear_status(rdir)
             print("status cleared")
+    elif a.cmd == "classify":
+        r = classify(bdir, a.task, a.kind, a.why)
+        nxt = "the agent's next attempt" if a.kind == "model" else "no agent attempt: resume runs only the units left"
+        print(f"{a.task}: {r['kind']} ({nxt})")
     elif a.cmd == "release":
         print(f"released {release(bdir, a.id)['id']}: placed at the orchestrator's next task boundary")
     else:

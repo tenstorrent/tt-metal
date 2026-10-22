@@ -7,7 +7,16 @@
     python -m models.demos.common.bringup next --spec S         tasks whose deps are all PASS
     python -m models.demos.common.bringup gate P2.3 --spec S [--commit] [--force]
     python -m models.demos.common.bringup gate P2.3 --spec S --commit-only   F149: commit a passed gate git refused
-A gate unit kept as PASS on the same stamp (core/stamps.py, F150) is not run again; --fresh runs it anyway.
+A gate unit kept as PASS on the same stamp (core/stamps.py, F150) is not run again; --fresh runs it anyway (owner only).
+F169: a gate never restarts. Every test is its own unit; one that passed in the task's gate on the same code under
+test is kept. After a failure: fix it, then
+    python -m models.demos.common.bringup gate P2.3 --spec S --unit <name>   run only that unit (see it pass)
+    python -m models.demos.common.bringup gate P2.3 --spec S --continue      the delta: units not yet passed; commits
+    python -m models.demos.common.bringup gate P2.3 --spec S --rerun <u,u>   run these passed units again too
+    python -m models.demos.common.bringup gate P2.3 --spec S --status        each unit: kept / failed / stopped / not run
+    python -m models.demos.common.bringup gate P2.3 --spec S --check         F170: an agent's run of its gate: kept per
+                                                                             unit (the orchestrator's gate then runs
+                                                                             only the rest); no state, no commit
     python -m models.demos.common.bringup sweep [prefix] --spec S [--commit]
     python -m models.demos.common.bringup validate --spec S     spec + ledger schema
 
@@ -26,7 +35,7 @@ import os
 import sys
 from pathlib import Path
 
-from models.demos.common.bringup.core.gate import commit_only, run_gate, task_commit
+from models.demos.common.bringup.core.gate import commit_only, delta_status, run_gate, task_commit
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.core.spec import Spec
 
@@ -75,10 +84,19 @@ def cmd_next(a):
 @command("gate", "run one gate")
 def cmd_gate(a):
     spec, led = load(a)
+    if a.status:
+        for u, st in delta_status(spec, led, a.task):
+            print(f"  {u}: {st}")
+        return 0
     if a.commit_only:
         res = commit_only(spec, led, a.task)
-    else:
-        res = run_gate(spec, led, a.task, commit=a.commit, force=a.force, fresh=a.fresh)
+    elif a.unit:
+        res = run_gate(spec, led, a.task, units=[u for x in a.unit for u in x.split(",") if u])
+    elif a.check:  # F170: the agent's run of its gate: recorded per unit, no state, no commit
+        res = run_gate(spec, led, a.task, check=True, force=a.force)
+    else:  # --continue is the default: the units not yet passed (F169)
+        rerun = [u for x in (a.rerun or []) for u in x.split(",") if u]
+        res = run_gate(spec, led, a.task, commit=a.commit or a.continue_, force=a.force, fresh=a.fresh, rerun=rerun)
     print(led.task(a.task)["title"])
     print(res.summary())
     if res.commit:
@@ -425,7 +443,18 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--force", action="store_true", help="run even if deps are not PASS")
     ap.add_argument("--commit-only", action="store_true", help="gate: commit a passed gate git refused (F149)")
-    ap.add_argument("--fresh", action="store_true", help="gate/sweep/rerun: run even a unit kept PASS on the same code")
+    ap.add_argument(
+        "--fresh", action="store_true", help="gate/sweep/rerun: run every unit, kept or not (owner only; F169)"
+    )
+    ap.add_argument("--unit", action="append", help="gate: run only this unit (F169); repeat or comma-separate")
+    ap.add_argument(
+        "--continue", dest="continue_", action="store_true", help="gate: the units not yet passed, then commit (F169)"
+    )
+    ap.add_argument("--rerun", action="append", help="gate: run these passed units again too (F169)")
+    ap.add_argument("--status", action="store_true", help="gate: each unit kept / failed / stopped / not run (F169)")
+    ap.add_argument(
+        "--check", action="store_true", help="gate: an agent's run, kept per unit for the orchestrator's gate (F170)"
+    )
     ap.add_argument("--ledger-only", action="store_true", help="validate: skip the model-spec schema")
     ap.add_argument("--files", nargs="*", help="freeze: files to freeze (default: the task's 'tests')")
     ap.add_argument("--no-commit", action="store_true", help="freeze: do not commit")

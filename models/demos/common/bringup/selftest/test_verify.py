@@ -73,7 +73,14 @@ def test_a_batched_verify_judges_every_task_as_its_own_gate(gspec, monkeypatch, 
     (s.bringup_dir / "state.json").write_text(json.dumps({t["id"]: {"status": "PASS"} for t in tasks}))
     pats = ["X.1", "C.*", "S.*"]
     one = V.verify(s, pats, out=tmp_path / "one")
+    import shutil
+
+    from models.demos.common.bringup.core.gate import run_name
+
+    shutil.rmtree(s.run_dir(run_name(led)) / "stamps")  # F170: only the batched run's records below
     many = V.verify(s, pats, out=tmp_path / "many", batch=True, force=True)  # F150: not the kept runs of `one`
+    again = V.verify(s, pats, out=tmp_path / "again", batch=True)  # F170 (audit item 11): the batch's runs are kept
+    assert {r["task"] for r in again["tasks"] if r.get("reused")} == {"X.1", "C.blk.attn_norm", "S.blk.02"}
     assert [r["task"] for r in one["tasks"]] == ["X.1", "C.blk.attn_norm", "C.blk.mlp", "S.blk.02"]
     assert [(r["task"], r["verdict"]) for r in many["tasks"]] == [(r["task"], r["verdict"]) for r in one["tasks"]]
     assert one["failed"] == many["failed"] == ["C.blk.mlp"] and {r.get("batch") for r in many["tasks"]} == {None, 0}

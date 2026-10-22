@@ -80,6 +80,29 @@ def test_golden_full_layers(fx):
     assert not Golden(g.dir).verify()
 
 
+def test_golden_step_dumps_only_for_the_named_layers(fx):
+    """F159: a full model's goldens store every layer's in / out and state, but the per-step boundaries (the step
+    tests' inputs) only for the representative layers: DeepSeek-V4.1 on galaxy_8x4, 40 layers, ~330 -> ~180 GB."""
+    spec_path = fx()
+    import yaml
+
+    raw = yaml.safe_load(open(spec_path))
+    next(r for r in raw["ladder"] if r["name"] == "s256")["step_dump_layers"] = [1]
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    s = Spec.load(spec_path)
+    assert s.validate() == []
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    g = Golden.for_rung(s, "s256")
+    assert g.verify() and g.manifest["step_dump_layers"] == [1]
+    assert set(g.layer(2, 1)) == {"in", "attn_norm", "attn_out", "h_mid", "ffn_norm", "mlp_out", "out"}
+    assert set(g.layer(2, 0)) == {"in", "out"} and set(g.layer(2, 2)) == {"out"}  # F161: 0 is the run start
+    assert sorted(p.name for p in (g.dir / "kv_cache").iterdir()) == [f"layer_{i}.safetensors" for i in range(3)]
+    next(r for r in raw["ladder"] if r["name"] == "s256")["step_dump_layers"] = [7]
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    assert any("step_dump_layers [7] not run" in e for e in Spec.load(spec_path).validate())
+
+
 def test_golden_layer_subset_stores_run_starts_on_every_chunk(fx):
     spec_path = fx(layers=[0, 2])
     prompt.build(Spec.load(spec_path))
@@ -233,3 +256,23 @@ def test_rehash_goldens_updates_only_verified_golden_files(fx, tmp_path):
     man.write_text(json.dumps(m))
     with pytest.raises(FreezeError, match="does not verify"):
         rehash_goldens(s, led)
+
+
+def test_golden_outs_every_chunk_without_dumps(fx):
+    """F160: a long rung dumps only its last chunk; outs_every_chunk also stores every layer's out on every chunk
+    (DeepSeek-V4.1 full model: the per-layer errors of every chunk, owner)."""
+    import yaml
+
+    spec_path = fx()
+    raw = yaml.safe_load(open(spec_path))
+    r = next(r for r in raw["ladder"] if r["name"] == "s512")
+    r["outs_every_chunk"] = True
+    r.pop("full_dumps", None)
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    s = Spec.load(spec_path)
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    g = Golden.for_rung(s, "s512")
+    assert g.verify() and g.dumped_chunks == [g.n_chunks - 1] and g.manifest["outs_every_chunk"]
+    assert set(g.layer(0, 1)) == {"out"} and set(g.layer(0, 0)) == {"in", "out"}  # layer 0: the run's start
+    assert "attn_norm" in g.layer(g.n_chunks - 1, 1)

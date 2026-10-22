@@ -177,8 +177,11 @@ def mesh_parametrize(fn):
     Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None."""
     import pytest
 
+    s = spec()
+    # F170 (audit item 7): every device test takes the spec's box.test_timeout_s, frozen component and swap tests
+    # included (their templates had no mark, so pytest.ini's 300 s killed swap tests that take ~290 s unloaded)
+    fn = pytest.mark.timeout(int(s.get("box.test_timeout_s")))(fn)
     if impl_mode() != "device":
         return pytest.mark.parametrize("mesh_device", [None], ids=["nodevice"])(fn)
-    s = spec()
     fn = pytest.mark.parametrize("device_params", [device_params(s)], indirect=True, ids=["box"])(fn)
     return pytest.mark.parametrize("mesh_device", [tuple(s.mesh)], indirect=True, ids=["x".join(map(str, s.mesh))])(fn)
