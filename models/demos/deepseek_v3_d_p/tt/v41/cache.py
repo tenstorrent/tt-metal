@@ -233,46 +233,59 @@ class V41ChunkTables:
         """The indexer's score width (rows of a ratio-``ratio`` source) of the chunk at ``start``: its bucket."""
         return self.bucket(start, length) // ratio
 
-    def prepare_chunk(self, start: int, length: int) -> None:
-        """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
-        between a chunk's ``_stage`` and its forward (or replay); no device work."""
+    def prepare_chunk_host(self, start: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """The host tensors ``prepare_chunk`` copies into the chunk's input buffers, each with its buffer: RoPE
+        rows, the pin page, the visible counts, the row indices. Depends on ``start`` only, so it can run ahead of
+        the device (on the prefill's prefetch thread)."""
         assert self.generic
         assert start % self.chunk == 0 or start == 0, start
         chunk = self.chunk
+        pairs = []
         for (compressed, stride), buffers in self._rope_buffers.items():
             positions = torch.arange(start, start + chunk, stride)
             for host, buffer in zip(cos_sin(self.config, compressed, positions), buffers):
-                ttnn.copy_host_to_device_tensor(self._host_replicated(host, ttnn.bfloat16), buffer)
+                pairs.append((self._host_replicated(host, ttnn.bfloat16), buffer))
         first = torch.arange(self.sp * self.tp, dtype=torch.int32) * self._query_rows  # chip query offsets
         pin = torch.zeros(self.sp, self.tp, 1, 8, dtype=torch.int32)
         pin[..., 0] = (first + start).reshape(self.sp, self.tp, 1)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                pin,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
-            ),
-            self._pin,
+        pairs.append(
+            (
+                ttnn.from_torch(
+                    pin,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+                ),
+                self._pin,
+            )
         )
         positions = torch.arange(chunk, dtype=torch.int64) + start  # every query row of the chunk
         for r, buffer in self._visible.items():
             visible = ((positions + 1) // r).float().view(chunk, 1)
             host = visible.reshape(self.sp, self.tp, self._query_rows, 1)
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    host,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
-                ),
-                buffer,
+            pairs.append(
+                (
+                    ttnn.from_torch(
+                        host,
+                        dtype=ttnn.float32,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+                    ),
+                    buffer,
+                )
             )
         for r, buffer in self._row_index.items():
             rows = torch.arange(chunk // r, dtype=torch.int32) + start // r
-            ttnn.copy_host_to_device_tensor(
-                self._host_replicated(rows.view(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), buffer
-            )
+            pairs.append((self._host_replicated(rows.view(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), buffer))
+        return pairs
+
+    def prepare_chunk(self, start: int, length: int, host: list | None = None) -> None:
+        """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
+        between a chunk's ``_stage`` and its forward (or replay); no device work beyond the copies (ordered on the
+        command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made ahead."""
+        assert self.generic
+        for tensor, buffer in self.prepare_chunk_host(start) if host is None else host:
+            ttnn.copy_host_to_device_tensor(tensor, buffer)
         self._chunk_start = start
 
     def _host_replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):

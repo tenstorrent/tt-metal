@@ -71,10 +71,20 @@ PREFILL_GENERIC = "TT_V41_PREFILL_GENERIC"  # "1": prefill states are position-g
 # of the next chunk (~90 ms a chunk at 40 layers) serialize behind it (17.7 s of a 61.7 s 1M
 # prefill); a thread prepares them while the main thread waits in the issue.
 PREFILL_PREFETCH = "TT_V41_PREFILL_PREFETCH"
+# "1": a chunked prefill call that ends before the prompt's end waits for the device and reads its
+# logits back as the final call does (the earlier synchronous behaviour). Default "0": it returns
+# once its replays are issued (no logits: the plugin discards an intermediate chunk's), so the next
+# call's host work (the scheduler, the stage of the next chunk) overlaps the device; the next
+# chunk's copies and replay are ordered behind this chunk's on the command queue.
+PREFILL_DRAIN = "TT_V41_PREFILL_DRAIN"
 
 
 def prefill_prefetch() -> int:
     return int(os.environ.get(PREFILL_PREFETCH, "2"))
+
+
+def prefill_drain() -> bool:
+    return os.environ.get(PREFILL_DRAIN, "0") == "1"
 
 
 def prefill_generic() -> bool:
@@ -98,6 +108,8 @@ class _HostChunk:
     token_ids: ttnn.Tensor  # host [1, 1, chunk/sp] uint32
     engram: dict[int, EngramChunkInputs]  # host tensors
     types: torch.Tensor | None  # the first chunk's token types padded with TEXT, when it holds image spans
+    tables: list | None = None  # generic states: ``V41ChunkTables.prepare_chunk_host`` (host tensors, buffers)
+    cost: dict | None = None  # host seconds of making this chunk: hash, gather (Engram), tables
 
 
 def image_spans(token_types: torch.Tensor) -> list[tuple[int, int]]:
@@ -283,11 +295,12 @@ class TtV41Transformer(LightweightModule):
             state.dspark_rings = self.dspark.new_rings()
         return state
 
-    def _host_chunks(self, request: _Request, first: int = 0):
+    def _host_chunks(self, request: _Request, first: int = 0, tables=None):
         """Each chunk's host inputs in order from the chunk at ``first`` (a multiple of the chunk): token ids and
-        (Engram layers) the n-gram hash and the packed rows / row ids of its lookups. Tokens-only, so the loop
-        prepares chunk i + 1 while the device runs chunk i. Resuming at ``first`` seeds the Engram history from the
-        tokens before it (what hashing them would have left)."""
+        (Engram layers) the n-gram hash and the packed rows / row ids of its lookups, and (``tables``, a generic
+        state's ``V41ChunkTables``) the chunk's position inputs. Tokens-only, so the loop prepares chunk i + 1
+        while the device runs chunk i. Resuming at ``first`` seeds the Engram history from the tokens before it
+        (what hashing them would have left)."""
         tokens, total = request.tokens, int(request.tokens.numel())
         assert first % self.chunk == 0 and 0 <= first < total, (first, total)
         history = None
@@ -302,17 +315,27 @@ class TtV41Transformer(LightweightModule):
             types = request.token_types[:length] if request.token_types is not None and start == 0 else None
             text = None if types is None else types == TEXT
             engram = {}
+            cost = {"hash": 0.0, "gather": 0.0, "tables": 0.0}
             if self.engram:
+                t0 = time.perf_counter()
                 ids, history = self.engram_hash(tokens[start : start + length], history, text)
+                cost["hash"] = time.perf_counter() - t0
+                t0 = time.perf_counter()
                 engram = {
                     l: e.prepare_host(ids[:, self.engram_hash.layer_index(l)], self.chunk, text)
                     for l, e in self.engram.items()
                 }
+                cost["gather"] = time.perf_counter() - t0
             padded = None
             if types is not None:
                 padded = torch.full((self.chunk,), TEXT, dtype=torch.int64)
                 padded[:length] = types
-            yield _HostChunk(start, length, self._token_ids(chunk_tokens, device=False), engram, padded)
+            position = None
+            if tables is not None:
+                t0 = time.perf_counter()
+                position = tables.prepare_chunk_host(start)
+                cost["tables"] = time.perf_counter() - t0
+            yield _HostChunk(start, length, self._token_ids(chunk_tokens, device=False), engram, padded, position, cost)
 
     def _stage(self, host: _HostChunk, buffers: dict):
         """Write a chunk's host inputs into the request's device input buffers (allocated by its first chunk, so
@@ -398,15 +421,19 @@ class TtV41Transformer(LightweightModule):
         if resume is not None and resume.get("next") == start and resume.get("host") is not None:
             chunks, host = resume["chunks"], resume["host"]  # the pipeline of the previous call, a chunk ahead
         else:
-            chunks = self._prefetched(self._host_chunks(request, start), prefill_prefetch())
+            tables = state.tables if state.generic else None
+            chunks = self._prefetched(self._host_chunks(request, start, tables), prefill_prefetch())
             host = next(chunks)
         t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
         chunk_log = os.environ.get("TT_V41_PREFILL_CHUNK_LOG", "0") == "1"
         for c in range(start // self.chunk, -(-end // self.chunk)):
+            if host.cost is not None:  # the thread's (or the loop's) seconds making this chunk's host inputs
+                for k, v in host.cost.items():
+                    t[k] = t.get(k, 0.0) + v
             t0 = time.perf_counter()
             token_ids, engram_inputs = self._stage(host, buffers)
             if state.generic:
-                state.tables.prepare_chunk(host.start, host.length)
+                state.tables.prepare_chunk(host.start, host.length, host.tables)
             t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
             rope = buffers["dspark_rope"][c] if self.dspark is not None else None
             forward = lambda: self._chunk_forward(
@@ -762,7 +789,9 @@ class V41GenericPrefillTrace:
         """tokens [S] (the whole prompt) -> (fp32 logits [logit_positions, vocab] of the position before ``end``,
         state) as ``prefill``; ``self.last`` the phases. ``start`` > 0 resumes the prompt at that chunk boundary
         (as ``prefill_into``); ``end`` (a chunk boundary, default the prompt's end) stops after that chunk, the
-        next chunks' host inputs prepared ahead through ``resume`` (``TtV41Transformer._run``)."""
+        next chunks' host inputs prepared ahead through ``resume`` (``TtV41Transformer._run``). A call with
+        ``end`` before the prompt's end returns ``(None, state)`` without waiting for the device unless
+        ``TT_V41_PREFILL_DRAIN=1`` (``PREFILL_DRAIN``)."""
         model, state = self.model, self.state
         total = int(tokens.numel())
         end = total if end is None else end
@@ -786,6 +815,9 @@ class V41GenericPrefillTrace:
             return []
 
         scored = model._run(request, state, self.buffers, step, timings=self.last, start=start, end=end, resume=resume)
+        if end < total and not prefill_drain():  # an intermediate call: its replays are issued, not awaited
+            self.last["wait"] = self.last["readback"] = 0.0
+            return None, state
         t0 = time.perf_counter()
         ttnn.synchronize_device(model.mesh_device)
         self.last["wait"] = time.perf_counter() - t0

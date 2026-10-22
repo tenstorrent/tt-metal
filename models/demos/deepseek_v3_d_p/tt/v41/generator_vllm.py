@@ -306,6 +306,8 @@ class DeepseekV41ForCausalLM:
                 logits, _ = trace.run(prompt)
                 mode = "replay"
             elif generic is not None:
+                # an intermediate chunk (n < total) returns no logits and does not wait for the device: the
+                # plugin discards its row, and the next call's copies and replay queue behind this chunk's
                 logits, _ = generic.run(prompt, start=start, end=n, resume=resume)
                 mode = f"generic {generic.last['replayed']}+{generic.last['eager']}"
             else:
@@ -318,7 +320,8 @@ class DeepseekV41ForCausalLM:
                 f"DeepSeek-V4.1-Flash: prefill of {n - start} tokens at {start} (prefix {n}) in {time.time() - t0:.2f} s "
                 f"({mode}{'' if phases is None else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.last.items() if isinstance(v, float))})"
             )
-            out[i, 0] = logits[-1]
+            if logits is not None:
+                out[i, 0] = logits[-1]
         return out
 
     def _join_pending(self, key: int) -> None:
