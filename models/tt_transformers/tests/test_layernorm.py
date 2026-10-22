@@ -16,14 +16,6 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
-def torch_layernorm_ref(x, weight, eps):
-    """Mean-centered biasless LayerNorm matching HF Cohere/transformers semantics (fp32 internals)."""
-    mean = x.float().mean(dim=-1, keepdim=True)
-    var = x.float().var(dim=-1, keepdim=True, unbiased=False)
-    x_norm = (x.float() - mean) * torch.rsqrt(var + eps)
-    return (x_norm * weight.float()).to(x.dtype)
-
-
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
@@ -48,6 +40,23 @@ def torch_layernorm_ref(x, weight, eps):
 )
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def torch_rmsnorm_ref(first_layer_prefix, state_dict, model_args, input):
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    reference_model = model_args.reference_rms_norm()
+    reference_model.load_state_dict(partial_state_dict)
+    return reference_model(input)
+
+
+def torch_layernorm_ref(x, weight, eps):
+    """Mean-centered biasless LayerNorm matching HF Cohere/transformers semantics (fp32 internals)."""
+    mean = x.float().mean(dim=-1, keepdim=True)
+    var = x.float().var(dim=-1, keepdim=True, unbiased=False)
+    x_norm = (x.float() - mean) * torch.rsqrt(var + eps)
+    return (x_norm * weight.float()).to(x.dtype)
+
+
 def test_layernorm_inference(
     max_seq_len,
     batch_size,
@@ -64,6 +73,8 @@ def test_layernorm_inference(
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
+    if norm_types == LayerNormTypes.RMSNORM:
+        first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Torch reference gamma straight from the converted state dict (1D, [dim])
     torch_weight = state_dict[state_dict_prefix + "attention_norm.weight"].float()
@@ -88,7 +99,10 @@ def test_layernorm_inference(
     tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
 
     input = torch.rand(1, 1, 32, model_args.dim)
-    reference_output = torch_layernorm_ref(input, torch_weight, model_args.norm_eps)
+    if norm_types == LayerNormTypes.LAYERNORM:
+        reference_output = torch_layernorm_ref(input, torch_weight, model_args.norm_eps)
+    if norm_types == LayerNormTypes.RMSNORM:
+        reference_output = torch_rmsnorm_ref(first_layer_prefix, state_dict, model_args, input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(

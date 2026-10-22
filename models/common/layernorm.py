@@ -107,15 +107,15 @@ class LayerNorm(LightweightModule):
             torch_weight_tiled = state_dict[weight_name].reshape(1, 1, 1, dim)
             if add_unit_offset:
                 torch_weight_tiled = torch_weight_tiled + 1.0
-                self.weight_tiled = ttnn.as_tensor(
-                    torch_weight_tiled,
-                    device=device,
-                    dtype=weight_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=weight_memory_config,
-                    cache_file_name=None if weight_cache_path is None else weight_cache_path / (weight_name + "_tiled"),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-                )
+            self.weight_tiled = ttnn.as_tensor(
+                torch_weight_tiled,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=None if weight_cache_path is None else weight_cache_path / (weight_name + "_tiled"),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
 
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
