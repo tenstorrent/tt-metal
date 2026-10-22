@@ -1763,3 +1763,19 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - DS41 full model short rung: a non-step layer's file held in and out, fp32 [5120, 20484] each (839 MB); its in is the
   previous layer's out bit for bit (checked at L5, L15, L30) and no check reads it (the ladder, drift and profile read
   in only at a run start, the step tests only on step layers). Now 420 MB; a run start keeps its in.
+- DS41 full model short rung: a non-step layer's file held in and out, fp32 [5120, 20484] each (839 MB); its in is the
+  previous layer's out bit for bit (checked at L5, L15, L30) and no check reads it (the ladder, drift and profile read
+  in only at a run start, the step tests only on step layers). Now 420 MB; a run start keeps its in.
+
+## F160: a top-k step's ids are compared as sets in the swap checks (2026-10-22)
+- DeepSeek-V4.1 swap enc_source_14 / enc_source_engram_17: the indexer's per-step check compared ids by position
+  (default_mode: "match" for an integer output); the reference returns ascending ids, the device's top-k returns
+  them by score, so the same sets scored 0.0015 (limit 0.92) while recall was 0.994 (DS41-102).
+- testing/component.py step_mode: an integer output that is a top-k (component_checks.output_kind == "index") is
+  compared by per-row overlap (topk_overlap), as the component checks already did (K-42). Selftest
+  test_a_topk_step_is_compared_as_a_set_not_by_position.
+
+## F161: an owner waiver reaches a step's integer (top-k) output (2026-10-22)
+- DeepSeek-V4.1 swap enc_source_14: the owner-delegated indexer waiver never applied: the per-step check's integer
+  path returned before NF.waive. Now a waived top-k passes when its per-row overlap with the CPU step is structural
+  (>= 1 - struct_scaled_rel, F97); a wrong id set still fails. Selftest test_a_waiver_reaches_an_index_step_but_not_a_wrong_one.
