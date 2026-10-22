@@ -311,12 +311,14 @@ class TtExperts:
                 dealloc(dk)
         ids16 = ids if ids.dtype == ttnn.uint16 else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM)
         ids_g, wts_g = wc.routing(ids16, wts)
+        passed = (ids_g, wts_g)  # (routing hands its inputs through on a one-row mesh / bf16 weights: freed after)
         for t in {id(t): t for t in (ids16, wts) + ((ids,) if idx is None else ())}.values():
-            if t is not idx and not (given and t is wts):  # (the router's outputs: the block frees them)
-                dealloc(t)
+            if t is not idx and not (given and t is wts) and not any(t is p for p in passed):
+                dealloc(t)  # (the router's outputs: the block frees them)
         out = wc(self.fe, xg, ids_g, wts_g, int(self.fidelity.value))
-        for t in (ids_g, wts_g):
-            dealloc(t)
+        for t in passed:
+            if t is not idx and not (given and t is wts):
+                dealloc(t)
         if self.keep_rows:  # (the shared expert's x: take_rows hands it over, the shared expert frees it)
             if self._rows is not None:
                 dealloc(self._rows)
