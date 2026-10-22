@@ -95,7 +95,7 @@ Shield separately grades release performance targets and Terminal/SWE results.
 
 Dispatch the workflow on this PR branch with model `granite42-30b-qb2`,
 sku `bh_quietbox_2`, tier `3`, and plugin ref
-`a2500313c990b129d78b74dadca312ed696caca0`. The initial 60-minute allowance
+`a2500313c990b129d78b74dadca312ed696caca0`. The 45-minute allowance
 includes device tests, model startup, reasoning and setup variance; phase timings
 in the artifacts allow recalibration after a complete run. The weights must be
 available in the runner's pinned Hugging Face cache.

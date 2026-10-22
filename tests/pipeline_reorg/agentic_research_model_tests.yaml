@@ -351,9 +351,8 @@
   model_family: Granite
   skus:
     bh_quietbox_2:
-      # Initial allowance: device checks, full-model startup and thinking GPQA.
-      # Recalibrate from the phase timings after the first complete CI run.
-      timeout: 60
+      # Includes startup and thinking GPQA, with headroom above the 35-minute run.
+      timeout: 45
       tier: 3
   owner_id: U08BGTAMU1W # Marina Vasiljevic
   team: models
