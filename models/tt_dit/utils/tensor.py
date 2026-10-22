@@ -548,8 +548,6 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
-# Its 32 per-shard copies are where #60670 showed up. Pipelines cap their whole call as well; this
-# covers callers of fast_device_to_host outside a pipeline call (a no-op inside one).
 @cap_torch_threads_to_half_the_cpus()
 def _reassemble_2d(
     mesh_coords: list,
