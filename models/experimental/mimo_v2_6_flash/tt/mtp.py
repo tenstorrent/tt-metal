@@ -19,6 +19,7 @@ at the true position t (reference/spec_decode.py).
 """
 
 import os
+import time
 
 import torch
 
@@ -190,7 +191,10 @@ class TtMiMoMTP:
 
     def enqueue(self, tokens, plan):
         """Draft after the replica's last decode or verify step (non-blocking): it reads that step's final hidden."""
-        for h, d in zip(self.host_inputs(tokens, plan), self.trace["inputs"]):
+        t = time.perf_counter()
+        host = self.host_inputs(tokens, plan)
+        self.last_inputs_s = time.perf_counter() - t
+        for h, d in zip(host, self.trace["inputs"]):
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 

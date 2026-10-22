@@ -317,6 +317,8 @@ class TtMiMoModel:
         self.layer_groups = list(layer_groups)
         empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
         self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
+        # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
+        self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
         # Decode's device-sampled greedy token (decode_forward_device); persistent buffers, made before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         self.page_table_tt = {
@@ -335,15 +337,21 @@ class TtMiMoModel:
         """rows: {slot: {group: int32 [<= table_width] block ids}} (vLLM's table row of the user in that slot).
         Copies every group table that changed to the device, in queue order with the work already enqueued."""
         changed = set()
+        lengths = self.vllm_table_lengths
         for slot, tables in rows.items():
             for g, row in tables.items():
                 host = self.vllm_tables[g]
-                assert row.numel() <= host.shape[1], f"group {g}: table row of {row.numel()} > {host.shape[1]}"
-                new = torch.zeros(host.shape[1], dtype=torch.int32)
-                new[: row.numel()] = row.to(torch.int32)
-                if not torch.equal(new, host[slot]):
-                    host[slot] = new
-                    changed.add(g)
+                n = row.numel()
+                assert n <= host.shape[1], f"group {g}: table row of {n} > {host.shape[1]}"
+                row = row.to(torch.int32)
+                # Compare in place, without a full-width padded copy of every row on every step.
+                written = lengths[(g, slot)]
+                if written <= n and torch.equal(host[slot, :n], row):
+                    continue
+                host[slot, :n] = row
+                host[slot, n:written] = 0
+                lengths[(g, slot)] = n
+                changed.add(g)
         for g in sorted(changed):
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(

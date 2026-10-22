@@ -607,6 +607,7 @@ class MiMoV2ForCausalLM:
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         t0 = time.perf_counter()
+        self._verify_tables_s = 0.0
         if spec_mode != "argmax_ids":
             raise ValueError(f"MiMo verifies greedy argmax ids; got spec_mode {spec_mode!r}")
         if any(model.verify_trace is None for model in self.models):
@@ -646,7 +647,7 @@ class MiMoV2ForCausalLM:
                 for s, row, col in vp.answers:
                     argmax[row, col] = int(out[s])
         if TIMING:
-            self._spec_timing("verify", t0, waited, sum(map(len, lanes)))
+            self._spec_timing("verify", t0, waited, sum(map(len, lanes)), self._verify_tables_s)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=argmax)
 
     def _enqueue_verify_pass(self, lane, vp, tables):
@@ -655,9 +656,14 @@ class MiMoV2ForCausalLM:
         pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
         tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
         pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
-        model.set_vllm_page_tables(
-            {s: self._group_rows(tables, row) for s, row in enumerate(vp.table_rows) if row is not None}
-        )
+        t = time.perf_counter()
+        # A request's candidates fill several slots: build its group rows once, not once per slot.
+        by_row = {}
+        for row in vp.table_rows:
+            if row is not None and row not in by_row:
+                by_row[row] = self._group_rows(tables, row)
+        model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
+        self._verify_tables_s += time.perf_counter() - t
         return model.verify_enqueue(tok, pos)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
@@ -672,7 +678,7 @@ class MiMoV2ForCausalLM:
         rows = committed_tokens.shape[0]
         drafts = torch.zeros(rows, num_drafts, dtype=torch.int32)
         valid = torch.zeros(rows, dtype=torch.int32)
-        jobs = []
+        jobs, inputs_s = [], 0.0
         for lane, source in enumerate(self.spec_sources):
             mtp = self.models[lane].mtp
             if source is None or mtp is None or source.row >= rows or not 1 <= num_drafts <= MAX_DRAFTS:
@@ -686,6 +692,7 @@ class MiMoV2ForCausalLM:
             for c in range(m):
                 slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
             mtp.enqueue(slot_tokens, plan)
+            inputs_s += mtp.last_inputs_s
             jobs.append((lane, r, plan.anchor))
         waited = 0.0
         for lane, r, anchor in jobs:
@@ -695,10 +702,10 @@ class MiMoV2ForCausalLM:
             valid[r] = num_drafts
         self.spec_sources = [None] * self.dp
         if TIMING:
-            self._spec_timing("propose", t0, waited, len(jobs))
+            self._spec_timing("propose", t0, waited, len(jobs), inputs_s)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
-    def _spec_timing(self, kind, t0, waited, count):
+    def _spec_timing(self, kind, t0, waited, count, part=0.0):
         """Every 128 verifies: per verify step, the mean host time and the time blocked reading back (the device's
         share) of the verify and of the MTP draft, the time from a verify's return to the draft (the plugin's accept
         walk), and the gap from a draft's return to the next verify (the plugin's commit and vLLM's scheduling and
@@ -712,6 +719,8 @@ class MiMoV2ForCausalLM:
             "verify_wait": 0.0,
             "propose_host": 0.0,
             "propose_wait": 0.0,
+            "verify_tables": 0.0,
+            "draft_inputs": 0.0,
             "accept": 0.0,
             "accepts": 0,
             "gap": 0.0,
@@ -728,6 +737,7 @@ class MiMoV2ForCausalLM:
             stats["passes"] += count
             stats["verify_host"] += now - t0 - waited
             stats["verify_wait"] += waited
+            stats["verify_tables"] += part
             stats["verified"] = now
         else:
             if stats["verified"] is not None:
@@ -737,6 +747,7 @@ class MiMoV2ForCausalLM:
             stats["drafts"] += count
             stats["propose_host"] += now - t0 - waited
             stats["propose_wait"] += waited
+            stats["draft_inputs"] += part
             stats["last"] = now
         if kind == "propose" and stats["verifies"] >= 128:
             n = stats["verifies"]
@@ -747,8 +758,8 @@ class MiMoV2ForCausalLM:
             logger.info(
                 f"MiMo vLLM timing: spec {n} verifies in {1e3 * (now - stats['since']):.0f} ms "
                 f"({1e3 * (now - stats['since']) / n:.2f} ms/step), {stats['passes']} passes, {stats['drafts']} lane "
-                f"drafts; per step: verify host {ms('verify_host')} + wait {ms('verify_wait')} ms, accept "
-                f"{ms('accept', stats['accepts'])} ms, draft host {ms('propose_host')} + wait {ms('propose_wait')} ms, "
+                f"drafts; per step: verify host {ms('verify_host')} (tables {ms('verify_tables')}) + wait {ms('verify_wait')} ms, accept "
+                f"{ms('accept', stats['accepts'])} ms, draft host {ms('propose_host')} (inputs {ms('draft_inputs')}) + wait {ms('propose_wait')} ms, "
                 f"gap {ms('gap', stats['gaps'])} ms"
             )
             stats = None
