@@ -1,4 +1,21 @@
-# TT-Transformers
+# ttt_compat (TT-Transformers v1)
+
+> [!IMPORTANT]
+> **This folder accepts fixes only.** New development of TT-Transformers happens in
+> [tenstorrent/tt-transformers](https://github.com/tenstorrent/tt-transformers).
+>
+> `models/ttt_compat` is the original TT-Transformers code, previously at `models/tt_transformers`.
+> It stays in tt-metal for the models and tools that still depend on it.
+>
+> - **Accepted:** bug fixes, and changes needed to keep the existing models and their CI working.
+> - **Not accepted:** new features, new model support or new APIs. Please open them in
+>   [tenstorrent/tt-transformers](https://github.com/tenstorrent/tt-transformers) instead. If a fix here
+>   also applies there, please open it there too.
+> - **Review:** every change in this folder needs an approval from its code owners
+>   (see [`.github/CODEOWNERS`](../../.github/CODEOWNERS)).
+> - **Old import path:** `models.tt_transformers` is a deprecated alias of `models.ttt_compat` and will
+>   be removed in a future PR. Use `models.ttt_compat` in new code. File paths have no alias: use
+>   `models/ttt_compat/...`.
 
 This code can run large language models such as the Llama3 family, Qwen2.5, Mistral, DeepSeek-R1-Distill variants and similar. Tensor-parallelism automatically distributes workloads across all available chips.
 
