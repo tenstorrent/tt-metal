@@ -179,6 +179,28 @@ $O resume --spec <spec>
 - A gate passes only if deps passed, frozen files are unchanged, the device was used only through
   `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, the command exits 0, every metric meets its threshold and
   every artifact exists.
+- A gate never restarts (F169). Every test is its own unit; a unit that passed in its task's gate stays passed until the
+  code under test changes (the model's code and tests, the task's paths, the forks, ttnn / tt_metal, the goldens),
+  whatever else was edited (spec, waivers, framework, records). A failed or stopped gate records which units passed and
+  which remain (state `units`, runs/<run>/delta/<task>.json); `gate <task> --unit <u>` runs one unit, `gate <task>
+  --continue` the rest (and commits), `--rerun <u>` a passed unit again, `--status` lists them; `--fresh` runs every
+  unit (owner only). A failure the overseer classified as framework, waiver or infrastructure (`overseer classify`)
+  resumes into the delta and starts no agent. The orchestrator logs `gate unit k/n <unit> PASS|FAIL|STOPPED`; the
+  watch wakes on a failed or stopped unit.
+- F170: every test-running `&&` segment of a gate is its own unit (a setup step travels with its test). Agents run
+  their gate with `gate <task> --check` (kept per unit, no state, no commit), so the orchestrator's gate after an
+  attempt runs only what the agent did not pass; after an attempt that changed nothing the last failure stands (no
+  re-run), and an agent that crashed without changes is retried, not charged. A timeout or a box error retries the
+  stopped unit once (a box error after a quick box check) before the run stops; every device test takes the spec's
+  `box.test_timeout_s`. A programming error in the framework's code on a task that passed before stops for the
+  overseer (no agent). A pause stops every agent loop before its next attempt; the debugger keeps a pass with
+  problems for review.
+- F171: a unit's stamp is taken as it starts (an edit mid-gate is not filed under the old key); pre-commit runs only
+  on the task's changed files (a reused gate runs none); the stamp's environment ignores BRINGUP_CPU_THREADS and the
+  JIT-server variables; a batched `core.verify` keeps each task's result for its gate and pins the checkout env; the
+  A/B report's "same code" is the gate's code key (untracked files included); an agent is charged only for knowledge
+  errors it introduced; a CPU job outside a gate next to device work takes a quarter of the cores at nice 19; the
+  watch reports a DASHBOARD STALE / RED line once per change (stale after 30 min, not 2).
 - A test freezes only after it passes with the CPU reference and fails on its mistake sweep. Component and swap tests
   freeze without a review agent when their sweep passes (`agents.component_review`, `agents.swap_review`).
 - An agent step fails if the tree changed outside the brief's paths, a command reached the device without a safe

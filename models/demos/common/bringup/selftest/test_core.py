@@ -269,13 +269,15 @@ def test_cli_status_and_validate(sandbox):
     assert out.returncode == 0 and "valid" in out.stdout
 
 
-def test_cpu_threads_are_physical_cores():
-    """F40: CPU gates use one torch thread per physical core."""
+def test_cpu_threads_are_physical_cores(monkeypatch):
+    """F40: CPU gates use one torch thread per physical core (F171: when no device work shares the box)."""
     import psutil
 
-    from models.demos.common.bringup.core.metrics import cpu_threads
+    from models.demos.common.bringup.core import metrics as Mx
 
-    assert cpu_threads() == (psutil.cpu_count(logical=False) or os.cpu_count())
+    monkeypatch.setattr(Mx, "device_work_running", lambda: False)
+    monkeypatch.delenv("BRINGUP_CPU_THREADS", raising=False)
+    assert Mx.cpu_threads() == (psutil.cpu_count(logical=False) or os.cpu_count())
 
 
 def test_state_keeps_only_gated_metrics_when_a_test_records_many(sandbox):
@@ -403,3 +405,14 @@ def test_commit_only_takes_a_fix_to_the_files_the_hook_named(sandbox):
     assert any("as the hook asked (F154): src/test_x.py" in ln for ln in res.lines)
     assert (sandbox.repo / "runs.txt").read_text() == "run\n"
     assert "src/test_x.py" in sandbox.git("show", "--name-only", "--format=", "HEAD").split()
+
+
+def test_cpu_threads_env_override(monkeypatch):
+    """F165: BRINGUP_CPU_THREADS caps the torch threads of a CPU job that shares the box with a live bring-up
+    (DeepSeek-V4.1 full-model goldens on 8 of 16 cores while the 2x2 run's swap tests ran their CPU references)."""
+    from models.demos.common.bringup.core.metrics import cpu_threads
+
+    monkeypatch.setenv("BRINGUP_CPU_THREADS", "8")
+    assert cpu_threads() == 8
+    monkeypatch.delenv("BRINGUP_CPU_THREADS")
+    assert cpu_threads() >= 1

@@ -102,11 +102,42 @@ def pcc(a, b) -> float:
     return float((a @ b) / den) if den > 0 else float(bool((a == b).all()))
 
 
-def cpu_threads() -> int:
-    """Torch threads for CPU gates: physical cores, not SMT siblings (a 64-row expert GEMM: 4 ms at 16, 27 ms at 32)."""
+def _physical_cores() -> int:
     try:
         import psutil
 
         return psutil.cpu_count(logical=False) or os.cpu_count()
     except ImportError:
         return os.cpu_count()
+
+
+def device_work_running() -> bool:
+    """F170: another process on this box runs a bring-up orchestrator or a device test (run_safe_pytest.sh)."""
+    try:
+        import psutil
+    except ImportError:
+        return False
+    me = os.getpid()
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        cl = " ".join(p.info.get("cmdline") or [])
+        if p.info["pid"] != me and ("bringup.orchestrator" in cl or "run_safe_pytest.sh" in cl):
+            return True
+    return False
+
+
+def cpu_threads() -> int:
+    """Torch threads for CPU gates: physical cores, not SMT siblings (a 64-row expert GEMM: 4 ms at 16, 27 ms at 32).
+    BRINGUP_CPU_THREADS overrides it (F165: a long CPU job sharing the box with a live bring-up).
+    F170 (audit item 19): a CPU job started outside a gate (no BRINGUP_TASK) while device work runs on the box takes a
+    quarter of the physical cores at the lowest priority by default, so it cannot starve a device gate's CPU reference
+    into its timeout (DeepSeek-V4.1: the full-model goldens next to FIX.10). Call once, at the job's start."""
+    if os.environ.get("BRINGUP_CPU_THREADS"):
+        return int(os.environ["BRINGUP_CPU_THREADS"])
+    cores = _physical_cores()
+    if not os.environ.get(TASK_ENV) and device_work_running():
+        try:
+            os.nice(19 - os.nice(0))
+        except OSError:
+            pass
+        return max(1, cores // 4)
+    return cores

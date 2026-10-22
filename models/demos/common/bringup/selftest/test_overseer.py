@@ -334,7 +334,8 @@ def test_a_fix_job_runs_its_gate_tasks_commands_exactly(sandbox):
     job = OV.queue_fix(sandbox.spec.bringup_dir, "Fix.", ["C.1", "L.1", "X.3"], tasks=tasks)
     fix = OV.fix_task(job, tasks)
     units = gate_units(fix, tasks)
-    assert units == [(t, gate_command(tasks[t])) for t in ("C.1", "L.1", "X.3")]
+    # F170: the fix runs each task's units exactly as that task's own gate does (X.3: its ladder and its profile)
+    assert units == [u for t in ("C.1", "L.1", "X.3") for u in gate_units(tasks[t], tasks)]
     assert "--no-precompile" not in units[0][1] and units[1][1].count("--no-precompile") == 1
     assert gate_command(fix, tasks).count("--no-precompile") == 4  # L.1, and X.3's ladder, clean wall and profile
     led = sandbox.tasks(*tasks.values(), fix)

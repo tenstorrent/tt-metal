@@ -24,9 +24,13 @@ $allowed
 Everything else is read-only for this step. The orchestrator diffs the tree when you finish.
 
 ## Gate you must pass
+Run it with (F170; never by running the test commands below by hand):
 ```
-$gate_cmd
+$gate_check
 ```
+It runs these units, one test each; a unit that passed on the same code is not run again, and the orchestrator's gate
+after you finishes runs only the units you did not pass. While iterating, run one unit with `--check --unit <name>`.
+$gate_units
 Thresholds (the runner compares the recorded metrics; you cannot change them):
 $thresholds
 
