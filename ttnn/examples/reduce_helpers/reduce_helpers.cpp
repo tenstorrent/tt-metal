@@ -52,7 +52,7 @@ namespace reduce_host = ttnn::kernel_lib::host;
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
-const ComputeHardwareConfig kComputeHardware{.fpu_math_fidelity = MathFidelity::HiFi4};
+const ComputeHardwareConfig compute_hardware{.fpu_math_fidelity = MathFidelity::HiFi4};
 
 DataflowBufferSpec tile_dfb(const char* name, tt::DataFormat format, uint32_t tiles) {
     return {
@@ -97,21 +97,21 @@ KernelSpec writer_kernel(uint32_t num_output_tiles, const std::vector<uint32_t>&
 
 // mean(input, dim=H) for a [H, W] bfloat16 input on one core. H need not be a multiple of 32.
 ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor& input, const ttnn::Tensor& output) {
-    // 1. Factory: one call reduces the whole [Ht, Wt] block. The reader delivers strips of kOutputGroup columns,
-    //    row by row within each strip, so compute holds kOutputGroup column results in DEST at once.
-    constexpr uint32_t kOutputGroup = 4;
+    // 1. Factory: one call reduces the whole [Ht, Wt] block. The reader delivers strips of output_group columns,
+    //    row by row within each strip, so compute holds output_group column results in DEST at once.
+    constexpr uint32_t output_group = 4;
     const uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
-    TT_FATAL(Wt % kOutputGroup == 0, "The reader only delivers whole strips");
-    const uint32_t input_dfb_tiles = 2 * kOutputGroup;
+    TT_FATAL(Wt % output_group == 0, "The reader only delivers whole strips");
+    const uint32_t input_dfb_tiles = 2 * output_group;
 
     // 2. Factory: describe the block and the compute kernel's hardware configuration. The planner rejects an
     //    output group larger than max_reduce_output_group() for this hardware configuration.
     auto block = reduce_host::ReduceBlockSpec::tiled(
         input.logical_shape()[-2], input.logical_shape()[-1], input.dtype(), output.dtype());
     block.input_cb_tiles = input_dfb_tiles;
-    block.output_group = kOutputGroup;
-    const auto hardware = reduce_host::make_reduce_hardware_config(input.device()->arch(), kComputeHardware);
+    block.output_group = output_group;
+    const auto hardware = reduce_host::make_reduce_hardware_config(input.device()->arch(), compute_hardware);
 
     // 3. Planner. The scalar is absent, so AVG divides by the logical height.
     const reduce_host::ReducePlan plan = reduce_host::make_reduce_plan(
@@ -147,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor&
             .source = OVERRIDE_KERNEL_PREFIX "ttnn/examples/reduce_helpers/kernels/dataflow/reader_column_strips.cpp",
             .dfb_bindings = {producer("input")},
             .tensor_bindings = {{.tensor_parameter_name = TensorParamName{"input"}, .accessor_name = "src"}},
-            .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"output_group", kOutputGroup}},
+            .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"output_group", output_group}},
             .hw_config = CreateReaderDataMovementConfig(),
         },
         writer_kernel(Wt, writer_args),
@@ -155,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor&
             .unique_id = KernelSpecName{"compute"},
             .source = OVERRIDE_KERNEL_PREFIX "ttnn/examples/reduce_helpers/kernels/compute/column_mean.cpp",
             .dfb_bindings = {consumer("input"), consumer("auxiliary"), producer("out")},
-            .hw_config = kComputeHardware,
+            .hw_config = compute_hardware,
             .advanced_options = {.compile_time_varargs = compute_args},
         },
     };
@@ -177,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& output) {
     // 1. Factory: one call per input, each over its whole block, a before b. The reader streams a, then b,
     //    row-major. The accumulator holds the partial result of one call: one tile per tile row.
-    constexpr uint32_t kInputDfbTiles = 2;
+    constexpr uint32_t input_dfb_tiles = 2;
     const uint32_t Ht = a.padded_shape()[-2] / TILE_HEIGHT;
     const uint32_t accumulator_tiles = Ht;
 
@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     auto describe = [&](const ttnn::Tensor& input) {
         auto block = reduce_host::ReduceBlockSpec::tiled(
             input.logical_shape()[-2], input.logical_shape()[-1], input.dtype(), output.dtype());
-        block.input_cb_tiles = kInputDfbTiles;
+        block.input_cb_tiles = input_dfb_tiles;
         return reduce_host::ReduceCallConfig{
             .block = block,
             .reduce_math = ReduceOpMath::AVG,
@@ -201,7 +201,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
         .output_cb_id = Output,
         .accumulator_cb_tiles = accumulator_tiles,
     };
-    const auto hardware = reduce_host::make_reduce_hardware_config(a.device()->arch(), kComputeHardware);
+    const auto hardware = reduce_host::make_reduce_hardware_config(a.device()->arch(), compute_hardware);
 
     // 3. Planner. AVG divides by the combined logical width of both calls.
     const reduce_host::ReduceSequencePlan plan =
@@ -213,8 +213,8 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     const tt::DataFormat input_format = datatype_to_dataformat_converter(a.dtype());
     const tt::DataFormat output_format = datatype_to_dataformat_converter(output.dtype());
     spec.dataflow_buffers = {
-        tile_dfb("in_a", input_format, kInputDfbTiles),
-        tile_dfb("in_b", input_format, kInputDfbTiles),
+        tile_dfb("in_a", input_format, input_dfb_tiles),
+        tile_dfb("in_b", input_format, input_dfb_tiles),
         auxiliary_dfb(plan.auxiliary.cb),
         tile_dfb("accumulator", output_format, accumulator_tiles),
         tile_dfb("out", output_format, 2),
@@ -253,7 +253,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
                  producer("accumulator"),
                  consumer("accumulator"),
                  producer("out")},
-            .hw_config = kComputeHardware,
+            .hw_config = compute_hardware,
             .advanced_options = {.compile_time_varargs = compute_args},
         },
     };
