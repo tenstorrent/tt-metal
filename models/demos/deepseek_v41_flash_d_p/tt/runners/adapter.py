@@ -51,16 +51,12 @@ PAD_ID = 0xFFFFFFFF
 class _FabricPayload(type):
     """``DS41Config.FABRIC_PAYLOAD_SIZE``, read when the runner opens its mesh (runner_utils.open_mesh_device; K-79):
     the payload bringup/hooks.py:device_params gives every bring-up mesh, so the runner's fabric matches the tests':
-    EXPERTS_COMBINE=weighted (the default since P.8) sends one expert row + trailer per packet (weighted_combine.
-    FABRIC_PAYLOAD, 10880 B), else the fabric default 4352 B (one fp32 tile). FIX.8, DS41-94: a fixed 4352 hung the
-    runner in FlatWithProgramDeviceOperation. Lazy, so importing the adapter stays light."""
+    the routed experts' weighted combine (P.8) sends one expert row + trailer per packet (weighted_combine.
+    FABRIC_PAYLOAD, 10880 B). FIX.8, DS41-94: a fixed 4352 hung the runner in FlatWithProgramDeviceOperation. Lazy, so
+    importing the adapter stays light."""
 
     @property
     def FABRIC_PAYLOAD_SIZE(cls) -> int:
-        from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
-
-        if settings.get("EXPERTS_COMBINE") != "weighted":
-            return 4352
         from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
 
         return int(FABRIC_PAYLOAD)

@@ -2,44 +2,35 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1 shared expert (reference/ds41_ref.py "shared_expert": _swiglu with lin=mm and no routing weight;
-inference Expert.forward) on the SP x TP mesh, tensor parallel by the intermediate (plan.md "Shared expert"). Adapted
-from models/demos/xing40_a4b_d_p/tt/mlp.py:TtDenseMLP with the model's clamps.
+inference Expert.forward) on the SP x TP mesh, tensor parallel by the intermediate (plan.md "Shared expert").
 
     shared_out = w2 q(silu(min(w1 q(x), 10)) * clamp(w3 q(x), +-10))      q = fp8 act quant, blocks of 32 (released code)
 
-The device does not emulate q (agent rule 17; FIX.8 deleted the quantizers): x and h are cast to the bf16 the matmuls
-read. Per chip (r, c), I/TP = 2304 / TP intermediate columns (1152 on 2x2, 576 on 4x4 / 8x4 / 2x4):
+The device does not emulate q (agent rule 17): x and h are the tiles the flat op multiplies. Per chip (r, c), I/TP =
+2304 / TP intermediate columns (1152 on 2x2, 576 on 4x4 / 8x4 / 2x4), run by ONE ttnn.bringup.flat_routed_expert call
+(P.12, Marko Staletovic's K3_SE=flat, combine_rf/examples/tt_k3_token_split_moe.py _build_shared_flat; FIX.9 deleted
+the ttnn.linear chain): the slice cut into SE_PARTS always-on "experts" of I/TP / SE_PARTS columns that every own token
+goes to (counts [S/SP] each, regions p S/SP; each part zero-padded to a multiple of 256 columns, the op's
+down-projection K block: 2x2 1152 -> 1280); the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K],
+weights_nk) laid out once at load in the op's bank layout as bfloat8_b (the checkpoint's fp8 width, agent rule 7; bfp8
+rounds e4m3 values more than 3 binades below their 16-value group's largest, measured in tt/perf_shared_expert.py),
+the clamped SwiGLU in the op (limit 10), the routed experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h
+tiles, full = MATMUL_FIDELITY + bf16 tiles), fp32 DEST, bf16 y [S/SP, H] TILE = the partial (the parts' sum when
+SE_PARTS > 1), in ccl.partial_dtype for moe_add.
 
-    x       ffn_norm [1, 1, S/SP, H] (rows over axis 0, replicated over axis 1: tt/norm.py gather=True)
-    bf16(x) a cast (x itself when ffn_norm wrote bf16; may be passed in when the experts already made it)
-    g | u   one ttnn.linear by [W1^T_c | W3^T_c] [H, 2 I/TP] (column-parallel; bf16 weights, exact: e4m3 x 2^k),
-            HiFi4 + fp32 accumulation, fp32 out (K-25)
-    h       silu(min(g, 10)) * clamp(u, +-10), fp32 on the SFPU
-    bf16(h) a cast
-    partial ttnn.linear by W2^T_c [I/TP, H] (row-parallel), fp32 out: [1, 1, S/SP, H] fp32 (DS41-25: keep fp32)
-    sum     over the TP axis, keep the chip's hidden columns (setting EXPERTS_SUM: gather_add = all_gather + SFPU add,
-            exact fp32, K-30; reduce_scatter = one CCL). In the assembled model the partial is added to the routed
-            experts' partial before that one exchange (``partial`` + TtExperts.reduce).
+    x       ffn_norm [1, 1, S/SP, H] (rows over axis 0, replicated over axis 1: tt/norm.py gather=True); with ``rows``
+            (the routed experts' row-major gathered q(x) of the column, [R S/SP, H]) the op reads the chip's own rows
+            by a load-time token index (no layout conversion here); without, the chip's x is converted to row major
+    partial [1, 1, S/SP, H] (this chip's intermediate share)
+    sum     over the TP axis, keep the chip's hidden columns (setting EXPERTS_SUM). In the assembled model the partial
+            is added to the routed experts' partial before that one exchange (``partial`` + TtExperts.reduce).
 
-Output shared_out [1, 1, S/SP, H/TP] fp32 TILE (rows over axis 0, hidden columns over axis 1). No host work in the
-forward; weights are laid out once at load.
-
-SHARED_EXPERT_IMPL=flat (P.12, Marko Staletovic's K3_SE=flat, combine_rf/examples/tt_k3_token_split_moe.py
-_build_shared_flat): the same per-chip slice run by ONE ttnn.bringup.flat_routed_expert call, the slice cut into
-SE_PARTS always-on "experts" of I/TP / SE_PARTS columns that every own token goes to (counts [S/SP] each, regions
-p S/SP; each part zero-padded to a multiple of 256 columns, the op's down-projection K block: 2x2 1152 -> 1280);
-the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K], weights_nk) laid out once at load in the
-op's bank layout as bfloat8_b (the checkpoint's fp8 width, agent rule 7; bfp8 rounds e4m3 values more than 3 binades
-below their 16-value group's largest, measured in tt/perf_shared_expert.py), the clamped SwiGLU in the op (limit 10),
-the routed experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h tiles, full = MATMUL_FIDELITY + bf16
-tiles), fp32 DEST, bf16 y [S/SP, H] TILE = the partial (the parts' sum when SE_PARTS > 1), in ccl.partial_dtype for
-moe_add. Not hidden: one more program after the routed experts' (folding it into their program needs one weight
-dtype for both: routed bfp4 vs shared bfp8; overlapping it with the dispatch needs sub-devices), but its x costs
-nothing (the routed experts' gathered rows). P.12, 2x2, chunk 2048, layers 0 / 24 (tt/perf_shared_expert.py): device
-1431 -> 250 us a layer; shared_out vs float64 (exact fp8 weights) rel 0.0030 linear, 0.020-0.022 flat (bias +1.3-1.4 %:
-the bfp8 h / x tiles' packer rounding at LoFi, as the routed experts' glm path, DS41-74). x: with ``rows`` (EXPERTS_COMBINE=weighted hands over its row-major gathered q(x) of the column,
-[R S/SP, H]) the op reads the chip's own rows by a load-time token index (no layout conversion here); without, the
-chip's x is converted to row major once.
+Not hidden: one more program after the routed experts' (folding it into their program needs one weight dtype for
+both: routed bfp4 vs shared bfp8; overlapping it with the dispatch needs sub-devices), but its x costs nothing (the
+routed experts' gathered rows). P.12, 2x2, chunk 2048, layers 0 / 24 (tt/perf_shared_expert.py): device 1431 -> 250
+us a layer vs the deleted linear chain; shared_out vs float64 (exact fp8 weights) rel 0.020-0.022 (bias +1.3-1.4 %:
+the bfp8 h / x tiles' packer rounding at LoFi, as the routed experts' glm path, DS41-74 / DS41-77). Output shared_out
+[1, 1, S/SP, H/TP] (rows over axis 0, hidden columns over axis 1). No host work in the forward.
 """
 
 from __future__ import annotations
@@ -50,11 +41,11 @@ from loguru import logger
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, cast, compute_config, dense_dtype, fp32_acc, sum_cols
+from .common import DRAM, TP_AXIS, cast, fp32_acc, sum_cols
 from .settings import settings
 
 TILE = 32
-# SHARED_EXPERT_IMPL=flat: always-on experts the chip's intermediate slice is cut into (K3_SE_PARTS). 1 = the whole
+# always-on experts the chip's intermediate slice is cut into (K3_SE_PARTS). 1 = the whole
 # slice (2x2: 1152 columns, 36 tiles; 4x4 / 8x4 / 2x4: 576) as one expert: the op plans it (the gate/up split takes
 # the 2304-wide routed experts at H 5120 too), y is the partial itself (no parts' sum). Measured in tt/perf_shared_expert.py (P.12).
 SE_PARTS = 1
@@ -65,10 +56,6 @@ DOWN_K = 256
 _DONE: dict = {}  # (mesh, down coordinators) -> the flat op's done words, shared by every layer's shared expert
 
 
-def _mapper(mesh, dims):
-    return ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims)
-
-
 class TtSharedExpert:
     def __init__(
         self,
@@ -77,13 +64,12 @@ class TtSharedExpert:
         w3: torch.Tensor,
         w2: torch.Tensor,
         swiglu_limit: float,
-        chunk: int | None = None,
-        impl: str | None = None,
+        chunk: int,
         flat_opts: dict | None = None,
     ):
         """w1, w3 [I, H], w2 [H, I] (nn.Linear layout), fp32 values on the fp8 grid (bf16-exact). chunk: the chunk
-        (all mesh rows; SHARED_EXPERT_IMPL=flat plans for chunk / SP rows a chip). impl: SHARED_EXPERT_IMPL value
-        (None: the setting)."""
+        (all mesh rows; the op is planned for chunk / SP rows a chip). flat_opts: comparison-only overrides of the
+        flat op's tile formats / fidelity / packer rounding (tt/perf_shared_expert.py)."""
         tp = mesh.shape[TP_AXIS]
         inter, hidden = w1.shape
         assert w3.shape == (inter, hidden) and w2.shape == (hidden, inter), (w1.shape, w3.shape, w2.shape)
@@ -95,38 +81,10 @@ class TtSharedExpert:
         self.ip = self.I // tp  # the chip's intermediate share
         self.lim = float(swiglu_limit)
         self.sum_mode = settings.get("EXPERTS_SUM")
-        self.cfg = compute_config(mesh)
-        self.impl = impl or settings.get("SHARED_EXPERT_IMPL")
-        assert self.impl in ("linear", "flat"), self.impl
-        self.reads_rows = False  # flat: takes the routed experts' gathered row-major x (``rows``)
-        if self.impl == "flat":
-            assert chunk is not None, "SHARED_EXPERT_IMPL=flat needs the chunk (rows a chip)"
-            self._load_flat(w1, w3, w2, int(chunk), flat_opts or {})
-            return
-        # [W1^T | W3^T] chip-major along the last dim: chip column c gets [W1^T[:, c ip:(c+1) ip] | W3^T[same]]
-        w1t = w1.float().t().reshape(hidden, tp, self.ip)
-        w3t = w3.float().t().reshape(hidden, tp, self.ip)
-        w13 = torch.stack([w1t, w3t], dim=2).reshape(1, 1, hidden, 2 * self.I)
-        w13 = w13.contiguous()
-        self.w13 = ttnn.from_torch(
-            w13,
-            dtype=dense_dtype(w13, "shared_experts.w1|w3"),  # DENSE_WEIGHTS (P.13)
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=DRAM,
-            mesh_mapper=_mapper(mesh, (None, 3)),  # columns over axis 1, replicated over axis 0
-        )
-        w2t = w2.float().t().reshape(1, 1, inter, hidden).contiguous()
-        self.w2 = ttnn.from_torch(
-            w2t,
-            dtype=dense_dtype(w2t, "shared_experts.w2"),
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=DRAM,
-            mesh_mapper=_mapper(mesh, (None, 2)),  # rows (the chip's intermediate) over axis 1
-        )
+        self.reads_rows = False  # takes the routed experts' gathered row-major x (``rows``)
+        self._load_flat(w1, w3, w2, int(chunk), flat_opts or {})
 
-    # ------------------------------------------------------------------ SHARED_EXPERT_IMPL=flat
+    # ------------------------------------------------------------------ the flat op
     def _load_flat(self, w1, w3, w2, chunk: int, opts: dict):
         """The chip's intermediate slice as SE_PARTS always-on experts of the flat routed expert (bfp8 weights in its
         bank layout, built once), the load-time token index / counts / regions."""
@@ -135,7 +93,7 @@ class TtSharedExpert:
         mesh, tp = self.mesh, self.tp
         R, C = tuple(mesh.shape)
         assert TP_AXIS == 1 and C == tp
-        assert self.lim == 10.0, f"SHARED_EXPERT_IMPL=flat: swiglu_limit {self.lim} != the op's clamped_silu 10"
+        assert self.lim == 10.0, f"shared expert: swiglu_limit {self.lim} != the op's clamped_silu 10"
         assert chunk % (R * TILE) == 0, f"chunk {chunk} is not {R} x a multiple of {TILE}"
         P = SE_PARTS
         assert self.ip % (P * TILE) == 0, f"{self.ip} columns in {P} parts"
@@ -226,7 +184,7 @@ class TtSharedExpert:
 
     def _flat_partial(self, x: ttnn.Tensor, xq: ttnn.Tensor | None, rows: ttnn.Tensor | None) -> ttnn.Tensor:
         S, H, P = self.S, self.H, self.P
-        assert x.shape[-2] == S, f"SHARED_EXPERT_IMPL=flat is built for {S} rows a chip, got {x.shape[-2]}"
+        assert x.shape[-2] == S, f"the shared expert is built for {S} rows a chip, got {x.shape[-2]}"
         kw = dict(
             y_bf16=True,
             down_fp32=self.down_fp32,
@@ -270,38 +228,9 @@ class TtSharedExpert:
 
     def partial(self, x: ttnn.Tensor, xq: ttnn.Tensor | None = None, rows: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """This chip's share of the output: x [1, 1, s, H] fp32 TILE (or its bf16 cast ``xq``, then x is unused)
-        -> [1, 1, s, H] fp32 TILE partial (sum over the TP axis = shared_out). SHARED_EXPERT_IMPL=flat: ``rows`` =
-        the routed experts' gathered row-major x [R s, H] (consumed), the partial in ccl.partial_dtype."""
-        if self.impl == "flat":
-            return self._flat_partial(x, xq, rows)
-        assert rows is None
-        cfg, lim, ip = self.cfg, self.lim, self.ip
-        own = xq is None
-        if own:
-            xq = cast(x, ttnn.bfloat16)  # (x itself when ffn_norm wrote bf16)
-        gu = ttnn.linear(xq, self.w13, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        if own and xq is not x:
-            ttnn.deallocate(xq)
-        s = gu.shape[-2]
-        g = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, s, ip], memory_config=DRAM)
-        u = ttnn.slice(gu, [0, 0, 0, ip], [1, 1, s, 2 * ip], memory_config=DRAM)
-        ttnn.deallocate(gu)
-        if lim > 0:
-            g2 = ttnn.minimum(g, lim, memory_config=DRAM)
-            u2 = ttnn.clamp(u, -lim, lim, memory_config=DRAM)
-            ttnn.deallocate(g)
-            ttnn.deallocate(u)
-            g, u = g2, u2
-        sg = ttnn.silu(g, memory_config=DRAM)
-        ttnn.deallocate(g)
-        h = ttnn.multiply(sg, u, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(sg)
-        ttnn.deallocate(u)
-        hq = cast(h, ttnn.bfloat16)
-        ttnn.deallocate(h)
-        y = ttnn.linear(hq, self.w2, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        ttnn.deallocate(hq)
-        return y
+        -> [1, 1, s, H] TILE partial in ccl.partial_dtype (sum over the TP axis = shared_out). ``rows`` = the routed
+        experts' gathered row-major x [R s, H] (consumed)."""
+        return self._flat_partial(x, xq, rows)
 
     def reduce(self, part: ttnn.Tensor) -> ttnn.Tensor:
         """Sum partials [1, 1, s, H] fp32 over axis 1, keep the chip's hidden columns [1, 1, s, H/TP]."""
@@ -324,13 +253,9 @@ class TtSharedExpert:
         return out
 
 
-def build_shared_expert(
-    mesh, ck, cfg, layer: int, chunk: int | None = None, impl: str | None = None, flat_opts: dict | None = None
-) -> TtSharedExpert:
+def build_shared_expert(mesh, ck, cfg, layer: int, chunk: int, flat_opts: dict | None = None) -> TtSharedExpert:
     """Layer ``layer``'s shared expert (fp8 weights dequantized at load, exact; reference Config.swiglu_limit).
-    chunk: the chunk (all mesh rows; SHARED_EXPERT_IMPL=flat needs it); impl: SHARED_EXPERT_IMPL (None: setting)."""
+    chunk: the chunk (all mesh rows)."""
     p = f"layers.{layer}.ffn.shared_experts."
     w = {n: ck.weight(p + n + ".weight", torch.float32) for n in ("w1", "w3", "w2")}
-    return TtSharedExpert(
-        mesh, w["w1"], w["w3"], w["w2"], cfg.swiglu_limit, chunk=chunk, impl=impl, flat_opts=flat_opts
-    )
+    return TtSharedExpert(mesh, w["w1"], w["w3"], w["w2"], cfg.swiglu_limit, chunk=chunk, flat_opts=flat_opts)

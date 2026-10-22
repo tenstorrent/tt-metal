@@ -23,7 +23,7 @@ TABLE = {
         "HiFi2",
         ("HiFi4", "HiFi3", "HiFi2"),
         "the fidelity of the matmuls ATTN_FIDELITY and EXPERTS_PRECISION do not set (mHC hc_fn projection, router "
-        "gate, engram wkv, the shared expert's linear path, the experts' selector matmuls; tt/common.py:compute_config). "
+        "gate, engram wkv; tt/common.py:compute_config). "
         "HiFi2 (P.13, owner rule F123: GLM-5.3's production fidelity) is the default; HiFi4 = the bring-up precision "
         "(a comparison value). P.13, 2x2, chunk 53248-55296, plain profile, HiFi2 alone: device total 220.79 -> 219.52 ms a "
         "chunk (engram_kv 6.02 -> 4.87; mHC hc_fn, router: unchanged); the engram wkv matmul at bfp8 [1024, 6144] x "
@@ -53,8 +53,8 @@ TABLE = {
         ("bf16", "bfp8"),
         "the device format of every dense weight the checkpoint stores in fp8 (e4m3 x ue8m0 per 32 x 32; tt/common.py:"
         "dense_dtype): attention wq_a | wkv (tt/q_a.py), wq_b / wo_a / wo_b (tt/attention.py), the indexer's wq_b "
-        "(tt/indexer.py), the engram wkv (tt/engram_kv.py), the shared expert's linear path (tt/shared_expert.py; its "
-        "flat path is bfp8 since P.12). The compressor's wkv / wgate / wk and the indexer's weights_proj are bf16 in "
+        "(tt/indexer.py), the engram wkv (tt/engram_kv.py); the shared expert (tt/shared_expert.py) is bfp8 in the flat "
+        "op's layout since P.12. The compressor's wkv / wgate / wk and the indexer's weights_proj are bf16 in "
         "the checkpoint and stay bf16 (rule 7). bf16 = the dequantized values exactly; bfp8 (P.13, "
         "owner rule F123: the checkpoint's own 8-bit width; DeepSeek multiplies them with fp8 kernels) = bfloat8_b, "
         "which keeps 7 magnitude bits under one exponent per 16 values, so an fp8 value more than 3 binades under its "
@@ -140,102 +140,52 @@ TABLE = {
     ),
     "EXPERTS_IMPL": Setting(
         "bfp4",
-        ("bfp8", "bfp4", "fp4_decode"),
-        "routed experts (tt/experts.py), per local expert extract -> ttnn.linear SwiGLU with the routing weight and "
-        "fp8 q(h) before w2 -> insert, on: bfp8 = every expert's w1 | w3 and w2 converted to bfloat8_b ONCE at load, "
-        "kept as stored [N, K] and used with transpose_b (exact: every e2m1 x e8m0 value, asserted at load; W^T would "
-        "round 48 of the run's 2304 matrices, DS41-35), no per-chunk weight work (FIX.1, OV-6); fp4_decode = the "
-        "packed fp4 codes kept on the device and decoded to bf16 W^T for every expert in every chunk (a per-chunk "
-        "weight rebuild against agent rule 5; half the weight memory; comparison only). Layer 0, 2x2, chunk 2048, "
-        "timed loop tt/perf_experts.py: bfp8 319 ms vs fp4_decode 611 ms per layer per chunk, outputs bit-identical; "
-        "load 44 s vs 4 s. The expert loop or the fused op: EXPERTS_KERNEL. bfp4 (owner pick 2026-10-17, P.1: "
-        "memory for galaxy_4x4) = the same path with "
-        "every expert's w1 | w3 and w2 converted to bfloat4_b ONCE at load ([N, K], transpose_b, groups of 16 along "
-        "K inside one e8m0 block): lossy (3 magnitude bits under the group's exponent, round to nearest even; "
-        "changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| 0.118-0.124), 0.5625 B per "
-        "value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, 8.9 on 8x4; bfp8 33.6 / 16.8); "
-        "stats logged at load. P.1, 2x2, chunk 53248-55296, plain profile: experts 312.7 vs 315.3 ms per layer "
-        "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. P.10 (owner, 2026-10-20; agent rule 7 / F117: the shipped default stores a weight in "
-        "the checkpoint's own width, fp4 -> bfp4; bfp8 = the exact fp4 values): bfp4 is the DEFAULT. On the "
-        "default path (flat + weighted combine, bf16 sums, glm precision) the flat plan keeps its cores (48 gate/up, "
-        "32 down, 10 free cells, 9 accumulators, one pass) with mt 1 -> 2 and a 1156 -> 948 KB flat arena; synced "
-        "experts call, 2x2, chunk 2048, random inputs (tt/perf_experts.py::test_weights_bfp4): 4.47 -> 3.47 ms at layers "
-        "0 and 24; vs float64 with the exact fp4 weights bfp8 rel 0.0202 / 0.0206, bfp4 0.184 / 0.205 (bias +0.037 / "
-        "+0.040), bfp4 vs float64 with bfp4-rounded weights 0.0202 (the device path as exact as bfp8's; the rest is "
-        "bfloat4_b's rounding of the weights, DS41-74)",
-    ),
-    "EXPERTS_KERNEL": Setting(
-        "flat",
-        ("loop", "unified", "flat"),
-        "how the routed experts run on the dispatched buffer (tt/experts.py; EXPERTS_IMPL bfp8 or bfp4): loop = per "
-        "local expert extract -> ttnn.linear w1 | w3 -> SFPU SwiGLU x r -> bf16 -> ttnn.linear w2 -> "
-        "insert (24 experts x ~10 ops at the whole-chunk cap; 2522 of 3025 ms device per chunk on 2x2, X.1); "
-        "unified = ONE ttnn.bringup.unified_routed_expert_moe program over every local expert (counts on the "
-        "device, only the routed rows computed): ClampedSiluGlu, HiFi4 + fp32 dest, high_precision, the fork's "
-        "routing_weights (each dispatched row's fp32 weight from its routing pieces, one selector matmul per chunk) "
-        "+ weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). flat (the default: P.3, "
-        "Marko Staletovic's flat expert, accepted by the owner 2026-10-18 and made the default via F104; experts "
-        "149.3 vs unified 176.8 ms per chunk) = ONE ttnn.bringup.flat_routed_expert program (spatially pipelined: the DRAM bank readers stream "
-        "every local expert's weights once, x relays tilize and multicast the dispatched rows, the down cores write y at each expert's region), clamped_silu, fidelity "
-        "MATMUL_FIDELITY, fp32 DEST (gate/up and down), bf16 x / h / y, the fork's routing_weights "
-        "(the fork's fp8_act_quant is off since FIX.8) + weights_nk (the stored "
-        "[N, K] matrices laid out tile-transposed: bfp8 exact, asserted at load); the dispatched row's first H values "
-        "read in place (hidden=H, no x copy)",
+        ("bfp8", "bfp4"),
+        "the routed experts' weight format (tt/experts.py): every expert's w1 / w3 / w2 laid out ONCE at load in the "
+        "flat op's bank layout from the stored [N, K] matrices (weights_nk; no per-chunk weight work). bfp8 = "
+        "bfloat8_b, exact for every e2m1 x e8m0 value along K (asserted at load; W^T would round 48 of the run's 2304 "
+        "matrices, DS41-35); bfp4 (owner pick 2026-10-17, P.1: memory for galaxy_4x4; the DEFAULT since P.10, agent "
+        "rule 7 / F117: the checkpoint's own fp4 width) = bfloat4_b, lossy (3 magnitude bits under the group's "
+        "exponent, round to nearest even; changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| "
+        "0.118-0.124, logged at load), 0.5625 B per value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, "
+        "8.9 on 8x4; bfp8 33.6 / 16.8). P.10 on the shipped path (flat + weighted combine, bf16 sums, glm precision): "
+        "the flat plan keeps its cores (48 gate/up, 32 down, 10 free cells, 9 accumulators, one pass) with mt 1 -> 2 "
+        "and a 1156 -> 948 KB flat arena; synced experts call, 2x2, chunk 2048, random inputs "
+        "(tt/perf_experts.py::test_weights_bfp4): 4.47 -> 3.47 ms at layers 0 and 24; vs float64 with the exact fp4 "
+        "weights bfp8 rel 0.0202 / 0.0206, bfp4 0.184 / 0.205 (bias +0.037 / +0.040), bfp4 vs float64 with "
+        "bfp4-rounded weights 0.0202 (the device path as exact as bfp8's; the rest is bfloat4_b's rounding of the "
+        "weights, DS41-74). FIX.9 deleted the per-chunk fp4_decode value and the loop / unified kernels (EXPERTS_KERNEL)",
     ),
     "EXPERTS_PRECISION": Setting(
         "glm",
         ("full", "glm"),
-        "the routed experts' own precision (tt/experts.py; MATMUL_FIDELITY stays the rest of the model's): full = the "
-        "expert matmuls at MATMUL_FIDELITY with fp32 DEST, the flat op's x / h / y as bf16 tiles; glm (P.4, owner "
-        "comparison 2026-10-18) = Marko Staletovic's flat expert as GLM-5.3 runs it (glm53_flash_d_p/tt/experts_ag.py): "
-        "the expert matmuls at LoFi, the flat op's x and h tiles bfp8 (x_bf16 = h_bf16 = False), y bfp8 TILE "
-        "(y_bf16 = False; combine reads bfp8 TILE), fp32 DEST in gate/up and down (down_fp32 = True, GLM_AG_DOWN_FP32's "
-        "default); EXPERTS_KERNEL=unified: LoFi only (the fused op has no bfp8 tile options); loop: its w1 | w3 and "
-        "w2 linears at LoFi. The routing-weight selector matmuls (no expert matmuls) stay at MATMUL_FIDELITY, and the V4.1 math (routing weight on h, fp8 q(h) before w2) runs in both. Combined with "
-        "EXPERTS_IMPL=bfp4 for GLM's weight format. P.4, 2x2, chunk 53248-55296, plain profile, flat: experts 128.9 "
-        "(glm + bfp4) vs 149.2 ms (full + bfp8) per chunk, device total 631.8 vs 651.9; ladder last (glm + bfp4) worst "
-        "layer L03 0.99524, state min 0.99710 (bfp4 at full, P.1: 0.99535 / 0.99726); layer-0 experts vs CPU rel "
-        "0.131, bias +3.4 % (DS41-64)",
-    ),
-    "EXPERTS_COMBINE": Setting(
-        "weighted",
-        ("separate", "weighted"),
-        "EXPERTS_KERNEL=flat only (P.8, owner comparison 2026-10-19): separate = today's chain (q(x) | routing-weight "
-        "pieces in the dispatched row, ttnn.bringup.dispatch along axis 0, the flat expert with routing_weights + "
-        "(until FIX.8) fp8_act_quant (q(r h) before w2), ttnn.bringup.combine, the K-slot permute / slices / fp32 adds); weighted = "
-        "the flat expert and combine_rf's router-forwarded weighted combine (sparse_combine_rf) in ONE program per chip "
-        "(ttnn.bringup.flat_routed_expert_with_program, Marko Staletovic's wiring), the model's layout kept: q(x) "
-        "gathered along the mesh column (axis 0; the flat expert reads its rows by token index: the column's "
-        "dispatch), the device planner (combine_plan, column axis) builds counts / regions / token index and the "
-        "combine's tables from the column's top-k ids and bf16 weights, each expert row goes to its token's home chip "
-        "in the column and is multiplied there by its routing weight (bf16) and summed in fp32 per token (packer L1 "
-        "accumulation), then the column partials are added across the row by the same reduce-scatter (tt/ccl.py "
-        "sum_cols). No routing-weight pieces, no fp8 q(h) (the weight moves from h to the combine; w2 is linear), no "
-        "separate combine and no K-slot adds. The combine's fp32 accumulators hold the home tokens in L1, so the chunk "
-        "runs in passes of as many tokens as the free cells hold (tt/weighted_combine.py; 2x2: 2 passes of 512, DS41-69), "
-        "each token's rows summed in a fixed order (the det order table: bit-identical calls). Output bf16 under "
-        "CCL_IMPL=fabric_bf16 (the reduce-scatter's input, DS41-67), else fp32. Needs a 10880 B fabric payload "
-        "(bringup/hooks.py:device_params). P.8, layer 0, 2x2, chunk 2048, synced experts call: glm 5.3-5.4 ms vs separate "
-        "8.0 ms (arrival order), full precision 6.05 ms (det) vs 8.5 ms; vs float64 rel 0.0029 vs 0.0023 (full, fp32 out)",
+        "the routed experts' and the shared expert's own precision on the flat op (tt/experts.py, tt/shared_expert.py; "
+        "MATMUL_FIDELITY stays the rest of the model's): full = the expert matmuls at MATMUL_FIDELITY with fp32 DEST, "
+        "the flat op's x / h / y as bf16 tiles; glm (P.4, owner comparison 2026-10-18) = Marko Staletovic's flat "
+        "expert as GLM-5.3 runs it (glm53_flash_d_p/tt/experts_ag.py): the expert matmuls at LoFi, x and h tiles bfp8 "
+        "(x_bf16 = h_bf16 = False), y bfp8 TILE (y_bf16 = False; combine reads bfp8 TILE), fp32 DEST in gate/up and "
+        "down (down_fp32 = True, GLM_AG_DOWN_FP32's default). Combined with EXPERTS_IMPL=bfp4 for GLM's weight format. "
+        "P.4, 2x2, chunk 53248-55296, plain profile, flat: experts 128.9 (glm + bfp4) vs 149.2 ms (full + bfp8) per "
+        "chunk (the deleted separate-combine chain); ladder last (glm + bfp4) worst layer L03 0.99524, state min 0.99710; "
+        "layer-0 experts vs CPU rel 0.131, bias +3.4 % (DS41-64)",
     ),
     "COMBINE_ACC": Setting(
         "bf16",
         ("fp32", "bf16"),
-        "EXPERTS_COMBINE=weighted only (P.9, owner comparison 2026-10-20, option B): the combine's running sum of each "
+        "P.9 (owner comparison 2026-10-20, option B): the routed experts' weighted combine's running sum of each "
         "home token in its accumulator core's L1 (combine_rf sparse_combine_rf acc_dtype): fp32 = 20 KB a token, so the "
         "free cells' 9 accumulators hold <= 558 tokens and a 2x2 chip's 1024 home tokens run in 2 passes (the flat expert "
         "streams every expert's weights twice a layer, DS41-69); bf16 = 10 KB a token (the packer's L1 accumulation adds "
         "each weighted row from fp32 DEST onto a bf16 sum: one bf16 rounding per added row; the weight multiply "
-        "unchanged, HiFi4 at fp32 DEST), so the chunk runs in ONE pass (asserted, tt/experts.py). Same fixed summation "
-        "order (det): calls stay bit-identical. fp32 is the max-precision value and today's path (the default until the "
-        "owner accepts P.9). P.9, 2x2, chunk 2048, synced experts call, shipped glm precision: 5.74 ms (2 passes) -> 4.29 "
+        "unchanged, at fp32 DEST), so the chunk runs in ONE pass (asserted, tt/experts.py). Same fixed summation "
+        "order (det): calls stay bit-identical. bf16 is the default since the owner accepted P.9. P.9, 2x2, chunk 2048, synced experts call, shipped glm precision: 5.74 ms (2 passes) -> 4.29 "
         "ms (1 pass) at layers 0 and 24; full precision vs float64 (128 tokens) fp32 rel 0.0029, bf16 0.0041, bf16 vs "
         "fp32 0.0029 (bias -2.3e-4)",
     ),
     "COMBINE_PLANNER": Setting(
         "multi",
         ("one", "multi"),
-        "EXPERTS_COMBINE=weighted only (P.11, owner comparison 2026-10-20): the weighted combine's per-call planner "
+        "P.11 (owner comparison 2026-10-20): the routed experts' weighted combine's per-call planner "
         "(combine_rf combine_planner_prepare, column mode: the column's experts, id offset, passes, the det order table) "
         "on one = ONE core per pass (today's program; ~1.57 ms a layer at 1024 home tokens per chip, DS41-73); multi = "
         "the column multi-core planner (Marko Staletovic's V2 multi-core structure ported to the column options: up to "
@@ -249,34 +199,6 @@ TABLE = {
         "P.8 (owner comparison 2026-10-19): the dtype ffn_norm writes (tt/norm.py, gather=True): fp32 = today's; bf16 = "
         "the normalized row rounded once to bf16 by the last multiply's packer, so the row all-gather moves half the "
         "bytes; the router (bf16 x @ bf16 gate) and the experts / shared expert read it as is (no conversion op)",
-    ),
-    "EXPERTS_DECODE": Setting(
-        "gather",
-        ("gather", "arith"),
-        "EXPERTS_IMPL=fp4_decode only: the e2m1 code -> value step of the expert weight decode: gather = "
-        "ttnn.gather from the 16-entry table (4.0 ms per [2304, 5120] matrix); arith = composed float arithmetic "
-        "(6.4 ms); both bit-exact",
-    ),
-    "SHARED_EXPERT_IMPL": Setting(
-        "flat",
-        ("linear", "flat"),
-        "the shared expert (tt/shared_expert.py; TP by the intermediate over the mesh row, 2304 / TP columns a chip): "
-        "linear = today's ttnn.linear chain (bf16 weights, exact fp8 values: [W1 | W3] column-parallel at "
-        "MATMUL_FIDELITY + fp32 accumulation, SFPU clamped SwiGLU, bf16 h, W2 row-parallel, fp32 partial); flat (P.12, "
-        "owner comparison 2026-10-20, Marko Staletovic's K3_SE=flat) = the chip's slice run by the flat routed expert "
-        "(ttnn.bringup.flat_routed_expert) as SE_PARTS always-on experts every own token goes to, weights bfloat8_b "
-        "(the checkpoint's fp8 width, agent rule 7) laid out once at load from the stored [N, K] matrices, the routed "
-        "experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h tiles, full = MATMUL_FIDELITY + bf16 tiles), "
-        "fp32 DEST, bf16 y = the partial moe_add sums with the routed experts' before their one reduce-scatter. Under "
-        "EXPERTS_COMBINE=weighted its x is the routed experts' row-major gathered x, read by token "
-        "index (no layout conversion of its own). Not hidden: folding into the routed experts' program "
-        "needs one weight dtype for both (routed bfp4, shared bfp8), overlapping the dispatch needs sub-devices; its x "
-        "costs nothing. P.12, 2x2, chunk 2048, plain profile (8 layers): shared_expert 11.41 -> 2.01 ms a chunk (1.43 -> "
-        "0.25 ms a layer, 288 -> 32 programs), moe_add 1.78 -> 1.58, MoE block (router + experts + shared + moe_add) "
-        "4.05 -> 2.84 ms a layer, device total 230.28 -> 220.61; quick A/B: chunk wall 232.1 ms either way, worst layer "
-        "L03 0.99519 (linear, P.11: 0.99530). shared_out vs float64 with the exact fp8 weights (layers 0 / 24, 256 rows): "
-        "linear rel 0.0030, bias +0.09 %; flat 0.020 / 0.022, bias +1.3 / +1.4 % (bfp8 x / h tiles; the bfp8 weights "
-        "alone 0.005-0.006; LoFi + bf16 tiles 0.011, bias -0.8 %; HiFi4 + bf16 tiles 0.006: DS41-77)",
     ),
     "EXPERTS_SUM": Setting(
         "gather_add",
@@ -350,5 +272,7 @@ TABLE = {
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
 # deleted the parity-only switches (NUMERICS, COMPRESSOR_X, ENGRAM_KV_QDQ, ATTN_IN_MM, WINDOW_SDPA and its _OUT /
-# _SCORES / _PROBS / WINDOW_PIECES) with their code (tt/quant.py, tt/exact_mm.py, tt/window_exact.py).
+# _SCORES / _PROBS / WINDOW_PIECES) with their code (tt/quant.py, tt/exact_mm.py, tt/window_exact.py). FIX.9 deleted the
+# second expert pipeline (EXPERTS_KERNEL loop / unified, EXPERTS_IMPL fp4_decode, EXPERTS_DECODE, EXPERTS_COMBINE separate,
+# SHARED_EXPERT_IMPL linear): the flat routed expert with the weighted combine and the flat shared expert are the only path.
 settings = Settings("DS41_", TABLE)

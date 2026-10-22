@@ -2460,3 +2460,92 @@ Gotchas:
 Re-run: the FIX.8 gate (brief), one command per call; profile: `BRINGUP_TASK=FIX.8 TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`.
+
+## FIX.9 (overseer, 2026-10-22): one expert pipeline (precision_debt_report.md J2)
+
+What changed (the flat routed expert with the weighted combine, and the flat shared expert, are the only path):
+- `tt/experts.py` 1019 -> 383 lines: deleted EXPERTS_COMBINE=separate (dispatch / combine / K-slot fp32 adds,
+  `_modules`, `_dispatch`, `_combine`), the routing-weight pieces (`_pieces`, `_weight_col`, `_routing_rows`, the
+  selectors `sel` / `sel_all`, DS41-23), EXPERTS_KERNEL loop / unified (`_loop`, `_ffn`, `_unified`, `_flat`), the
+  fp4_decode weights (`pack_planes`, `_load_fp4`, `_decode`) and the unused device tables (dispatch table, gidx).
+  `partial` = the old `_weighted`; `_load_block` keeps the bfp8 exactness assert / bfp4 stats on the [N, K]
+  matrices and feeds `_load_flat`. `build_experts` lost `combine=`.
+- `tt/shared_expert.py`: deleted SHARED_EXPERT_IMPL=linear (the ttnn.linear chain, its bf16 / DENSE_WEIGHTS
+  weights); `chunk` is required, `impl=` gone.
+- `tt/settings.py`: deleted EXPERTS_KERNEL, EXPERTS_COMBINE, EXPERTS_DECODE, SHARED_EXPERT_IMPL; EXPERTS_IMPL is
+  {bfp8, bfp4}; descriptions of EXPERTS_PRECISION / COMBINE_ACC / COMBINE_PLANNER / MATMUL_FIDELITY / DENSE_WEIGHTS
+  no longer name the deleted paths (24 -> 20 settings).
+- `bringup/hooks.py:device_params` and `tt/runners/adapter.py:_FabricPayload` always use the weighted combine's
+  10880 B payload (DS41-94); `tt/model.py` keep_rows / router_wts no longer test `experts.weighted`;
+  `tt/weighted_combine.py` docstring. tt/ + hooks: +238 / -1218 lines.
+- `tt/perf_experts.py`: deleted test_time_experts (bfp8 vs fp4_decode), test_unified_vs_loop, test_kernels;
+  test_weighted_vs_separate -> test_weighted (weighted only; also fixed its undefined `wround`).
+  `tt/perf_shared_expert.py`: test_shared_flat_vs_linear -> test_shared_flat.
+- Forks (no other model calls the options: grep of every model's code, the forks' tests/cases.py and tests):
+  - unified_routed_expert_ffn: removed `routing_weights` / `fp8_act_quant` (attributes, input, CBs c_20 / c_21,
+    reader staging, `calculate_routed_h`, UnpackToDestFp32); `weights_transposed` stays (no caller now). Program
+    factory and kernels = pre-P.2 + WEIGHTS_NK. `tests/unit/test_ds41_h_options.py` deleted, its transposed check ->
+    `tests/unit/test_weights_transposed.py`; `tests/reference.py` lost the fp8 helpers.
+  - flat_routed_expert_ttnn: removed `routing_weights` / `fp8_act_quant` and the plan's `routed` (plan branch, 36 KB
+    arena region, RH_* CBs / semaphores / args, `AddrSrc::RoutingWeights`, SE_RH_* kernel blocks, `se_rh.hpp`);
+    `weights_nk` / `hidden` stay. `tests/unit/test_ds41_h_options.py` deleted -> `tests/unit/test_weights_nk.py`
+    (nk bit-identity, V4.1 shapes with hidden, block_float_exact). Weight-cache keys never had `routed`.
+  - READMEs, CHANGELOGs, INDEX.md updated. Build OK (warnings as errors).
+Fork-side diff: 30 files, +131 / -1764.
+
+Measured (2x2, defaults):
+- Baseline first (untouched tree, 6 of the 8 gate component tests; the loop was cut at dec_reuse): every printed check
+  line of the after-runs equals the before-runs (diff of the `ok` / `FAIL` / `note` lines: identical). err_experts
+  L00 0.130168, L02 0.16062, L20 0.183528, L21 0.183309 (no before); err_shared_expert L00 0.0151197, L02 0.0179665,
+  L20 0.0182662, L21 0.0176558.
+- Gate: the 4 shared-expert tests PASS. The 4 experts tests FAIL, before and after, identically (DS41-95): err_experts
+  is within its limit (e.g. 0.130 <= 0.337) but the frozen auto checks vs the CPU step (rel 0.13-0.18 > 0.06-0.08;
+  second inputs' fixed 0.03) fail, and test_c_swa_experts.py KeyErrors on `component_col_factor`. These frozen tests
+  (2026-10-16/17) predate F128 and the bfp4 / glm defaults; the brief's "pass today" is not so for them.
+- L.last (run with --no-precompile to fit one 10-minute call, K-52): PASS; err_layer L00 .0265/.057, L01 .0346/.072,
+  L02 .0523/.1077, L03 .0818/.1587, L14 .0618/.138, L20 .0306/.0507, L21 .0521/.1312, L24 .0281/.0418 (= FIX.8's);
+  err_state max window_kv_L03 .0542; worst layer pcc 0.996652.
+- Plain profile (chunk 53248-55296, BRINGUP_TASK=FIX.9): device 104.28 ms a chunk (FIX.8 104.31), 7800 programs,
+  experts 16.77 (16.84), shared_expert 2.02, router 1.47, moe_add 1.58; host_transfers_per_layer 0; wall 355 ms.
+- Forks, options off: unified fork_source 73 / 75 run and pass, 0 regressions; the 2 weight-cache tests are not
+  collected (deepseek_v3_d_p/tests/conftest.py imports xing40's settings, which still pass the removed
+  `max_precision=`; F137, not this change); model cases 5 passed / 1 skipped (xing40 4x2); test_weights_transposed
+  3 passed. Flat tests/unit/ 19 passed / 13 failed = the recorded baseline (12 x `p.nsg == 1`, the MiMo perf band,
+  DS41-63) + test_weights_nk 3 passed; GLM's test_flat_bench 9.556 / 23.725 ms (9.558 / 23.721).
+- settings_lint 0 violations, ops_lint 0 problems.
+
+Gotchas:
+- Out of date now (pointers into deleted code): DS41-23, DS41-57, DS41-58, DS41-59, DS41-60, DS41-61, DS41-62
+  (knowledge-use report FIX.9.overseer.1.json).
+- A shell loop of run_safe_pytest calls longer than 10 minutes is moved to the background by the tool and then killed:
+  run one test file per call.
+
+Re-run: the FIX.9 gate (brief), one command per call (L.last with --no-precompile to fit 10 minutes); fork checks
+`scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/<file>.py`,
+`python -m models.demos.common.bringup.testing.fork_source --fork unified_routed_expert_ffn`,
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/test_unified_routed_expert_ffn.py`.
+
+## FIX.9 attempt 5 (overseer, 2026-10-22): the re-rendered experts tests and the devfmt diagnosis
+
+State: attempt 1's deletions (section above) were still in the tree after the crash; kept unchanged (re-read the
+diff; rebuilt with ./build_metal.sh, since some fork sources were newer than the library; fork option tests
+test_weights_nk.py 3 passed, test_weights_transposed.py 3 passed).
+Added `bringup/hooks.py:devfmt_component` (+ `_bfp_round`): the F137 diagnosis hook (testing/devfmt.py, never gated).
+Without it the diagnosis said "a logic bug" (it modelled only bf16 activations). experts: the weights go through
+EXPERTS_IMPL's block format on the stored [N, K] matrices (tt/experts.py:_bfp4_round), x / h / y as bfp8 tiles (glm),
+the bf16 routing weight is applied after w2, and the sum is rounded to bf16. Other steps: the framework's default
+(bf16 activations). No device path or setting changed.
+Gate, run one command per call (overseer re-rendered tests, OV-27):
+- 4 x shared_expert PASS: err L00 0.0151197, L02 0.0179665, L20 0.0182662, L21 0.0176558 (= the baseline).
+- 4 x experts FAIL, identically to the baseline: err_experts L00 0.130168 / L02 0.16062 / L20 0.183528 / L21 0.183309,
+  each within its golden limit (0.337 / 0.507 / 0.882 / 0.958). The vs-CPU check fails (rel > 0.0598 / 0.0720 / 0.0814 /
+  0.0819, median row ratio +4.4 to +5.5 %), and so do the second inputs (0.18-0.20 > 0.03). Diagnosis with the hook: the
+  CPU step at the device's formats is 0.128 / 0.158 / 0.181 / 0.181 from native, and the device is 0.0149 / 0.0171 /
+  0.0184 / 0.0182 from it. Verdict: a precision gap (DS41-95).
+- CPU only, random x, layer 0, the CPU step at the device's formats vs native: bfp4 + glm 0.1825 (ratio 1.047),
+  bfp4 + full 0.1798, bfp8 + glm 0.0171 (1.006), bfp8 + full 0.0038. So the gap is bfp4 alone.
+- L.last (--no-precompile, K-52) PASS: err_layer L00 .0265, L01 .0346, L02 .0523, L03 .0818, L14 .0618, L20 .0306,
+  L21 .0521, L24 .0281; worst layer pcc 0.996652; err_state max .0542 (= FIX.8's).
+Decision: no change to shipped numerics (the brief forbids it; rule 14: a precision gap is reported, not raised).
+The four experts tests need an owner waiver (tests.waivers) for EXPERTS_IMPL=bfp4, or the owner picks bfp8.
+Re-run: the gate, one test file per call; diagnosis lines: `grep "^note err_experts"` in the test output.

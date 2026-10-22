@@ -16,7 +16,7 @@ ORACLE_MAX_SEQ = 65536  # positions the oracle's caches hold (parity and sanity 
 
 class _WeightedPayloadSpec:
     """The spec as the harness reads it for the mesh's device params, with the fabric packet payload one expert row
-    needs under EXPERTS_COMBINE=weighted (device_params below)."""
+    of the weighted combine needs (device_params below)."""
 
     def __init__(self, spec, payload: int):
         self._spec, self._payload = spec, payload
@@ -33,29 +33,14 @@ class _WeightedPayloadSpec:
 
 
 def device_params(spec):
-    """The mesh's device params: the spec's (2D fabric, l1_small), read by the harness. EXPERTS_COMBINE=weighted (P.8)
-    also sets the fabric packet payload to 10880 B: combine_rf's L1 hand-off sends each expert row (5120 bf16 =
-    10240 B) with its 32 B trailer as one packet (the router default is 4352 B; Blackhole max 15232 B; Marko
+    """The mesh's device params: the spec's (2D fabric, l1_small), read by the harness, with the fabric packet payload
+    at 10880 B (P.8): combine_rf's L1 hand-off in the routed experts' weighted combine sends each expert row (5120
+    bf16 = 10240 B) with its 32 B trailer as one packet (the router default is 4352 B; Blackhole max 15232 B; Marko
     Staletovic's V4.1 setting, FLAT_COMBINE_OVERLAP_WORKLOG.md)."""
     from models.demos.common.bringup.testing import harness
-    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
-
-    if settings.get("EXPERTS_COMBINE") != "weighted":
-        return _spec_params(spec)
     from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
 
     return harness.device_params(_WeightedPayloadSpec(spec, FABRIC_PAYLOAD))
-
-
-def _spec_params(spec):
-    """The harness's device params for the spec as written (no hook)."""
-    from models.demos.common.bringup.testing import harness
-
-    class _Plain(_WeightedPayloadSpec):
-        def get(self, key, default=None):
-            return self._spec.get(key, default)
-
-    return harness.device_params(_Plain(spec, None))
 
 
 def _config(spec):
@@ -1042,6 +1027,76 @@ def device_component(mesh, spec, layer, step):
     fn = _device_step_fn(mesh, spec, layer, step, _checkpoint(spec), _config(spec))
     if fn is None:
         raise NotImplementedError(f"implement step: no device module for {step} yet")
+    return fn
+
+
+_DEVFMT_REFS: dict = {}  # layer -> the native reference devfmt_component runs (built on the first failing check)
+
+
+def _bfp_round(t, mant: int, ties_away: bool = False):
+    """t (last dim a multiple of 16) through a block float of 16-value groups along the last dim with `mant` magnitude
+    bits under the group's largest binary exponent (bfloat8_b: 7, bfloat4_b: 3), fp32. ties_away: the device packer's
+    rounding of bfp8 tiles (DS41-77), else round to nearest even (ttnn's host packing, tt/experts.py:_bfp4_round)."""
+    g = t.float().reshape(-1, 16)
+    _, e = torch.frexp(g.abs().amax(dim=-1, keepdim=True))
+    s = torch.ldexp(torch.ones_like(e, dtype=torch.float64), mant - e)
+    up, down = s.float(), (1.0 / s).float()
+    v = g * up
+    v = torch.sign(v) * torch.floor(v.abs() + 0.5) if ties_away else v.round()
+    lim = 2**mant - 1
+    return v.clamp_(-lim, lim).mul_(down).reshape(t.shape)
+
+
+def devfmt_component(spec, layer, step):
+    """F137 diagnosis only (testing/devfmt.py; never gated, never a device path): the CPU step at the device's real
+    formats. experts (tt/experts.py, shipped settings): every expert's w1 / w3 / w2 through EXPERTS_IMPL's block format
+    on the stored [N, K] matrices (bfp4: `_bfp4_round`, ttnn's host packing; bfp8: exact, DS41-10), x / h / y as bfp8
+    tiles (EXPERTS_PRECISION=glm) or bf16 (full), the routing weight bf16 applied in the combine after w2, the sum
+    rounded to bf16 (COMBINE_ACC=bf16). LoFi itself is not modelled. Other steps: bf16 activations (the framework's
+    default model)."""
+    from models.demos.deepseek_v41_flash_d_p.reference.weights import ExpertPrefetcher
+    from models.demos.deepseek_v41_flash_d_p.tt.experts import _bfp4_round
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    ref = _DEVFMT_REFS.get(layer)
+    if ref is None:
+        ref = _DEVFMT_REFS[layer] = reference(spec, layers=[layer], numerics="native")
+
+    def bf16(t):
+        return t.to(torch.bfloat16).float() if isinstance(t, torch.Tensor) and t.is_floating_point() else t
+
+    if step != "experts":
+        cpu = ref.component(layer, step)
+        return lambda ctx, *x: bf16(cpu(ctx, *[bf16(t) for t in x]))
+
+    wround = _bfp4_round if settings.get("EXPERTS_IMPL") == "bfp4" else (lambda w: w.float())
+    act = (lambda t: _bfp_round(t, 7, ties_away=True)) if settings.get("EXPERTS_PRECISION") == "glm" else bf16
+    acc = bf16 if settings.get("COMBINE_ACC") == "bf16" else (lambda t: t)
+    lim = ref.cfg.swiglu_limit
+
+    def fn(ctx, x, routing):
+        xq = act(bf16(x))  # ffn_norm's bf16 output, tiled as the flat op reads it
+        out = torch.zeros(x.shape, dtype=torch.float32)
+        tok_all, exp_all = (routing != 0).nonzero(as_tuple=True)
+        order = torch.argsort(exp_all, stable=True)
+        tok_all, exp_all = tok_all[order], exp_all[order]
+        experts, counts = torch.unique_consecutive(exp_all, return_counts=True)
+        pf = ExpertPrefetcher(ref.ck, layer, experts.tolist())
+        off = 0
+        for e, n in zip(experts.tolist(), counts.tolist()):
+            tok = tok_all[off : off + n]
+            off += n
+            ws = pf.get(e)
+            w1, w3, w2 = (wround(ws[k][2]) for k in ("w1", "w3", "w2"))
+            xt = xq[tok]
+            gate, up = xt @ w1.T, xt @ w3.T
+            if lim > 0:
+                up = up.clamp(min=-lim, max=lim)
+                gate = gate.clamp(max=lim)
+            y = act(act(torch.nn.functional.silu(gate) * up) @ w2.T)
+            out.index_add_(0, tok, bf16(routing[tok, e, None].float()) * y)
+        return acc(out)
+
     return fn
 
 

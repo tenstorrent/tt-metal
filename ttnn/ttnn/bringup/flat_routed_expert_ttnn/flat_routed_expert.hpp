@@ -42,8 +42,6 @@ ttnn::Tensor flat_routed_expert(
     bool h_bf16 = false,
     bool y_bf16 = false,
     uint32_t math_fidelity = 0,
-    const std::optional<ttnn::Tensor>& routing_weights = std::nullopt,
-    bool fp8_act_quant = false,
     bool weights_nk = false,
     uint32_t hidden = 0);
 
