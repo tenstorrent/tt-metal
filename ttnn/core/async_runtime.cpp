@@ -4,6 +4,7 @@
 
 #include "ttnn/async_runtime.hpp"
 
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;

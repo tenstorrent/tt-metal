@@ -44,7 +44,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::tt_metal::IDevice* const device = output_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* const device = output_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_batch = input_shape[0];
@@ -257,12 +257,16 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             } else {
                 start_stick_id = i * input_nsticks_per_core;
             }
+            // An unevenly sharded tensor's last shard is only partly backed by real sticks.
+            const uint32_t num_sticks = start_stick_id >= total_output_sticks
+                                            ? 0
+                                            : std::min(input_nsticks_per_core, total_output_sticks - start_stick_id);
 
             reader_desc.emplace_runtime_args(
                 core,
                 {
                     input_tensor.buffer(),
-                    input_nsticks_per_core,
+                    num_sticks,
                     start_stick_id,
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
                     static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
@@ -275,7 +279,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                 core,
                 {
                     output_tensor.buffer(),
-                    input_nsticks_per_core,
+                    num_sticks,
                     start_stick_id,
                 });
         }

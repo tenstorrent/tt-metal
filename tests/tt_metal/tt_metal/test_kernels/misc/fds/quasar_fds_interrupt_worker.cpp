@@ -18,6 +18,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 #include "quasar_fds_interrupt.h"
 
@@ -30,7 +31,7 @@ constexpr uint32_t kNumSlots = 4;
 
 constexpr uint32_t kL1Address = get_named_compile_time_arg_val("l1_address");
 constexpr uint32_t kGroupId = get_named_compile_time_arg_val("group_id");
-constexpr uint32_t kDispatchMask = get_named_compile_time_arg_val("dispatch_mask");
+constexpr uint32_t kDispatchMask = overlay::fds_signalling::dispatch_lane_mask;
 constexpr uint32_t kPollIterations = get_named_compile_time_arg_val("poll_iterations");
 
 // One engine drives this worker, so one go on any lane is the whole count.
@@ -78,6 +79,7 @@ void kernel_main() {
     // otherwise stand at the threshold the moment this group is armed, and the interrupt would
     // report the last epoch's signal.
     fds_epoch::clear_worker_inputs(kDispatchMask);
+    fds_kernel::refresh_worker_group_status(kGroupId);
     overlay::FdsNeo::fds_config_interrupt_en(uint32_t{1} << kGroupId);
 
     uint32_t ready_token = kReadyTokenA;
@@ -100,6 +102,6 @@ void kernel_main() {
 
     // The last ready token is still on the done wire, so this is a change the engine will capture.
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kGroupId);
+        overlay::FdsNeo::fds_done(kGroupId);
     }
 }

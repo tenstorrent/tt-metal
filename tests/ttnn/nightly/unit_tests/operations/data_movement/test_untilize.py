@@ -91,11 +91,10 @@ def test_untilize_with_unpadding_wide(device, shape, output_end, expect_width_pa
         torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
     )
 
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    # Use NO_DISPATCH instead of NORMAL (which only sees CBs and so reports no cores for Metal 2.0 programs)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
     try:
-        untilized = ttnn.untilize_with_unpadding(
-            tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
-        )
+        ttnn.untilize_with_unpadding(tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config)
     finally:
         captured_graph = ttnn.graph.end_graph_capture()
 
@@ -116,6 +115,10 @@ def test_untilize_with_unpadding_wide(device, shape, output_end, expect_width_pa
             f"on the height-only path ({height_only_cores} cores), got {num_cores}"
         )
 
+    # The hooked program above did not run. Run it to check the output.
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
     result = ttnn.to_torch(untilized)
     slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
     assert_equal(torch_tensor[slices], result)

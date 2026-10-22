@@ -41,7 +41,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
             pytest.param(
                 shape,
                 {
-                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                     "fabric_router_config": _fabric_router_config(),
                     **dict(device_params_extra or {}),
                 },

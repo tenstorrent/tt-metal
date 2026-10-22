@@ -7,13 +7,21 @@
 from tracy.perf_counter_multipass import (
     PERF_COUNTER_L1_GROUPS,
     PERF_COUNTER_MAX_GROUPS_PER_PASS,
-    merge_perf_counter_device_logs,
     arch_l1_groups,
+    merge_perf_counter_device_logs,
     perf_counter_groups_to_bitfield,
     schedule_perf_counter_passes,
 )
 
-CSV_HEADER = "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run host ID\n"
+CSV_HEADER = (
+    "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run host ID, "
+    "trace id, trace id counter, zone name, type, source line, source file, meta data\n"
+)
+
+
+def row(*fields):
+    """A device log row: the eight leading fields, then the trace columns and the rest."""
+    return ",".join(str(f) for f in fields) + ",,,,,,,\n"
 
 
 def assert_pass_invariants(passes):
@@ -28,6 +36,14 @@ def test_full_blackhole_set_schedules_one_pass_per_l1_bank():
     assert len(passes) == 6
     assert_pass_invariants(passes)
     assert sorted(g for p in passes for g in p) == sorted(groups)
+
+
+def test_all_non_l1_groups_and_one_l1_bank_fit_one_pass():
+    # The largest single pass mask (47 with l1_0); measured to fit the BRISC firmware on Blackhole
+    # (8684 of 8704 bytes) and Wormhole (7600 of 7712).
+    passes = schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn", "l1_0"])
+    assert passes == [["l1_0", "fpu", "pack", "unpack", "instrn"]]
+    assert perf_counter_groups_to_bitfield(passes[0]) == 47
 
 
 def test_wormhole_all_set_schedules_two_passes():
@@ -48,7 +64,8 @@ def test_two_l1_banks_force_two_passes():
 
 
 def test_group_cap_forces_extra_pass():
-    assert len(schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn"])) == 2
+    assert len(schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn"])) == 1
+    assert len(schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn"], max_groups_per_pass=3)) == 2
 
 
 def test_dedup_case_insensitive_and_empty():
@@ -66,20 +83,100 @@ def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
     pass0 = tmp_path / "pass_0.csv"
     pass1 = tmp_path / "pass_1.csv"
     merged = tmp_path / "merged.csv"
-    pass0.write_text(CSV_HEADER + "0,1,1,BRISC,4096,100,0,7\n0,1,1,BRISC, 9090 ,110,42,7\n")
-    pass1.write_text(CSV_HEADER + "0,1,1,BRISC,4096,105,0,7\n0,1,1,BRISC,9090,115,43,7\n0,1,1,TRISC_0,9090,116,44,7\n")
+    pass0.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 4096, 100, 0, 7) + row(0, 1, 1, "BRISC", " 9090 ", 110, 42, 7))
+    pass1.write_text(
+        CSV_HEADER
+        + row(0, 1, 1, "BRISC", 4096, 105, 0, 7)
+        + row(0, 1, 1, "BRISC", 9090, 115, 43, 7)
+        + row(0, 1, 1, "TRISC_0", 9090, 116, 44, 7)
+    )
 
     merge_perf_counter_device_logs([pass0, pass1], merged)
 
     lines = merged.read_text().splitlines()
     assert lines[0] == CSV_HEADER.rstrip("\n")
-    assert lines[1:3] == ["0,1,1,BRISC,4096,100,0,7", "0,1,1,BRISC, 9090 ,110,42,7"]
-    assert lines[3:] == ["0,1,1,BRISC,9090,115,43,7", "0,1,1,TRISC_0,9090,116,44,7"]
+    assert lines[1:3] == [
+        row(0, 1, 1, "BRISC", 4096, 100, 0, 7).rstrip(),
+        row(0, 1, 1, "BRISC", " 9090 ", 110, 42, 7).rstrip(),
+    ]
+    # appended rows keep their data but take pass 0's timestamp for the same core and run host id, whatever the RISC
+    assert lines[3:] == [
+        row(0, 1, 1, "BRISC", 9090, 110, 43, 7).rstrip(),
+        row(0, 1, 1, "TRISC_0", 9090, 110, 44, 7).rstrip(),
+    ]
     assert sum("4096" in line for line in lines) == 1
     assert sum(line.startswith("PCIe") for line in lines) == 1
+
+
+def test_merge_anchors_each_trace_replay_on_its_own_pass0_row(tmp_path):
+    pass0 = tmp_path / "pass_0.csv"
+    pass1 = tmp_path / "pass_1.csv"
+    merged = tmp_path / "merged.csv"
+
+    def traced(ts, data, replay):
+        return ",".join(str(f) for f in (0, 1, 1, "BRISC", 9090, ts, data, 7, 3, replay)) + ",,,,,\n"
+
+    # two replays of one traced op share the run host id and differ in the trace id counter
+    pass0.write_text(CSV_HEADER + traced(110, 42, 0) + traced(210, 42, 1))
+    pass1.write_text(CSV_HEADER + traced(115, 43, 0) + traced(215, 43, 1) + traced(315, 43, 2))
+
+    merge_perf_counter_device_logs([pass0, pass1], merged)
+
+    lines = merged.read_text().splitlines()
+    # the third replay has no pass 0 row and is dropped
+    assert lines[3:] == [traced(110, 43, 0).rstrip(), traced(210, 43, 1).rstrip()]
+
+
+def test_merge_drops_counter_rows_with_no_pass0_anchor(tmp_path):
+    pass0 = tmp_path / "pass_0.csv"
+    pass1 = tmp_path / "pass_1.csv"
+    merged = tmp_path / "merged.csv"
+    pass0.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 9090, 110, 42, 7))
+    pass1.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 9090, 115, 43, 7) + row(0, 2, 2, "BRISC", 9090, 116, 44, 9))
+
+    merge_perf_counter_device_logs([pass0, pass1], merged)
+
+    lines = merged.read_text().splitlines()
+    assert lines[1:] == [
+        row(0, 1, 1, "BRISC", 9090, 110, 42, 7).rstrip(),
+        row(0, 1, 1, "BRISC", 9090, 110, 43, 7).rstrip(),
+    ]
 
 
 def test_arch_l1_groups():
     assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
     assert arch_l1_groups(False, is_quasar=True) == []
     assert arch_l1_groups(False) == ["l1_0", "l1_1"]
+
+
+def _zone(run_id, ts, phase, core=(1, 1)):
+    timer = {"id": 1, "zone_name": "BRISC-FW", "type": phase, "run_host_id": run_id}
+    return (timer, ts, 0, "BRISC", core)
+
+
+def _counter(run_id, ts, core=(1, 1)):
+    timer = {"id": 9090, "zone_name": "", "type": "TS_DATA", "run_host_id": run_id}
+    return (timer, ts, 7, "BRISC", core)
+
+
+def test_get_ops_keeps_merged_pass_counters_inside_their_op():
+    # a merged multipass log carries counter records from later runs, whose timestamps fall outside the
+    # FW window of the first run; they must not open a spurious op or swallow the next one
+    from tracy.process_device_log import get_ops
+
+    timeseries = [
+        _zone(1, 100, "ZONE_START"),
+        _counter(1, 150),
+        _zone(1, 200, "ZONE_END"),
+        _zone(2, 300, "ZONE_START"),
+        _counter(2, 350),
+        _zone(2, 400, "ZONE_END"),
+        _counter(1, 5000),  # from pass 2, same op, much later run
+        _counter(2, 5100),
+    ]
+    timeseries.sort(key=lambda ts: ts[1])
+    ops = get_ops(timeseries)
+    assert [op["timeseries"][0][0]["run_host_id"] for op in ops] == [1, 2]
+    counters = [sorted(ts[1] for ts in op["timeseries"] if ts[0]["type"] == "TS_DATA") for op in ops]
+    assert counters == [[150, 5000], [350, 5100]]
+    assert all(op["timeseries"][0][0]["type"] == "ZONE_START" for op in ops)

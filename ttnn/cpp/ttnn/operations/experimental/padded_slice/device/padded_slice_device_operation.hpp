@@ -9,6 +9,8 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "padded_slice_device_operation_types.hpp"
 #include "padded_slice_rm_program_factory.hpp"
 #include "padded_slice_tile_program_factory.hpp"

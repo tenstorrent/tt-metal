@@ -37,6 +37,20 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// A one-pipe PrefetcherPipeSpace over sender (0,0) and receiver (1,0), 1 KiB ring.
+experimental::PrefetcherPipeSpaceConfig make_pipe_space_config() {
+    return experimental::PrefetcherPipeSpaceConfig{
+        .sender_cores = CoreRangeSet(CoreRange({0, 0})),
+        .receiver_domain = CoreRangeSet(CoreRange({1, 0})),
+        .ring_size = 1024,
+        .max_receivers_per_pipe = 1,
+    };
+}
+
+}  // namespace
+
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     uint32_t local_l1_size = 3200;
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -163,8 +177,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
     auto mesh_device = devices_[0];
 
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
+    // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
+    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config());
+    auto pipe = space.create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
     const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
 
     SubDevice sub_device(std::array{cores});
@@ -213,14 +228,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1U
     SubDevice sub_device(std::array{cores});
     const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
 
-    EXPECT_THROW(
-        experimental::CreatePrefetcherPipe(
-            mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024),
-        std::exception);
+    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()), std::exception);
 
     mesh_device->remove_sub_device_manager(manager);
-    EXPECT_NO_THROW(experimental::CreatePrefetcherPipe(
-        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024));
+    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {

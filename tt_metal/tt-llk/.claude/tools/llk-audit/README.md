@@ -12,7 +12,7 @@ hunt for novel hazards.
 
 ```
 ┌─ extractor/  (C++ / Clang libTooling) ─ parse once, emit a semantics-free FACT BASE
-│     llk_extract.cpp     functions · pointer-writes (+provenance) · pointer-reads · calls · macro expansions
+│     llk_extract.cpp     functions · pointer-writes (+provenance) · pointer-reads · calls · macro expansions · opcode values
 │
 ├─ llkaudit/   (Python) ─ classify the fact base into recall candidates
 │     registry.py         ← THE table that maps LLK names/signatures to meaning (edit this)
@@ -42,6 +42,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` / `PARTIAL_MATH_DRAIN` |
 | `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported); both halves of the Dest→Src gate (`MOVD2A`/`MOVD2B` wait mask, and which bank the dummy publication waits on) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` / `DEST2SRC_NO_MATH_DRAIN` / `DEST2SRC_WRONG_SRC_GATE` / `DEST2SRC_DRAIN_REARMED` / `DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED` / `DEST2SRC_WAIT_UNSEEN` / `DEST2SRC_WAIT_UNRELATED` / `DUMMY_PUBLISH_SERIALIZING` / `DUMMY_PUBLISH_SETDVALID_UNSEQUENCED` / `DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE` / `DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
+| `mop-replay` | an instruction word whose execution point is its MOP/replay SLOT, not its line (slotted words + Src flips, records that capture without issuing, unresolved buffer indices); models neither expander | `MOP_SLOTTED_SRC_FLIP` / `MOP_SLOTTED_WORD` / `MOP_WORD_SLOT_UNATTRIBUTED` / `REPLAY_RECORD_NOEXEC` / `REPLAY_RECORD_EXEC_UNRESOLVED` / `REPLAY_INDEX_UNRESOLVED` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
 | `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set_remote/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
 | `noc-atomic-exit` † | non-posted NoC atomic (`noc_semaphore_inc` / remote `up`) left in flight at kernel exit (no following `noc_async_atomic_barrier` / `noc_async_full_barrier`) | `NO_ATOMIC_BARRIER_AT_EXIT` |
@@ -85,13 +86,17 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Coverage: 8 of 9 classes have a committed checker (11 checkers — the NoC class has 4)
+### Coverage: 8 of 9 classes have a committed checker (12 checkers — the NoC class has 4, plus cross-cutting `mop-replay`)
 Only `instruction-latency` has no committed checker (its surface is the SFPU files
 that don't parse under clang, and its verdict needs an out-of-tree version-pinned
 `sfpi-gcc` table → stays fully LLM-driven). The split of the other 8 by *where
 their surface lives*:
 - **In tt-llk (findings on a plain run):** `mmio-race`, `cfg-word-overlap`,
-  `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`.
+  `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`, `mop-replay`.
+  `mop-replay` is not a tenth hazard class — it is a **cross-cutting** recall
+  surface (a word's execution point is its MOP/replay slot, not its line) whose
+  findings feed `srcreg-bank`, `semaphore-handshake`, `mailbox-sync` and
+  `instruction-latency`.
   `srcreg-bank`/`mailbox-sync` are narrow recallers (control-point/endpoint
   inventory + the mechanical ISA flags); their kernel-layer surface stays with
   the skills' ttnn-widened grep.
@@ -148,6 +153,7 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new NoC read barrier or read-consume form (noc-read-barrier) → `NOC_METHOD_READ_BARRIER` / `READ_FORWARD_CALLS`
 - new all-draining full barrier → `NOC_FULL_BARRIERS` / `NOC_METHOD_FULL_BARRIER` (drains read+write+atomic — satisfies the flush/barrier, atomic-barrier, AND read-barrier predicates)
 - noc-l1-invalidate has no per-signature table — it keys on the `pointer_read` fact (a volatile L1 poll in a loop) scoped to NoC context (`noc_op_of`) / `get_semaphore` provenance; widen the `pointer_read` capture, not a name list
+- new MOP slot setter / replay entry point → `MOP_SLOT_SETTERS` / `REPLAY_RECORD_CALLS` / `REPLAY_EXPAND_CALLS`. **A word's FAMILY is a contract with the extractor:** `TT_OP_*` expansions are filed under `OPCODE_VALUE_FAMILY` (`opcode_value`), never `macro`, so no instruction-consuming check can read an opcode value as an instruction issued at that line — and `mop-replay` reads only that family. Change one side and the hint goes silently dead (it still passes every hermetic test and returns 0 on a real fact base); a test asserts the two agree.
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 

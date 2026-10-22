@@ -14,4 +14,4 @@ target_link_libraries(mnist_mlp PRIVATE ttml)
 target_compile_definitions(mnist_mlp PRIVATE MNIST_DATA_LOCATION="${mnist_dataset_SOURCE_DIR}/")
 add_definitions(-DCONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs")
 
-target_precompile_headers(mnist_mlp REUSE_FROM ttml_pch)
+tt_reuse_precompile_headers(mnist_mlp ttml_pch)

@@ -26,6 +26,7 @@
 #include <thread>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -66,7 +67,7 @@ void sync_debug_servers_before_teardown() {
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
-    IDevice* device = this->device().get_devices()[0];
+    auto* device = this->device().impl().get_devices()[0];
     TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 
     auto& cluster = MetalContext::instance().get_cluster();
@@ -114,7 +115,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
              {"host_dst_pcie_addr", host_dst_pcie_addr},
              {"l1_staging_addr", l1_staging_addr},
              {"transfer_size_bytes", kTransferSizeBytes}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{

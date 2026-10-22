@@ -1,0 +1,9 @@
+# One 1x2 Blackhole mesh co-owned by two ranks on one host, one chip per rank.
+mesh_descriptors {
+  name: "DUAL_RANK_1X2"
+  arch: BLACKHOLE
+  device_topology { dims: [1, 2] dim_types: [LINE, LINE] }
+  host_topology { dims: [1, 2] }
+  channels { count: 1 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "DUAL_RANK_1X2" mesh_id: 0 } }

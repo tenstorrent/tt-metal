@@ -136,20 +136,31 @@ depends on the target architecture. On Wormhole, Blackhole & Quasar this is
 a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.
 
+Floating point operations are not IEEE conformant, due to hardware
+restrictions. The following does not claim to be a complete list of
+differences.
+
+  * ``-0.0`` and ``+0.0`` are different.
+  * Comparisions involving NaNs do not behave as IEEE specifies.
+  * Conversions of NaNs to non-floating point type produce an
+    unspecified value.
+  * Other operations on NaNs produce a NaN result of unspecified sign.
+  * Some rounding is towards nearest, with ties rounding to the larger
+    magnitude result.
+
+Comparison behavior is described in more detail below.
+
 User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:
+Constant registers are implemented as objects which can be referenced
+wherever a vector can be used. The following variables are defined:
 
   * ``vConstTileId``, counts by two through the vector elements: [0, 2, 4..62]
   * ``vConstFloatPrgm0``, ``vConstIntPrgm0``
   * ``vConstFloatPrgm1``, ``vConstIntPrgm1``
   * ``vConstFloatPrgm2``, ``vConstIntPrgm2``
-
-Note: previously the vector constants ``1.0f``, ``0.0f``, ``-1.0f``
-and ``0.8373f`` were also available as named constants. Just use the
-floating literals (possibly converted to ``vFloat``), the compiler
-knows what to do.
+  * ``vConstFloatPrgm3``, ``vConstIntPrgm3`` Quasar only
 
 User Visible Objects
 ^^^^^^^^^^^^^^^^^^^^
@@ -292,8 +303,8 @@ If no ``mode`` override is provided, the data representation in
 tha Architecture. You may override that default with the ``mode``
 function, which optionally specifies a data representation, and an
 optional addr_mode operand. This may be specified on both loads and
-stores.  The following data representations and defaults are
-available:
+stores.  The following data representations and defaults, if
+applicable, are available:
 
   * FSrcB - (vFloat) dynamic float representation
   * F32 - 32-bit float
@@ -302,8 +313,10 @@ available:
   * I32 - (vInt, except Wormhole), 32-bit 2's complement integer
   * U32 - (vUInt), 32-bit unsigned integer
   * U16 - (vUInt16), 16-bit unsigned integer
+  * U8 - 8-bit unsigned integer, (Quasar only)
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
+  * SM8 - 8-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
   * LO16 - low 16 bits
   * HI16 - high 16 bits
@@ -312,9 +325,11 @@ On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
 ``vSMag`` to or from ``I32`` a conversion operation is inserted -- on
 Wormhole this is part of the load or store, on other architectures it
-is a separate operation. It is unspecified how 2's complement's most
-negative value converts to sign-magnitude.  Not all data
-representations are permitted for all types.
+is a separate operation. On all ISAs, loading or storing SM16 or SM8
+to or from vInt or related types will insert conversion operations.
+It is unspecified how 2's complement's most negative value converts to
+sign-magnitude.  Not all data representations are permitted for all
+types.
 
 The ``LO16`` layout transfers 16 bits to and from the low part of a
 ``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
@@ -437,17 +452,24 @@ operands. For the integer operations, the second operand may also be a
 The modifying variants, ``OP=``, are available.
 
 Conditional operators are provided -- ``==``, ``!=``, ``<``, ``>=``,
-``>`` & ``<=``. These produce a ``vBool`` result, which may be used
-directly in a ``v_if`` conditional. Both operands must
-be related vector types, or the second operand may be an appropriate
-scalar operator, or, for integral comparisons, may be a ``vMag`` type.
+``>`` & ``<=``. These produce a type that may implicitly convert
+to a ``vBool`` type.  These may be used:
 
-``vBool``s may be combined with ``&&``, ``||`` and ``!``
-operations. Note that these are not short-circuiting.
+  * in a ``v_if`` or ``v_elseif`` conditional.
+  * operands to a ``&&``, ``||`` and ``!`` operators (which may
+    themselves be combined and/or used in ``v_if`` & ``v_elseif``
+    conditionals.
+  * the operand of a ``mask`` call (see below).
+
+Both operands must be related vector types, or the second operand may
+be an appropriate scalar operator, or, for integral comparisons, may
+be a ``vMag`` type.  The ``&&``, ``||`` operators are not
+short-circuiting.
 
 You may create predicate functions that return a ``vBool``, but they
 must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
-store the return value and then interrogate it later.
+store the return value and then interrogate it later (a compile error
+will most-likely result).
 
 Float comparisons have the following properties:
 
@@ -468,10 +490,42 @@ Float comparisons have the following properties:
 
 These features are determined by the hardware.
 
-Note: With the exception of signed integral compares on Quasar, there
-is currently a compiler defect regarding signed and unsigned integer
-comparisons, where ordering comparisons are only correct when the two
-operands are within 2^31 of each other.
+Due to hardware limitations, ordering integral compares (both signed
+and unsigned) are not correct over the full range -- except on Quasar
+for signed compares. This is a compiler defect that is yet to be
+fixed. However, when values are less than 2^31 apart, the
+ordering compares are (a) correct and (b) can be cheaper than the
+full sequence, even on Quasar.  To that end the ``sfpi::nearby``
+wrapper function is provided and may be used to wrap all, or part, of
+comparison sequences. The compiler does not have vector value range
+information to deduce this itself.
+
+.. code-block:: c++
+
+    vInt a = exexp (f, ExponentMode::Biased);
+    v_if (nearby (a < 255)) {
+    } v_endif;
+
+Mask Generation
+^^^^^^^^^^^^^^^
+
+Masks can be generated from comparison operations on Blackhole and
+Quasar targets:
+
+.. code-block:: c++
+
+    vUInt mask (a OP b)
+
+Where ``OP`` is one of ``<``, ``<=``, ``==``, ``!=``, ``>`` or
+``>=``. The types supported are:
+
+  * vFloat
+  * vSMag
+  * vInt: Quasar only
+
+The result elements are all-zeroes or all-ones, depending on the
+comparison result. These use the ordering compare instructions and
+the ``nearby`` wrapper cannot be used (nor is it needed).
 
 Scalar Values
 ^^^^^^^^^^^^^
@@ -564,27 +618,13 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 .. code-block:: c++
 
-   impl_::FloatInt round (vFloat v);
-
-Round v to nearest integer, ties round to nearest even. This returns a
-tuple that may be implicitly converted to either ``vFloat`` or
-``vInt``, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both:
-
-.. code-block:: c++
-
-   auto [f1, i1] = round (v);
-   vFloat f2 = round (v);
-   vInt i2 = round (v);
-
-.. code-block:: c++
-
    vFloat ldexp (vFloat in, int scale, LdexpMode = LdexpMode::Correct);
    vFloat ldexp (vFloat in, vInt scale, LdexpMode = LdexpMode::Correct);
 
 Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
 which for the vector case can be slightly faster at the expense of not
-dealing with exponent overflow or underflow.
+dealing with exponent overflow or underflow. Values of ``scale``
+outside of [-127,127] produce unspecified results.
 
 .. code-block:: c++
 
@@ -770,7 +810,9 @@ routine.  It may be ignored, with the loss of consistency checking, if
 one uses the cookieless evaluator.
 
 Note that the 8- and 16-bit formats use a bespoke representation, and
-the 8 bit format in particular has a range of (-2.0, +2.0).
+the 8 bit format in particular has a range of (-2.0, +2.0). Also, as
+its zero representation coincides with a small negative value, small
+values below that threshold are flushed to zero to avoid a discontinuity.
 
 On Quasar, use of these routines conflicts with use of the ``vConst``
 constants.
@@ -934,10 +976,8 @@ vector to memory will result in an error similar to the following:
 .. code-block:: c++
 
     tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
-      792 |     v = (initialized) ? __builtin_rvtt_sfpassign_lv(v, in) : in;
+      792 |     v = __builtin_rvtt_sfpassign_lv (v, in);
           |       ^
-    /tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
-
 
 Function Calls
 --------------

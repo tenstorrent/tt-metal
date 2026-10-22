@@ -81,15 +81,15 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         worker_l1_size);
 }
 
-void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
+void enable_program_cache(MeshDevice& device) { device.enable_program_cache(); }
 
-void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear_program_cache(); }
+void disable_and_clear_program_cache(MeshDevice& device) { device.disable_and_clear_program_cache(); }
 
 void close_device(MeshDevice& device) { device.close(); }
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
-void deallocate_buffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
+void deallocate_buffers(MeshDevice* device) { device->allocator()->deallocate_buffers(); }
 
 // Device management for auto-formatting
 // Note: This functionality is planned for deprecation in the future.

@@ -43,6 +43,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -66,7 +67,7 @@ static void test_sems_across_core_types(
     }
 
     for (const auto& mesh_device : devices) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (not device->is_mmio_capable()) {
             continue;
         }
@@ -157,8 +158,11 @@ static void test_sems_across_core_types(
 }
 
 TEST_F(MeshDispatchFixture, EthTestBlank) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -232,7 +236,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -272,7 +276,12 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
+    test_sems_across_core_types(this, this->devices_, true);
+}
 
 TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
@@ -285,6 +294,9 @@ TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
 TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
@@ -294,10 +306,10 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_dfbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
 
         CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;
@@ -481,14 +493,14 @@ TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
 
 namespace {
 
-std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
+std::optional<CoreCoord> quasar_dispatch_s_virtual_core(distributed::MeshDevice& mesh_device) {
     auto& metal_context = MetalContext::instance();
     if (!metal_context.get_dispatch_query_manager().dispatch_s_enabled()) {
         return std::nullopt;
     }
 
     auto& dcm = metal_context.get_dispatch_core_manager();
-    const ChipId chip = device->id();
+    const ChipId chip = mesh_device.get_device_ids()[0];
     const uint16_t channel = metal_context.get_cluster().get_assigned_channel_for_device(chip);
     if (!dcm.is_dispatcher_s_core_allocated(chip, channel, /*cq_id=*/0)) {
         return std::nullopt;
@@ -496,7 +508,7 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
 
     const auto& logical_cxy = dcm.dispatcher_s_core(chip, channel, 0);
     const CoreType core_type = dcm.get_dispatch_core_type();
-    return device->virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+    return mesh_device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
 }
 
 Program create_quasar_l1_write_program(
@@ -507,7 +519,7 @@ Program create_quasar_l1_write_program(
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::ProgramSpec spec{
@@ -540,8 +552,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
-    IDevice* device = this->device().get_devices().front();
-    if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
+    if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(this->device())) {
         GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
     }
 
@@ -558,10 +569,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     // dispatch_s is wired in topology/core manager
-    const auto dispatch_s_core = quasar_dispatch_s_virtual_core(device);
+    const auto dispatch_s_core = quasar_dispatch_s_virtual_core(this->device());
     ASSERT_TRUE(dispatch_s_core.has_value());
 
-    const ChipId chip = device->id();
+    const ChipId chip = this->device().get_device_ids()[0];
     const uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip);
     const auto& dispatch_s_logical = dispatch_core_manager.dispatcher_s_core(chip, channel, 0);
     const auto& dispatch_logical = dispatch_core_manager.dispatcher_core(chip, channel, 0);

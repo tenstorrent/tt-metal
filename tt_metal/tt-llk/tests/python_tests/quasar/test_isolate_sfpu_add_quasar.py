@@ -11,11 +11,12 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
-from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
+from helpers.llk_params import MathOperation, format_dict
 from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -28,7 +29,6 @@ from helpers.stimuli_generator import (
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -42,34 +42,31 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
     ]
-)
+    # The MX pair is on the input side: these operands reach the SFPU through UNP_S
+    # into SrcS, a decode port the unpack test (UnpA/UnpB) does not cover.
+) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
+    (fmt, dest_acc, runtime(input_dimensions))
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         SFPU_ADD_FORMATS
     )
-    for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
-def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_dest_acc_input_dims=SFPU_ADD_COMBINATIONS)
+def test_isolate_sfpu_add_quasar(formats_dest_acc_input_dims):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 
@@ -127,9 +124,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
         formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(implied_math_format),
-        ],
+        templates=[],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
@@ -149,7 +144,6 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

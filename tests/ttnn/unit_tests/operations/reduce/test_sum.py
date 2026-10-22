@@ -10,11 +10,12 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])

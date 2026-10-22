@@ -36,5 +36,5 @@ migration:
   resp_queue: /mig_ep1_resp
 
 env:
-  M3_INDEX_CACHE_BF16: "1"        # [MATCH RUNNER]
+  M3_INDEX_CACHE_BF16: "0"        # [MATCH RUNNER]
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

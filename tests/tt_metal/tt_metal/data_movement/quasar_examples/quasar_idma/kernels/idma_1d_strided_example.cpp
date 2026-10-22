@@ -48,7 +48,7 @@ void kernel_main() {
     /* CMD Misc register, only difference to NOC*/
     idma_setup_as_copy_cmdbuf_0(false);
     /* Vcs = IDMA channel*/
-    setup_vcs_cmdbuf_0(false);
+    setup_vcs_cmdbuf_0(NocVcs::READ);
     /* Trids work the same way as for NOC*/
     setup_trids_cmdbuf_0(0);
     /* Set transfer length */

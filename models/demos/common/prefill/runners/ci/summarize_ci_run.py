@@ -6,6 +6,7 @@ import os
 import re
 
 _KV = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+KV PCC:\s+nope=([-\d.]+)\s+pe=([-\d.]+)")
+_GQA = re.compile(r"layer\s+(\d+):\s+K=([-\d.]+)\s+V=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
@@ -30,6 +31,8 @@ def _iter_lines(root):
 def _pcc_matrix(root):
     layers = {}
     have_index = False
+    have_mla = False
+    have_gqa = False
     for line in _iter_lines(root):
         m = _KV.search(line)
         if m:
@@ -37,6 +40,15 @@ def _pcc_matrix(root):
             cell = layers.setdefault(layer, {})
             cell["nope"] = min(nope, cell.get("nope", nope))
             cell["pe"] = min(pe, cell.get("pe", pe))
+            have_mla = True
+            continue
+        m = _GQA.search(line)
+        if m:
+            layer, key, value = int(m.group(1)), float(m.group(2)), float(m.group(3))
+            cell = layers.setdefault(layer, {})
+            cell["k"] = min(key, cell.get("k", key))
+            cell["v"] = min(value, cell.get("v", value))
+            have_gqa = True
             continue
         m = _INDEX.search(line)
         if m:
@@ -49,12 +61,15 @@ def _pcc_matrix(root):
     if not layers:
         print("no per-layer PCC lines found in ranklogs (producer verify may not have run)")
         return
-    header = f"{'layer':>5}  {'kvpe.nope':>10}  {'kvpe.pe':>10}" + (f"  {'index':>10}" if have_index else "")
-    print(header)
+    columns = [("nope", "kvpe.nope"), ("pe", "kvpe.pe")] if have_mla or not have_gqa else []
+    if have_gqa:
+        columns += [("k", "K"), ("v", "V")]
+    header = f"{'layer':>5}" + "".join(f"  {label:>10}" for _, label in columns)
+    print(header + (f"  {'index':>10}" if have_index else ""))
     worst = 1.0
     for layer in sorted(layers):
         cell = layers[layer]
-        row = f"{layer:>5}  {cell.get('nope', float('nan')):>10.5f}  {cell.get('pe', float('nan')):>10.5f}"
+        row = f"{layer:>5}" + "".join(f"  {cell.get(key, float('nan')):>10.5f}" for key, _ in columns)
         if have_index:
             row += f"  {cell.get('index', float('nan')):>10.5f}" if "index" in cell else f"  {'-':>10}"
         print(row)

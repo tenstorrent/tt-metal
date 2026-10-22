@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <ostream>
@@ -11,7 +12,7 @@
 
 #include <fmt/base.h>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt {
 
@@ -127,11 +128,11 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: return (256 * 4) + (16 * 4);
         case DataFormat::MxFp4: return (1024 / 2) + 32;  // 544 bytes: 32 scales (1 per 32-elem block) + 512 data
-        case DataFormat::MxFp6P: return 1024 + 32;       // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
-        case DataFormat::MxFp6R: return 1024 + 32;       // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
-        case DataFormat::MxFp8R: return (1024) + 32;     // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
-        case DataFormat::MxFp8P: return (1024) + 32;     // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
-        case DataFormat::MxInt8: return 1024 + 32;  // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data (int8)
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P:
+        case DataFormat::MxInt8: return 1024 + 32;        // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
         case DataFormat::MxInt4: return (1024 / 2) + 32;  // 544 bytes: 32 scales + 512 data (int4, 2 per byte)
         case DataFormat::MxInt2: return (1024 / 4) + 32;  // 288 bytes: 32 scales + 256 data (int2, 4 per byte)
         case DataFormat::Float16:

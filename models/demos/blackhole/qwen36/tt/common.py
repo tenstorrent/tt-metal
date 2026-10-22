@@ -16,6 +16,7 @@ def create_tt_model(
     n_layers=None,
     layer_indices=None,
     hf_model=None,
+    enable_mtp=None,
 ):
     """Build the Qwen3.5-9B model. Returns (args, model, state_dict).
 
@@ -30,6 +31,7 @@ def create_tt_model(
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        enable_mtp=enable_mtp,
     )
     if layer_indices is not None:
         layer_indices = list(layer_indices)
@@ -40,8 +42,8 @@ def create_tt_model(
         args.layer_indices = layer_indices
         args.n_layers = len(layer_indices)
     elif n_layers is not None:
+        # Keep attention_type_list whole -- MTP needs a full_attention index from it.
         args.n_layers = n_layers
-        args.attention_type_list = args.attention_type_list[:n_layers]
 
     # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
     # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --

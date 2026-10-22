@@ -1,0 +1,46 @@
+# sin / cos over one period, [-3.1, 3.1], plus 0, +-0.5, +-1, +-pi/2, +-3, a small normal (1e-4)
+# and a denormal (1e-40). These are the ops the compute API's sin_tile / cos_tile run.
+#
+# Trigonometry SFPU kernels on Quasar, using only existing fuser features: dest_acc is fixed per file
+# (hence the _dest16 / _dest32 pairs), every float input goes through the FPU datacopy path, and
+# stimuli are finite intervals and points. Special points sit outside the random ranges.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-3.1, -1.58]
+        - [-1.56, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 1.56]
+        - [1.58, 3.1]
+        - -3.0
+        - -1.5707964
+        - -1.0
+        - -0.5
+        - 0.0
+        - 1.0e-40
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 1.5707964
+        - 3.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Sin, Cos]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

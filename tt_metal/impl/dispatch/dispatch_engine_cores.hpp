@@ -11,9 +11,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
-#include <umd/device/types/core_coordinates.hpp>         // CoreType
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // tt::ChipId
+#include <tt-umd/types/core_coordinates.hpp>         // CoreType
 
 namespace tt::tt_metal::experimental::quasar {
 struct QuasarDataMovementConfig;
@@ -22,9 +22,11 @@ struct QuasarDataMovementConfig;
 struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
-class IDevice;
 class MetalEnvImpl;
 class Program;
+namespace distributed {
+class MeshDevice;
+}
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::detail {
@@ -68,13 +70,13 @@ KernelHandle CreateDispatchEngineKernel(
     const experimental::quasar::QuasarDataMovementConfig& config);
 
 // SD cq-kernel test helpers (test_prefetcher / test_dispatcher).
-CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device);
-CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index);
-CoreCoord dispatch_engine_virtual_core(const tt::tt_metal::IDevice* device, uint32_t index);
-CoreCoord sd_cq_prefetch_core(const tt::tt_metal::IDevice* device);
-CoreCoord sd_cq_dispatch_core(const tt::tt_metal::IDevice* device);
-CoreCoord sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const CoreCoord& logical_core);
-bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device);
+CoreType resolve_sd_cq_kernel_core_type(const distributed::MeshDevice& mesh_device);
+CoreCoord dispatch_engine_core(const distributed::MeshDevice& mesh_device, uint32_t index);
+CoreCoord dispatch_engine_virtual_core(const distributed::MeshDevice& mesh_device, uint32_t index);
+CoreCoord sd_cq_prefetch_core(const distributed::MeshDevice& mesh_device);
+CoreCoord sd_cq_dispatch_core(const distributed::MeshDevice& mesh_device);
+CoreCoord sd_cq_virtual_core(const distributed::MeshDevice& mesh_device, const CoreCoord& logical_core);
+bool sd_cq_kernel_tests_should_skip(const distributed::MeshDevice& mesh_device);
 // Legacy role→DM helpers kept for SD test call sites that still name a preferred DM; DE CreateKernel
 // auto-picks free DMs by creation order (prefetch first → DM0, dispatch → DM1, …).
 DataMovementProcessor prefetch_dm_processor();

@@ -319,8 +319,15 @@ void kernel_main() {
                 //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
-                    dfb_ex_external.reserve_back(dfb_ex_external_tiles_required);
-                    uint32_t l1_write_addr_external = dfb_ex_external.get_write_ptr();
+                    // Only the mean and variance passes gather partials from the other cores into
+                    // this buffer and push it; the final-value pass neither writes nor pushes it, so
+                    // it must not reserve either. The gather below and the push after the block loop
+                    // carry the same condition.
+                    uint32_t l1_write_addr_external = 0;
+                    if (cur_read_iteration == 0 || cur_read_iteration == 1) {
+                        dfb_ex_external.reserve_back(dfb_ex_external_tiles_required);
+                        l1_write_addr_external = dfb_ex_external.get_write_ptr();
+                    }
 
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual;

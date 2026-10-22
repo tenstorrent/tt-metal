@@ -75,7 +75,7 @@ struct BluesteinPlan {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-inline constexpr uint32_t next_pow2(uint32_t v) {
+constexpr uint32_t next_pow2(uint32_t v) {
     if (v <= 1u) {
         return 1u;
     }
@@ -97,7 +97,7 @@ inline constexpr uint32_t next_pow2(uint32_t v) {
 // FFT routes through fft_two_pass (M > 1024), avoiding the problematic
 // Stockham path and providing better numerical conditioning.
 // Cap: M is never doubled beyond 2^30 (the three-pass upper limit).
-inline constexpr uint32_t bluestein_M(uint32_t N) {
+constexpr uint32_t bluestein_M(uint32_t N) {
     uint32_t M = next_pow2(2u * N - 1u);
     while (M < 2u * N + 7u && M < (1u << 30)) {
         M *= 2u;
@@ -170,7 +170,7 @@ inline ttnn::Tensor upload_replicated_rows(
         row.size(),
         length);
 
-    ttnn::Shape shape{ttnn::SmallVector<uint32_t>{B, length}};
+    ttnn::Shape shape{ttsl::SmallVector<uint32_t>{B, length}};
     TensorSpec spec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     const size_t total = static_cast<size_t>(B) * length;

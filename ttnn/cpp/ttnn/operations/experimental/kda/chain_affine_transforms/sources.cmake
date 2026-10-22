@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_CHAIN_AFFINE_TRANSFORMS_API_HEADERS chain_affine_transforms.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_CHAIN_AFFINE_TRANSFORMS_SRCS
+    chain_affine_transforms.cpp
+    device/chain_affine_transforms_device_operation.cpp
+    device/chain_affine_transforms_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_CHAIN_AFFINE_TRANSFORMS_NANOBIND_SRCS chain_affine_transforms_nanobind.cpp)

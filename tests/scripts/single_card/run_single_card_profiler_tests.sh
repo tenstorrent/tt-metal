@@ -100,6 +100,17 @@ run_streaming_profiler_test() {
     pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
 }
 
+run_sync_events_test() {
+    remove_default_log_locations
+    # Test sync event instrumentation for CB and semaphore APIs (streaming profiler only).
+    pytest tests/ttnn/tracy/test_sync_events_profiler.py
+}
+
+run_perf_counter_analysis_test() {
+    # Offline post-processing tests: they build their own counter frames, so no device.
+    pytest $PROFILER_TEST_SCRIPTS_ROOT/test_perf_counter_analysis.py --noconftest
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -109,6 +120,8 @@ run_profiling_test() {
     run_realtime_profiler_test
     run_accumulate_profiler_test
     run_streaming_profiler_test
+    run_sync_events_test
+    run_perf_counter_analysis_test
 }
 
 main() {

@@ -61,6 +61,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::q_in, dfb::k_in, dfb::qk_im);
     matmul_init(dfb::q_in, dfb::k_in);
+    // Reset the Quasar pack-operand tracker (see pack_reconfig_out). No-op on WH/BH.
+    reset_pack_operand_tracking();
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
@@ -102,4 +104,9 @@ void kernel_main() {
                 dfb::out);
         }
     }
+
+    // The writer pushes the identity scale and column identity tiles once; compute reads them by index for
+    // the whole kernel and never pops them. Release them so the buffers are left balanced.
+    release_writer_constant(dfb::identity_scale_in, 1);
+    release_writer_constant(dfb::col_identity, 1);
 }

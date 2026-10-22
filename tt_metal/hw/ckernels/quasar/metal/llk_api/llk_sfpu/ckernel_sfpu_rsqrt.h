@@ -87,7 +87,6 @@ inline void _init_rsqrt_() {
  * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; when true and not APPROXIMATION_MODE, run the
  *         full-precision SQRT_23-bits path for a 32-bit Dest result.
  * @tparam FAST_APPROX: ABI-parity shim; must be false (enforced by static_assert).
- * @tparam legacy_compat: ABI-parity shim; must be false (enforced by static_assert).
  * @note Call @ref rsqrt_init with matching template args first — it programs the SQRT_23-bits seed /
  *       refinement constants that @ref _sfpu_rsqrt_body_ reads.
  */
@@ -95,11 +94,9 @@ template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
     bool EN_32BIT_DEST = false,
-    bool FAST_APPROX /*maybe_unused*/ = false,
-    bool legacy_compat /*maybe_unused*/ = false>
+    bool FAST_APPROX /*maybe_unused*/ = false>
 inline void calculate_rsqrt() {
     static_assert(!FAST_APPROX, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");
-    static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
@@ -116,11 +113,10 @@ inline void calculate_rsqrt() {
     }
 }
 
-// Signature mirrors Blackhole/Wormhole rsqrt_init (<APPROXIMATION_MODE, legacy_compat>); the init
+// Signature mirrors Blackhole/Wormhole rsqrt_init (<APPROXIMATION_MODE>); the init
 // itself does not depend on the Dest width, so no fp32 template arg is threaded here.
-template <bool APPROXIMATION_MODE, bool legacy_compat /*maybe_unused*/ = false>
+template <bool APPROXIMATION_MODE>
 void rsqrt_init() {
-    static_assert(!legacy_compat, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>();
     // Program the SQRT_23-bits seed / refinement constants the full-precision rsqrt reads.
     _init_rsqrt_<APPROXIMATION_MODE>();

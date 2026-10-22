@@ -63,7 +63,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     const auto grid_size = device->compute_with_storage_grid_size();
     const auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     const CoreRangeSet core_grid_set(core_grid);
@@ -217,7 +217,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    bool use_legacy_rsqrt = false;
     std::vector<uint32_t> compute_args = {
         input_cb_id,
         stats_cb_id,
@@ -234,7 +233,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        static_cast<uint32_t>(use_legacy_rsqrt),
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles};

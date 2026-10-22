@@ -42,6 +42,7 @@ from tracy.perf_counter_analysis import (
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
+    is_ratio_label,
     print_counter_statistics_summary,
     print_efficiency_metrics_summary,
     get_device_op_data,
@@ -127,6 +128,13 @@ _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
 # in this fixed order and by ascending processor index within a class
 _KERNEL_SIZE_SUFFIX = " MAX KERNEL SIZE [B]"
 _KERNEL_SIZE_CLASS_ORDER = ["TENSIX DM", "TENSIX COMPUTE", "ACTIVE ETH DM", "IDLE ETH DM"]
+
+
+def _csv_cell(value) -> str:
+    """CSV text for one cell: N/A (None or NaN) is blank, commas become semicolons."""
+    if value is None or (isinstance(value, float) and isnan(value)):
+        return ""
+    return str(value).replace(",", ";")
 
 
 def _kernel_size_sort_key(column):
@@ -644,23 +652,35 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
     return device_op
 
 
+def _host_replayed_trace(trace_replays: Optional[TraceReplayDict], device_id: int, trace_id: int) -> bool:
+    """True if the host log holds a TT_METAL_TRACE_REPLAY marker for this trace on this device."""
+    if not trace_replays:
+        return False
+    return trace_id in trace_replays.get(device_id, {})
+
+
 def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        # A device absent from the report is not an error by itself: if all of its host ops belong to traces
+        # that were captured but never replayed, the device ran nothing and the loader created no entry for it.
+        # Treat it as having no rows and let the per-op checks below decide.
+        device_rows = device_perf_by_device.get(device_id, {})
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
-        for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
+        replayed_trace_ids: Set[int] = set()
+        for (op_id, trace_id, session_id), row in device_rows.items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            if trace_id is not None:
+                replayed_trace_ids.add(int(trace_id))
 
         enriched_ops = []
+        dropped_ops_by_trace: Dict[int, int] = {}
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -680,9 +700,29 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
+            if (
+                not candidates
+                and host_trace_id is not None
+                and host_trace_id not in replayed_trace_ids
+                and not _host_replayed_trace(trace_replays, device_id, host_trace_id)
+            ):
+                # The host captured this trace but never replayed it (e.g. a prefill-only demo
+                # that records the decode trace up front), so the device produced no data for
+                # any of its ops. Both sources agree: no REPLAY marker from the host and no rows
+                # from the device. Leave these ops without device data instead of failing the
+                # whole report. A trace that the host did replay keeps the assert below, so a
+                # device report that lost every row of a replayed trace is still an error.
+                dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
+
+            missing_hint = ""
+            if host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+                missing_hint += "; the host replayed this trace, so the device report should have rows for it"
+            if not device_rows:
+                missing_hint += "; the report has no rows at all for this device"
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
+                f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
@@ -707,6 +747,13 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        for dropped_trace_id, dropped_count in sorted(dropped_ops_by_trace.items()):
+            logger.warning(
+                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
+                f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
+                f"device data and appear in the report as host-only rows"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
@@ -864,7 +911,6 @@ def _enrich_ops_from_device_logs(
 
         # Check if perf counters data is available
         risc_data = device_data["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
-        device_arch = device_data["deviceInfo"].get("arch", "")
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
@@ -876,6 +922,7 @@ def _enrich_ops_from_device_logs(
         perf_metrics = None
         if perf_counter_df is not None and not perf_counter_df.empty:
             total_compute_cores = device_data["deviceInfo"]["max_compute_cores"]
+            device_arch = device_data["deviceInfo"].get("arch", "")
             perf_metrics = compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores)
 
         # Enrich ops with device data and perf counters
@@ -900,151 +947,18 @@ def _enrich_ops_from_device_logs(
                 per_op_counts = perf_metrics["per_op_counts"]
                 lookup_key = (global_call_count, trace_id_counter)
 
-                def assign_metric(base_name, metric_dict, suffix=" (%)", lookup=lookup_key):
-                    if metric_dict:
-                        device_op[f"{base_name} Min{suffix}"] = metric_dict["min"].get(lookup, nan)
-                        device_op[f"{base_name} Median{suffix}"] = metric_dict["median"].get(lookup, nan)
-                        device_op[f"{base_name} Max{suffix}"] = metric_dict["max"].get(lookup, nan)
-                        device_op[f"{base_name} Avg{suffix}"] = metric_dict["avg"].get(lookup, nan)
-
-                assign_metric("SFPU Util", per_op_stats.get("SFPU Util", {}))
-                assign_metric("FPU Util", per_op_stats.get("FPU Util", {}))
-                assign_metric("MATH Util", per_op_stats.get("MATH Util", {}))
-
                 device_op["avg_sfpu_count"] = per_op_counts.get("avg_sfpu_count", {}).get(lookup_key, nan)
                 device_op["avg_fpu_count"] = per_op_counts.get("avg_fpu_count", {}).get(lookup_key, nan)
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
-                assign_metric("Unpacker0 Write Efficiency", per_op_stats.get("Unpacker0 Write Efficiency", {}))
-                assign_metric("Unpacker1 Write Efficiency", per_op_stats.get("Unpacker1 Write Efficiency", {}))
-                assign_metric("Unpacker Write Efficiency", per_op_stats.get("Unpacker Write Efficiency", {}))
-                assign_metric("Packer Efficiency", per_op_stats.get("Packer Efficiency", {}))
-
-                # FPU Execution Efficiency
-                assign_metric("FPU Execution Efficiency", per_op_stats.get("FPU Execution Efficiency", {}))
-
-                # Math Pipeline Utilization
-                assign_metric("Math Pipeline Utilization", per_op_stats.get("Math Pipeline Utilization", {}))
-
-                # Math-to-Pack Handoff Efficiency
-                assign_metric(
-                    "Math-to-Pack Handoff Efficiency", per_op_stats.get("Math-to-Pack Handoff Efficiency", {})
-                )
-
-                # Unpacker-to-Math Data Flow
-                assign_metric("Unpacker-to-Math Data Flow", per_op_stats.get("Unpacker-to-Math Data Flow", {}))
-
-                # Thread stall rates
-                for t in range(3):
-                    assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
-
-                # Pipeline wait metrics
-                pipeline_wait_names = [
-                    "SrcA Valid Wait",
-                    "SrcB Valid Wait",
-                    "SrcA Clear Wait",
-                    "SrcB Clear Wait",
-                    "Math Idle Wait T1",
-                    "Pack Idle Wait T2",
-                    "Unpack Idle Wait T0",
-                ]
-                for metric_name in pipeline_wait_names:
-                    assign_metric(metric_name, per_op_stats.get(metric_name, {}))
-
-                # Semaphore wait metrics
-                for t in range(3):
-                    assign_metric(f"Semaphore Zero Wait T{t}", per_op_stats.get(f"Semaphore Zero Wait T{t}", {}))
-                    assign_metric(f"Semaphore Full Wait T{t}", per_op_stats.get(f"Semaphore Full Wait T{t}", {}))
-
-                # Data Hazard Stall Rate
-                assign_metric("Data Hazard Stall Rate", per_op_stats.get("Data Hazard Stall Rate", {}))
-
-                # L1 Bank 0 metrics
-                assign_metric("L1 Unpacker Port Util", per_op_stats.get("L1 Unpacker Port Util", {}))
-                assign_metric("L1 TDMA Bundle Util", per_op_stats.get("L1 TDMA Bundle Util", {}))
-                assign_metric("NOC Ring 0 Outgoing Util", per_op_stats.get("NOC Ring 0 Outgoing Util", {}))
-                assign_metric("NOC Ring 0 Incoming Util", per_op_stats.get("NOC Ring 0 Incoming Util", {}))
-
-                # L1 Bank 1 metrics
-                assign_metric("NOC Ring 1 Outgoing Util", per_op_stats.get("NOC Ring 1 Outgoing Util", {}))
-                assign_metric("NOC Ring 1 Incoming Util", per_op_stats.get("NOC Ring 1 Incoming Util", {}))
-
-                # L1 Port 1 (arch-specific)
-                assign_metric("L1 Packer Port Util", per_op_stats.get("L1 Packer Port Util", {}))
-
-                # L1 back-pressure
-                assign_metric(
-                    "NOC Ring 0 Outgoing Backpressure", per_op_stats.get("NOC Ring 0 Outgoing Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 0 Incoming Backpressure", per_op_stats.get("NOC Ring 0 Incoming Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 1 Outgoing Backpressure", per_op_stats.get("NOC Ring 1 Outgoing Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 1 Incoming Backpressure", per_op_stats.get("NOC Ring 1 Incoming Backpressure", {})
-                )
-                assign_metric("L1 Unpacker Backpressure", per_op_stats.get("L1 Unpacker Backpressure", {}))
-                assign_metric("L1 Packer Port Backpressure", per_op_stats.get("L1 Packer Port Backpressure", {}))
-
-                # Math pipeline stall breakdown
-                assign_metric("Math Src Data Ready Rate", per_op_stats.get("Math Src Data Ready Rate", {}))
-                assign_metric("SrcA Write Port Blocked Rate", per_op_stats.get("SrcA Write Port Blocked Rate", {}))
-                assign_metric(
-                    "SrcA Write Overwrite Blocked Rate",
-                    per_op_stats.get("SrcA Write Overwrite Blocked Rate", {}),
-                )
-                assign_metric(
-                    "SrcB Write Overwrite Blocked Rate",
-                    per_op_stats.get("SrcB Write Overwrite Blocked Rate", {}),
-                )
-                assign_metric("Dest Read Backpressure", per_op_stats.get("Dest Read Backpressure", {}))
-                assign_metric(
-                    "Math Dest Write Port Stall Rate", per_op_stats.get("Math Dest Write Port Stall Rate", {})
-                )
-                assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
-
-                # Instruction issue rates
-                assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
-                assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")
-                assign_metric("T2 Instrn Issue Rate", per_op_stats.get("T2 Instrn Issue Rate", {}), suffix="")
-
-                # Per-type instruction issue efficiency
-                assign_metric("CFG Instrn Avail Rate T0", per_op_stats.get("CFG Instrn Avail Rate T0", {}))
-                assign_metric("SYNC Instrn Avail Rate T0", per_op_stats.get("SYNC Instrn Avail Rate T0", {}))
-                assign_metric("THCON Instrn Avail Rate T0", per_op_stats.get("THCON Instrn Avail Rate T0", {}))
-                assign_metric("MOVE Instrn Avail Rate T0", per_op_stats.get("MOVE Instrn Avail Rate T0", {}))
-                assign_metric("MATH Instrn Avail Rate T1", per_op_stats.get("MATH Instrn Avail Rate T1", {}))
-                assign_metric("UNPACK Instrn Avail Rate T0", per_op_stats.get("UNPACK Instrn Avail Rate T0", {}))
-                assign_metric("PACK Instrn Avail Rate T2", per_op_stats.get("PACK Instrn Avail Rate T2", {}))
-
-                # Write port blocking
-                assign_metric("SrcB Write Port Blocked Rate", per_op_stats.get("SrcB Write Port Blocked Rate", {}))
-                assign_metric("SrcA Write Actual Efficiency", per_op_stats.get("SrcA Write Actual Efficiency", {}))
-                assign_metric("SrcB Write Actual Efficiency", per_op_stats.get("SrcB Write Actual Efficiency", {}))
-
-                # Packer engine granularity
-                assign_metric("Packer Engine 0 Util", per_op_stats.get("Packer Engine 0 Util", {}))
-                assign_metric("Packer Engine 1 Util", per_op_stats.get("Packer Engine 1 Util", {}))
-                assign_metric("Packer Engine 2 Util", per_op_stats.get("Packer Engine 2 Util", {}))
-
-                # Low priority waits
-                assign_metric("MMIO Idle Wait T0", per_op_stats.get("MMIO Idle Wait T0", {}))
-                assign_metric("SFPU Idle Wait T1", per_op_stats.get("SFPU Idle Wait T1", {}))
-                assign_metric("THCON Idle Wait T0", per_op_stats.get("THCON Idle Wait T0", {}))
-                assign_metric("MOVE Idle Wait T0", per_op_stats.get("MOVE Idle Wait T0", {}))
-                assign_metric("RISC Core L1 Util", per_op_stats.get("RISC Core L1 Util", {}))
-
-                # L1 composite metrics
-                assign_metric("L1 Total Bandwidth Util", per_op_stats.get("L1 Total Bandwidth Util", {}))
-                assign_metric("L1 Read vs Write Ratio", per_op_stats.get("L1 Read vs Write Ratio", {}))
-                assign_metric("NOC Ring 0 Asymmetry", per_op_stats.get("NOC Ring 0 Asymmetry", {}))
-                assign_metric("L1 Contention Index", per_op_stats.get("L1 Contention Index", {}))
-                assign_metric("Unpacker L1 Efficiency", per_op_stats.get("Unpacker L1 Efficiency", {}))
-                assign_metric("Packer L1 Efficiency", per_op_stats.get("Packer L1 Efficiency", {}))
-                assign_metric("NOC vs Compute Balance", per_op_stats.get("NOC vs Compute Balance", {}))
-                assign_metric("TDMA vs NOC L1 Share", per_op_stats.get("TDMA vs NOC L1 Share", {}))
+                # Keyed by the engine labels so the CSV cannot drift from the engine. The "Avg ... util on full grid"
+                # columns come separately from the grid-wide counts over the kernel duration.
+                for base_name, mstat in per_op_stats.items():
+                    suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
+                    device_op[f"{base_name} Min{suffix}"] = mstat["min"].get(lookup_key, nan)
+                    device_op[f"{base_name} Median{suffix}"] = mstat["median"].get(lookup_key, nan)
+                    device_op[f"{base_name} Max{suffix}"] = mstat["max"].get(lookup_key, nan)
+                    device_op[f"{base_name} Avg{suffix}"] = mstat["avg"].get(lookup_key, nan)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1199,7 +1113,6 @@ def get_device_data_generate_report(
         freq = deviceData["deviceInfo"]["freq"]
 
         # Calculate efficiency metrics for all devices (device-only mode)
-        device_arch = deviceData["deviceInfo"].get("arch", "")
         device_efficiency_metrics = {}
         for device in deviceData["devices"]:
             risc_data = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
@@ -1213,7 +1126,9 @@ def get_device_data_generate_report(
                     # Calculate efficiency metrics for this device
                     import pandas as pd
 
-                    agg_metrics, eff_summary_rows = compute_device_only_metrics(perf_counter_df, device_arch)
+                    agg_metrics, eff_summary_rows = compute_device_only_metrics(
+                        perf_counter_df, deviceData["deviceInfo"].get("arch", "")
+                    )
                     device_efficiency_metrics[device] = agg_metrics
 
                     if eff_summary_rows:
@@ -1299,17 +1214,9 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        is_raw = "IPC" in base_name or "Issue Rate" in base_name
-                        suffix = "" if is_raw else " (%)"
-                        # Legacy "Avg on full grid" column names.
-                        if base_name == "SFPU Util":
-                            rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        elif base_name == "FPU Util":
-                            rowDict["Avg FPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        elif base_name == "MATH Util":
-                            rowDict["Avg Math util on full grid (%)"] = m["avg"].get(lookup_key, nan)
-                        else:
-                            rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
+                        # No grid-wide average columns here: they need the kernel duration a device-only run lacks.
+                        suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
+                        rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
                         rowDict[f"{base_name} Min{suffix}"] = m["min"].get(lookup_key, nan)
                         rowDict[f"{base_name} Median{suffix}"] = m["median"].get(lookup_key, nan)
                         rowDict[f"{base_name} Max{suffix}"] = m["max"].get(lookup_key, nan)
@@ -1373,17 +1280,21 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
-                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+                # Dynamic l1_client columns must be in fieldnames or DictWriter raises.
+                allHeaders += sorted(
+                    h for h in csv_row_headers if str(h).startswith("L1_CLIENT_") and h not in allHeaders
+                )
+                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders, extrasaction="ignore")
                 writer.writeheader()
                 for rowDict in rowDicts:
                     for field, fieldData in rowDict.items():
-                        rowDict[field] = str(fieldData).replace(",", ";")
+                        rowDict[field] = _csv_cell(fieldData)
                     writer.writerow(rowDict)
             logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
             with open(perCoreCSVPath, "w") as perCoreCSV:
                 perCoreCSVHeader = ["device ID", "op2op ID"] + [core for core in perCoreCSVHeader]
 
-                writer = csv.DictWriter(perCoreCSV, fieldnames=perCoreCSVHeader)
+                writer = csv.DictWriter(perCoreCSV, fieldnames=perCoreCSVHeader, extrasaction="ignore")
                 writer.writeheader()
 
                 for rowDict in perCoreRowDicts:
@@ -1755,7 +1666,11 @@ def generate_reports(
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
-                        if header not in OPS_CSV_HEADER and header not in _PERF_COUNTER_CSV_HEADERS_SET:
+                        if (
+                            header not in OPS_CSV_HEADER
+                            and header not in _PERF_COUNTER_CSV_HEADERS_SET
+                            and not header.startswith("L1_CLIENT_")
+                        ):
                             continue
                         if value in (None, ""):
                             continue
@@ -1865,6 +1780,8 @@ def generate_reports(
         for row in csv_rows:
             all_row_keys.update(row.keys())
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
+        # Quasar l1_client selections produce dynamically named columns.
+        active_perf_headers += sorted(h for h in all_row_keys if str(h).startswith("L1_CLIENT_"))
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])
@@ -1888,11 +1805,11 @@ def generate_reports(
             + active_perf_headers
             + sorted(list(childCallKeys))
         )
-        writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+        writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders, extrasaction="ignore")
         writer.writeheader()
         for csv_row in csv_rows:
             for field, fieldData in csv_row.items():
-                csv_row[field] = str(fieldData).replace(",", ";")
+                csv_row[field] = _csv_cell(fieldData)
             writer.writerow(csv_row)
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 

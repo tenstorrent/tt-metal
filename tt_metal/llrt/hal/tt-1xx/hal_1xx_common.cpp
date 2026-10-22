@@ -6,8 +6,6 @@
 #include "hal_types.hpp"
 #include "rtoptions.hpp"
 
-#include <filesystem>
-
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::hal_1xx {
@@ -30,7 +28,13 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             switch (params.processor_class) {
                 case HalProcessorClassType::DM:
                     switch (params.processor_id) {
-                        case 0: defines.push_back("COMPILE_FOR_BRISC"); break;
+                        case 0:
+                            defines.push_back("COMPILE_FOR_BRISC");
+                            if (params.is_fw && params.rtoptions.get_brisc_firmware_variant() ==
+                                                    tt::llrt::BriscFirmwareVariant::Blaze) {
+                                defines.push_back("BLAZE_RUNTIME_RELOAD");
+                            }
+                            break;
                         case 1: defines.push_back("COMPILE_FOR_NCRISC"); break;
                         default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
@@ -74,8 +78,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
 
     // Index into kernel_config_base[] / mailboxes for the core type of this build.
     defines.push_back(fmt::format(
-        "PROGRAMMABLE_CORE_TYPE={}",
-        static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
+        "PROGRAMMABLE_CORE_TYPE={}", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
 
     return defines;
 }
@@ -90,23 +93,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     switch (params.processor_id) {
                         case 0:
                             if (params.is_fw) {
-                                switch (params.rtoptions.get_brisc_firmware_variant()) {
-                                    case tt::llrt::BriscFirmwareVariant::Default:
-                                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
-                                        break;
-                                    case tt::llrt::BriscFirmwareVariant::Blaze: {
-                                        const auto tt_metal_root =
-                                            std::filesystem::weakly_canonical(params.rtoptions.get_root_dir());
-                                        const auto blaze_brisc =
-                                            tt_metal_root.parent_path() / "blaze/firmware/brisc.cc";
-                                        TT_FATAL(
-                                            std::filesystem::is_regular_file(blaze_brisc),
-                                            "TT_METAL_FW_SRC_BRISC=blaze requires {}",
-                                            blaze_brisc.string());
-                                        srcs.push_back(blaze_brisc.string());
-                                        break;
-                                    }
-                                }
+                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
                             } else {
                                 srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisck.cc");
                             }

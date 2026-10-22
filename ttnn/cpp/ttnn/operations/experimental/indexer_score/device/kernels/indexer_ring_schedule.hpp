@@ -19,14 +19,14 @@ struct Geometry {
     bool rotate_waves;
 };
 
-inline constexpr uint32_t wave_column_shift(uint32_t wave, uint32_t wave_count, uint32_t cols) {
+constexpr uint32_t wave_column_shift(uint32_t wave, uint32_t wave_count, uint32_t cols) {
     const uint32_t stride = cols / (wave_count + 1) > 0 ? cols / (wave_count + 1) : 1;
     return ((wave + wave / 2) * stride) % cols;
 }
 
 // Count a lane's work without expanding its band list. Each wave assigns a
 // strided subset of units and contributes either one or two physical shards.
-inline constexpr uint32_t band_count(const Geometry& g, uint32_t lane) {
+constexpr uint32_t band_count(const Geometry& g, uint32_t lane) {
     const uint32_t wave_count = g.ring_size / 2 + 1;
     const uint32_t lane_count = g.num_blocks * g.cols;
     uint32_t count = 0;

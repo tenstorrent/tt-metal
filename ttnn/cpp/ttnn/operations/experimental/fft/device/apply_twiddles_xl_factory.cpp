@@ -146,10 +146,10 @@ ttnn::device_operation::ProgramArtifacts ApplyTwiddlesXlFactory::create_program_
              TensorBinding{.tensor_parameter_name = XL_D_I, .accessor_name = "d_i"}},
         .compile_time_args = {{"p", P}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_row", "num_rows", "big_modulus"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device_raw->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    KernelSpec writer = shared::make_writer(device_raw->arch(), P, is_bf16);
+    KernelSpec writer = shared::make_writer(P, is_bf16);
     KernelSpec compute = shared::make_compute();
 
     KernelRunArgs reader_run_args{.kernel = XL_READER};

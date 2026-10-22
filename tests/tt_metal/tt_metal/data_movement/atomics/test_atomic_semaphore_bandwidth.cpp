@@ -5,6 +5,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
@@ -31,11 +32,7 @@ struct AtomicSemaphoreConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test
 /// @return true if test passes, false otherwise
-bool run_atomic_semaphore_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, const AtomicSemaphoreConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
-
+bool run_atomic_semaphore_test(distributed::MeshDevice& mesh_device, const AtomicSemaphoreConfig& test_config) {
     std::cerr << "Sender core location X,Y: " << test_config.sender_core_coord.x << ","
               << test_config.sender_core_coord.y << std::endl;
     std::cerr << "Receiver core location X,Y: " << test_config.receiver_core_coord.x << ","
@@ -73,7 +70,7 @@ bool run_atomic_semaphore_test(
     uint32_t l1_base_address = sender_l1_info.base_address;
 
     // Physical Core Coordinates
-    CoreCoord physical_receiver_core = device->worker_core_from_logical_core(test_config.receiver_core_coord);
+    CoreCoord physical_receiver_core = mesh_device.worker_core_from_logical_core(test_config.receiver_core_coord);
     uint32_t packed_receiver_core_coordinates = physical_receiver_core.x << 16 | (physical_receiver_core.y & 0xFFFF);
 
     // Compile-time arguments for sender kernel
@@ -128,13 +125,19 @@ bool run_atomic_semaphore_test(
 
     // Initialize semaphores to zero on both cores
     vector<uint32_t> zero_semaphore = {0};
-    detail::WriteToDeviceL1(
-        device, test_config.sender_core_coord, l1_base_address + test_config.semaphore_addr_offset, zero_semaphore);
-    detail::WriteToDeviceL1(
-        device, test_config.receiver_core_coord, l1_base_address + test_config.semaphore_addr_offset, zero_semaphore);
+    slow_dispatch::WriteToL1(
+        mesh_device,
+        test_config.sender_core_coord,
+        l1_base_address + test_config.semaphore_addr_offset,
+        zero_semaphore);
+    slow_dispatch::WriteToL1(
+        mesh_device,
+        test_config.receiver_core_coord,
+        l1_base_address + test_config.semaphore_addr_offset,
+        zero_semaphore);
 
     // Barrier to ensure initialization is complete
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     // Launch the program using mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();
@@ -142,7 +145,7 @@ bool run_atomic_semaphore_test(
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -150,14 +153,14 @@ bool run_atomic_semaphore_test(
 
     // Read final semaphore values for verification
     vector<uint32_t> sender_semaphore_result, receiver_semaphore_result;
-    detail::ReadFromDeviceL1(
-        device,
+    slow_dispatch::ReadFromL1(
+        mesh_device,
         test_config.sender_core_coord,
         l1_base_address + test_config.semaphore_addr_offset,
         sizeof(uint32_t),
         sender_semaphore_result);
-    detail::ReadFromDeviceL1(
-        device,
+    slow_dispatch::ReadFromL1(
+        mesh_device,
         test_config.receiver_core_coord,
         l1_base_address + test_config.semaphore_addr_offset,
         sizeof(uint32_t),
@@ -187,7 +190,7 @@ bool run_atomic_semaphore_test(
 
 /// @brief Bandwidth sweep test that varies transaction sizes and counts
 void increment_value_sweep_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 1},
     CoreCoord receiver_core = {0, 0}) {
@@ -227,7 +230,7 @@ void increment_value_sweep_test(
 
 /// @brief Directed performance test with optimal parameters
 void directed_performance_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     uint32_t atomic_inc_value = 1,
     CoreCoord sender_core = {0, 0},
@@ -261,7 +264,7 @@ TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreAdjacentIncrementValueSweep) 
     uint32_t test_id = 340;
 
     unit_tests::dm::atomics::increment_value_sweep_test(
-        get_mesh_device(),
+        this->device(),
         test_id,
         CoreCoord(0, 1),  // Sender core
         CoreCoord(0, 0)   // Receiver core
@@ -271,7 +274,7 @@ TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreAdjacentIncrementValueSweep) 
 TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) {
     uint32_t test_id = 341;
 
-    auto logical_grid_size = get_mesh_device()->logical_grid_size();
+    auto logical_grid_size = this->device().logical_grid_size();
 
     TT_FATAL(logical_grid_size.x > 2 && logical_grid_size.y > 2, "Test assumes grid size is at least 3x3");
 
@@ -279,7 +282,7 @@ TEST_F(UnitMeshFastDispatchFixture, AtomicSemaphoreNonAdjacentIncrementValueSwee
     auto sender_core = CoreCoord(logical_grid_size.x - 2, logical_grid_size.y - 2);
 
     unit_tests::dm::atomics::increment_value_sweep_test(
-        get_mesh_device(),
+        this->device(),
         test_id,
         sender_core,     // Sender core
         CoreCoord(0, 0)  // Receiver core

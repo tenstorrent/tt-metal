@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 
+#include <algorithm>
 #include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include <utility>
@@ -36,7 +37,9 @@ namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const uint32_t num_workers =
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 }  // namespace
 
@@ -108,15 +111,13 @@ void issue_record_event_commands(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         }
     }
 
@@ -179,7 +180,7 @@ void issue_wait_for_event_commands(
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
     command_sequence.add_dispatch_wait(
-        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id, cq_id);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

@@ -43,11 +43,11 @@ CASES = [
             },
         ],
         "kwargs": {
-            "dtype": {"k": "dtype", "v": "BFLOAT8_B"},
+            "dtype": {"k": "dtype", "v": "BFLOAT16"},
         },
         "outs": [
             {
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "k": "t",
                 "layout": "TILE",
                 "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},

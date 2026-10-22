@@ -23,6 +23,7 @@
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,16 +41,14 @@ protected:
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    IDevice* device_{nullptr};
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         mesh_device_ = devices_[0];
-        device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-        l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+        l1_unreserved_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         if (is_quasar) {
             // Metal 2.0 reserves DM0/DM1 for runtime; user kernels get at most 6 threads.
@@ -83,7 +82,7 @@ protected:
                 .source = kernel_src,
                 .num_threads = num_dms_,
                 .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -96,9 +95,12 @@ protected:
                     .num_threads = 1,
                     .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementGen1Config{
-                            .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                            .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                        experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                                },
                         },
                 });
                 kernel_names.push_back(name);
@@ -124,14 +126,14 @@ protected:
     }
 
     uint32_t read_counter(const experimental::NodeCoord& node, uint32_t addr) {
-        tt::tt_metal::detail::ReadFromDeviceL1(device_, node, addr, sizeof(uint32_t), result);
+        slow_dispatch::ReadFromL1(*mesh_device_, node, addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
         return result.empty() ? 0u : result[0];
     }
 
     void set_counter(const experimental::NodeCoord& node, uint32_t addr, uint32_t value) {
         std::vector<uint32_t> initial_l1_words(1, value);
-        tt::tt_metal::detail::WriteToDeviceL1(device_, node, addr, initial_l1_words);
+        slow_dispatch::WriteToL1(*mesh_device_, node, addr, initial_l1_words);
     }
 
     void zero_counter(const experimental::NodeCoord& node, uint32_t addr) { set_counter(node, addr, 0); }
@@ -149,7 +151,7 @@ protected:
             .source = kernel_path_cacheline,
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"base_addr", "report_addr", "residency_addr"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
         experimental::ProgramSpec spec{
@@ -179,7 +181,7 @@ protected:
         const uint32_t ret_base = l1_unreserved_base + 32;
         std::vector<uint32_t> init(16, 0);  // sem word + lock word + 8 ret slots
         init[0] = sem_init;
-        tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, init);
+        slow_dispatch::WriteToL1(*mesh_device_, core, l1_unreserved_base, init);
 
         distributed::MeshWorkload workload;
         Program program;
@@ -193,7 +195,7 @@ protected:
             .num_threads = num_dms_,
             .runtime_arg_schema =
                 {.runtime_arg_names = {"sem_addr", "lock_addr", "ret_base", "increment_times", "mode", "pairs"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
         experimental::ProgramSpec spec{
@@ -278,7 +280,7 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
         .source = kernel_path_noc,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::KernelSpec remote_spec{
         .unique_id = REMOTE_KERNEL,
@@ -286,13 +288,23 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
         .num_threads = 1,
         .compiler_options = {.defines = {{"REMOTE_TARGET", "1"}}},
         .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times", "remote_noc_x", "remote_noc_y"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     if (!is_quasar) {
-        self_spec.hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        remote_spec.hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        self_spec.hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                },
+        };
+        remote_spec.hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                },
+        };
     }
 
     experimental::WorkUnitSpec wu_0{.name = "wu_0", .kernels = {SELF_KERNEL}, .target_nodes = node_0};
@@ -405,7 +417,7 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     run_cacheline_probe(base, report, residency);
 
     const uint32_t total = 2u + 3u * NUM_SEPS;
-    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report, total * sizeof(uint32_t), result);
+    slow_dispatch::ReadFromL1(*mesh_device_, core, report, total * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), total);
 
     // Control A: the platform actually models a write-back cache.

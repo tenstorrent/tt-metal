@@ -21,9 +21,17 @@ Tensor cumsum(
     std::optional<DataType> dtype,
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    bool disable_compensated_sum) {
     return operations::reduction::accumulation::common::accumulation_invoke(
-        input, dim, dtype, std::move(optional_out), reverse_order, memory_config, ttnn::prim::AccumulationOp::CUMSUM);
+        input,
+        dim,
+        dtype,
+        std::move(optional_out),
+        reverse_order,
+        memory_config,
+        ttnn::prim::AccumulationOp::CUMSUM,
+        disable_compensated_sum);
 }
 
 }  // namespace ttnn

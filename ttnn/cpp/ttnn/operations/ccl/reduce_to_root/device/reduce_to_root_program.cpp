@@ -136,7 +136,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::optional<ttnn::MeshCoordinate>& backward_coord,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
-    auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
+    auto* mesh_device = tensor_args.input_tensor_l.device();
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;

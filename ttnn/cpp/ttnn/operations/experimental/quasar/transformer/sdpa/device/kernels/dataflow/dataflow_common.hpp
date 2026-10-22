@@ -309,8 +309,9 @@ void copy_tile(
         {});
 }
 
-// Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16)
-template <uint32_t tile_bytes>
+// Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16).
+// neg_bf16 overrides the bf16 fill value (see quasar_mask_neg_bf16).
+template <uint32_t tile_bytes, uint16_t neg_bf16 = 0xFF80>
 void fill_neginf_tile(uint32_t dfb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
     constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
@@ -323,9 +324,10 @@ void fill_neginf_tile(uint32_t dfb_id, uint32_t tile_id) {
     constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
     if constexpr (tile_bytes == bf16_size) {
-        // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
+        // BFLOAT16: two values per word (-inf by default)
+        constexpr uint32_t neg_pair = (static_cast<uint32_t>(neg_bf16) << 16) | neg_bf16;
         for (uint32_t i = 0; i < total_words; i++) {
-            ptr[i] = 0xFF80FF80;
+            ptr[i] = neg_pair;
         }
     } else {
         // BFP formats (bfp4, bfp8): first 64 bytes are exponents, rest are mantissas
@@ -766,6 +768,39 @@ inline void fill_custom_diagonal_tile_bfp4(
     }
 }
 
+// bf16 twin of fill_custom_diagonal_tile_bfp4, same masking rule. Used where the mask DFB is Float16_b
+// (Quasar has no block-float formats).
+template <uint32_t tile_bytes, uint16_t neg_bf16 = 0xFF80>
+inline void fill_custom_diagonal_tile_bf16(
+    Noc noc, uint32_t dfb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
+    ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
+
+    fill_tile_zeros<tile_bytes>(noc, dfb_id, tile_id);
+
+    DataflowBuffer dfb(dfb_id);
+    volatile tt_l1_ptr uint16_t* tile_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr() + tile_id * tile_bytes);
+
+    for (uint32_t face_idx = 0; face_idx < 4; face_idx++) {
+        const uint32_t row_start = (face_idx / 2) * tt::constants::FACE_HEIGHT;
+        const uint32_t col_start = (face_idx % 2) * tt::constants::FACE_WIDTH;
+        volatile tt_l1_ptr uint16_t* face_ptr = tile_ptr + face_idx * tt::constants::FACE_HW;
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            const int32_t global_row = row_start + row;
+            for (uint32_t col = 0; col < tt::constants::FACE_WIDTH; col++) {
+                const int32_t global_col = col_start + col;
+                const bool masked_upper =
+                    (leading_diagonal_offset < 32) && (global_col > global_row + leading_diagonal_offset);
+                const bool masked_lower =
+                    (trailing_diagonal_offset < 32) && (global_col < global_row - trailing_diagonal_offset);
+                if (masked_upper || masked_lower) {
+                    face_ptr[row * tt::constants::FACE_WIDTH + col] = neg_bf16;
+                }
+            }
+        }
+    }
+}
+
 template <uint32_t tile_bytes>
 void fill_vertical_tile_bfp4(Noc noc, uint32_t dfb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
     /*
@@ -862,6 +897,17 @@ void fill_vertical_tile_bfp4(Noc noc, uint32_t dfb_id, uint32_t tile_id, uint32_
 }
 
 enum class MaskType { FULLY_ALLOWED, FULLY_MASKED, PARTIAL_MASK };
+
+// bf16 value for masked positions in the generated sliding-window and windowed (block-diagonal) masks.
+// Both can mask a row across an entire K chunk; with -inf that row's max is -inf and exp(-inf - -inf)
+// is NaN on Quasar (WH's FPU does not produce the NaN). A large finite negative gives exp(0) garbage
+// for that chunk, which the next chunk's rescale exp(scale * (m_old - m_new)) zeroes out, as long as
+// the row has an allowed key in some processed chunk.
+#ifdef ARCH_QUASAR
+constexpr uint16_t quasar_mask_neg_bf16 = 0xCE6E;  // ~ -1e9
+#else
+constexpr uint16_t quasar_mask_neg_bf16 = 0xFF80;  // -inf
+#endif
 
 template <uint32_t dfb_mask_in>
 void generate_causal_sliding_window_mask(
@@ -983,15 +1029,20 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile<tile_bytes>(dfb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
                     }
                     break;
                 case MaskType::PARTIAL_MASK:
-                    fill_custom_diagonal_tile_bfp4<tile_bytes>(
-                        noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    if constexpr (tile_bytes == tt::constants::TILE_HW * sizeof(uint16_t)) {
+                        fill_custom_diagonal_tile_bf16<tile_bytes, quasar_mask_neg_bf16>(
+                            noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    } else {
+                        fill_custom_diagonal_tile_bfp4<tile_bytes>(
+                            noc, dfb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                    }
             }
         }
     }
@@ -1040,7 +1091,12 @@ void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_ch
                 }
             } else {
                 if (vertical_tile_idx == -1) {
-                    fill_vertical_tile_bfp4<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    // The mask is bf16 on Quasar and for streaming compute, Bfp4_b otherwise.
+                    if constexpr (tile_bytes == tt::constants::TILE_HW * sizeof(uint16_t)) {
+                        fill_vertical_tile_bf16<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    } else {
+                        fill_vertical_tile_bfp4<tile_bytes>(noc, dfb_mask_in, in_mask_tile_id, unpad_col_in_tile);
+                    }
                     vertical_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, vertical_tile_idx, in_mask_tile_id);

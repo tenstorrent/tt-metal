@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -108,8 +109,30 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
     // factory -- silently pinning the slow fallback, or worse, replaying a native program whose CB
     // addresses were baked in for a free L1 window into a window a live tensor now occupies.
     auto factory = select_program_factory(operation_attributes, tensor_args);
+
+    // Aliasing signature: for each input, the position of the first input backed by the same
+    // MeshTensor. The Metal 2.0 spec-factory cache path (resolve_bindings, in mesh_device_operation
+    // _adapter.hpp) records each input's argument position by first MeshTensor-address match and
+    // freezes that table into the cache entry, so concat([x, x]) binds both inputs to position 0.
+    // Folding this partition into the hash gives aliased and distinct call patterns separate cache
+    // entries: a later concat([a, b]) of the same spec then misses and rebinds both inputs, instead
+    // of hitting the [x, x] entry and silently reading the first input twice. The legacy Buffer*
+    // patcher had an equivalent aliasing bail-out; this restores that guarantee for the ported
+    // factories. (The general fix belongs in resolve_bindings and is tracked separately.)
+    const auto& input_tensors = tensor_args.input_tensors;
+    std::vector<uint32_t> input_alias_signature(input_tensors.size());
+    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+        input_alias_signature[i] = i;
+        for (uint32_t j = 0; j < i; ++j) {
+            if (&input_tensors[j].mesh_tensor() == &input_tensors[i].mesh_tensor()) {
+                input_alias_signature[i] = j;
+                break;
+            }
+        }
+    }
+
     return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes, tensor_args, factory.index());
+        operation_attributes, tensor_args, factory.index(), input_alias_signature);
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -212,6 +235,36 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 first_input.shard_spec().value().grid.ranges().size() == 1,
                 "Block-sharded concat requires a single contiguous rectangular CoreRange.");
+            if (is_width_concat(rank, args.dim)) {
+                // Each input starts at the sum of the widths before it, a byte offset inside the
+                // destination shard, and a NOC transfer cannot start unaligned -- it copies the
+                // wrong bytes rather than failing. Only ragged widths reach this: the factory's
+                // shard-row check already forces an exact width to a multiple of the alignment.
+                // The last input is unconstrained, since nothing starts after it.
+                //
+                // The quantity wanted is the NOC alignment (NOC_L1_{READ,WRITE}_ALIGNMENT_BYTES),
+                // not the L1 allocation alignment: they agree at 16 B on Wormhole and Blackhole,
+                // but Quasar decouples them and shifts the data, so its NOC alignment is 1 B.
+                // Hal::get_read_alignment is unreachable from TTNN (same limitation noted in
+                // all_gather.cpp), so this is conservative on Quasar.
+                const uint32_t element_size = first_input.element_size();
+                const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+                uint32_t prefix_w = 0;
+                for (size_t i = 0; i + 1 < tensor_args.input_tensors.size(); i++) {
+                    prefix_w += tensor_args.input_tensors[i].logical_shape()[-1];
+                    TT_FATAL(
+                        (prefix_w * element_size) % l1_alignment == 0,
+                        "Width concat: input {} starts at column {} ({} bytes), not L1-aligned ({} "
+                        "bytes). A ragged width puts the boundary inside a shard and the NOC cannot "
+                        "write at an unaligned offset. Pad each width to a multiple of {} elements, "
+                        "or concat before sharding.",
+                        i + 1,
+                        prefix_w,
+                        prefix_w * element_size,
+                        l1_alignment,
+                        l1_alignment / element_size);
+                }
+            }
         }
     } else if (shard_first) {
         // Grouped concat is implemented only by the zero-copy sharded factories; the generic
@@ -329,14 +382,26 @@ uint32_t calculate_max_tensors_per_concat(
             return block_sharded_max;
         }
 
-        // Other sharded layouts (height/width) use different kernels with different arg patterns
+        // Other sharded layouts (height/width) go to ConcatS2SMultiProgramFactory:
+        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors,
+        //                 output_block_stride, block_start, block_count                = 7
+        //   Runtime per input, per RISC: pages_per_stick, num_sticks, write_offset,
+        //                 read_offset, block_stride                                    = 5N
+        // Total 7 + 5N against the 256 the concat kernels are built with.
         constexpr uint32_t effective_args_limit = 256;
-        constexpr uint32_t base_args = 4;
-        constexpr uint32_t args_per_tensor = 4;
+        constexpr uint32_t base_args = 7;
+        constexpr uint32_t args_per_tensor = 5;
 
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
         uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
+        // Not the binding limit in practice: that factory aliases each input shard as a circular
+        // buffer, indices 0..N-1 with the output at 16, so it asserts above 16 inputs long before
+        // the arg budget runs out. Capping this at 16 to make it batch instead does not help --
+        // the batching path below hands every batch the *final* output_mem_config, whose shard
+        // height is sized for all N inputs, so a 16-input batch is asked for an N-input shard and
+        // fails in TensorSpec. That is why the block-sharded path rejects batching outright. Left
+        // as the arg model it claims to be; the 16-input ceiling reports itself clearly.
         log_debug(
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 

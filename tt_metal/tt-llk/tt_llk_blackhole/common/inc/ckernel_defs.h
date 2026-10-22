@@ -360,6 +360,21 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    // nextafter steps the bit pattern, so the step is one ULP of the destination format rather
+    // than a fixed epsilon. bfloat16 carries its mantissa in the top 16 bits of the fp32 dest
+    // register, so it needs its own variant.
+    NEXTAFTER      = 43,
+    NEXTAFTER_BF16 = 44,
+    // LOGADDEXP, LOGADDEXP2, and COPY_DEST have no SfpuType counterpart, so their
+    // inits pass a placeholder (`add1` in the test helpers, `unused` in Compute API).
+    LOGADDEXP  = 45,
+    LOGADDEXP2 = 46,
+    // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
+    // The kernels are calculate_quant_int32 / requant / dequant and copy_dest_value.
+    QUANT     = 47,
+    REQUANT   = 48,
+    DEQUANT   = 49,
+    COPY_DEST = 50,
 };
 
 enum class PackMode : std::uint8_t

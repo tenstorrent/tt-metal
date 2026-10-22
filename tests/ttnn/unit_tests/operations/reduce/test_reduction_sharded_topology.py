@@ -276,8 +276,9 @@ def test_reduce_w_height_sharded_mixed_l1_dram(device, op_name, dram_side):
     torch.manual_seed(0)
     ttnn_op, torch_op = REDUCE_OPS[op_name]
 
-    tensor_shape = (1, 1, 256, 256)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    num_cores = min(device.dram_grid_size().x, device.compute_with_storage_grid_size().x)
+    tensor_shape = (1, 1, 32 * num_cores, 256)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
     input_spec = ttnn.ShardSpec(shard_grid, (32, 256), ttnn.ShardOrientation.ROW_MAJOR)
     output_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
 

@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include "ttnn-nanobind/bind_function.hpp"
@@ -38,6 +39,17 @@ ttnn::Tensor fast_reduce_nc_wrapper(
 }  // namespace
 
 void bind_fast_reduce_nc(nb::module_& mod) {
+    ttnn::bind_function<"fast_reduce_nc_split", "ttnn.experimental.">(
+        mod,
+        "Reduce rank-4 interleaved TILE input along dim 0 or 1, writing two tile-aligned channel outputs in one "
+        "dispatch.",
+        &ttnn::experimental::reduction::fast_reduce_nc_split,
+        nb::arg("input").noconvert(),
+        nb::kw_only(),
+        nb::arg("dim").noconvert(),
+        nb::arg("split_output_width").noconvert(),
+        nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        nb::arg("compute_kernel_config").noconvert() = nb::none());
     ttnn::bind_function<"fast_reduce_nc", "ttnn.experimental.">(
         mod,
         R"doc(

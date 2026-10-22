@@ -448,17 +448,6 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
-    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
-    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
-    # extreme small-input end (rsqrt -> very large).
-    MathOperation.RsqrtCompat: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
-        )
-    ),
-    # reciprocal_compat (legacy exponent-difference reciprocal): same domain as the
-    # accurate Reciprocal -- everything except the pole, both signs.
-    MathOperation.ReciprocalCompat: _reciprocal_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -765,8 +754,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # Bounded by accuracy rather than representable range: a**b evaluates as
     # exp(b * ln a), and the relative error is roughly flat in the operands, so the bounds
-    # pair with the rtol in BINARY_CUSTOM_TOLERANCES. A <= 16 is left out because it drives
-    # |a**b| to Float16's ceiling, which would make this an overflow test.
+    # pair with the rtol SfpuElwpow declares in sfpu_accuracy_budget.yaml. A <= 16 is
+    # left out because it drives |a**b| to Float16's ceiling, which would make this an
+    # overflow test.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
@@ -776,12 +766,40 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
     # x * abs_err(ln y) and so grows with x while a fixed atol does not, which is what pairs
-    # it with the atol in BINARY_CUSTOM_TOLERANCES. Most of that error is output
-    # quantization rather than the kernel. y keeps its full log-uniform span.
+    # it with the atol SfpuXlogy declares in sfpu_accuracy_budget.yaml. Most of that error
+    # is output quantization rather than the kernel. y keeps its full log-uniform span.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
+        ),
+    ),
+    # logaddexp: finite for any finite pair, so the sweep deliberately crosses the
+    # exp() overflow boundary (|x| > 88.7) where the naive log(exp(a) + exp(b))
+    # composition returns +/-inf. Independent +/-200 draws land ~10% of positions
+    # with |a - b| < 20 — the band where the log1p(exp(-|a-b|)) correction is
+    # non-negligible — and the rest exercise the max-dominated path at magnitudes
+    # the composed form cannot survive. +/-200 stays representable in fp16.
+    MathOperation.SfpuLogaddexp: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
@@ -1066,6 +1084,8 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -1115,7 +1135,6 @@ _SFPU_UNDEFINED_RANGES: Dict[
 ] = {
     # ── Unary: only spec_A has a hole ────────────────────────────────────────
     MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
-    MathOperation.ReciprocalCompat: {Operand.A: [(-1e-6, 1e-6)]},
     MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
     MathOperation.Atanh: {
@@ -1416,6 +1435,14 @@ def probe_beside(
 # (log(-eps), sqrt(-eps)). Pass include_undefined=True to probe the far side anyway once
 # the goldens model it.
 SingularitySide = Enum("SingularitySide", "BOTH ABOVE BELOW")
+#: Ops with a pole at every non-positive integer. ``_OP_SINGULARITIES`` names points;
+#: these are a lattice, and ``ulp_sweep.claimed_lanes`` excludes it: digamma and
+#: trigamma are infinite there, lgamma's |gamma| is, and every fp32 value of magnitude
+#: 2**23 or more is an integer, so for these ops the far negative tail is poles only.
+_NONPOSITIVE_INTEGER_POLES = frozenset(
+    {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}
+)
+
 _BOTH, _ABOVE, _BELOW = (
     SingularitySide.BOTH,
     SingularitySide.ABOVE,
@@ -1436,8 +1463,6 @@ _OP_SINGULARITIES: Dict[
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.ReciprocalCompat: {Operand.A: ((0.0, _BOTH),)},
     # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
     # side, so -1 is probed upward and +1 downward.
     MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
@@ -1925,9 +1950,12 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Divergences worth reading before trusting one of these: each is xfailed per combination
         # in the sweep rather than smoothed over in the golden.
         MathOperation.Reciprocal,  # 1/+/-0 = +/-inf, 1/+/-inf = +/-0; kernel gives +0 for NaN
-        MathOperation.Sqrt,  # sqrt(-inf) = NaN; kernel gives NaN for sqrt(-0), IEEE gives -0
-        MathOperation.Rsqrt,  # rsqrt(+/-0) = +/-inf; same -0 divergence as Sqrt
-        MathOperation.SqrtCustom,  # sqrt(-inf) gives -inf where IEEE gives NaN (issue #52930)
+        # The sqrt family passes the whole sweep since the signed-zero / -inf fixes. Zero signs
+        # are invisible to passed_test(), so test_sqrt_family_negative_zero_regression reads
+        # the raw bits. The scopes tagged on the entries are argued in the kernel headers.
+        MathOperation.Sqrt,  # sqrt(-inf) = NaN, sqrt(NaN) = NaN, sqrt(+/-0) = +/-0; !FAST_APPROX
+        MathOperation.Rsqrt,  # rsqrt(-inf) = NaN, rsqrt(+/-0) = +/-inf; !FAST_APPROX
+        MathOperation.SqrtCustom,  # as Sqrt, on the NEGATIVE_INFINITY_SAFE instantiation
         # These goldens have to route through torch: math.sin / cos / acos / asin / tan *raise*
         # on a non-finite input instead of returning NaN, so a `math.*` call in a unary golden
         # is the same trap.
@@ -1976,12 +2004,14 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 #   enrolment depends on that.
 # * A zero's sign is invisible to passed_test(), which judges by torch.isclose, a both-NaN
 #   clause and PCC -- so a wrong zero sign can neither fail nor XPASS.
-# * Only a 32-bit input at dest_acc=Yes delivers a -0.0, which is what scopes Sqrt's and
-#   Rsqrt's xfails to unpack-to-dest.
+# * A real -0.0 reaches the LREG only at dest_acc=Yes with a 32-bit input; at dest_acc=No it
+#   arrives as +0. That unpack_to_dest split is why a signed-zero probe is only meaningful on
+#   one side of it: it scopes Sign's and Heaviside's xfails, and is the pipeline the sqrt
+#   family's regression test runs on.
 #
 # Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
 # every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no
-# ISA ruling, so the right outcome needs an owner -- as does RsqrtCompat(0).
+# ISA ruling, so the right outcome needs an owner.
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -2041,6 +2071,14 @@ def specials_safe(
     return True
 
 
+def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
+    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
+    so the three cannot drift apart."""
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
 def negative_zero_delivered(
     input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
 ) -> bool:
@@ -2058,7 +2096,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def nan_survives_to_l1(
@@ -2200,7 +2238,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwmul,  # inf*x = inf; 0*x is +0 on a WH/BH 16-bit Dest
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
@@ -2225,13 +2263,15 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all six.
+        # all eight.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
+        MathOperation.SfpuLogaddexp,  # max(a, b) + log1p(exp(-|a - b|))
+        MathOperation.SfpuLogaddexp2,  # as logaddexp, correction scaled by log2(e)
         # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
@@ -2242,6 +2282,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # Bit copy of one operand. A non-finite probe checks the pipeline,
+        # not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

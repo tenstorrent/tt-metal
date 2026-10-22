@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_xy_device_params,
@@ -597,7 +597,7 @@ def _scenario_id(scenario):
 
 
 def _workload(scenario):
-    config = glm_hf_config()
+    config = glm_5_3_hf_config()
     return Workload(
         chunk_tokens=CHUNK_TOKENS,
         cache_tokens=SCENARIOS[scenario]["cache"],

@@ -99,6 +99,13 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
@@ -144,10 +151,10 @@ void kernel_main() {
 #endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_rhs.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);
@@ -157,7 +164,7 @@ void kernel_main() {
 #endif
 
         tile_regs_acquire();
-        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
         copy_init(dfb_post_lhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
@@ -176,6 +183,7 @@ void kernel_main() {
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
         tile_regs_commit();
 
         tile_regs_wait();

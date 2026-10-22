@@ -3,20 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/indexer_score/device/kernels/indexer_score_causal_geometry.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <bit>
 
 namespace ttnn::prim {
 
 namespace {
+// The SP-sharded read of a block-cyclic chunked-prefill cache: the global positions of this device's query rows
+// follow the cache writer's rotation (see compute_causal_geometry) -- q holds its SP rank's chunk_local rows, or,
+// seq-sharded across TP as well (chunk_local == tp*S), its TP rank's S-row slice of them.
+bool rotation_exact_causal(const SparseSDPAMsaParams& attrs) {
+    return attrs.causal_enabled() && attrs.cluster_axis.has_value() && attrs.has_block_cyclic();
+}
+
 // Re-check invariants excluded from the program hash. Interleaved K/V shape fields (T, batch slots, and n_kv)
 // and cache_batch_idx may vary on a cache hit; tensor layout, padding, memory placement, and device must still
 // match kernel assumptions.
@@ -91,6 +103,27 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
     } else {
         TT_FATAL(B == 1, "k/v batch must be 1 unless cache_batch_idx is set (got {})", B);
     }
+    // chunk_start_idx is hash-excluded (patched per dispatch), hence checked on hits too.
+    if (attrs.causal_enabled() && attrs.has_block_cyclic()) {
+        const uint32_t chunk_start_idx = attrs.chunk_start_idx.value();
+        const auto& bc = attrs.block_cyclic.value();
+        // The rotated geometry works in tile-rows (as the KV writer does), so the chunk must start on the tile grid.
+        TT_FATAL(
+            chunk_start_idx % tt::constants::TILE_HEIGHT == 0,
+            "sparse_sdpa_msa: chunk_start_idx ({}) must be a multiple of {} with a block-cyclic cache",
+            chunk_start_idx,
+            tt::constants::TILE_HEIGHT);
+        // Without cluster_axis every device masks at chunk_start_idx + its flat rank * S, which matches the
+        // writer's placement only for a slab-aligned start.
+        TT_FATAL(
+            rotation_exact_causal(attrs) || bc.sp <= 1 || chunk_start_idx % (bc.sp * bc.chunk_local) == 0,
+            "sparse_sdpa_msa: a mid-slab chunk_start_idx ({}, slab {} = sp {} x chunk_local {}) with a block-cyclic "
+            "cache needs cluster_axis (the SP axis) for the rotated per-device query positions",
+            chunk_start_idx,
+            bc.sp * bc.chunk_local,
+            bc.sp,
+            bc.chunk_local);
+    }
 }
 }  // namespace
 
@@ -106,7 +139,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     const auto& v = t.v;
     const auto& idx = t.indices;
 
-    TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa_msa is Blackhole-only");
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa_msa is Blackhole-only");
 
     // q is bf16 or fp8_e4m3. K/V are tiled bf16 or bfp8_b. Indices are uint32 block ids.
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
@@ -202,6 +235,129 @@ SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_out
     return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
 }
 
+SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::derive_kernel_geometry(
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    Geometry g;
+    const uint32_t H_total = t.q.logical_shape()[1];
+    g.n_kv = t.k.logical_shape()[1];
+    g.H_logical = g.n_kv ? H_total / g.n_kv : 0;  // query heads per KV group (validation rejects n_kv == 0)
+    // Compute always sees whole 32-head tiles; the reader zero-fills the padded heads.
+    g.H = ((g.H_logical + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    g.S = t.q.logical_shape()[2];
+    g.topk = t.indices.logical_shape()[3];
+    g.d = t.q.logical_shape()[3];
+    g.v_dim = t.v.logical_shape()[3];
+    g.DHt = g.d / tt::constants::TILE_WIDTH;
+    g.vDHt = g.v_dim / tt::constants::TILE_WIDTH;
+    g.Skt = attrs.block_size / tt::constants::TILE_WIDTH;  // a chunk is exactly one block
+    g.Sqt = g.H / tt::constants::TILE_HEIGHT;
+    g.k_tiles_per_block = g.Skt * g.DHt;
+    g.v_tiles_per_block = g.Skt * g.vDHt;
+    g.k_df = tt::tt_metal::datatype_to_dataformat_converter(t.k.dtype());
+    g.v_df = tt::tt_metal::datatype_to_dataformat_converter(t.v.dtype());
+    g.k_tile_bytes = tt::tile_size(g.k_df);
+    g.v_tile_bytes = tt::tile_size(g.v_df);
+    // Q is read row-major and tiled on chip; fp8 Q tilizes into bfp8_b. The output matches Q's dtype.
+    g.q_rm_df = tt::tt_metal::datatype_to_dataformat_converter(t.q.dtype());
+    g.q_is_fp8 = (t.q.dtype() == DataType::FP8_E4M3);
+    g.q_in_df = g.q_is_fp8 ? tt::DataFormat::Bfp8_b : g.q_rm_df;
+    g.out_df = g.q_rm_df;
+    g.q_row_bytes = g.d * t.q.element_size();
+    g.idx_row_bytes = g.topk * t.indices.element_size();
+    return g;
+}
+
+std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
+    const Geometry& g, bool causal, bool block_cache_serves_kv) {
+    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
+    constexpr uint32_t tile_bytes = tt::tile_size(bf);  // intermediates are bf16
+    std::vector<CbSpec> cbs = {
+        {cb_q_rm, g.q_row_bytes, g.H, g.q_rm_df},
+        {cb_q_in, tt::tile_size(g.q_in_df), g.Sqt * g.DHt, g.q_in_df},
+        {cb_scale, tile_bytes, 1, bf},
+        {cb_qk_im, tile_bytes, g.Sqt * g.Skt, bf},
+        {cb_max_a, tile_bytes, g.Sqt, bf},
+        {cb_max_b, tile_bytes, g.Sqt, bf},
+        {cb_sum_a, tile_bytes, g.Sqt, bf},
+        {cb_sum_b, tile_bytes, g.Sqt, bf},
+        {cb_out_a, tile_bytes, g.Sqt * g.vDHt, bf},
+        {cb_out_b, tile_bytes, g.Sqt * g.vDHt, bf},
+        {cb_corr, tile_bytes, g.Sqt, bf},
+        {cb_out_im, tile_bytes, g.Sqt * g.vDHt, bf},  // bf16 accumulator, full precision
+        {cb_out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df},
+        {cb_idx, g.idx_row_bytes, 1, bf},
+        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf},  // active block count + causal control
+        {cb_col_identity, tile_bytes, 1, bf},
+        {cb_recip_scratch, tile_bytes, 1, bf},
+        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf},
+        {cb_kack, message_page_bytes(1), 2, bf},
+    };
+    // Streamed K/V: one block, single-buffered -- the reader reserves it and the writer fills its half into the
+    // same L1. Absent when the block cache serves K/V (compute then reads the cache CBs in place).
+    if (!block_cache_serves_kv) {
+        cbs.push_back({cb_k_in, g.k_tile_bytes, g.k_tiles_per_block, g.k_df});
+        cbs.push_back({cb_v_in, g.v_tile_bytes, g.v_tiles_per_block, g.v_df});
+    }
+    // The mask tiles are touched only under CAUSAL_MASK_ENABLED, so causal-off skips their L1.
+    if (causal) {
+        cbs.push_back({cb_neginf, tile_bytes, 1, bf});
+        cbs.push_back({cb_vmask, tile_bytes, 2, bf});
+    }
+    return cbs;
+}
+
+uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
+    const uint32_t quantum =
+        std::max<uint32_t>(tt::tt_metal::hal::get_l1_alignment(), CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
+    return tt::align(words * static_cast<uint32_t>(sizeof(uint32_t)), quantum);
+}
+
+uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    if (!attrs.enable_kv_block_cache) {  // off: zero slots, no geometry derived on the host path
+        return 0;
+    }
+    const Geometry g = derive_kernel_geometry(attrs, t);
+    const uint64_t block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
+    // The hash runs before validation, so a not-yet-rejected block_size or d below a tile can give block_bytes == 0.
+    if (block_bytes == 0) {
+        return 0;
+    }
+    // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slot queue, each rounded up
+    // to the CB placement alignment as the program allocator does; the cache CBs are whole tiles, already aligned.
+    // L1 buffers fill the interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans
+    // L1_SMALL) is the bound when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's
+    // per-device buffers, trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
+    // Fewer slots than one query selects (topk) selects the streamed kernels: each query would cycle its blocks
+    // through the slots and evict them before the next query re-selects them. The streamed kernels need the L1 of
+    // one slot, so that program fails at launch only where the cache-off op would.
+    auto* device = t.q.device();
+    if (device == nullptr) {  // host or deallocated q: validation runs after this and reports it
+        return 0;
+    }
+    const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
+    uint64_t base_bytes =
+        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
+    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
+        base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
+    }
+    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t l1_end = l1_base + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const uint64_t l1_top = std::min<uint64_t>(device->lowest_occupied_compute_l1_address().value_or(l1_end), l1_end);
+    const uint64_t free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
+    const uint32_t n_fit =
+        static_cast<uint32_t>(std::min<uint64_t>(free_l1 / block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
+    const uint32_t slots = n_fit < std::max(sparse_sdpa_msa::KV_CACHE_SLOTS_MIN, g.topk) ? 0 : n_fit;
+    // Logged per call, not at program creation: zero slots reuses the cached cache-off program.
+    log_debug(
+        tt::LogOp,
+        "sparse_sdpa_msa: KV block cache {} slots ({} B free L1){}",
+        slots,
+        free_l1,
+        slots == 0 ? ", fewer than topk fit, running the streamed kernels" : "");
+    return slots;
+}
+
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
@@ -226,25 +382,75 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        // The RESOLVED slot count: the CB layout and kernels bake it in, and auto depends on free L1 at this call.
+        // A request that resolves to no slots aliases the cache-off program (same layout, same kernels).
+        attrs.kv_cache_slots,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
 
-uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
+SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_geometry(
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Derived exactly as indexer_score_msa's start, so the mask and the indexer's selection share one
-    // global-position frame.
+    // Derived exactly as indexer_score_msa's start (same closed form, same device index), so the mask and the
+    // indexer's selection share one global-position frame.
     if (!attrs.causal_enabled()) {
-        return 0;
+        return {};
     }
     const uint32_t S = t.q.logical_shape()[2];
+    const uint32_t chunk_start_idx = attrs.chunk_start_idx.value();
     const uint32_t device_index =
         mesh_dispatch_coordinate.has_value()
             ? ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, attrs.cluster_axis)
             : 0;
-    return attrs.chunk_start_idx.value() + device_index * S;
+    if (!rotation_exact_causal(attrs)) {
+        return {.chunk_start = chunk_start_idx + device_index * S};
+    }
+    // The chunk [chunk_start_idx, +sp*chunk_local) was written round-robin by update_padded_kv_cache, so this
+    // device's S query rows start at the writer's rotated position, not chunk_start_idx + rank*S, and on the
+    // boundary chip of a mid-slab start they cross a slab boundary (the straddle). With q also seq-sharded over
+    // TP (chunk_local == tp*S) the device holds its TP rank's S-row slice of its SP rank's rows: the same
+    // [SP, TP] geometry indexer_score uses with seq_shard_axes=[SP, TP].
+    const auto& bc = attrs.block_cyclic.value();
+    TT_FATAL(
+        device_index < bc.sp,
+        "sparse_sdpa_msa: cluster_axis rank {} out of range for block-cyclic sp={} (cluster_axis must be the "
+        "block-cyclic SP axis)",
+        device_index,
+        bc.sp);
+    uint32_t tp_index = 0;
+    if (bc.chunk_local != S) {
+        const auto mesh_shape = t.q.device()->get_view().shape();
+        TT_FATAL(
+            mesh_shape.dims() == 2 && bc.chunk_local % S == 0 && mesh_dispatch_coordinate.has_value(),
+            "sparse_sdpa_msa: a TP-sub-sharded q (block_cyclic_chunk_local {} = tp * q seq-len {}) needs a 2D mesh",
+            bc.chunk_local,
+            S);
+        const uint32_t tp_axis = 1 - attrs.cluster_axis.value();
+        tp_index = ttnn::ccl::get_linearized_index_from_physical_coord(t.q, *mesh_dispatch_coordinate, tp_axis);
+        TT_FATAL(
+            tp_index < bc.chunk_local / S,
+            "sparse_sdpa_msa: TP rank {} out of range for block_cyclic_chunk_local {} / q seq-len {}",
+            tp_index,
+            bc.chunk_local,
+            S);
+    }
+    constexpr uint32_t TW = tt::constants::TILE_WIDTH;
+    const auto g = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
+        chunk_start_idx,
+        /*has_block_cyclic=*/true,
+        /*rotation_exact=*/true,
+        bc.sp,
+        bc.chunk_local,
+        device_index,
+        tp_index,
+        S);
+    return {
+        .chunk_start = g.chunk_start_tiles * TW,
+        .straddle_row = g.straddle_q_tile * TW,
+        .straddle_jump = g.straddle_jump_tiles * TW,
+    };
 }
 
 SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_args(
@@ -272,7 +478,7 @@ SparseSDPAMsaOperation::DispatchArgs SparseSDPAMsaOperation::compute_dispatch_ar
         .v_batch_tile_offset = slot * n_kv * v_group_tile_stride,
         .k_group_tile_stride = k_group_tile_stride,
         .v_group_tile_stride = v_group_tile_stride,
-        .chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate),
+        .causal = compute_causal_geometry(attrs, t, mesh_dispatch_coordinate),
     };
 }
 
@@ -327,7 +533,9 @@ void SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::override_runtime_argum
         reader[kReaderVBatchOffset] = dyn.v_batch_tile_offset;
         reader[kReaderKGroupStride] = dyn.k_group_tile_stride;
         reader[kReaderVGroupStride] = dyn.v_group_tile_stride;
-        reader[kReaderChunkStart] = dyn.chunk_start_local;
+        reader[kReaderChunkStart] = dyn.causal.chunk_start;
+        reader[kReaderStraddleRow] = dyn.causal.straddle_row;
+        reader[kReaderStraddleJump] = dyn.causal.straddle_jump;
 
         auto& writer = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
         TT_FATAL(
@@ -367,24 +575,23 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    bool enable_kv_block_cache) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .scale = scale,
-            .block_size = block_size,
-            .compute_kernel_config = compute_kernel_config,
-            .cache_batch_idx = cache_batch_idx,
-            .block_cyclic = block_cyclic,
-            .chunk_start_idx = chunk_start_idx,
-            .cluster_axis = cluster_axis,
-        },
-        OperationType::tensor_args_t{
-            .q = q,
-            .k = k,
-            .v = v,
-            .indices = indices,
-        });
+    OperationType::operation_attributes_t attrs{
+        .scale = scale,
+        .block_size = block_size,
+        .compute_kernel_config = compute_kernel_config,
+        .cache_batch_idx = cache_batch_idx,
+        .block_cyclic = block_cyclic,
+        .chunk_start_idx = chunk_start_idx,
+        .cluster_axis = cluster_axis,
+        .enable_kv_block_cache = enable_kv_block_cache,
+    };
+    const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
+    // One resolution per call, against the L1 free now; the hash and the factory read this count.
+    attrs.kv_cache_slots = OperationType::resolve_kv_cache_slots(attrs, tensors);
+    return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 
 }  // namespace ttnn::prim

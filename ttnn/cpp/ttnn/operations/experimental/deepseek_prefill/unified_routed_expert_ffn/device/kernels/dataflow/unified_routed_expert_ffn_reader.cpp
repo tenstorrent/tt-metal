@@ -31,61 +31,62 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#include "../weight_runs.hpp"
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(1);
-    const uint32_t idx_table_addr = get_arg_val<uint32_t>(2);
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t idx_table_addr = get_common_arg_val<uint32_t>(2);
 
-    const uint32_t my_mt = get_arg_val<uint32_t>(3);
-    const uint32_t my_nt_gu = get_arg_val<uint32_t>(4);
-    const uint32_t my_nt_d = get_arg_val<uint32_t>(5);
+    const uint32_t my_mt = get_arg_val<uint32_t>(0);
+    const uint32_t my_nt_gu = get_arg_val<uint32_t>(1);
+    const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
 
-    // Weight-multicast runtime args (indices 6..15).
-    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(6);
+    // Weight-multicast runtime args (indices 3..12).
+    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(3);
     const bool is_in1_sender = is_in1_sender_u32 != 0;
-    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(7);
-    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(8);
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(9);
-    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(10);
-    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(11);
-    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(12);
-    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(13);
-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(14);
-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(15);
+    const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(4);
+    const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(5);
+    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(6);
+    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(7);
+    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(8);
+    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(9);
+    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(10);
+    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(11);
+    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(12);
 
-    // x (in0) multicast runtime args (indices 16..25).
-    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(16);
+    // x (in0) multicast runtime args (indices 13..22).
+    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(13);
     const bool is_in0_sender = is_in0_sender_u32 != 0;
-    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(17);
-    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(18);
-    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(19);
-    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(20);
-    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(21);
-    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(22);
-    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(23);
-    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(24);
-    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(25);
+    const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(14);
+    const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(15);
+    const uint32_t in0_num_receivers = get_arg_val<uint32_t>(16);
+    const uint32_t in0_mcast_nx_start = get_arg_val<uint32_t>(17);
+    const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(18);
+    const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(19);
+    const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(20);
+    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(21);
+    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(22);
 
     // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
     // on its act_ready_sem for GRID_X - 1 incs from the receivers; then
     // mcasts cb_activated -> all M-row cores' cb_in0_down_full L1; then
     // mcasts act_valid_sem to release receivers.
-    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(26);
-    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(27);
+    const uint32_t act_ready_sem_id = get_arg_val<uint32_t>(23);
+    const uint32_t act_valid_sem_id = get_arg_val<uint32_t>(24);
 
     // UP_SPLIT local handshake (reader <-> writer): up_go = slot reserved,
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
-    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(28);
-    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(29);
+    const uint32_t up_go_sem_id = get_arg_val<uint32_t>(25);
+    const uint32_t up_done_sem_id = get_arg_val<uint32_t>(26);
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
 
-    // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 30.
+    // M-row NoC coord table: GRID_X (x, y) pairs starting at M_ROW_NOC_RT_OFFSET.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
     // COUNTS_BCAST occupies 7 args before the M-row NoC table.
-    constexpr uint32_t COUNTS_BCAST_RT = 30;
+    constexpr uint32_t COUNTS_BCAST_RT = 27;
     // DOWN_SPLIT go/done sems sit between COUNTS_BCAST and the M-row NoC table.
     constexpr uint32_t DOWN_SEM_RT = COUNTS_BCAST_RT + 7;
     // IN1_WRITER_MCAST go/done sems follow the DOWN_SPLIT pair.
@@ -168,8 +169,16 @@ void kernel_main() {
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(31) != 0;
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(32);
     constexpr uint32_t max_active_tokens = get_compile_time_arg_val(33);
+    // Tile columns per DRAM ND shard of the weight tensors, 0 when they are DRAM-interleaved.
+    // A core's per_core_N-wide slice of one K-row is exactly one shard, so it reads as a single
+    // NoC transaction instead of per_core_N of them; see weight_runs.hpp. gate and up share one
+    // value (the program factory pins them equal), down carries its own.
+    constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(34);
+    constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 
-    constexpr uint32_t x_accessor_offset = 34;
+    constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -201,25 +210,24 @@ void kernel_main() {
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
     // `start` (= expert_region_offsets) accessor. Appended last in the reader's
-    // accessor stream. start_addr is the runtime arg after the GRID_X-pair M-row
-    // NoC table at M_ROW_NOC_RT_OFFSET.
-    const uint32_t start_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
+    // accessor stream. Its buffer binding is shared across all worker cores.
+    const uint32_t start_addr = get_common_arg_val<uint32_t>(3);
     constexpr uint32_t start_accessor_offset = idx_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
     const auto start_acc = TensorAccessor(start_args, start_addr);
 
     // Per-expert weight base addresses follow start_addr in three contiguous
-    // runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
-    // down[0..N). gate_addr(e) = arg[WEIGHTS_RT + e], etc.
-    constexpr uint32_t WEIGHTS_RT = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1;
+    // common-runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
+    // down[0..N). gate_addr(e) = arg[COMMON_WEIGHTS + e], etc.
+    constexpr uint32_t COMMON_WEIGHTS = 4;
 
 #ifdef FUSE_BIAS
     // gpt-oss expert biases. CT bias CB ids + accessor descriptors follow the
     // start accessor; per-expert bias base addresses follow the weight blocks in
     // three further runtime-arg blocks (gate_bias[0..N), up_bias, down_bias)
-    // starting at BIAS_RT. Read per expert in the loop, added by the compute
+    // starting at COMMON_BIAS. Read per expert in the loop, added by the compute
     // kernel (gate/up before the activation, down after the down matmul).
-    constexpr uint32_t BIAS_RT = WEIGHTS_RT + 3 * experts_per_chip;
+    constexpr uint32_t COMMON_BIAS = COMMON_WEIGHTS + 3 * experts_per_chip;
     constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
     constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
     constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
@@ -396,9 +404,12 @@ void kernel_main() {
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
-        const uint32_t gate_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 0 * experts_per_chip + local_expert_id);
-        const uint32_t up_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 1 * experts_per_chip + local_expert_id);
-        const uint32_t down_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 2 * experts_per_chip + local_expert_id);
+        const uint32_t gate_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0 * experts_per_chip + local_expert_id);
+        const uint32_t up_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1 * experts_per_chip + local_expert_id);
+        const uint32_t down_addr_e =
+            get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2 * experts_per_chip + local_expert_id);
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
@@ -448,9 +459,12 @@ void kernel_main() {
         // columns are discarded either way — the gate/up ones by the down
         // phase's K bound, the down ones by the writer.
         {
-            const uint32_t gbias_addr = get_arg_val<uint32_t>(BIAS_RT + 0 * experts_per_chip + local_expert_id);
-            const uint32_t ubias_addr = get_arg_val<uint32_t>(BIAS_RT + 1 * experts_per_chip + local_expert_id);
-            const uint32_t dbias_addr = get_arg_val<uint32_t>(BIAS_RT + 2 * experts_per_chip + local_expert_id);
+            const uint32_t gbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + local_expert_id);
+            const uint32_t ubias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 1 * experts_per_chip + local_expert_id);
+            const uint32_t dbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 2 * experts_per_chip + local_expert_id);
             const auto gate_bias_acc = TensorAccessor(gate_bias_args, gbias_addr, get_tile_size(cb_gate_bias));
             const auto up_bias_acc = TensorAccessor(up_bias_args, ubias_addr, get_tile_size(cb_up_bias));
             const auto down_bias_acc = TensorAccessor(down_bias_args, dbias_addr, get_tile_size(cb_down_bias));
@@ -711,26 +725,24 @@ void kernel_main() {
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
                 const uint32_t gate_block_start = l1_w_gate;
+                // N-OOB hidden padding columns (col >= N_gate_tiles_full == down's K_down_tiles)
+                // are left UNWRITTEN: their gate output lands on a down K position the down
+                // matmul never reduces (see the compute's real_k_tiles bound), so the stale L1
+                // is dropped. Mirrors the down-weight K-OOB skip below.
+                const uint32_t gate_col0 = my_nt_gu * per_core_N_gu;
+                const uint32_t gate_col_end =
+                    (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                    for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                        const uint32_t row = kb * in0_block_w_gu + k;
-                        const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                        // N-OOB hidden padding column (col >= N_gate_tiles_full == down's
-                        // K_down_tiles) is left UNWRITTEN: its gate output lands on a down
-                        // K position the down matmul never reduces (see the compute's
-                        // real_k_tiles bound), so the stale L1 is dropped. Mirrors the
-                        // down-weight K-OOB skip below.
-                        if (col < N_gate_tiles_full) {
-                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_read.async_read(
-                                gate_acc,
-                                CoreLocalMem<uint32_t>(l1_w_gate),
-                                gate_tile_bytes,
-                                {.page_id = tile_idx},
-                                {});
-                        }
-                        l1_w_gate += gate_tile_bytes;
-                    }
+                    GuRuns::read(
+                        noc_read,
+                        gate_acc,
+                        kb * in0_block_w_gu + k,
+                        N_gate_tiles_full,
+                        gate_col0,
+                        gate_col_end,
+                        l1_w_gate,
+                        gate_tile_bytes);
+                    l1_w_gate += per_core_N_gu * gate_tile_bytes;
                 }
                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
                 // already read it on NoC 1; reader just takes the L1 start and
@@ -741,19 +753,19 @@ void kernel_main() {
                 }
                 if constexpr (reader_reads_up) {
                     uint32_t l1_w_up = up_block_start;
+                    // N-OOB hidden padding columns left unwritten: same rationale as the gate
+                    // read above, and `up` shares gate's N split so it shares the bounds.
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                            const uint32_t row = kb * in0_block_w_gu + k;
-                            const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                            // N-OOB hidden padding column left unwritten: same rationale as
-                            // the gate read above.
-                            if (col < N_gate_tiles_full) {
-                                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_read.async_read(
-                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            }
-                            l1_w_up += up_tile_bytes;
-                        }
+                        GuRuns::read(
+                            noc_read,
+                            up_acc,
+                            kb * in0_block_w_gu + k,
+                            N_gate_tiles_full,
+                            gate_col0,
+                            gate_col_end,
+                            l1_w_up,
+                            up_tile_bytes);
+                        l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
                 }
                 noc_read.async_read_barrier();
@@ -921,24 +933,23 @@ void kernel_main() {
                 in1_block_start = l1_w;
                 // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
                 // NoC 1 into the upper part of the same slot.
+                // Both OOB directions are left UNWRITTEN.
+                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+                //     decoding to Inf would NaN every valid output column — the bound is what
+                //     makes the skip safe.
+                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+                //     by the writer's col guard.
+                const uint32_t down_col0 = my_nt_d * per_core_N_d;
+                const uint32_t down_col_end =
+                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
                 for (uint32_t k = 0; k < down_split_k; ++k) {
-                    for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                        const uint32_t row = kb * in0_block_w_d + k;
-                        const uint32_t col = my_nt_d * per_core_N_d + n;
-                        // Both OOB directions are left UNWRITTEN.
-                        //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds
-                        //     its K-loop by real_k_tiles, so these are never reduced. Were
-                        //     they reduced, stale L1 decoding to Inf would NaN every valid
-                        //     output column — the bound is what makes the skip safe.
-                        //   * N-OOB (col >= N_down_tiles_full, free dim): the output column
-                        //     is dropped by the writer's col guard.
-                        if (row < K_down_tiles && col < N_down_tiles_full) {
-                            const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_read.async_read(
-                                down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
-                        }
-                        l1_w += down_tile_bytes;
+                    const uint32_t row = kb * in0_block_w_d + k;
+                    if (row < K_down_tiles) {
+                        DRuns::read(
+                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
                     }
+                    l1_w += per_core_N_d * down_tile_bytes;
                 }
             }
 

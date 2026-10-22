@@ -42,18 +42,13 @@ inline void select_cfg_state(const std::uint32_t state_id)
 {
     LLK_ASSERT(state_id <= 1, "Blackhole cleanup configuration state must be zero or one.");
 
+    // No drain is needed after the flip: the state ID is a thread-private register that the thread's
+    // following configuration instructions see in program order, and RISC configuration accesses
+    // select their bank by address.
     if (cfg_state_id != state_id)
     {
         flip_cfg_state_id();
-        tensix_sync();
     }
-}
-
-// Mailbox reads are bare volatile loads. Fence so later config / CLEANUP_DONE
-// writes cannot race ahead when the payload is only checked under LLK_ASSERT.
-inline void mailbox_fence()
-{
-    asm volatile("fence" ::: "memory");
 }
 
 /**
@@ -68,35 +63,33 @@ inline void start()
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "Hardware cleanup requires a TRISC thread.");
 
-    mop_sync();
+    // Waits for the thread to go idle, which includes any MOP still being expanded; a separate
+    // mop_sync() adds nothing. The drain must precede the mailbox write below, a RISC store that
+    // no Tensix-side wait can order.
     tensix_sync();
 
     if constexpr (thread_id == UnpackThreadId)
     {
         mailbox_write(MathThreadId, UNPACK_READY);
         const std::uint32_t configure = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(configure == UNPACK_CONFIGURE, "Unexpected unpack cleanup configuration grant.");
     }
     else if constexpr (thread_id == PackThreadId)
     {
         mailbox_write(MathThreadId, PACK_READY);
         const std::uint32_t configure = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(configure == PACK_CONFIGURE, "Unexpected pack cleanup configuration grant.");
     }
     else
     {
         const std::uint32_t unpack_ready = mailbox_read(UnpackThreadId);
         const std::uint32_t pack_ready   = mailbox_read(PackThreadId);
-        mailbox_fence();
         LLK_ASSERT(unpack_ready == UNPACK_READY, "Unexpected cleanup message from unpack thread.");
         LLK_ASSERT(pack_ready == PACK_READY, "Unexpected cleanup message from pack thread.");
 
         // Unpack configures while Math blocks on CONFIGURED.
         mailbox_write(UnpackThreadId, UNPACK_CONFIGURE);
         const std::uint32_t configured = mailbox_read(UnpackThreadId);
-        mailbox_fence();
         LLK_ASSERT(configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
     }
 }
@@ -116,22 +109,20 @@ inline void finish()
     LLK_ASSERT(cfg_state_id == 0, "Blackhole cleanup must exit with configuration state zero selected.");
 
     // Do not hand off while buffered MOP / Tensix config work could overlap the
-    // next owner (or the caller's return into the next MicroOp).
-    mop_sync();
+    // next owner (or the caller's return into the next MicroOp). tensix_sync() waits for
+    // the thread to go idle, MOPs still being expanded included.
     tensix_sync();
 
     if constexpr (thread_id == UnpackThreadId)
     {
         mailbox_write(MathThreadId, UNPACK_CONFIGURED);
         const std::uint32_t done = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected unpack cleanup completion.");
     }
     else if constexpr (thread_id == PackThreadId)
     {
         mailbox_write(MathThreadId, PACK_CONFIGURED);
         const std::uint32_t done = mailbox_read(MathThreadId);
-        mailbox_fence();
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected pack cleanup completion.");
     }
     else
@@ -139,7 +130,6 @@ inline void finish()
         // Pack configures while Math blocks on CONFIGURED.
         mailbox_write(PackThreadId, PACK_CONFIGURE);
         const std::uint32_t configured = mailbox_read(PackThreadId);
-        mailbox_fence();
         LLK_ASSERT(configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
 
         mailbox_write(UnpackThreadId, CLEANUP_DONE);

@@ -65,7 +65,7 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
     uint32_t num_padded_sticks) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -304,7 +304,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
              {"src_stride_bytes", src_stride_bytes},
              {"dst_stride_bytes", dst_stride_bytes},
              {"begins_bytes", begins_bytes}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

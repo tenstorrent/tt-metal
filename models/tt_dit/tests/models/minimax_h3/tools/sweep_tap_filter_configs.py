@@ -40,6 +40,7 @@ import os
 import sys
 import time
 from collections import Counter
+from contextlib import contextmanager
 
 import torch
 from loguru import logger
@@ -109,16 +110,47 @@ def record_decoder_shapes(mesh_device, *, num_latent_frames: int, factor: int, a
 # ------------------------------------------------------------------------------------------- sweeping
 
 
-def _timed(fn, mesh_device, repeat: int) -> float:
-    """Best-of-``repeat`` device-synchronised wall time of ``fn()``; the first call (compile) is excluded."""
-    fn()
+@contextmanager
+def isolated_trial(mesh_device, cache):
+    """Conv programs retain L1_SMALL reader indices until their program cache is cleared.
+
+    A trial owns its prepared weights and programs. Keep both for warm timing, then
+    release them even after an allocation failure so the next configuration starts
+    with the same capacity. This tool owns the mesh; never use this around a live pipeline.
+    """
     ttnn.synchronize_device(mesh_device)
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    try:
+        yield
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        for key, value in list(cache.items()):
+            if key != "cc":
+                ttnn.deallocate(value)
+        cache.clear()
+        mesh_device.disable_and_clear_program_cache()
+        mesh_device.enable_program_cache()
+
+
+def _timed(fn, mesh_device, repeat: int) -> float:
+    """Best warm wall time, excluding compilation and output disposal."""
+    out = fn()
+    try:
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        ttnn.deallocate(out)
     best = float("inf")
     for _ in range(repeat):
-        t0 = time.perf_counter()
-        fn()
-        ttnn.synchronize_device(mesh_device)
-        best = min(best, time.perf_counter() - t0)
+        out = None
+        try:
+            t0 = time.perf_counter()
+            out = fn()
+            ttnn.synchronize_device(mesh_device)
+            best = min(best, time.perf_counter() - t0)
+        finally:
+            if out is not None:
+                ttnn.deallocate(out)
     return best
 
 
@@ -192,12 +224,17 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
 
     def probe(formulation, slice_config):
         """(fits, max_abs_err) for one configuration -- one run; a RuntimeError is 'does not fit'."""
-        try:
-            out = runner(formulation, slice_config)()
-        except RuntimeError as exc:
-            return dict(fits=False, error=str(exc).splitlines()[0][:200])
-        actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
-        return dict(fits=True, max_abs_err=float((actual - expected).abs().max()))
+        with isolated_trial(mesh_device, cache):
+            out = None
+            try:
+                out = runner(formulation, slice_config)()
+                actual = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+                return dict(fits=True, max_abs_err=float((actual - expected).abs().max()))
+            except RuntimeError as exc:
+                return dict(fits=False, error=str(exc).splitlines()[0][:200])
+            finally:
+                if out is not None:
+                    ttnn.deallocate(out)
 
     def time_all(configs: dict) -> dict:
         """Best-of-``repeat`` seconds per config, measured in two interleaved rounds (forward, then reversed) so
@@ -207,54 +244,58 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
         for round_order in (order, order[::-1]):
             for name in round_order:
                 formulation, slice_config = configs[name]
-                best[name] = min(best[name], _timed(runner(formulation, slice_config), mesh_device, repeat))
+                with isolated_trial(mesh_device, cache):
+                    best[name] = min(best[name], _timed(runner(formulation, slice_config), mesh_device, repeat))
         return best
 
-    result = dict(shape=dict(B=B, T_pad=T_pad, C=C, K=K, stride=stride, T_out=T_out), formulations={})
-    for formulation in applicable_formulations(C):
-        rows = {}
-        n_min = None
-        for n in range(1, max_slices + 1):
-            r = probe(formulation, slice_config_for(n))
-            rows[n] = r
-            if r["fits"]:
-                n_min = n
-                break
-        if n_min is not None:
-            for n in sorted({n_min + 1, n_min + 2, 2 * n_min}):
-                if n <= max_slices and n <= T_out:
-                    rows[n] = probe(formulation, slice_config_for(n))
-        auto = probe(formulation, None)
-        configs = {str(n): (formulation, slice_config_for(n)) for n, r in rows.items() if r["fits"]}
-        if auto["fits"]:
-            configs["auto"] = (formulation, None)
-        seconds = time_all(configs) if configs else {}
-        for n, r in rows.items():
-            if r["fits"]:
-                r["seconds"] = seconds[str(n)]
-        if auto["fits"]:
-            auto["seconds"] = seconds["auto"]
-        fitting = {n: r for n, r in rows.items() if r["fits"]}
-        best_n = min(fitting, key=lambda n: fitting[n]["seconds"]) if fitting else None
-        result["formulations"][str(formulation)] = dict(
-            n_min=n_min,
-            best_n=best_n,
-            best_seconds=fitting[best_n]["seconds"] if best_n else None,
-            auto=auto,
-            by_num_slices={str(n): r for n, r in rows.items()},
-        )
-        logger.info(
-            f"{shape}: {formulation!r}: n_min={n_min} best_n={best_n} "
-            f"best={fitting[best_n]['seconds'] * 1e3 if best_n else float('nan'):.2f} ms "
-            f"auto={'%.2f ms' % (auto['seconds'] * 1e3) if auto['fits'] else 'no fit'}"
-        )
-    if time_mac:
-        mac = probe("mac", None)
-        if mac["fits"]:
-            mac["seconds"] = _timed(runner("mac", None), mesh_device, repeat)
-        result["formulations"]["mac"] = mac
-    ttnn.deallocate(x_dev)
-    return result
+    try:
+        result = dict(shape=dict(B=B, T_pad=T_pad, C=C, K=K, stride=stride, T_out=T_out), formulations={})
+        for formulation in applicable_formulations(C):
+            rows = {}
+            n_min = None
+            for n in range(1, max_slices + 1):
+                r = probe(formulation, slice_config_for(n))
+                rows[n] = r
+                if r["fits"]:
+                    n_min = n
+                    break
+            if n_min is not None:
+                for n in sorted({n_min + 1, n_min + 2, 2 * n_min}):
+                    if n <= max_slices and n <= T_out:
+                        rows[n] = probe(formulation, slice_config_for(n))
+            auto = probe(formulation, None)
+            configs = {str(n): (formulation, slice_config_for(n)) for n, r in rows.items() if r["fits"]}
+            if auto["fits"]:
+                configs["auto"] = (formulation, None)
+            seconds = time_all(configs) if configs else {}
+            for n, r in rows.items():
+                if r["fits"]:
+                    r["seconds"] = seconds[str(n)]
+            if auto["fits"]:
+                auto["seconds"] = seconds["auto"]
+            fitting = {n: r for n, r in rows.items() if r["fits"]}
+            best_n = min(fitting, key=lambda n: fitting[n]["seconds"]) if fitting else None
+            result["formulations"][str(formulation)] = dict(
+                n_min=n_min,
+                best_n=best_n,
+                best_seconds=fitting[best_n]["seconds"] if best_n else None,
+                auto=auto,
+                by_num_slices={str(n): r for n, r in rows.items()},
+            )
+            logger.info(
+                f"{shape}: {formulation!r}: n_min={n_min} best_n={best_n} "
+                f"best={fitting[best_n]['seconds'] * 1e3 if best_n else float('nan'):.2f} ms "
+                f"auto={'%.2f ms' % (auto['seconds'] * 1e3) if auto['fits'] else 'no fit'}"
+            )
+        if time_mac:
+            mac = probe("mac", None)
+            if mac["fits"]:
+                with isolated_trial(mesh_device, cache):
+                    mac["seconds"] = _timed(runner("mac", None), mesh_device, repeat)
+            result["formulations"]["mac"] = mac
+        return result
+    finally:
+        ttnn.deallocate(x_dev)
 
 
 # A slice row is recorded only when the explicit count beats auto-slicing by this margin at the reference length.

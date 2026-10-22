@@ -17,7 +17,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -25,6 +25,10 @@ namespace tt::tt_metal {
 static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES <=
     sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
+
+static_assert(
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
+    "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
@@ -131,7 +135,8 @@ uint32_t DispatchSettings::get_prefetch_q_entries(
     } else if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
-        prefetch_q_entries = 1534;
+        // A whole number of 64 B lines with 4 B entries, which the cached Quasar fetch queue requires.
+        prefetch_q_entries = 1536;
     }
     return prefetch_q_entries;
 }
@@ -139,7 +144,7 @@ uint32_t DispatchSettings::get_prefetch_q_entries(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 
@@ -177,7 +182,6 @@ DispatchSettings& DispatchSettings::build() {
 
 bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
-           prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
            dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
            prefetch_q_entry_size_bytes_ == other.prefetch_q_entry_size_bytes_ &&
            prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
@@ -258,8 +262,9 @@ DispatchSettings& DispatchSettings::dispatch_s_buffer_size(uint32_t val) {
 
 // Sets pointer values based on L1 alignment
 DispatchSettings& DispatchSettings::with_alignment(uint32_t l1_alignment) {
-    this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
-    this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
+    // Only the first sizeof(prefetch_q_ptr_type) bytes hold the pointer; the rest pads the slot to
+    // L1 alignment so the completion queue pointers that follow stay aligned.
+    this->prefetch_q_rd_ptr_size_ = l1_alignment;
     this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
     this->other_ptrs_size = l1_alignment;
 

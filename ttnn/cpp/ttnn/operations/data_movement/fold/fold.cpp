@@ -325,7 +325,7 @@ static Tensor apply_halo_padding(
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -441,6 +441,7 @@ Tensor fold(
 
     const Tensor& input_tensor = input_tensor_;
     TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h and stride_w must be greater than 0");
 
     // use_transpose_as_fold takes a legacy composite path that bypasses prim::fold, so collapse_output cannot be
     // honoured there.
@@ -539,8 +540,10 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        if (processed_tensor.layout() == Layout::TILE) {
-            // TILE-native factory is broken (see fold_multi_core_tiled_interleaved) → untilize→RM.
+        // Rejection falls back to untilize→RM so prim::fold takes the 1-stick RM path; validate_fold FATALs on same
+        // predicate.
+        if (processed_tensor.layout() == Layout::TILE &&
+            !operations::data_movement::is_tile_native_fold_supported(processed_tensor, stride_h, stride_w)) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 

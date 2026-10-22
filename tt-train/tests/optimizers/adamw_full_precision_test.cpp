@@ -214,6 +214,7 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     serialization::StateDict state;
     state["steps"] = initial_steps;
     state["lr"] = pc.lr;
+    state["initial_lr"] = pc.lr;
     state["beta1"] = pc.beta1;
     state["beta2"] = pc.beta2;
     state["epsilon"] = pc.epsilon;
@@ -409,6 +410,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
         serialization::StateDict state;
         state["steps"] = initial_steps;
         state["lr"] = lr;
+        state["initial_lr"] = lr;
         state["beta1"] = state_beta1;
         state["beta2"] = state_beta2;
         state["epsilon"] = epsilon;

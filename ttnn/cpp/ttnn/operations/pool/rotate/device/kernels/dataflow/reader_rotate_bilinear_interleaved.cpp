@@ -97,8 +97,11 @@ void kernel_main() {
         const int32_t term4 = fixed_mul(y_centered_q16, cos_angle_q16);
         const int32_t y_in_q16 = fixed_add(fixed_add(term3, term4), center_y_q16);
 
-        const int32_t h0 = fixed_to_int(y_in_q16);
-        const int32_t h1 = h0 + 1;
+        // Sticks past the tensor's last batch are padding in an unevenly sharded last shard: they
+        // still push a page (compute is sized per shard) but must read only the fill stick.
+        const bool in_tensor = curr_batch < input_batch;
+        const int32_t h0 = in_tensor ? fixed_to_int(y_in_q16) : -1;
+        const int32_t h1 = in_tensor ? h0 + 1 : -1;
         const int32_t w0 = fixed_to_int(x_in_q16);
         const int32_t w1 = w0 + 1;
 
@@ -136,7 +139,7 @@ void kernel_main() {
 
         scalar_dfb.reserve_back(1);
         const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
-        fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+        fill_four_val<scalar_cb_id>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
         scalar_dfb.push_back(1);
 
         noc.async_read_barrier();

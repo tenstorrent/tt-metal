@@ -109,6 +109,12 @@ public:
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        // Fabric cannot be run if we have < 2 devices
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as fabric requires > 2 devices, but only saw {} devices", num_devices);
+            GTEST_SKIP();
+        }
+
         std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {

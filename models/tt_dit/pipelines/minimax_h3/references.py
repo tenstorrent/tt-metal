@@ -9,10 +9,11 @@ The two passes between a request and the packed layout, mirroring the reference'
 ``MiniMaxH3Ref2VAReferenceEncoderStep.encode_references``:
 
 1. :func:`prepare_references` -- validate the request and put every reference on
-   **its own** resolution. An image goes to a 2048 px short edge, a video onto the
-   768 px canvas of its own aspect ratio at 24 fps truncated to the generated frame
-   count, a soundtrack onto the audio VAE's sample rate truncated to the generated
-   duration. None of this touches the target canvas.
+   **its own** resolution. An image is resized by ``reference_resize_mode`` (default
+   ``match`` against the target canvas), a video the same way under ``match`` and
+   otherwise onto the 768 px canvas of its own aspect ratio, at 24 fps truncated to
+   the generated frame count, a soundtrack onto the audio VAE's sample rate
+   truncated to the generated duration.
 2. :func:`encode_references` -- encode each one and, in doing so, **resolve the
    latent geometry the packed layout is built from**. This is why the encode has to
    run before the layout, unlike ``fl2va`` where a keyframe's geometry is the
@@ -47,7 +48,12 @@ import torch
 from PIL import Image, ImageOps
 
 from .conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD, keyframe_condition_rows, sample_posterior
-from .packing import MINIMAX_H3_FPS, MINIMAX_H3_MAX_DURATION, MINIMAX_H3_MIN_DURATION, align_num_frames
+from .packing import (
+    MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
+    MINIMAX_H3_FPS,
+    MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MIN_DURATION,
+)
 from .packing_ref2va import (
     MINIMAX_H3_MAX_REFERENCE_AUDIOS,
     MINIMAX_H3_MAX_REFERENCE_IMAGES,
@@ -64,11 +70,17 @@ from .packing_ref2va import (
     resolve_reference_image_size,
     trim_reference_num_frames,
 )
+from .policy import align_num_frames, get_num_frames
 
 # The audio VAE hops 800 samples at 32 kHz. Its `encode` right-pads the waveform up
 # to a whole hop with ZEROS, which our device encoder does not do -- it asserts
 # divisibility instead -- so the padding happens here, on host.
 MINIMAX_H3_AUDIO_HOP = 800
+
+# Latent count of the longest soundtrack a request can carry (15 s aligned up to 362 frames -> 604 hops).
+MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS = math.ceil(
+    get_num_frames(MINIMAX_H3_MAX_DURATION) * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND / MINIMAX_H3_FPS
+)
 
 
 def check_references(references: Sequence[MiniMaxH3Reference]) -> list[str]:
@@ -103,9 +115,8 @@ def resolve_num_frames(
     """The generated frame count, derived from the references when it was left open.
 
     Only derivable when **exactly one** reference carries audio -- with two, the
-    request is ambiguous about which duration to generate. The duration ceiling is
-    checked against the *aligned* count, because a 14.99 s soundtrack rounds up to
-    362 frames, i.e. 15.083 s, and it is the aligned count that gets generated.
+    request is ambiguous about which duration to generate. A 15 s soundtrack aligns
+    up to 362 frames, i.e. 15.083 s, the same count a 15 s request generates.
     """
     if num_frames is not None:
         return align_num_frames(num_frames)
@@ -124,26 +135,23 @@ def resolve_num_frames(
             f"references[{index}] is {duration:g} s long, outside the {MINIMAX_H3_MIN_DURATION} to "
             f"{MINIMAX_H3_MAX_DURATION} seconds H3 generates"
         )
-    aligned = align_num_frames(round(duration * MINIMAX_H3_FPS))
-    if aligned / MINIMAX_H3_FPS > MINIMAX_H3_MAX_DURATION:
-        raise ValueError(
-            f"references[{index}] is {duration:g} s, which rounds up to {aligned} frames (17n + 5), i.e. "
-            f"{aligned / MINIMAX_H3_FPS:g} s -- past the {MINIMAX_H3_MAX_DURATION} s H3 generates. Pass "
-            "num_frames to generate a shorter video from this soundtrack."
-        )
-    return aligned
+    return get_num_frames(duration)
 
 
 def prepare_references(
     references: Sequence[MiniMaxH3Reference],
     num_frames: int | None,
     audio_sampling_rate: int,
+    *,
+    reference_resize_mode: str = "match",
+    target_height: int | None = None,
+    target_width: int | None = None,
 ) -> tuple[list[MiniMaxH3PreparedReference], int]:
     """Prepare every reference at its own resolution, and resolve the frame count.
 
     A video goes through the two passes the reference's ``ffmpeg`` decode applied,
     **in this order**: the constant-frame-rate resample onto 24 fps, then the
-    LANCZOS rescale onto its own canvas. Frames handed over at 24 fps and already at
+    LANCZOS rescale onto its encode size. Frames handed over at 24 fps and already at
     that canvas therefore reach the VAE untouched, which is the parity-exact route.
     """
     check_references(references)
@@ -162,11 +170,22 @@ def prepare_references(
             # rotation in EXIF and would condition sideways, and a palette or RGBA
             # PNG would reach the channel permute with the wrong channel count.
             image = ImageOps.exif_transpose(image).convert("RGB")
-            height, width = resolve_reference_image_size(*image.size)
+            height, width = resolve_reference_image_size(
+                *image.size,
+                mode=reference_resize_mode,
+                target_width=target_width,
+                target_height=target_height,
+            )
             reference.image = prepare_reference_image(image, height, width)
         elif reference.kind == "video":
             frames = resample_reference_frames(reference_media_to_uint8(entry.video), float(entry.fps))
-            reference.frames = prepare_reference_frames(frames, num_frames)
+            reference.frames = prepare_reference_frames(
+                frames,
+                num_frames,
+                mode=reference_resize_mode,
+                target_width=target_width,
+                target_height=target_height,
+            )
         if reference.has_audio:
             reference.waveform = prepare_reference_waveform(
                 entry.audio,
@@ -190,19 +209,20 @@ def normalize_reference_pixels(frames: np.ndarray, device: torch.device | str | 
     return (pixels.to(torch.float32).div(255.0) - pixel_mean) / pixel_std
 
 
-def pad_waveform_to_hop(waveform: torch.Tensor) -> torch.Tensor:
-    """Right-pad a waveform with zeros up to a whole 800-sample hop.
+def raw_reference_pixels(frames: np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
+    """``(T, H, W, 3)`` uint8 frames to ``(1, 3, T, H, W)`` raw **uint8** pixels, for a ``pixel_norm`` VAE."""
+    return torch.from_numpy(np.ascontiguousarray(frames)).to(device).permute(3, 0, 1, 2)[None]
 
-    The reference audio VAE's ``encode`` does this internally
-    (``autoencoder_kl_minimax_h3_audio.py:607``); the device encoder asserts the length
-    is already a multiple of the hop instead. Load-bearing, not defensive: a 5.1667 s
-    soundtrack is 165333 samples, which is not a multiple of 800.
+
+def pad_waveform_to_max_duration(waveform: torch.Tensor) -> torch.Tensor:
+    """Right-pad a waveform with zeros to the one fixed encode length, 604 hops.
+
+    The encoder is right-pad invariant, so trimming the pad latents afterwards recovers the unpadded answer.
     """
     samples = waveform.shape[-1]
-    padded = math.ceil(samples / MINIMAX_H3_AUDIO_HOP) * MINIMAX_H3_AUDIO_HOP
-    if padded == samples:
-        return waveform
-    return torch.nn.functional.pad(waveform, (0, padded - samples))
+    target = MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * MINIMAX_H3_AUDIO_HOP
+    assert samples <= target, f"a reference soundtrack of {samples} samples exceeds the {target}-sample maximum"
+    return torch.nn.functional.pad(waveform, (0, target - samples))
 
 
 def encode_references(
@@ -218,6 +238,7 @@ def encode_references(
     patch_size: tuple[int, int, int] = (1, 2, 2),
     audio_latent_channels: int = 32,
     device: torch.device | str | None = None,
+    raw_pixels: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """Encode the references into packed condition rows, resolving their geometry.
 
@@ -251,7 +272,8 @@ def encode_references(
             else:
                 # Snapped DOWN to a 17n + 5 the VAE encodes without padding.
                 frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
-            pixels = normalize_reference_pixels(frames, device=device)
+            to_pixels = raw_reference_pixels if raw_pixels else normalize_reference_pixels
+            pixels = to_pixels(frames, device=device)
             # A single frame takes the spatial encoder alone; a video takes the temporal
             # chunking that turns 17n + 5 frames into 5n + 2 latent frames.
             moments = encode_clip(pixels) if reference.kind == "image" else encode_video(pixels)
@@ -262,10 +284,13 @@ def encode_references(
             video_rows.append(keyframe_condition_rows(latents, latents_mean, latents_std, patch_size))
 
         if reference.has_audio:
-            waveform = pad_waveform_to_hop(reference.waveform.to(device) if device else reference.waveform)
+            waveform = reference.waveform.to(device) if device else reference.waveform
+            num_latents = math.ceil(waveform.shape[-1] / MINIMAX_H3_AUDIO_HOP)
+            waveform = pad_waveform_to_max_duration(waveform)
             # The audio VAE is mono; the two stereo channels are two batch items.
             latents = encode_audio(waveform[:, None]).float().cpu().transpose(1, 2)  # (2, T, C)
-            reference.num_audio_latents = latents.shape[1]
+            latents = latents[:, :num_latents]
+            reference.num_audio_latents = num_latents
             normalized = (latents - audio_mean) / audio_std
             # Channel-major rows: the whole left channel, then the whole right one.
             audio_rows.append(normalized.reshape(-1, audio_latent_channels))

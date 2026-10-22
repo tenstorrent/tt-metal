@@ -42,14 +42,15 @@ namespace sfpu {
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
-    sfpi::vFloat three_quarters = 0.75f;
-    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
-
     if constexpr (!FAST_APPROX) {
-        // normalise a (-0.0 and subnormals become +0.0)
+        // normalise a (-0.0 and subnormals become +0.0). This must run before
+        // the exponent read below so that -0.0 follows the same path as +0.0
+        // and log(±0.0) returns -inf, matching torch.
         a = a * 1.0f + 0.0f;
     }
 
+    sfpi::vFloat three_quarters = 0.75f;
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
     e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
     sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();

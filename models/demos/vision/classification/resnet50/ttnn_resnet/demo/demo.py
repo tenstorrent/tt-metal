@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import torch
 from loguru import logger
@@ -27,6 +28,13 @@ resnet_model_config = {
 ops_parallel_config = {}
 
 
+def load_image_processor(model_version, model_location_generator=None):
+    # CIv2: pull the HF image processor config from the large file cache instead of the HF hub
+    if model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
+        model_version = model_location_generator(model_version, model_subdir="", download_if_ci_v2=True)
+    return AutoImageProcessor.from_pretrained(model_version)
+
+
 def run_resnet_imagenet_inference(
     batch_size_per_device,
     iterations,
@@ -39,7 +47,7 @@ def run_resnet_imagenet_inference(
     profiler.clear()
 
     # set up image processor
-    image_processor = AutoImageProcessor.from_pretrained(model_version)
+    image_processor = load_image_processor(model_version, model_location_generator)
 
     batch_size = batch_size_per_device * device.get_num_devices()
     iterations = iterations // device.get_num_devices()
@@ -161,7 +169,7 @@ def run_resnet_inference(
     model_version="microsoft/resnet-50",
 ):
     # set up image processor
-    image_processor = AutoImageProcessor.from_pretrained(model_version)
+    image_processor = load_image_processor(model_version, model_location_generator)
 
     # load inputs
     images = get_data(input_loc)

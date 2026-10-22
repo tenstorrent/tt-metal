@@ -8,7 +8,7 @@ import json
 import dataclasses
 import pprint
 import shutil
-from types import ModuleType
+from types import BuiltinFunctionType, FunctionType, ModuleType
 
 
 from loguru import logger
@@ -31,6 +31,10 @@ def pytest_make_parametrize_id(config, val, argname):
     # Handle TensorSpec objects - create deterministic ID from shape/dtype/layout
     elif type(val).__name__ == "TensorSpec":
         val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
+    # Handle functions (e.g. torch.erfinv) - their default repr embeds a memory address
+    # that differs per xdist worker process, which aborts collection with a mismatch
+    elif isinstance(val, (BuiltinFunctionType, FunctionType)):
+        val = val.__name__
     return f"{argname}={val}"
 
 
@@ -78,4 +82,10 @@ def pre_and_post(request):
         yield
 
     ttnn.tracer.disable_tracing()
-    ttnn.CONFIG = original_config
+    # Restore the live config IN PLACE. `ttnn.CONFIG` is a reference to the C++ `ttnn::CONFIG` global that device
+    # operations and the tensor serializer read; rebinding the module attribute to the snapshot would leave every
+    # later test (and `ttnn.manage_config`) mutating a detached Python-owned copy that the C++ side never sees.
+    for key in ttnn.Config.keys():
+        value = getattr(original_config, key)
+        if getattr(ttnn.CONFIG, key) != value:
+            setattr(ttnn.CONFIG, key, value)

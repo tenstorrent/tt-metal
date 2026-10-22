@@ -10,7 +10,7 @@
 #include <enchantum/iostream.hpp>
 
 #include "hal_types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +38,8 @@ Hal::Hal(
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) :
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
@@ -53,7 +54,8 @@ Hal::Hal(
                 profiler_dram_bank_size_per_risc_bytes,
                 enable_dram_backed_cq,
                 is_simulator,
-                enable_blackhole_dram_programmable_cores);
+                enable_blackhole_dram_programmable_cores,
+                enable_aerisc_ptp_trace);
             break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
@@ -260,16 +262,13 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
     return set;
 }
 
-uint32_t Hal::make_go_msg_u32(
-    uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const {
+uint32_t Hal::make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const {
     uint32_t go_msg_u32_val = 0;
     // We know go_msg_t is the same for all core types, so we can use TENSIX's factory.
     auto go_msg = get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
                       .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
     TT_ASSERT(go_msg.size() == sizeof(uint32_t));
     go_msg.signal() = signal;
-    go_msg.master_x() = master_x;
-    go_msg.master_y() = master_y;
     go_msg.dispatch_message_offset() = dispatch_message_offset;
     return go_msg_u32_val;
 }

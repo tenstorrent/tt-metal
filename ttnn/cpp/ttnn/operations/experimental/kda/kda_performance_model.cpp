@@ -31,16 +31,16 @@ double physical_bytes(const Tensor& tensor) {
     return static_cast<double>(tensor.physical_volume()) * tensor.element_size();
 }
 
-void validate_tensor(const Tensor& tensor, tt::tt_metal::IDevice* device, std::string_view role) {
+void validate_tensor(const Tensor& tensor, const MeshDevice& device, std::string_view role) {
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.buffer() != nullptr,
         "KDA performance model requires allocated device {} tensors",
         role);
-    TT_FATAL(tensor.device() == device, "KDA performance model requires all {} tensors on the same device", role);
+    TT_FATAL(tensor.device() == &device, "KDA performance model requires all {} tensors on the same device", role);
 }
 
 double mandatory_dram_bytes(
-    const Tensor& tensor, tt::tt_metal::IDevice* device, std::string_view role, int& profiler_bytes) {
+    const Tensor& tensor, const MeshDevice& device, std::string_view role, int& profiler_bytes) {
     validate_tensor(tensor, device, role);
     if (!tensor.memory_config().is_dram()) {
         profiler_bytes = 0;
@@ -54,7 +54,7 @@ double mandatory_dram_bytes(
 
 double mandatory_dram_bytes(
     std::span<const Tensor* const> tensors,
-    tt::tt_metal::IDevice* device,
+    const MeshDevice& device,
     std::string_view role,
     std::vector<int>& profiler_bytes) {
     profiler_bytes.assign(tensors.size(), 0);
@@ -69,7 +69,7 @@ double mandatory_dram_bytes(
 
 double mandatory_dram_bytes(
     const std::vector<Tensor>& tensors,
-    tt::tt_metal::IDevice* device,
+    const MeshDevice& device,
     std::string_view role,
     std::vector<int>& profiler_bytes) {
     profiler_bytes.assign(tensors.size(), 0);
@@ -100,8 +100,8 @@ KdaProfilerModel make_profiler_model(
     TT_FATAL(device->arch() == tt::ARCH::BLACKHOLE, "KDA performance model supports Blackhole only");
 
     KdaProfilerModel result;
-    const double total_dram_bytes = mandatory_dram_bytes(inputs, device, "input", result.inputs_bytes) +
-                                    mandatory_dram_bytes(outputs, device, "output", result.outputs_bytes);
+    const double total_dram_bytes = mandatory_dram_bytes(inputs, *device, "input", result.inputs_bytes) +
+                                    mandatory_dram_bytes(outputs, *device, "output", result.outputs_bytes);
 
     const double factor =
         static_cast<double>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));

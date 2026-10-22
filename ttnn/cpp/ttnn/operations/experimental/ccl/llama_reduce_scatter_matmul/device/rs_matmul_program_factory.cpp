@@ -39,6 +39,11 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
     tt::tt_metal::SubDeviceId sub_device_id = operation_attributes.rs_op.subdevice_id.value();
     auto [part_cores, rs_cores] =
         LlamaReduceScatterDeviceOperation::get_rs_core_grids(operation_attributes.rs_op, tensor_args.rs);
+    // The fused matmul is built through matmul_multi_core_reuse_mcast_1d_optimized_helper, which has
+    // no PrefetcherPipe transport: it would build a plain in1 buffer and read the weight from DRAM.
+    TT_FATAL(
+        operation_attributes.matmul.prefetcher_pipes.empty(),
+        "The fused reduce-scatter + matmul path does not support prefetcher_pipes in1 delivery");
     std::optional<CoreRangeSet> reduce_scatter_core_range = rs_cores;
     if (tensor_args.second_weight_tensor.has_value()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler base_signaler = ttnn::experimental::ccl::MatmulFusedOpSignaler(
