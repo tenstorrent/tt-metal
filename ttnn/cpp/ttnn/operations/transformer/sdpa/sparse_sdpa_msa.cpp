@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa_msa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
-#include <tt-metalium/hal.hpp>
 #include <cmath>
 
 namespace ttnn::transformer {
@@ -21,7 +20,8 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool enable_kv_block_cache) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -62,7 +62,7 @@ ttnn::Tensor sparse_sdpa_msa(
     // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
     const bool q_is_fp8 = (q.dtype() == ttnn::DataType::FP8_E4M3);
     auto kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        q.device()->arch(),
         compute_kernel_config,
         /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/true,
@@ -80,7 +80,8 @@ ttnn::Tensor sparse_sdpa_msa(
         cache_batch_idx,
         chunk_start_idx,
         cluster_axis,
-        block_cyclic);
+        block_cyclic,
+        enable_kv_block_cache);
 }
 
 }  // namespace ttnn::transformer

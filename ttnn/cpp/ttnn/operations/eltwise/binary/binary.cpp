@@ -10,6 +10,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -667,17 +668,6 @@ inline auto invoke_binary_ng_impl(
     // faithful only for a finite integer inside the destination's range. Fractional values are
     // truncated, and out-of-range or non-finite ones are undefined: measured before this check,
     // inf reached an int32 kernel as INT32_MIN and 2^32 reached a uint32 one as 0, both silently.
-    // The bounds are written as powers of two because those are exactly representable as floats,
-    // so the comparison cannot round the limit it is testing -- INT32_MAX is not a float32, 2^31 is.
-    const auto integer_path_is_exact = [](float value, DataType dt) {
-        if (!std::isfinite(value) || std::trunc(value) != value) {
-            return false;
-        }
-        if (dt == DataType::INT32) {
-            return value >= -2147483648.0f && value < 2147483648.0f;
-        }
-        return value >= 0.0f && value < 4294967296.0f;
-    };
 
     // A float scalar cannot survive pack_scalar_runtime_arg against a 32-bit integer tensor: it is
     // cast to int32/uint32 there, so 2.5 arrives as 2 and 0.5 as 0, silently. The tensor-tensor path
@@ -733,7 +723,7 @@ inline auto invoke_binary_ng_impl(
             // scalar they cannot represent has to be rejected too instead of being truncated.
             const float scalar_value = std::get<float>(rhs);
             TT_FATAL(
-                integer_path_is_exact(scalar_value, a_dtype),
+                operations::binary::utils::scalar_fits_integer_dtype(scalar_value, a_dtype),
                 "Binary operation {} with a {} tensor cannot represent the scalar {}: only a finite integer within "
                 "the range of {} survives being packed as one, and this value would be changed silently. Typecast "
                 "the input to a floating-point dtype first.",

@@ -26,14 +26,15 @@ void bind_moe_compute(nb::module_& mod) {
     nb::enum_<ttnn::experimental::prim::detail::MoEActivationFunction>(mod, "MoEActivationFunction")
         .value("SILU", ttnn::experimental::prim::detail::MoEActivationFunction::SILU)
         .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU)
-        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU);
+        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU)
+        .value("CLAMPED_SILU", ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU);
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
         Experimental fused MoE compute supporting arbitrary ``(hidden_size, intermediate_size)`` pairs.
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
-        projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
+        projection via W2) and activation (SILU, SwiGLU, GELU, or clamped SiLU) in a fused compute kernel.
         Tile distribution across the matmul ring (12 cores on Wormhole; 7 or 8 cores on
         Blackhole depending on whether one DRAM bank is fused off — auto-detected from the
         live DRAM-bank count) is derived at compile time from ``hidden_size`` and
@@ -113,7 +114,15 @@ void bind_moe_compute(nb::module_& mod) {
 
         - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
           activation function — one of ``ttnn.experimental.MoEActivationFunction``
-          ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
+          ``{SILU, SWIGLU, GELU, CLAMPED_SILU}`` — applied between the W0/W1 and W2 projections.
+
+        - ``activation_limit`` (optional): required for ``CLAMPED_SILU`` and rejected for
+          every other activation; a finite positive ``L`` giving
+          ``silu(min(gate, L)) * clamp(up, -L, L)`` (no additive up bias). Part of the program cache key.
+
+        - ``math_fidelity`` (default ``LoFi``) and ``fp32_dest_acc_en`` (default ``False``): compute
+          settings of the expert matmuls and the activation. ``math_approx_mode`` stays enabled and
+          ``dst_full_sync_en`` disabled. Both are part of the program cache key.
 
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
@@ -156,13 +165,31 @@ void bind_moe_compute(nb::module_& mod) {
 
         **Combine paths**
 
-        When ``compute_only=False``, the op also runs the fused selective_reduce_combine
-        stage and returns **6** tensors. There are two combine modes:
+        When ``compute_only=False``, the op returns **6** tensors, the sixth being the final
+        ``[k, tokens, hidden]`` row-major output. There are three ways it is produced:
 
-        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The combine runs
-          locally with no fabric, mux cores, links, topology, or cross-device semaphore.
-        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` on a multi-device
-          mesh. The combine reduces along that mesh axis using the fabric.
+        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The fused
+          selective_reduce_combine stage runs locally with no fabric, mux cores, links, topology,
+          or cross-device semaphore.
+        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` naming a mesh
+          axis of extent > 1. The fused combine reduces along that axis using the fabric.
+        - Local output mode: the named ``cluster_axis`` has extent 1 (for example axis 0 of a 1x4
+          expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
+          combine kernels run: the op's own writer puts each expert's token rows straight into the
+          final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
+          may be opened without a fabric config); ``topology``, ``num_links``,
+          ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
+          On a multi-device mesh every coordinate must receive the same replicated token set and
+          routing metadata (expert indices, scores and mapping) and returns the partial of its own
+          experts: only the rows its experts own are written, as with the combine, and the other
+          rows of the ``[k, tokens, hidden]`` output keep what the buffer held, so a caller that
+          sums the partials across the other axis passes a zeroed ``optional_output_tensor``.
+          The output is written one token row (2 x H bytes) per page, so its memory config
+          (``output_memory_config``, or the ``optional_output_tensor``'s) must be row-major
+          INTERLEAVED or HEIGHT_SHARDED with whole rows per shard, DRAM or L1; WIDTH_SHARDED,
+          BLOCK_SHARDED and ND sharding are rejected (a row would span several pages). Nothing is
+          staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
+          this path. That form does not support shared experts.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and
@@ -179,7 +206,8 @@ void bind_moe_compute(nb::module_& mod) {
           ``Linear`` or ``Ring`` explicitly (BH Loudbox callers must pass ``Linear``).
         - ``num_links`` (optional, default ``None``): Number of fabric links for the
           multi-device fused combine; auto-detected from the mesh and ``cluster_axis`` when
-          ``None``. Must be ``None`` for single-device fused mode and ``compute_only=True``.
+          ``None`` (1 in local output mode, where no link is opened). Must be ``None`` for
+          single-device fused mode and ``compute_only=True``.
         - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
           the fabric mux on the multi-device fused combine path; must be ``None`` for
           single-device fused mode and ``compute_only=True``. Mux cores may be placed anywhere
@@ -191,7 +219,10 @@ void bind_moe_compute(nb::module_& mod) {
           and route around it. The op raises a clear error only if the grid is too
           small/blocked to fit all groups disjointly.
         - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
-          Memory config for the combine output tensor.
+          Memory config for the combine output tensor. In local output mode it must be
+          row-major INTERLEAVED or HEIGHT_SHARDED (whole token rows per shard); left
+          ``None`` with an ``optional_output_tensor``, it takes that tensor's memory config,
+          and when both are given they must agree.
         - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
           combine output instead of allocating a new one. Must be ``None`` when
           ``compute_only=True`` (no combine output is produced).
@@ -241,7 +272,10 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("num_shared_experts_per_device") = nb::none());
+        nb::arg("num_shared_experts_per_device") = nb::none(),
+        nb::arg("activation_limit") = nb::none(),
+        nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::LoFi,
+        nb::arg("fp32_dest_acc_en") = false);
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

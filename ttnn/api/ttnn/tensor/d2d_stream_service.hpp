@@ -8,16 +8,19 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_stage_gate.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -25,6 +28,26 @@ class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn {
+
+// Receiver stage gate: the receiver holds each landed transfer until the gate selected
+// by the slot id in its metadata is open. Slot ids >= num_gates (e.g.
+// d2d_stream::kUngatedSlot) pass ungated. The two offsets must name different metadata
+// words; this is checked when the receiver is created.
+struct D2DStageGateConfig {
+    uint32_t num_gates = 0;  // enabled when > 0
+    uint32_t slot_id_offset_bytes = 0;
+    uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
+};
+
+// Location of one coord's gates.
+struct D2DStageGateDescriptor {
+    tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
+    tt::tt_metal::CoreCoord service_core_noc;  // virtual NoC coords
+    tt::tt_metal::DeviceAddr gate_base_addr = 0;
+
+    // L1 address of gate i's uint32.
+    tt::tt_metal::DeviceAddr gate_addr(uint32_t gate) const;
+};
 
 // Persistent device-to-device streaming service backed by a fixed device tensor
 // on each side and a MeshSocket running over tt-fabric. The D2D analog of
@@ -107,6 +130,9 @@ struct D2DStreamConfig {
     // behavior). Both meshes derive the same per-coord lane count from the symmetric
     // link topology, so the receiver knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
+
+    // Receiver only.
+    std::optional<D2DStageGateConfig> stage_gate;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -257,6 +283,13 @@ public:
     // side doc for the pairing / ordering contract.
     void wait_for_fabric_links();
     void release_fabric_links();
+
+    // Stage gate. get_num_stage_gates() is 0 without one; the rest TT_FATAL.
+    uint32_t get_num_stage_gates() const;
+    D2DStageGateDescriptor get_stage_gate_descriptor(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+    // Direct L1 access, not ordered with the CQ.
+    void set_stage_gate(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open);
+    bool is_stage_gate_open(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const;
 
 private:
     friend class D2DStreamService;

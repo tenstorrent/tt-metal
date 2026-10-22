@@ -38,7 +38,8 @@ inline void _calculate_typecast_fp32_to_uint16_rows()
     // magnitude, so -1.0 would yield 1), which is why the clamp above is still required.
     // instr_mod1 bit 3 selects an immediate descale operand and applies only to the int32 -> int8
     // modes, so the mode is passed bare rather than OR-ed with (1 << 3).
-    TTI_SFP_STOCH_RND(ckernel::p_sfpu::sfp_stochrnd_rnd_mod::NearEven, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, ckernel::p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(
+        ckernel::p_sfpu::sfp_stochrnd_rnd_mod::NearEven, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, ckernel::p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT16);
 
     // sfpmem::UINT16 is the unsigned-16 store mode: it narrows the value in lreg[1] and places it
     // where the packer reads UInt16 from, the same mode calculate_typecast and
