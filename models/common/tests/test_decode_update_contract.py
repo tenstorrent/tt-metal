@@ -15,7 +15,7 @@ from models.common.sampling.generator import (
     _hash_request_seed_to_device_seed,
 )
 from models.common.warmup.warmup_utils import WarmupForwardMixin
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 def _fake_sampling_generator():
@@ -303,7 +303,7 @@ def test_qwen_vl_generator_forwards_slot_remap_to_shared_sampling_owner():
 
 
 def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     def run(*, sampling_params=None, defer_device_sampling=False, fail_readback=False):
         events = []
@@ -352,7 +352,7 @@ def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
 
 
 def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     calls = [[], []]
     models = []
@@ -370,7 +370,7 @@ def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
 
 
 def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     sampling = SimpleNamespace(seed_manager=SimpleNamespace(max_batch_size=2), apply_slot_remap=lambda remap: None)
     fake = SimpleNamespace(
@@ -386,8 +386,8 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 
 
 def test_sglang_bridge_explicitly_requests_host_authoritative_decode(monkeypatch):
-    from models.tt_transformers.tt.generator import Generator
-    from models.tt_transformers.tt.generator_sglang import LlamaForCausalLM
+    from models.ttt_compat.tt.generator import Generator
+    from models.ttt_compat.tt.generator_sglang import LlamaForCausalLM
 
     calls = []
     monkeypatch.setattr(
@@ -464,7 +464,7 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
 
 
 def test_shared_generator_preserves_explicit_commands_after_mainline_seed_fix():
-    source_path = Path("models/tt_transformers/tt/generator.py")
+    source_path = Path("models/ttt_compat/tt/generator.py")
     source_text = source_path.read_text()
     tree = ast.parse(source_text)
     generator = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Generator")
@@ -533,8 +533,8 @@ def test_gemma4_pli_explicitly_disables_decode_token_feedback():
 
 def test_explicit_trace_reloads_select_mode_and_gemma4_bucket_buffers(monkeypatch):
     from models.demos.gemma4.tt import generator as gemma4_generator
-    from models.tt_transformers.tt import common
-    from models.tt_transformers.tt import generator as shared_generator
+    from models.ttt_compat.tt import common
+    from models.ttt_compat.tt import generator as shared_generator
 
     copies = []
 

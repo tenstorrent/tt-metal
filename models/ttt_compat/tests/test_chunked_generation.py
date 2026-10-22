@@ -9,10 +9,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_block_size, num_blocks_in_seq
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.ttt_compat.tt.common import PagedAttentionConfig, get_block_size, num_blocks_in_seq
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs
 
 
 @torch.no_grad()

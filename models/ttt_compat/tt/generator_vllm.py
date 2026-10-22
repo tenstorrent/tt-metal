@@ -33,9 +33,9 @@ except ImportError:
 import ttnn
 from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
-from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+from models.ttt_compat.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
 def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
@@ -474,7 +474,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         optimizations: str = None,
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+        from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
 
         max_seq_len = 1024 * 128
 
@@ -589,7 +589,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
         assert optimizations is None, "Custom optimizations are not supported for this model"
-        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+        from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 

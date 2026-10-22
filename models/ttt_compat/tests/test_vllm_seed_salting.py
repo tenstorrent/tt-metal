@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 
 def test_vllm_text_transformer_disables_duplicate_seed_salting():
-    from models.tt_transformers.tt import generator_vllm
+    from models.ttt_compat.tt import generator_vllm
 
     hf_config = SimpleNamespace(_name_or_path="meta-llama/Llama-3.1-8B-Instruct")
 

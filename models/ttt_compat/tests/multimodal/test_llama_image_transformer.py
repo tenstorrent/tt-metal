@@ -11,10 +11,10 @@ from transformers import MllamaForConditionalGeneration
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
-from models.tt_transformers.tt.multimodal.llama_vision_encoder import (
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
+from models.ttt_compat.tt.multimodal.llama_vision_encoder import (
     build_encoder_attention_mask,
     mask_tile_padding,
     pad_seq_one_tile,

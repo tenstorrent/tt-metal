@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from models.tt_transformers.tt.lm_head import _lm_head_cache_file_name
+from models.ttt_compat.tt.lm_head import _lm_head_cache_file_name
 
 
 def test_galaxy_2d_lm_head_uses_distinct_cache_key():

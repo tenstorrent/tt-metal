@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.tt_transformers.tt.distributed_norm import galaxy_distributed_norm_core_grid
+from models.ttt_compat.tt.distributed_norm import galaxy_distributed_norm_core_grid
 
 
 @pytest.mark.parametrize(

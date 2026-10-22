@@ -5,7 +5,7 @@ import gc
 
 import pytest
 
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.ttt_compat.tt.model_config import parse_optimizations
 
 # transformers 5.x removed Cache.get_usable_length, but some trust_remote_code reference models
 # still call it -- e.g. microsoft/Phi-3-mini-128k-instruct's modeling_phi3.py does

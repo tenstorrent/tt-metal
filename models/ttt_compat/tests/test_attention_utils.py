@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import torch
 
-from models.tt_transformers.tt import attention as attention_module
+from models.ttt_compat.tt import attention as attention_module
 
 
 class _StopAfterBiasConstruction(Exception):

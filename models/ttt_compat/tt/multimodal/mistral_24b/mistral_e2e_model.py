@@ -11,8 +11,8 @@ pass the resulting visual tokens to the text model along with text tokens.
 
 
 import ttnn
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.multimodal.mistral_24b.vision_model import TtMistralVisionTransformer
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.multimodal.mistral_24b.vision_model import TtMistralVisionTransformer
 
 
 class MistralTransformer(Transformer):

@@ -14,8 +14,8 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-import models.tt_transformers.tt.load_checkpoints as load_checkpoints
-from models.tt_transformers.tt.load_checkpoints import (
+import models.ttt_compat.tt.load_checkpoints as load_checkpoints
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     load_hf_state_dict_filtered,
     load_hf_state_dict_for_layers,
@@ -257,7 +257,7 @@ class TestCheckpointIndexContainment:
         # swallows a ValueError from the per-layer read into a from_pretrained fallback. The index check has
         # to run first and propagate, so from_pretrained must never be reached here.
         pytest.importorskip("ttnn")
-        from models.tt_transformers.tt.model_config import ModelArgs
+        from models.ttt_compat.tt.model_config import ModelArgs
 
         class _FromPretrainedMustNotRun:
             @staticmethod

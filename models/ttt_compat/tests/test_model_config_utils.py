@@ -8,8 +8,8 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model_config import (
     ModelArgs,
     TensorGroup,
     compute_galaxy_padded_vocab_size,
@@ -71,7 +71,7 @@ def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_
     args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
     args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
     args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
-    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_blackhole", lambda: False)
+    monkeypatch.setattr("models.ttt_compat.tt.model_config.is_blackhole", lambda: False)
 
     assert args.use_minimal_prefill_matmul(seq_len)
     assert args.use_minimal_qkv_prefill_matmul(seq_len)

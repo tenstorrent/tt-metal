@@ -6,7 +6,7 @@ import os
 import pytest
 from loguru import logger
 
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
@@ -36,13 +36,13 @@ def test_ci_dispatch(model_weights):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/tt_transformers/tests/test_embedding.py",
-            "models/tt_transformers/tests/test_rms_norm.py",
-            "models/tt_transformers/tests/test_mlp.py",
-            "models/tt_transformers/tests/test_attention.py",
-            "models/tt_transformers/tests/test_attention_prefill.py",
-            "models/tt_transformers/tests/test_decoder.py",
-            "models/tt_transformers/tests/test_decoder_prefill.py",
+            "models/ttt_compat/tests/test_embedding.py",
+            "models/ttt_compat/tests/test_rms_norm.py",
+            "models/ttt_compat/tests/test_mlp.py",
+            "models/ttt_compat/tests/test_attention.py",
+            "models/ttt_compat/tests/test_attention_prefill.py",
+            "models/ttt_compat/tests/test_decoder.py",
+            "models/ttt_compat/tests/test_decoder_prefill.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
         + (["--timeout", "600"] if "mistral" in model_weights.lower() else [])

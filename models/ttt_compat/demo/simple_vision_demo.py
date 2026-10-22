@@ -12,7 +12,7 @@ from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -25,8 +25,8 @@ import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import get_base_model_name
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.common import get_base_model_name
+from models.ttt_compat.tt.generator import Generator, create_submeshes
 
 _MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
 _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
@@ -170,9 +170,9 @@ def create_multimodal_model(
     use_paged_kv_cache=False,
     checkpoint=None,
 ):
-    from models.tt_transformers.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
-    from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
+    from models.ttt_compat.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.multimodal.llama_vision_model import CrossAttentionTransformer
+    from models.ttt_compat.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
     hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
     if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
@@ -276,8 +276,8 @@ def prepare_generator_args(
             False,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
         (
@@ -285,8 +285,8 @@ def prepare_generator_args(
             True,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-trace
         (
@@ -294,8 +294,8 @@ def prepare_generator_args(
             True,  # enable_trace
             16,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch16-trace
         (
@@ -303,8 +303,8 @@ def prepare_generator_args(
             True,  # enable_trace
             32,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch32-trace
         (
@@ -312,8 +312,8 @@ def prepare_generator_args(
             True,  # enable_trace
             4,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_w_text_only.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
+                "models/ttt_compat/demo/sample_prompts/vision_input_data_w_text_only.json",
             ),  # input_prompts
         ),  # batch4-trace-with-text-prompts
     ],

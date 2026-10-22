@@ -10,11 +10,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.lm_head import LMHead
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()

@@ -9,11 +9,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.ttt_compat.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
+from models.ttt_compat.tt.common import Mode, PagedAttentionConfig, sample_host
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs
+from models.ttt_compat.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()

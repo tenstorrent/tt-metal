@@ -35,7 +35,7 @@ Arguments
   --hf-model      Hugging Face model ID forwarded as HF_MODEL.
                   Default: meta-llama/Llama-3.2-1B-Instruct
   --test          Pytest target — a file path, directory, or node id.
-                  Default: models/tt_transformers/demo/simple_text_demo.py
+                  Default: models/ttt_compat/demo/simple_text_demo.py
   -k              Optional pytest -k filter expression to select a subset
                   of tests within the target.
 
@@ -57,13 +57,13 @@ Usage examples
      python host_mem_profiler.py \\
         --mesh-device T3K \\
          --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
-         --test        models/tt_transformers/demo/simple_text_demo.py
+         --test        models/ttt_compat/demo/simple_text_demo.py
 
 # Same model but only the decode token accuracy test case:
      python host_mem_profiler.py \\
          --mesh-device T3K \\
         --hf-model    meta-llama/Llama-3.1-8B-Instruct \\
-        --test        models/tt_transformers/demo/simple_text_demo.py \\
+        --test        models/ttt_compat/demo/simple_text_demo.py \\
         -k            performance-ci-token-mathcing
 """
 
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Profile host-side memory usage of a model test")
     parser.add_argument("--mesh-device", default="N150", help="MESH_DEVICE value (e.g. N150, T3K)")
     parser.add_argument("--hf-model", default="meta-llama/Llama-3.2-1B-Instruct", help="Hugging Face model ID")
-    parser.add_argument("--test", default="models/tt_transformers/demo/simple_text_demo.py", help="Pytest target path")
+    parser.add_argument("--test", default="models/ttt_compat/demo/simple_text_demo.py", help="Pytest target path")
     parser.add_argument("-k", default=None, help="pytest -k filter expression")
     args = parser.parse_args()
 

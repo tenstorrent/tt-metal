@@ -32,7 +32,7 @@ from models.common.sampling import (
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     Mode,
     copy_host_to_device,
     get_all_padded_prefill_lengths,

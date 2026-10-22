@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from models.tt_transformers.tt.load_checkpoints import is_param_replicated_across_shards
+from models.ttt_compat.tt.load_checkpoints import is_param_replicated_across_shards
 
 
 def layer_num(key):

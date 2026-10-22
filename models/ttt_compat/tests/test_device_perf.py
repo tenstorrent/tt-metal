@@ -10,7 +10,7 @@ from loguru import logger
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from models.tt_transformers.tests.test_utils import (
+from models.ttt_compat.tests.test_utils import (
     merge_device_rows,
     print_dict,
     process_measurements,
@@ -54,7 +54,7 @@ def test_device_perf_one_iter(
     max_generated_tokens,
     export_measurements,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True --timeout {INNER_DEMO_TIMEOUT_S}"
+    cmd = f"pytest models/ttt_compat/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True --timeout {INNER_DEMO_TIMEOUT_S}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"
@@ -66,7 +66,7 @@ def test_device_perf_one_iter(
     # Load perf targets
     perf_targets = {}
     try:
-        with open(f"models/tt_transformers/tests/perf_targets/device_perf_{mode}.json", "r") as f:
+        with open(f"models/ttt_compat/tests/perf_targets/device_perf_{mode}.json", "r") as f:
             perf_targets = json.load(f)
     except FileNotFoundError:
         logger.error(

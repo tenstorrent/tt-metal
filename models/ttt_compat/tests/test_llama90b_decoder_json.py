@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
     ModelOptimizations,

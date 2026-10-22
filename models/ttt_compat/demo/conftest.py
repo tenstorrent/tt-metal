@@ -4,7 +4,7 @@
 
 import json
 
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.ttt_compat.tt.model_config import parse_optimizations
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.

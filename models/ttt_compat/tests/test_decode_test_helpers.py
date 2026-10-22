@@ -4,7 +4,7 @@
 
 import unittest
 
-from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
+from models.ttt_compat.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
 
 
 class DecodeStepStateTests(unittest.TestCase):

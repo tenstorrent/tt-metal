@@ -12,14 +12,14 @@ from transformers.models.mllama.modeling_mllama import MllamaForCausalLM
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
-from models.tt_transformers.tests.multimodal.utils import load_partial_weights
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, get_single_rot_mat
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
+from models.ttt_compat.tests.multimodal.utils import load_partial_weights
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode, get_single_rot_mat
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.ttt_compat.tt.rope import get_rot_mats
 
 
 def two_layers_of_90B(partial_state_dict):

@@ -5,13 +5,13 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
-from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
-from models.tt_transformers.tt.mlp import MLP
-from models.tt_transformers.tt.model_config import TensorGroup
+from models.ttt_compat.tt.attention import Attention as DefaultAttention
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.distributed_norm import DistributedNorm
+from models.ttt_compat.tt.mixtral_mlp import TtMixtralMLP
+from models.ttt_compat.tt.mixtral_moe import TtMoeLayer
+from models.ttt_compat.tt.mlp import MLP
+from models.ttt_compat.tt.model_config import TensorGroup
 
 
 class TransformerBlock(LightweightModule):

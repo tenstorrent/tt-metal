@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 def generate_reference_outputs(total_length, output_file, hf_model_name=None):

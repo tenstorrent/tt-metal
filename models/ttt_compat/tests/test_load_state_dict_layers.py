@@ -18,8 +18,8 @@ splits again) all go through here in CI.
 import pytest
 import torch
 
-from models.tt_transformers.tt import model_config as model_config_module
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt import model_config as model_config_module
+from models.ttt_compat.tt.model_config import ModelArgs
 
 N_LAYERS = 1
 MAX_SEQ_LEN = 1024

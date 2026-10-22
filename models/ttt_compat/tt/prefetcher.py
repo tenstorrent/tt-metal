@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 # Prefetcher yaml config file describes the sender/receiver core placements
 _CONFIG_PATH = Path(__file__).parent / "prefetcher/prefetcher_config.yaml"
