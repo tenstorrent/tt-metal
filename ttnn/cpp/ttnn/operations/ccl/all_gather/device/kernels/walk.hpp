@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 
 // Page walk, shared by both all_gather algorithms.
 //   unit:    A bytes, the cut quantum. Local unit u is global unit g = (u / S) * N * S + stripe * S + u % S,
@@ -97,6 +98,13 @@ private:
     uint32_t e_, stride_, xfer_, tile_, lane_, k_, tile_first_, tail_first_, hb_, he_;
 };
 
+// An interleaved TensorAccessor (device): its runs of pages L apart do not depend on where they start.
+template <class T, class = void>
+struct IsInterleavedAcc : std::false_type {};
+template <class T>
+struct IsInterleavedAcc<T, std::void_t<decltype(T::DSpec::is_interleaved)>>
+    : std::bool_constant<T::DSpec::is_interleaved> {};
+
 // P is cut to a multiple of A here. dst_cross: runs may cross output pages. cross_row_enabled: a tuning knob.
 struct WalkGeo {
     uint32_t A, Uo, S, N, E, P;
@@ -122,8 +130,18 @@ struct Walk {
         const bool pages = g.E == g.Uo;
         cross_row_ = g.cross_row_enabled && pages && L_ % (g.N * (g.S / g.Uo)) == 0;
         lambda_ = cross_row_ ? L_ / g.N : (pages ? L_ : 1);
-        const uint32_t per_lane = (g.P - g.P % g.A) / (g.E * g.A);
+        // A column is at most a packet, and (when runs stop at the row end) at most one row of its lane, so
+        // that most columns are a single run.
+        uint32_t per_lane = (g.P - g.P % g.A) / (g.E * g.A);
+        if (!cross_row_ && pages) {
+            const uint32_t row_lane = (g.S / g.E + lambda_ - 1) / lambda_;
+            per_lane = per_lane < row_lane ? per_lane : row_lane;
+        }
         h_ = per_lane > 1 ? per_lane : 1;
+        if constexpr (IsInterleavedAcc<OutAcc>::value) {
+            // n pages L apart are all contiguous, or (page size not the bank pitch) none are: probe once.
+            whole_runs_ = out.num_contiguous_pages(0, L_ + 1) == 2;
+        }
     }
 
     // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for `stripe`. The order depends
@@ -135,7 +153,7 @@ struct Walk {
     }
 
     FORCE_INLINE bool next(DstRun& r) {
-        if (left_ == 0) {
+        if (left_ == 0) [[unlikely]] {
             return false;
         }
         const uint32_t l = tw_.element();
@@ -164,6 +182,9 @@ private:
     FORCE_INLINE uint32_t dst_contig(uint32_t page, uint32_t off, uint32_t n) const {
         if (E_ == Uo_) {
             // Element k is page + k * L.
+            if constexpr (IsInterleavedAcc<OutAcc>::value) {
+                return dst_cross_ && whole_runs_ ? n : 1;
+            }
             return dst_cross_ ? out_.num_contiguous_pages(page, page + (n - 1) * L_ + 1) : 1;
         }
         // Elements are units, lambda == 1: the rest of this page, then whole pages if they follow it.
@@ -177,16 +198,16 @@ private:
 
     const OutAcc& out_;
     uint32_t A_, Uo_, S_, N_, E_, L_, lambda_, h_;
-    bool dst_cross_, cross_row_;
+    bool dst_cross_, cross_row_, whole_runs_ = false;
     uint32_t stripe_units_ = 0, left_ = 0;
     TiledWalk tw_;
 };
 
-// A stretch linear in the source. A whole-page read stops at the source page's allocation (readable_bytes <
-// units * A); the stale slot tail lands in the destination page's padding.
+// A stretch linear in the source, `bytes` a multiple of A. A whole-page read stops at the source page's allocation
+// (readable_bytes < bytes); the stale slot tail lands in the destination page's padding.
 struct Piece {
     uint64_t src;
-    uint32_t units, readable_bytes;
+    uint32_t bytes, readable_bytes;
 };
 
 // Splits a dst run into stretches linear in the input. Splits add reads, never segments.
@@ -199,7 +220,11 @@ struct InputPieces {
         E_(E),
         L_(in.contiguous_page_stride()),
         ai_(in.get_aligned_page_size()),
-        src_cross_(src_cross) {}
+        src_cross_(src_cross) {
+        if constexpr (IsInterleavedAcc<InAcc>::value) {
+            whole_runs_ = in.num_contiguous_pages(0, L_ + 1) == 2;
+        }
+    }
 
     template <class F>
     FORCE_INLINE void for_each(const DstRun& r, F&& f) {
@@ -212,8 +237,13 @@ struct InputPieces {
         for (uint32_t k = 0; k < r.n;) {
             const uint32_t l = r.l0 + k * r.lambda;
             if (pages) {
-                const uint32_t m = in_.num_contiguous_pages(l, l + (r.n - k - 1) * r.lambda + 1);
-                f(Piece{in_.get_noc_addr(l), m * E_, m * E_ * A_});
+                uint32_t m;
+                if constexpr (IsInterleavedAcc<InAcc>::value) {
+                    m = whole_runs_ ? r.n - k : 1;
+                } else {
+                    m = in_.num_contiguous_pages(l, l + (r.n - k - 1) * r.lambda + 1);
+                }
+                f(Piece{in_.get_noc_addr(l), m * E_ * A_, m * E_ * A_});
                 k += m;
             } else {
                 span(l * E_, E_, f);
@@ -237,7 +267,7 @@ private:
             m = std::min(m, n);
             // Without src_cross a piece is inside one page, so ai_ bounds it.
             const uint32_t bytes = m * A_;
-            f(Piece{in_.get_noc_addr(page, off * A_), m, src_cross_ ? bytes : std::min(bytes, ai_ - off * A_)});
+            f(Piece{in_.get_noc_addr(page, off * A_), bytes, src_cross_ ? bytes : std::min(bytes, ai_ - off * A_)});
             u += m;
             n -= m;
         }
@@ -245,7 +275,7 @@ private:
 
     const InAcc& in_;
     uint32_t A_, Ui_, E_, L_, ai_;
-    bool src_cross_;
+    bool src_cross_, whole_runs_ = false;
 };
 
 // Relay: the run is re-read from our own output, where upstream wrote it: one piece at the run's address.
@@ -254,6 +284,6 @@ struct RelayPieces {
 
     template <class F>
     FORCE_INLINE void for_each(const DstRun& r, F&& f) {
-        f(Piece{r.addr, r.n * E, r.n * E * A});
+        f(Piece{r.addr, r.n * E * A, r.n * E * A});
     }
 };

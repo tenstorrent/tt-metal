@@ -45,32 +45,6 @@
 
 namespace {
 
-// The device to_noc_* setters also move each address to the EDM's NOC, and throw on host. encode_segments calls
-// only these two, so the round trip runs it on this stand-in, which makes the same writes to a real header.
-template <class H>
-struct HostCodec {
-    volatile H* h;
-    void to_noc_unicast_write(const tt::tt_fabric::NocUnicastCommandHeader& c, size_t bytes) volatile {
-        h->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        h->command_fields.unicast_write.noc_address = c.noc_address;
-        h->payload_size_bytes = bytes;
-    }
-    void to_noc_unicast_scatter_write(const tt::tt_fabric::NocUnicastScatterCommandHeader& c, size_t bytes) volatile {
-        h->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        auto& s = h->command_fields.unicast_scatter_write;
-        s.chunk_count = c.chunk_count;
-        s.chunk_encoding = tt::tt_fabric::expand_encoding_to_all_chunks(
-            tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
-        for (uint32_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
-            s.noc_address[i] = i < c.chunk_count ? c.noc_address[i] : 0;
-            if (i + 1 < NOC_SCATTER_WRITE_MAX_CHUNKS) {
-                s.chunk_size[i] = i + 1 < c.chunk_count ? c.chunk_size[i] : 0;
-            }
-        }
-        h->payload_size_bytes = bytes;
-    }
-};
-
 void check(bool ok, const std::string& what) {
     if (!ok) {
         throw std::runtime_error(what);
@@ -179,7 +153,7 @@ struct RecRing {
         return kSlotBase + (count % kSlots) * kSlotBytes;
     }
     uint8_t trid() const { return 1 + count % kSlots; }
-    void commit() {
+    void commit(const Seg*, uint32_t) {
         check(open, "commit without a slot");
         open = false;
         ++count;
@@ -192,8 +166,7 @@ void round_trip(const Seg* segs, uint32_t nseg, uint32_t bytes) {
     alignas(16) uint8_t buf[sizeof(H)];
     std::memset(buf, 0xA5, sizeof(buf));  // stale fields must not matter
     auto* hdr = reinterpret_cast<volatile H*>(buf);
-    HostCodec<H> codec{hdr};
-    encode_segments(&codec, segs, nseg, bytes);
+    encode_segments(hdr, segs, nseg, bytes);
     uint32_t i = 0, next = 0;
     for_each_segment(hdr, [&](uint32_t off, uint64_t addr, uint32_t len) {
         check(i < nseg && off == next && addr == segs[i].dst && len == segs[i].bytes, "header round trip");
@@ -204,9 +177,24 @@ void round_trip(const Seg* segs, uint32_t nseg, uint32_t bytes) {
 }
 
 struct RecIo {
+    static constexpr uint32_t kReadsPerPoll = 128;
     std::vector<Packet> packets;
     Packet cur;
-    void read(uint64_t src, uint32_t l1, uint32_t bytes, uint8_t trid) { cur.reads.push_back({src, l1, bytes, trid}); }
+    uint32_t trid = 0, since_poll = 0;
+    void start(uint8_t t) {
+        check(cur.reads.empty(), "start with reads pending");
+        trid = t;
+        since_poll = 0;
+    }
+    void throttle(uint8_t t) {
+        check(t == trid && since_poll == kReadsPerPoll - 1, "throttle cadence");
+        since_poll = 0;
+    }
+    void read(uint64_t src, uint32_t l1, uint32_t bytes, uint8_t t) {
+        check(t == trid, "read trid differs from the open packet's");
+        check(++since_poll < kReadsPerPoll, "reads past the trid limit without a throttle");
+        cur.reads.push_back({src, l1, bytes, t});
+    }
     void write_headers(uint32_t slot, const Seg* segs, uint32_t nseg, uint32_t bytes) {
         round_trip<tt::tt_fabric::LowLatencyPacketHeader>(segs, nseg, bytes);
         round_trip<tt::tt_fabric::HybridMeshPacketHeader>(segs, nseg, bytes);
@@ -275,8 +263,8 @@ std::vector<uint32_t> run_pass(
         // H2: the pieces cover the run in order, each linear in its source.
         uint32_t i = 0;
         auto piece_check = [&](const Piece& p) {
-            check(p.units >= 1 && p.readable_bytes <= p.units * A, "piece size");
-            for (uint32_t k = 0; k < p.units; ++k, ++i) {
+            check(p.bytes >= A && p.bytes % A == 0 && p.readable_bytes <= p.bytes, "piece size");
+            for (uint32_t k = 0; k < p.bytes / A; ++k, ++i) {
                 check(i < units.size(), "pieces overrun the run");
                 const uint64_t want = relay ? out_addr(global(units[i])) : in_addr(units[i]);
                 check(p.src + uint64_t{k} * A == want, "piece not linear in its source");

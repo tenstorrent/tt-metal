@@ -4,6 +4,7 @@
 
 #include "all_gather_program.hpp"
 
+#include <algorithm>
 #include <array>
 #include <set>
 #include <unordered_map>
@@ -69,6 +70,14 @@ Workers make_workers(const AllGatherParams& args, tt::tt_metal::distributed::Mes
 
 }  // namespace
 
+uint32_t signal_packets(const all_gather_plan::Plan& plan) {
+    const uint64_t per_packet = plan.geo.P / plan.geo.A;
+    const uint64_t iter_packets = ((uint64_t{plan.slices.front().ne} * plan.geo.E) + per_packet - 1) / per_packet;
+    // About a third (ring) or a quarter (line: more hops to fill) of an iteration, rounded, within [2, 8].
+    const uint64_t g = plan.ring ? (iter_packets + 1) / 3 : (iter_packets + 2) / 4;
+    return static_cast<uint32_t>(std::clamp<uint64_t>(g, 2, 8));
+}
+
 SlotLayout make_slot_layout(uint32_t num_connections, uint32_t payload_bytes) {
     const auto hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     const uint32_t payload_off = tt::align(num_connections * hdr_bytes, kSlotAlign);
@@ -131,7 +140,7 @@ Kernels create_kernels(
         cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = builder_ct,
             .named_compile_args = builder_named});
     const auto pump = tt::tt_metal::CreateKernel(
@@ -140,7 +149,7 @@ Kernels create_kernels(
         cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
             .named_compile_args = pump_named});
     return Kernels{.builder = builder, .pump = pump};
 }

@@ -106,7 +106,9 @@ PlanIn make_plan_in(
 
 Plan make_plan(const PlanIn&);
 
-bool prefer_unicast(tt::ARCH, bool ring, uint32_t N, uint32_t links, uint64_t busiest_link_bytes);
+// stripe_row_bytes: what one device contributes to one output row (input page bytes x pages per stripe row).
+bool prefer_unicast(
+    tt::ARCH, bool ring, uint32_t N, uint32_t links, uint64_t busiest_link_bytes, uint64_t stripe_row_bytes);
 
 // Near-equal contiguous element ranges, never empty (needs 1 <= links <= elements).
 std::vector<Slice> make_slices(uint32_t elements, uint32_t links);

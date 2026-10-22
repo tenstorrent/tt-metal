@@ -57,7 +57,7 @@ all_gather_program::Kernels create_unicast_program(
             .builder_path = kUnicastBuilderPath,
             .pump_path = kUnicastPumpPath,
             .builder_args = {},
-            .pump_args = {{"signal_units", agp::kSignalPackets * plan.geo.P / plan.geo.A}}},
+            .pump_args = {{"signal_units", agp::signal_packets(plan) * plan.geo.P / plan.geo.A}}},
         input,
         output);
 

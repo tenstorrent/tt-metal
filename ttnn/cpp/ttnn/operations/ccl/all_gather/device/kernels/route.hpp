@@ -59,14 +59,27 @@ FORCE_INLINE void set_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, const Ro
     }
 }
 
+// Slot layout [pad | header 0 .. header C-1 | payload]: header c sits (C - c) headers before the payload, so the
+// last header and the payload are one contiguous packet (one write for connection C - 1).
+FORCE_INLINE constexpr uint32_t slot_header_offset(uint32_t c, uint32_t C, uint32_t hdr_bytes, uint32_t payload_off) {
+    return payload_off - (C - c) * hdr_bytes;
+}
+
 // Routes header c of every slot once, from routes[c]; per packet the builder writes only the NOC command. With
 // alternation, slot parity picks the variant: the slot count is even, so consecutive packets alternate.
 template <bool kMcast, bool kAlternate>
 FORCE_INLINE void route_slots(
-    uint32_t base, uint32_t slots, uint32_t slot_bytes, uint32_t hdr_bytes, const RouteArgs* routes, uint32_t C) {
+    uint32_t base,
+    uint32_t slots,
+    uint32_t slot_bytes,
+    uint32_t hdr_bytes,
+    uint32_t payload_off,
+    const RouteArgs* routes,
+    uint32_t C) {
     for (uint32_t s = 0; s < slots; ++s) {
         for (uint32_t c = 0; c < C; ++c) {
-            auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(base + s * slot_bytes + c * hdr_bytes);
+            auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+                base + s * slot_bytes + slot_header_offset(c, C, hdr_bytes, payload_off));
             set_route<kMcast>(hdr, routes[c], kAlternate ? s % 2 : 0);
         }
     }

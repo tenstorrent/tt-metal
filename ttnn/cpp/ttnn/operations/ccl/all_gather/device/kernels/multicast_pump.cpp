@@ -9,7 +9,7 @@
 #include "pump.hpp"
 #include "route.hpp"
 
-// Multicast pump: sends every slot on all C connections and copies it into our own output.
+// Multicast pump: sends every slot on all C connections (the builder copies it into our own output).
 //
 // Two semaphores, so a peer's next-invocation init can never pass for this invocation's completion:
 //   init: every peer's output is allocated. Sent once on route variant 0 of each connection; the variant-0
@@ -57,7 +57,7 @@ void kernel_main() {
     sem_wait_consume(init_sem, init_expect);
 
     Pump<cb, slots, slot_bytes, payload_off, hdr_bytes, C, A> pump(conns);
-    pump.run(total_units, [&](uint32_t slot, uint32_t) { pump.local_copy(slot); }, []() {});
+    pump.run(total_units, [](uint32_t, uint32_t) {}, []() {});
     pump.finish();
 
     for (uint32_t c = 0; c < C; ++c) {

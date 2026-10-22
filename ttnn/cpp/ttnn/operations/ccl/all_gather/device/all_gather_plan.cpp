@@ -214,9 +214,14 @@ Plan make_plan(const PlanIn& in) {
             why(geo_m, in.forced_unicast, "cannot route on this fabric axis"));
         return plan;
     }
-    const bool unicast = (links_u > 0 && links_m > 0)
-                             ? prefer_unicast(in.arch, plan.ring, in.N, links_u, in.output_packed_bytes / links_u)
-                             : links_u > 0;
+    const bool unicast = (links_u > 0 && links_m > 0) ? prefer_unicast(
+                                                            in.arch,
+                                                            plan.ring,
+                                                            in.N,
+                                                            links_u,
+                                                            in.output_packed_bytes / links_u,
+                                                            uint64_t{in.geo.ci} * in.geo.pages_per_stripe_row)
+                                                      : links_u > 0;
 
     plan.algo = unicast ? AgAlgo::Unicast : AgAlgo::Multicast;
     plan.geo = unicast ? *geo_u : *geo_m;
@@ -225,16 +230,22 @@ Plan make_plan(const PlanIn& in) {
     return plan;
 }
 
-bool prefer_unicast(tt::ARCH arch, bool ring, uint32_t N, uint32_t /*links*/, uint64_t busiest_link_bytes) {
+bool prefer_unicast(
+    tt::ARCH arch, bool ring, uint32_t N, uint32_t /*links*/, uint64_t busiest_link_bytes, uint64_t stripe_row_bytes) {
     // Not covered: BH at 1 link, and at 4+ links where unicast's DRAM reads bind; WH beyond T3000.
     switch (arch) {
-        case tt::ARCH::BLACKHOLE:
-            // Measured at 2 links, payload 15168, 64 KB - 12.8 MB per link: multicast ties or wins at every size on
-            // the 8-device ring (up to 1.7x) and line (up to 2.1x) and the 4-device line (up to 1.9x), so N alone
-            // decides. Both are CPU-bound per packet: unicast's busiest core builds (N-1)/2 (ring) or N-1 (line)
-            // stripes at ~1300 cycles/packet, multicast's pump one stripe at ~2900. By that model unicast wins only
-            // with few relays: ring N <= 5, line N <= 3 (unmeasured: no smaller ring on the box).
-            return ring ? N <= 5 : N <= 3;
+        case tt::ARCH::BLACKHOLE: {
+            // Measured at 2 links, payload 15168, 8 KB - 13 MB per link (8-device ring and line, 4-device line).
+            // Small (< N x 96 KB per link): latency decides. The ring is 5-18% faster on unicast, the line up to
+            // 34% faster on multicast (unicast relays N - 1 hops store-and-forward).
+            // Large: unicast's builder pays per run, and a run is at most a bank's share of a stripe row, so narrow
+            // stripe rows make it CPU-bound (one page per row also puts a stripe in one DRAM bank). Wide rows
+            // (64 KB): unicast is 5-31% faster on both; at 32 KB the ring still is (10-19%), the line is not; at
+            // 2-16 KB multicast is up to 2x faster on both.
+            const bool small = busiest_link_bytes < uint64_t{N} * 96 * 1024;
+            const bool wide = stripe_row_bytes >= (ring ? 32 : 64) * 1024;
+            return ring ? small || wide : !small && wide;
+        }
         case tt::ARCH::WORMHOLE_B0:
             // Ring: the fabric relays for free. Two devices: unicast never relays. 3-6: multicast's edge shrinks
             // with N. 7+: near tie, so size decides.

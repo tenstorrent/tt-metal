@@ -24,15 +24,19 @@
 namespace ttnn::operations::ccl::all_gather_program {
 
 // Pipeline constants. Wrong values cost speed, never correctness. Measured on BH (8x p150b, 2 links, payload
-// 15168): no K x D in {1..4} x {4, 6, 8} and no G in {1, 2, 8, ends only} beats (3, 6, 4) on any cell; K = D - 2
-// (no spare slot) is up to 5% slower, G >= 8 up to 8% on a 2 MB ring. The builders are CPU-bound, not read-bound.
-inline constexpr uint32_t kSlots = 6;          // CB slots: even (slot parity = packet parity) and fixed, so a
-                                               // cached program never depends on later allocator state
-inline constexpr uint32_t kInflight = 3;       // builder reads in flight; <= kSlots - 2 (one held by the pump)
-inline constexpr uint32_t kSignalPackets = 4;  // unicast data_valid cadence, in full packets
+// 15168): (K, D) = (3, 8) and (2, 4) are no faster than (3, 6) at 2 and 26 MB.
+inline constexpr uint32_t kSlots = 6;     // CB slots: even (slot parity = packet parity) and fixed, so a cached
+                                          // program never depends on later allocator state
+inline constexpr uint32_t kInflight = 3;  // local-copy slots a builder holds until their reads land; <= kSlots - 2
 inline constexpr uint32_t kBuilderRtInAddr = 0;
 inline constexpr uint32_t kBuilderRtOutAddr = 1;
 static_assert(kSlots % 2 == 0 && kInflight + 2 <= kSlots);
+
+// Unicast data_valid cadence, in full packets. Each signal is a fabric packet of its own, so a long cadence saves
+// link and pump time, while a short one lets the downstream relay start sooner, which counts when an iteration is
+// only a few packets. Measured on BH (8 devices, 2 links): at 8-26 MB, 1 packet is up to 1.5x slower than 6-16
+// (flat); at 2 MB (9 packets per iteration) 2 (line) or 3 (ring) is best and 8 is up to 20% slower.
+uint32_t signal_packets(const all_gather_plan::Plan& plan);
 
 // Cached per program; identical for both factories. Only the builder holds tensor addresses.
 struct SharedVariables {
@@ -77,8 +81,8 @@ struct Kernels {
     tt::tt_metal::KernelHandle builder;
     tt::tt_metal::KernelHandle pump;
 };
-// Creates the slot CB and both kernels on `cores`: builder on RISCV_0/NOC0, pump on RISCV_1/NOC1 (the EDM's
-// local NOC, so header addresses work for its local copy as-is).
+// Creates the slot CB and both kernels on `cores`: builder on RISCV_0/NOC1, pump on RISCV_1/NOC0. The EDMs write
+// everything they deliver into DRAM over NOC1; on BH, sends to the EDM over NOC1 cost ~4x more than over NOC0.
 Kernels create_kernels(
     tt::tt_metal::Program& program,
     const CoreRangeSet& cores,
