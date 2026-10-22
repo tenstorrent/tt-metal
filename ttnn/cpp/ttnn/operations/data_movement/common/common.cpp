@@ -315,7 +315,8 @@ float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_lo
 
 uint32_t get_effective_l1_cores(
     uint32_t transaction_size, tt::ARCH arch, bool is_write, uint32_t num_nocs, uint32_t num_cores) {
-    float max_bw = (arch == tt::ARCH::WORMHOLE_B0) ? 32.0f : 50.0f;
+    validate_noc_bw_arch(arch);
+    const float max_bw = arch == tt::ARCH::WORMHOLE_B0 ? 32.0f : 50.0f;
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw =
         get_transaction_noc_bw(transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, arch);
