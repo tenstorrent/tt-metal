@@ -1527,8 +1527,14 @@ class BatchedDFlashRunner:
         mesh = model.mesh_device
         self.mesh = mesh
         self.total_users = users
-        # block: the draft / verify block per user (the checkpoint's 8 by default); a lane holds 256 / block users
-        block = block or load_draft_config(draft_snapshot())["block_size"]
+        # block: the draft / verify block per user; a lane holds 256 / block users. Default: the largest block that keeps
+        # every user in one 256-row pass, at least 2 and at most the checkpoint's 8: 8 rows at 32 users, 4 at 64, 2 at 128
+        # and 256 (measured best at ISL 256, 256 new tokens: 32 users 8 rows 247 vs 4 rows 207 tok/s/user; 64 users 4
+        # rows 169 vs 8 rows 124; 128 users 2 rows 93 vs 4 rows 85; 256 users 2 rows 47 vs 4 rows 42)
+        if block is None:
+            ckpt = load_draft_config(draft_snapshot())["block_size"]
+            block = max(2, min(ckpt, self.ROWS // max(users, 1)))
+            block = 1 << (block.bit_length() - 1)  # (a power of 2: the block attention's row counts)
         self.LANE = self.ROWS // block
         lanes = max(1, users // self.LANE)
         assert users == self.LANE * lanes or (lanes == 1 and users <= self.LANE)
