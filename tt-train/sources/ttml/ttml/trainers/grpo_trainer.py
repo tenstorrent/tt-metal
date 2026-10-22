@@ -122,13 +122,13 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
-    # LR schedule; values and semantics follow TRL's ``lr_scheduler_type``:
+    # LR schedule; values follow TRL's ``lr_scheduler_type``:
     #   "constant"             -> flat at base_lr; ``warmup_steps`` is ignored.
     #   "constant_with_warmup" -> linear warmup, then flat at base_lr.
     #   "cosine"               -> linear warmup, then half-cosine anneal to 0.
     #   "cosine_with_min_lr"   -> linear warmup, then half-cosine anneal to base_lr * ``min_lr_rate``.
     lr_scheduler_type: str = "constant_with_warmup"
-    min_lr_rate: float = 0.0
+    min_lr_rate: Optional[float] = None
     # Gradient clipping. Off by default (matches today).
     use_clip_grad_norm: bool = False
     clip_grad_norm_max_norm: float = 1.0
@@ -182,6 +182,9 @@ class GRPOConfig:
                 f"(got {self.checkpoint_interval})."
             )
 
+        if not isinstance(self.warmup_steps, int) or isinstance(self.warmup_steps, bool) or self.warmup_steps < 0:
+            raise ValueError(f"grpo_config: 'warmup_steps' must be a non-negative int (got {self.warmup_steps!r}).")
+
         # LR scheduler name must be one of the TRL ``lr_scheduler_type`` values
         # GRPOTrainer supports.
         _allowed_lr_scheduler = {"constant", "constant_with_warmup", "cosine", "cosine_with_min_lr"}
@@ -193,7 +196,9 @@ class GRPOConfig:
         # ``min_lr_rate`` is a fraction of base_lr (TRL semantics). Only
         # consulted by "cosine_with_min_lr"; still validate the range so a
         # misconfigured yaml fails at construction rather than silently.
-        if not (0.0 <= self.min_lr_rate <= 1.0):
+        if self.lr_scheduler_type == "cosine_with_min_lr" and self.min_lr_rate is None:
+            raise ValueError("grpo_config: 'min_lr_rate' is required when 'lr_scheduler_type' is 'cosine_with_min_lr'.")
+        if self.min_lr_rate is not None and not (0.0 <= self.min_lr_rate <= 1.0):
             raise ValueError(f"grpo_config: 'min_lr_rate' must be in [0.0, 1.0] (got {self.min_lr_rate}).")
         # Grad clip norm is only consulted when clipping is enabled; guard the
         # positive-only invariant so a misconfigured yaml fails loudly.

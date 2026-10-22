@@ -391,7 +391,7 @@ _HOST_GRPO_CONFIG = dict(
 
 @pytest.mark.parametrize("lr_scheduler_type", ["constant", "constant_with_warmup", "cosine", "cosine_with_min_lr"])
 def test_grpo_config_accepts_trl_lr_scheduler_types(lr_scheduler_type):
-    cfg = GRPOConfig(**_HOST_GRPO_CONFIG, lr_scheduler_type=lr_scheduler_type)
+    cfg = GRPOConfig(**_HOST_GRPO_CONFIG, lr_scheduler_type=lr_scheduler_type, min_lr_rate=0.1)
     assert cfg.lr_scheduler_type == lr_scheduler_type
 
 
@@ -401,6 +401,9 @@ def test_grpo_config_accepts_trl_lr_scheduler_types(lr_scheduler_type):
         ({"lr_scheduler_type": "linear"}, "'lr_scheduler_type' must be one of"),
         ({"min_lr_rate": 1.5}, r"'min_lr_rate' must be in \[0.0, 1.0\]"),
         ({"use_clip_grad_norm": True, "clip_grad_norm_max_norm": 0.0}, "'clip_grad_norm_max_norm' must be > 0"),
+        ({"warmup_steps": -2}, "'warmup_steps' must be a non-negative int"),
+        ({"warmup_steps": 0.1}, "'warmup_steps' must be a non-negative int"),
+        ({"lr_scheduler_type": "cosine_with_min_lr"}, "'min_lr_rate' is required"),
     ],
 )
 def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message):
