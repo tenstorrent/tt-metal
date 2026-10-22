@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -34,8 +35,8 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
@@ -135,6 +136,14 @@ private:
     // on the device may not be thread safe.
     std::mutex api_mutex_;
     bool command_list_builder_active_ = false;
+    // Traces and command lists may both be used on a MeshDevice, but never at the same time.
+    // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
+    // command lists are the Metal 2.0 replacement. This counter, and the trace checks that use it
+    // and command_list_builder_active_, can be removed once traces are retired.
+    // Atomic rather than guarded by api_mutex_ so CommandList teardown never takes the API lock. Lists are
+    // only registered while a builder is active, so begin_mesh_trace, which checks both under api_mutex_,
+    // cannot miss a newly built list.
+    std::atomic<uint32_t> num_command_lists_ = 0;
     bool is_internal_state_initialized = false;
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
@@ -145,7 +154,7 @@ private:
     MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
-    // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
+    // New path (MeshDevice::open_mesh_device): a MetalContext instance is created for the
     // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
     bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -177,7 +186,6 @@ private:
         uint32_t l1_size_per_core = 0;
         uint32_t dram_size_per_channel = 0;
         std::set<CoreCoord> ethernet_cores;
-        std::set<CoreCoord> storage_only_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
@@ -301,6 +309,10 @@ public:
     SubDeviceManagerId acquire_command_list_builder();
     void release_command_list_builder();
 
+    // Tracks live CommandLists so trace capture can be rejected while any exist; see num_command_lists_.
+    void register_command_list();
+    void unregister_command_list() noexcept;
+
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
@@ -349,7 +361,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;

@@ -25,8 +25,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         Args:
             input (ttnn.Tensor): Input tensor ``[B*H, T, V]``. Must be an
                 interleaved TILE-layout device tensor with FLOAT32 or BFLOAT16 dtype.
-            gate (ttnn.Tensor): Sigmoid gate ``[B, T, H*V]``. Must be an
-                interleaved TILE-layout BFLOAT16 device tensor.
+            gate (ttnn.Tensor): Sigmoid gate ``[B, T, W]`` with ``W >= gate_column_offset + H*V``.
+                Must be an interleaved TILE-layout BFLOAT16 device tensor.
             weight (ttnn.Tensor): Per-value RMSNorm weight ``[V]``. Must be an
                 interleaved TILE-layout BFLOAT16 device tensor.
             num_heads (int): Number of heads ``H``. The input leading dimension
@@ -40,6 +40,9 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
                 Compute-kernel configuration.
             output_dtype (ttnn.DataType): Output dtype, either FLOAT32 or BFLOAT16.
                 Defaults to FLOAT32.
+            gate_column_offset (int): Tile-aligned first gate column; the gate is read from
+                columns ``[offset, offset + H*V)``, so a fused projection's gate columns need not
+                be sliced out first. Defaults to 0.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -57,7 +60,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("epsilon") = 1e-5f,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output_dtype") = ttnn::DataType::FLOAT32);
+        nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
+        nb::arg("gate_column_offset") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

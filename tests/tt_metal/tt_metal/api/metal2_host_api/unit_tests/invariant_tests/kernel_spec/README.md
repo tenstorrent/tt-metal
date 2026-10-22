@@ -79,7 +79,7 @@ struct KernelSpec {
     // Invariant:
     // - semaphore_spec_name must be unique across all semaphore_bindings.
     // - accessor_name must be unique across all semaphore_bindings.
-    // - Gen 2 & wormhole: Must be empty if is_compute_kernel().
+    // - Wormhole: Must be empty if is_compute_kernel().
     Group<SemaphoreBinding> semaphore_bindings;
 
     struct ScratchpadBinding {

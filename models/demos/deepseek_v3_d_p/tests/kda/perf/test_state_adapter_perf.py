@@ -24,7 +24,9 @@ from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _PCC_THRESHOLD, _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
+    LayerNrmseThresholds,
     check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
 )
@@ -199,6 +201,7 @@ def test_kimi_k3_state_adapter_cost(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)

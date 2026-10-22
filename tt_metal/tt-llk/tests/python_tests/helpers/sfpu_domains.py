@@ -1435,6 +1435,14 @@ def probe_beside(
 # (log(-eps), sqrt(-eps)). Pass include_undefined=True to probe the far side anyway once
 # the goldens model it.
 SingularitySide = Enum("SingularitySide", "BOTH ABOVE BELOW")
+#: Ops with a pole at every non-positive integer. ``_OP_SINGULARITIES`` names points;
+#: these are a lattice, and ``ulp_sweep.claimed_lanes`` excludes it: digamma and
+#: trigamma are infinite there, lgamma's |gamma| is, and every fp32 value of magnitude
+#: 2**23 or more is an integer, so for these ops the far negative tail is poles only.
+_NONPOSITIVE_INTEGER_POLES = frozenset(
+    {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}
+)
+
 _BOTH, _ABOVE, _BELOW = (
     SingularitySide.BOTH,
     SingularitySide.ABOVE,
@@ -2230,7 +2238,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwmul,  # inf*x = inf; 0*x is +0 on a WH/BH 16-bit Dest
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
@@ -2274,6 +2282,9 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # Bit copy of one operand. A non-finite probe checks the pipeline,
+        # not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -39,7 +39,7 @@ def test_element_size(dtype, expected_element_size):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_element_size_throws_for_block_floats(dtype):
     """Block float formats have shared exponents, so per-element size is undefined."""
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # allow-pytest.raises: host binding error, not a device fault
         ttnn.element_size(dtype)
 
 
