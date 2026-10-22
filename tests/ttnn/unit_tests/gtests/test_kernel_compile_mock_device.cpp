@@ -208,9 +208,11 @@ std::vector<CompileCase> unary_sweep_cases() {
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
     return sweep<UnaryOpType>("unary", [](MeshDevice* device, UnaryOpType op_type, DataType dtype) {
-        const auto op = !ttnn::operations::unary::utils::is_parametrized_type(op_type) ? EltwiseUnaryWithParam(op_type)
-                        : dtype == DataType::INT32 ? EltwiseUnaryWithParam(op_type, std::vector<std::int32_t>{1, 1})
-                                                   : EltwiseUnaryWithParam(op_type, std::vector<float>{1.0f, 1.0f});
+        auto op = EltwiseUnaryWithParam(op_type);
+        if (ttnn::operations::unary::utils::is_parametrized_type(op_type)) {
+            op = dtype == DataType::INT32 ? EltwiseUnaryWithParam(op_type, std::vector<std::int32_t>{1, 1})
+                                          : EltwiseUnaryWithParam(op_type, std::vector<float>{1.0f, 1.0f});
+        }
         ttnn::prim::unary(
             device_tensor(device, kTileShape, dtype), {op}, dtype, ttnn::DRAM_MEMORY_CONFIG, false, false, false);
     });
@@ -228,6 +230,7 @@ std::vector<CompileCase> binary_sweep_cases() {
         {"scalar", kTileShape, ttnn::Shape({1, 1, 1, 1})},
     };
     std::vector<std::vector<CompileCase>> groups;
+    groups.reserve(broadcasts.size());
     for (const auto& [name, lhs, rhs] : broadcasts) {
         groups.push_back(
             sweep<BinaryOpType>("binary_" + name, [lhs, rhs](MeshDevice* device, BinaryOpType op_type, DataType dtype) {
@@ -329,9 +332,9 @@ std::vector<CompileCase> data_movement_sweep_cases() {
 
 std::vector<CompileCase> matmul_cases() {
     // 128x128 @ 128x128 on a 2x2 grid: 2x2 output tiles and a 2-tile K block per core.
-    auto matmul = [](ttnn::operations::matmul::MatmulProgramConfig program_config,
+    auto matmul = [](const ttnn::operations::matmul::MatmulProgramConfig& program_config,
                      bool fp32_dest_acc,
-                     std::optional<ttnn::Activation> activation = std::nullopt) {
+                     const std::optional<ttnn::Activation>& activation = std::nullopt) {
         return [program_config, fp32_dest_acc, activation](MeshDevice* device) {
             ttnn::matmul(
                 device_tensor(device, ttnn::Shape({1, 1, 128, 128})),
@@ -440,7 +443,7 @@ std::vector<CompileCase> sdpa_cases() {
                 cu_window_seqlens);
         };
     };
-    auto blackhole_only = [](std::function<void(MeshDevice*)> run) {
+    auto blackhole_only = [](const std::function<void(MeshDevice*)>& run) {
         return [run](MeshDevice* device) {
             if (device->arch() != tt::ARCH::BLACKHOLE) {
                 GTEST_SKIP() << "Blackhole-only op";
@@ -564,8 +567,8 @@ protected:
         env_ = std::make_unique<tt::tt_metal::MetalEnv>(tt::tt_metal::MetalEnvDescriptor{
             .mock_cluster_desc_path =
                 tt::tt_metal::experimental::get_mock_cluster_desc_name(std::get<0>(GetParam()), 1)});
-        device_ =
-            env_->create_mesh_device(tt::tt_metal::distributed::MeshDeviceConfig(env_->get_system_mesh().shape()));
+        device_ = MeshDevice::open_mesh_device(
+            *env_, tt::tt_metal::distributed::MeshDeviceConfig(env_->get_system_mesh().shape()));
         // A cached workload outlives the sub-devices it references and crashes at teardown on mock (#45646).
         device_->disable_and_clear_program_cache();
     }
@@ -586,7 +589,7 @@ protected:
 TEST_P(KernelCompileMockDevice, Compiles) { std::get<1>(GetParam()).run(device_.get()); }
 
 std::string case_name(const ::testing::TestParamInfo<KernelCompileMockDevice::ParamType>& info) {
-    const auto arch = std::get<0>(info.param) == tt::ARCH::WORMHOLE_B0 ? "wormhole" : "blackhole";
+    const auto* const arch = std::get<0>(info.param) == tt::ARCH::WORMHOLE_B0 ? "wormhole" : "blackhole";
     return std::string(arch) + "_" + std::get<1>(info.param).name;
 }
 
