@@ -5,9 +5,9 @@
 // Quasar 2.0 eltwise binary: in0 (A), in1 (B) -> add / sub / mul -> Dest -> pack -> out0, using only the id-free
 // 2.0 compute API and the take-driven Dest chain.
 //
-// Compile-time args: num_tiles, tiles_per_section (full sections use *_block<T, 1>, a shorter tail the runtime
-// binary_block), op (0 add, 1 sub, 2 mul), mode: 0 = one run, 6 = chain switch (unpack-to-dest copy of A for 3
-// sections, binary 5, copy 3), 7 = two DFB sets (A op B -> out0 then B op A -> out1, num_tiles / 2 each).
+// Compile-time args: num_tiles, tiles_per_section (full sections use *_block<T, 1>, a shorter tail re-inits and uses
+// the runtime binary_block), op (0 add, 1 sub, 2 mul), mode: 0 = one run, 6 = chain switch (unpack-to-dest copy of A
+// for 3 sections, binary 5, copy 3), 7 = two DFB sets (A op B -> out0 then B op A -> out1, num_tiles / 2 each).
 
 #include <cstdint>
 
@@ -30,16 +30,22 @@ constexpr EltwiseBinaryType TYPE =
 
 template <typename A, typename B, typename Out, typename Dfb>
 void binary_sections(Dfb& a, Dfb& b, Dfb& out, std::uint32_t num_tiles) {
-    if constexpr (OP == 0) {
-        ex::add_init(a.template front<A>(), b.template front<B>());
-    } else if constexpr (OP == 1) {
-        ex::sub_init(a.template front<A>(), b.template front<B>());
-    } else {
-        ex::mul_init(a.template front<A>(), b.template front<B>());
-    }
-    ex::pack_init(out.template back<Out>());
+    auto init = [&] {
+        if constexpr (OP == 0) {
+            ex::add_init(a.template front<A>(), b.template front<B>());
+        } else if constexpr (OP == 1) {
+            ex::sub_init(a.template front<A>(), b.template front<B>());
+        } else {
+            ex::mul_init(a.template front<A>(), b.template front<B>());
+        }
+        ex::pack_init(out.template back<Out>());
+    };
+    init();
     for (std::uint32_t done = 0; done < num_tiles;) {
         const std::uint32_t n = num_tiles - done < TPS ? num_tiles - done : TPS;
+        if (n != TPS) {  // tail: block ops take no tails, so re-init before the shorter block
+            init();
+        }
         a.wait_front(n);
         b.wait_front(n);
         out.reserve_back(n);
