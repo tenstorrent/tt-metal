@@ -80,7 +80,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
     if any(0 in shape for shape in test_vector["stack_specs"]["tensors_shapes"]):
-        return True, "zero-volume stack is undefined"
+        return True, "zero-volume stack is rejected by ttnn.stack (concat would raise SIGFPE on it)"
     return False, None
 
 
@@ -91,7 +91,7 @@ def run(
     *,
     device,
 ) -> list:
-    dim = stack_specs.get("dim", 0)
+    dim = stack_specs.get("dim", 0)  # torch.stack's default; one traced vector omits it
     torch_input_tensors = [
         torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in stack_specs["tensors_shapes"]
     ]
