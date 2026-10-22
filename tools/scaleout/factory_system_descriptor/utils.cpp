@@ -21,8 +21,8 @@
 #include <google/protobuf/text_format.h>
 #include <yaml-cpp/yaml.h>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <board/board.hpp>
 #include <cabling_generator/cabling_generator.hpp>
 
