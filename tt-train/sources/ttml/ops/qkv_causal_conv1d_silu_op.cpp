@@ -67,6 +67,12 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                                    k_width,
                                    v_width,
                                    channel_chunk_size]() {
+        // backward() seeds only its root: an output the loss does not use contributes zero.
+        for (const auto& out : {out_q, out_k, out_v}) {
+            if (!out->is_grad_initialized()) {
+                out->set_grad(core::zeros_like(out->get_value()));
+            }
+        }
         auto [grad_input, grad_tap0, grad_tap1, grad_tap2, grad_tap3] = metal::qkv_causal_conv1d_silu_bw(
             out_q->get_grad(),
             out_k->get_grad(),

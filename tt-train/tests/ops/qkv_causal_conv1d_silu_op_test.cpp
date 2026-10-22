@@ -263,4 +263,32 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 
 INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
 
+// A loss that uses only q leaves k and v without a gradient; the backward treats them as zero.
+TEST_F(QkvCausalConv1dSiluTest, SingleOutputLoss) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{64, 96, 64, 32};
+    auto p = random_problem(s, 2);
+    auto ref = reference(s, p);
+    p.grad_y = ref.y;
+    xt::view(p.grad_y, xt::all(), xt::all(), xt::range(s.Q, s.C())) = 0.0F;
+    ref = reference(s, p);
+
+    auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
+    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+    std::array<TensorPtr, 4> tap_tensors;
+    for (size_t j = 0; j < 4; ++j) {
+        tap_tensors[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ true);
+    }
+    auto [q, k, v] = ops::qkv_causal_conv1d_silu(
+        input, history, tap_tensors[0], tap_tensors[1], tap_tensors[2], tap_tensors[3], s.Q, s.K, s.V);
+    q->set_grad(q->get_value());
+    q->backward();
+
+    expect_close(ref.grad_input, core::to_xtensor(input->get_grad()), "grad_input");
+    for (size_t j = 0; j < 4; ++j) {
+        expect_close(ref.grad_taps[j], core::to_xtensor(tap_tensors[j]->get_grad()), "grad_tap");
+    }
+}
+
 }  // namespace
