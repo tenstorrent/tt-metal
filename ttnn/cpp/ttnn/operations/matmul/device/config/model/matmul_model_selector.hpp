@@ -56,15 +56,19 @@ struct Pick {
     std::optional<Candidate> candidate;
     std::uint32_t cb_bytes = 0;
     std::string description;
+    // No candidate, for lack of L1: the per-core budget it had (the pick is made again when more is free)
+    std::optional<std::uint32_t> failed_budget;
 };
 
 // Process-wide map from a matmul's full signature (shapes, dtypes, layouts, memory configs, transposes, bias,
-// activation, compute kernel config, device grid, arch and model sha256) to its pick. Thread safe.
+// compute kernel config, device grid and arch) to its pick. Thread safe.
 class PickCache {
 public:
     std::optional<Pick> find(const std::string& key) const;
     // Keeps the first pick stored under a key (concurrent first calls may both score; either result is the same)
     Pick insert(const std::string& key, Pick pick);
+    // Stores a pick made again for a key (a pick that failed for lack of L1, retried with more free)
+    Pick replace(const std::string& key, Pick pick);
     std::size_t size() const;
     void clear();
 

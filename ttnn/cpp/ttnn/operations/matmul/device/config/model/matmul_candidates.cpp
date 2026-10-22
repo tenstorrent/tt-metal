@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/model/matmul_candidates.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
@@ -96,13 +97,15 @@ std::uint32_t max_subblock_area(const MatmulDesc& p, Family family) {
 
 std::uint32_t entry_size(std::uint32_t bytes, const HardwareDesc& hw) { return align_up(bytes, hw.dram_alignment); }
 
+// Buffer sizes are summed in 64 bits: block sizes from huge K or N can exceed 4 GB, which must not wrap into a size
+// that fits L1.
 // in0 entries' bytes (the in0_transposed copy has the same size) plus the out / partials buffers
-std::uint32_t finish(const MatmulDesc& p, std::uint32_t in0_bytes, std::uint32_t k, std::uint32_t out_block_tiles) {
+std::uint64_t finish(const MatmulDesc& p, std::uint64_t in0_bytes, std::uint32_t k, std::uint64_t out_block_tiles) {
     const bool l1_acc = p.packer_l1_acc && p.Kt / k > 1;
     const DataType interm = p.fp32_dest_acc ? DataType::kFloat32 : (l1_acc ? DataType::kBfloat16 : p.out);
-    std::uint32_t total = tile_size_bytes(p.out) * out_block_tiles;
+    std::uint64_t total = std::uint64_t{tile_size_bytes(p.out)} * out_block_tiles;
     if (interm != p.out) {
-        total += tile_size_bytes(interm) * out_block_tiles;  // partials can't share the output buffer
+        total += std::uint64_t{tile_size_bytes(interm)} * out_block_tiles;  // partials can't share the output buffer
     }
     if (p.transpose_a) {
         total += in0_bytes;  // in0_transposed
@@ -110,46 +113,48 @@ std::uint32_t finish(const MatmulDesc& p, std::uint32_t in0_bytes, std::uint32_t
     return total;
 }
 
-std::uint32_t cb_bytes(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse) {
-    const std::uint32_t a_batches = fuse ? 1 : p.batch_a;
-    const std::uint32_t b_batches = fuse ? 1 : p.batch_b;
-    const std::uint32_t nb = p.Kt / b.in0_block_w;
-    const std::uint32_t t0 = entry_size(tile_size_bytes(p.in0), hw);
-    const std::uint32_t t1 = entry_size(tile_size_bytes(p.in1), hw);
-    const std::uint32_t bias = p.bias_tile_bytes != 0 ? entry_size(p.bias_tile_bytes, hw) * b.out_block_w : 0;
+std::uint64_t cb_bytes(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse) {
+    const std::uint64_t a_batches = fuse ? 1 : p.batch_a;
+    const std::uint64_t b_batches = fuse ? 1 : p.batch_b;
+    const std::uint64_t nb = p.Kt / b.in0_block_w;
+    const std::uint64_t t0 = entry_size(tile_size_bytes(p.in0), hw);
+    const std::uint64_t t1 = entry_size(tile_size_bytes(p.in1), hw);
+    const std::uint64_t bias =
+        p.bias_tile_bytes != 0 ? std::uint64_t{entry_size(p.bias_tile_bytes, hw)} * b.out_block_w : 0;
     const std::uint32_t k = b.in0_block_w;
+    const std::uint64_t out_block_tiles = std::uint64_t{b.out_block_h} * b.out_block_w;
     switch (family) {
         case Family::k2D: {
-            const std::uint32_t buf = a_batches * nb > 1 ? kMcastBuffering : 1;
-            const std::uint32_t in0 = t0 * b.out_block_h * k * buf;
-            return in0 + t1 * b.out_block_w * k * buf + bias + finish(p, in0, k, b.out_block_h * b.out_block_w);
+            const std::uint64_t buf = a_batches * nb > 1 ? kMcastBuffering : 1;
+            const std::uint64_t in0 = t0 * b.out_block_h * k * buf;
+            return in0 + t1 * b.out_block_w * k * buf + bias + finish(p, in0, k, out_block_tiles);
         }
         case Family::k1DMcastIn0: {
-            const std::uint32_t in0 = t0 * b.out_block_h * k * (a_batches * nb > 1 ? kMcastBuffering : 1);
-            const std::uint32_t in1 = t1 * b.out_block_w * k * (b_batches * nb > 1 ? kMcastBuffering : 1);
-            return in0 + in1 + bias + finish(p, in0, k, b.out_block_h * b.out_block_w);
+            const std::uint64_t in0 = t0 * b.out_block_h * k * (a_batches * nb > 1 ? kMcastBuffering : 1);
+            const std::uint64_t in1 = t1 * b.out_block_w * k * (b_batches * nb > 1 ? kMcastBuffering : 1);
+            return in0 + in1 + bias + finish(p, in0, k, out_block_tiles);
         }
         case Family::k1DMcastIn1: {
-            std::uint32_t in0_entries = b.out_block_h * k;
+            std::uint64_t in0_entries = std::uint64_t{b.out_block_h} * k;
             if (a_batches == 1 && b_batches > 1) {
-                in0_entries = b.per_core_M * nb * k;  // A resident across B's batches
+                in0_entries = std::uint64_t{b.per_core_M} * nb * k;  // A resident across B's batches
             } else if (a_batches * nb > 1) {
                 in0_entries *= 2;
             }
-            const std::uint32_t in0 = t0 * in0_entries;
-            const std::uint32_t in1 = t1 * b.out_block_w * k * (b_batches * nb > 1 ? 2 : 1);
-            return in0 + in1 + bias + finish(p, in0, k, b.out_block_h * b.out_block_w);
+            const std::uint64_t in0 = t0 * in0_entries;
+            const std::uint64_t in1 = t1 * b.out_block_w * k * (b_batches * nb > 1 ? 2 : 1);
+            return in0 + in1 + bias + finish(p, in0, k, out_block_tiles);
         }
         case Family::kReuse: {
-            const std::uint32_t pm_batch = b.per_core_M > p.Mt ? p.Mt : b.per_core_M;
-            const std::uint32_t in0 = t0 * pm_batch * k * 2;
-            const std::uint32_t in1 = t1 * b.per_core_N * k * 2;
+            const std::uint64_t pm_batch = b.per_core_M > p.Mt ? p.Mt : b.per_core_M;
+            const std::uint64_t in0 = t0 * pm_batch * k * 2;
+            const std::uint64_t in1 = t1 * b.per_core_N * k * 2;
             // the whole per-batch [M, N] bias block, unaligned
-            const std::uint32_t reuse_bias = p.bias_tile_bytes * pm_batch * b.per_core_N;
-            return in0 + in1 + reuse_bias + finish(p, in0, k, b.per_core_M * b.per_core_N);
+            const std::uint64_t reuse_bias = p.bias_tile_bytes * pm_batch * b.per_core_N;
+            return in0 + in1 + reuse_bias + finish(p, in0, k, std::uint64_t{b.per_core_M} * b.per_core_N);
         }
     }
-    return 0;
+    TT_THROW("Unreachable");
 }
 
 bool fits(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse) {
@@ -818,7 +823,10 @@ std::uint32_t circular_buffer_bytes(const MatmulDesc& p, const HardwareDesc& hw,
     if (b.in0_block_w == 0) {
         return 0;
     }
-    return cb_bytes(p, hw, c.family, b, c.family == Family::kReuse ? true : c.fuse_batch);
+    // Saturate: a config whose buffers exceed 4 GB never fits a budget
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        cb_bytes(p, hw, c.family, b, c.family == Family::kReuse ? true : c.fuse_batch),
+        std::numeric_limits<std::uint32_t>::max()));
 }
 
 std::vector<Candidate> enumerate_candidates(const MatmulDesc& p, const HardwareDesc& hw) {

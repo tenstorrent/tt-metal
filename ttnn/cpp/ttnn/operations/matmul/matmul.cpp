@@ -15,6 +15,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
+#include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/config/model/matmul_model_hook.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -335,8 +336,9 @@ static ttnn::Tensor bound_matmul(
 
     // Opt-in (ttnn.CONFIG.matmul_model_config): the matmul config model chooses the program config, once per matmul,
     // for the inputs, bias and attributes the device op gets. The compute kernel config stays the one resolved above
-    // without a program config; nullopt keeps the default selection (prim::matmul's get_program_config).
-    if (!attributes.program_config.has_value()) {
+    // without a program config; nullopt keeps the default selection (prim::matmul's get_program_config). With the
+    // flag off nothing but the flag is read.
+    if (ttnn::CONFIG.get<"matmul_model_config">() && !attributes.program_config.has_value()) {
         attributes.program_config = model::model_program_config(
             input_tensor_a_adjusted,
             input_tensor_b_adjusted,

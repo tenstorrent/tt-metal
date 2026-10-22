@@ -135,6 +135,21 @@ TEST(MatmulModelCandidates, TighterBudgetOnlyRemoves) {
     EXPECT_TRUE(enumerate_candidates(p, HardwareDesc::blackhole(11, 10, 0)).empty());
 }
 
+TEST(MatmulModelCandidates, HugeKNeverWrapsIntoTheBudget) {  // 32x33554432 @ 33554432x32 bf16, Kt = 2^20
+    // Multi-GB K blocks must not wrap around 32 bits into a size that fits L1
+    MatmulDesc p = desc(1, 1u << 20, 1);
+    p.out = DataType::kBfloat8B;
+    p.packer_l1_acc = false;
+    const auto hw = HardwareDesc::blackhole(11, 10, kBudget);
+    const auto cs = enumerate_candidates(p, hw);
+    EXPECT_FALSE(cs.empty());
+    for (const auto& c : cs) {
+        // A K block of in0 alone is in0_block_w bf16 tiles
+        EXPECT_LE(std::uint64_t{c.blocking.in0_block_w} * 2048, kBudget) << "in0_block_w " << c.blocking.in0_block_w;
+        EXPECT_LE(circular_buffer_bytes(p, hw, c), kBudget);
+    }
+}
+
 TEST(MatmulModelCandidates, Unsupported) {
     MatmulDesc p = desc(4, 4, 4);
     p.a.sharded = true;

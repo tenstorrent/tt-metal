@@ -7,10 +7,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <limits>
 #include <numeric>
+#include <system_error>
 
 #include <tt_stl/assert.hpp>
 
@@ -21,13 +22,20 @@ std::unique_ptr<const ConfigModel> ConfigModel::load_file(const std::string& pat
         error = "no model path (ttnn.CONFIG.matmul_model_path)";
         return nullptr;
     }
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        error = "cannot open " + path;
+    // Read with an explicit size: streaming a directory or special file through istreambuf_iterator can throw
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) {
+        error = path + " is not a regular file" + (ec ? " (" + ec.message() + ")" : "");
         return nullptr;
     }
-    const std::vector<char> bytes{std::istreambuf_iterator<char>(file), {}};
-    if (!file.good() && !file.eof()) {
+    const std::uintmax_t size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        error = "cannot stat " + path + ": " + ec.message();
+        return nullptr;
+    }
+    std::ifstream file(path, std::ios::binary);
+    std::vector<char> bytes(size);
+    if (!file || !file.read(bytes.data(), static_cast<std::streamsize>(size))) {
         error = "cannot read " + path;
         return nullptr;
     }
@@ -112,6 +120,11 @@ std::optional<Pick> PickCache::find(const std::string& key) const {
 Pick PickCache::insert(const std::string& key, Pick pick) {
     std::lock_guard lock(mutex_);
     return picks_.try_emplace(key, std::move(pick)).first->second;
+}
+
+Pick PickCache::replace(const std::string& key, Pick pick) {
+    std::lock_guard lock(mutex_);
+    return picks_.insert_or_assign(key, std::move(pick)).first->second;
 }
 
 std::size_t PickCache::size() const {

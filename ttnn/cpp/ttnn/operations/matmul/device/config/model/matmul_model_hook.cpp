@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string_view>
+#include <variant>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -18,6 +19,7 @@
 
 #include "ttnn/config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/config/model/matmul_model_selector.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -216,6 +218,11 @@ std::optional<Call> describe(
         why = reason;
         return std::nullopt;
     }
+    if (p.batch_b > 1 && p.batch_a != p.batch_b) {
+        // The model's problem has one batch count (A's): it would score a broadcast A as a single batch
+        why = "B batched without matching A batches";
+        return std::nullopt;
+    }
 
     // The model's view: logical sizes in elements; it tells interleaved DRAM from interleaved L1
     MatmulProblem& m = call.problem;
@@ -293,6 +300,27 @@ std::uint32_t l1_cb_budget(const Tensor& a, const MatmulDesc& p, bool out_in_l1)
         budget = per_bank >= budget ? 0 : budget - per_bank;
     }
     return static_cast<std::uint32_t>(budget > kL1HeadroomBytes ? budget - kL1HeadroomBytes : 0);
+}
+
+// K tiles per K block of the config matmul's default selection would use, if that config has K blocks
+std::optional<std::uint32_t> default_in0_block_w(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes) {
+    const std::uint32_t bias_tile_bytes =
+        bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0;
+    const MatmulProgramConfig config = ttnn::operations::matmul::get_program_config(
+        a, b, attributes.transpose_a, attributes.transpose_b, bias_tile_bytes, attributes);
+    return std::visit(
+        [](const auto& c) -> std::optional<std::uint32_t> {
+            if constexpr (requires { c.in0_block_w; }) {
+                return static_cast<std::uint32_t>(c.in0_block_w);
+            } else {
+                return std::nullopt;
+            }
+        },
+        config);
 }
 
 MatmulProgramConfig to_program_config(const Candidate& c) {
@@ -404,39 +432,48 @@ std::optional<MatmulProgramConfig> choose(
         last = "model: " + pick.description;
         return to_program_config(*pick.candidate);
     };
-    if (auto cached = pick_cache().find(key)) {
+    const auto cached = pick_cache().find(key);
+    // A pick that failed for lack of L1 is made again once more L1 is free
+    if (cached && !(cached->failed_budget && budget > *cached->failed_budget)) {
         return use(*cached);
     }
 
     auto candidates = enumerate_candidates(call->desc, call->hw);
+    const bool none_fit = candidates.empty();
+    std::string none_left = "no candidate fits L1";
     if (bias.has_value()) {
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
     // Without packer L1 accumulation or fp32 dest accumulation the factories keep partial sums in the output format
-    // between K blocks, so with a block-float output every extra K block re-quantizes them (the model scores time,
-    // not accuracy). Keep the candidates with the fewest K blocks.
+    // between K blocks, so with a block-float output every K block after the first re-quantizes them (the model
+    // scores time, not accuracy). Keep the candidates with no more K blocks than the default selection's config, so
+    // the model never rounds the partial sums more often than matmul does without it.
     const MatmulDesc& p = call->desc;
     if (!p.packer_l1_acc && !p.fp32_dest_acc && (p.out == DataType::kBfloat8B || p.out == DataType::kBfloat4B) &&
         !candidates.empty()) {
-        auto k_blocks = [&](const Candidate& c) {
-            return (p.Kt + c.blocking.in0_block_w - 1) / c.blocking.in0_block_w;
-        };
-        const auto fewest = k_blocks(
-            *std::min_element(candidates.begin(), candidates.end(), [&](const Candidate& x, const Candidate& y) {
-                return k_blocks(x) < k_blocks(y);
-            }));
-        std::erase_if(candidates, [&](const Candidate& c) { return k_blocks(c) > fewest; });
+        auto k_blocks = [&](std::uint32_t in0_block_w) { return (p.Kt + in0_block_w - 1) / in0_block_w; };
+        const auto default_k_block = default_in0_block_w(a, b, bias, attributes);
+        if (default_k_block && *default_k_block > 0) {
+            const std::uint32_t limit = k_blocks(*default_k_block);
+            std::erase_if(candidates, [&](const Candidate& c) { return k_blocks(c.blocking.in0_block_w) > limit; });
+            none_left = fmt::format("no candidate fits L1 with at most the default's {} K blocks", limit);
+        } else {
+            candidates.clear();
+            none_left = "block-float output and the default config has no K blocking to compare with";
+        }
     }
     const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
     Pick pick;
-    pick.description = candidates.empty() ? "no candidate fits L1" : "the model can't score any candidate";
+    pick.description = candidates.empty() ? none_left : "the model can't score any candidate";
     std::size_t rejected = 0;
+    std::size_t rejected_for_l1 = 0;
     for (std::size_t i : rank_by_prediction(predicted)) {
         const Candidate& c = candidates[i];
         const std::uint32_t bytes = circular_buffer_bytes(call->desc, call->hw, c);
         if (bytes > budget) {
             ++rejected;
+            ++rejected_for_l1;
             continue;
         }
         const MatmulProgramConfig config = to_program_config(c);
@@ -458,11 +495,14 @@ std::optional<MatmulProgramConfig> choose(
     if (!pick.candidate && rejected > 0) {
         pick.description = fmt::format("all {} scored candidates rejected", rejected);
     }
-    // Time of this first (uncached) selection; later calls reuse the pick and its description
+    if (!pick.candidate && (none_fit || rejected_for_l1 > 0)) {
+        pick.failed_budget = budget;
+    }
+    // Time of this selection; later calls reuse the pick and its description
     pick.description += fmt::format(
         " (selected in {} us)",
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
-    return use(pick_cache().insert(key, std::move(pick)));
+    return use(cached ? pick_cache().replace(key, std::move(pick)) : pick_cache().insert(key, std::move(pick)));
 }
 
 }  // namespace

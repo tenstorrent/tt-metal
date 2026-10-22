@@ -5,7 +5,7 @@
 """The opt-in matmul config model (ttnn.CONFIG.matmul_model_config, #57884).
 
 Needs a Blackhole device. The tests that turn the model on use the blob that ships with ttnn (the default
-ttnn.CONFIG.matmul_model_path), or TT_MATMUL_MODEL_BLOB when set; they are skipped if the blob is missing.
+ttnn.CONFIG.matmul_model_path), or TT_MATMUL_MODEL_BLOB when set; a missing blob fails them.
 """
 
 import os
@@ -17,6 +17,7 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+last_pick = ttnn.operations.matmul.matmul_model_last_pick
 MODEL_BLOB = os.environ.get("TT_MATMUL_MODEL_BLOB") or str(ttnn.CONFIG.matmul_model_path)
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the matmul config model covers Blackhole only")
@@ -24,8 +25,7 @@ pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the matmul config mo
 
 @pytest.fixture
 def model_on():
-    if not os.path.isfile(MODEL_BLOB):
-        pytest.skip(f"no model blob at {MODEL_BLOB}")
+    assert os.path.isfile(MODEL_BLOB), f"the matmul config model blob is missing: {MODEL_BLOB}"
     with ttnn.manage_config("matmul_model_path", MODEL_BLOB), ttnn.manage_config("matmul_model_config", True):
         yield
 
@@ -99,8 +99,8 @@ CASES = [
 @pytest.mark.parametrize("a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b", CASES)
 def test_model_config_pcc(device, model_on, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
     expected, got = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
-    pick = ttnn.matmul_model_last_pick()
-    assert pick.startswith("model: ") or pick.startswith("default: "), pick
+    pick = last_pick()
+    assert pick.startswith("model: "), f"the model should choose for this interleaved matmul: {pick}"
     assert_with_pcc(expected, got, 0.99 if dtype_b == ttnn.bfloat8_b else 0.999)
 
 
@@ -108,13 +108,13 @@ def test_model_picks_for_a_plain_matmul(device, model_on):
     run_matmul(
         device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     )
-    assert ttnn.matmul_model_last_pick().startswith("model: "), ttnn.matmul_model_last_pick()
+    assert last_pick().startswith("model: "), last_pick()
     # The second call is a cache hit with the same pick
-    first = ttnn.matmul_model_last_pick()
+    first = last_pick()
     run_matmul(
         device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     )
-    assert ttnn.matmul_model_last_pick() == first, f"cache hit changed the pick: {ttnn.matmul_model_last_pick()}"
+    assert last_pick() == first, f"cache hit changed the pick: {last_pick()}"
 
 
 def test_model_keeps_default_for_sharded(device, model_on):
@@ -128,7 +128,23 @@ def test_model_keeps_default_for_sharded(device, model_on):
         b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     out = ttnn.matmul(ta, tb)
-    assert ttnn.matmul_model_last_pick().startswith("default: "), ttnn.matmul_model_last_pick()
+    assert last_pick().startswith("default: "), last_pick()
+    assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.999)
+
+
+def test_model_keeps_default_for_broadcast_a(device, model_on):
+    """A broadcast over a batched B: the model describes one batch count, so it keeps today's default."""
+    torch.manual_seed(0)
+    a = torch.randn(1, 1, 32, 64).bfloat16()
+    b = torch.randn(1, 4, 64, 64).bfloat16()
+    ta = ttnn.from_torch(
+        a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tb = ttnn.from_torch(
+        b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.matmul(ta, tb)
+    assert last_pick().startswith("default: B batched"), last_pick()
     assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.999)
 
 
@@ -137,7 +153,7 @@ def test_explicit_program_config_is_untouched(device, model_on):
     run_matmul(
         device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     )
-    before = ttnn.matmul_model_last_pick()
+    before = last_pick()
     a = torch.randn(1, 1, 64, 128).bfloat16()
     b = torch.randn(1, 1, 128, 64).bfloat16()
     ta = ttnn.from_torch(
@@ -157,7 +173,7 @@ def test_explicit_program_config_is_untouched(device, model_on):
         fused_activation=None,
     )
     out = ttnn.matmul(ta, tb, program_config=config)
-    assert ttnn.matmul_model_last_pick() == before, f"the model was consulted: {ttnn.matmul_model_last_pick()}"
+    assert last_pick() == before, f"the model was consulted: {last_pick()}"
     assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.999)
 
 
@@ -177,7 +193,7 @@ def test_block_float_output_keeps_precision(device, model_on):
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False
     )
     out = ttnn.matmul(ta, tb, dtype=ttnn.bfloat8_b, compute_kernel_config=config)
-    assert ttnn.matmul_model_last_pick().startswith("model: "), ttnn.matmul_model_last_pick()
+    assert last_pick().startswith("model: "), last_pick()
     assert_with_pcc(ttnn.to_torch(ta).float() @ ttnn.to_torch(tb).float(), ttnn.to_torch(out), 0.99)
 
 
@@ -185,8 +201,8 @@ def test_block_float_output_keeps_precision(device, model_on):
 def test_flag_off_is_the_default(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
     """Flag off (the default): the model is never consulted and matmul's results are bit-identical run to run."""
     assert not ttnn.CONFIG.matmul_model_config, "ttnn.CONFIG.matmul_model_config should be off by default"
-    before = ttnn.matmul_model_last_pick()
+    before = last_pick()
     _, first = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
     _, second = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
-    assert ttnn.matmul_model_last_pick() == before, f"the model was consulted: {ttnn.matmul_model_last_pick()}"
+    assert last_pick() == before, f"the model was consulted: {last_pick()}"
     assert torch.equal(first, second), "flag-off matmul is not deterministic run to run"

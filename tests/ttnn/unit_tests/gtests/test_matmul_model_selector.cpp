@@ -96,9 +96,7 @@ std::filesystem::path model_blob_path() {
 
 TEST(MatmulModelSelector, ScoresCandidatesWithTheModel) {
     const std::filesystem::path path = model_blob_path();
-    if (!std::filesystem::exists(path)) {
-        GTEST_SKIP() << "no model blob at " << path;
-    }
+    ASSERT_TRUE(std::filesystem::exists(path)) << "the matmul config model blob is missing: " << path;
     std::string error;
     const auto model = ConfigModel::load_file(path.string(), error);
     ASSERT_NE(model, nullptr) << error;

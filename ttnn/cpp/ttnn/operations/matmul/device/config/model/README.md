@@ -17,11 +17,13 @@ ttnn.CONFIG.matmul_model_config = True
 ```
 
 The model ships with ttnn (`matmul_model.blob` in this directory) and `ttnn.CONFIG.matmul_model_path` points at it by
-default. Set `matmul_model_path` to use another blob.
+default. Set `matmul_model_path` to use another blob. The default is filled in by `import ttnn`; a C++ program that
+does not import ttnn's Python package sets `matmul_model_path` itself (the blob is installed under the runtime root at
+`ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.blob`).
 
 When the flag is off nothing here runs and nothing is loaded. When it is on, the blob is loaded once, lazily, on
 the first matmul the model is eligible for. If it can't be loaded, a warning is logged once and matmul behaves as
-with the flag off. `ttnn.matmul_model_last_pick()` returns, for this thread's last matmul,
+with the flag off. `ttnn.operations.matmul.matmul_model_last_pick()` returns, for this thread's last matmul,
 `"model: <program config>"` or `"default: <reason>"` (for tests and benchmarks).
 
 ## When the model chooses
@@ -34,6 +36,8 @@ The model chooses only when all of the following hold. Otherwise today's default
 - The dtypes are bf16, bfp8_b, bfp4_b or fp32.
 - There is no global CB, sub-device, prefetcher pipe, `untilize_out` or `in0_column_offset`.
 - A fused bias, if any, is a single row.
+- If B is batched, A has the same batch count. A broadcast A over a batched B keeps the default: the model describes
+  a single batch count.
 - `sparse_matmul` is never affected.
 
 It decides once per matmul, in `bound_matmul`, on the inputs, bias and attributes the device op receives:
@@ -57,11 +61,17 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
      output and 16 KiB.
 2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and 57 features per candidate.
    `gbdt_model.{hpp,cpp}` evaluates the LightGBM residual. The prediction is `base_ns * exp(gbdt(features))`.
-3. **Pick.** Candidates are tried in order of prediction; ties keep candidate order. The first one that passes the
+3. **Precision.** With a bfp8_b or bfp4_b output and neither packer L1 nor fp32 accumulation, the factories keep
+   partial sums in the output format, so every K block after the first re-quantizes them. Only candidates with no
+   more K blocks than the default selection's config are kept, so the model never rounds more often than matmul does
+   without it. Otherwise the model changes only the program config: output dtype, math fidelity and accumulation stay
+   what the caller asked for.
+4. **Pick.** Candidates are tried in order of prediction; ties keep candidate order. The first one that passes the
    device op's own validation (`validate_on_program_cache_miss`) and the live L1 budget is used. If none passes, or
    none can be scored, the default selection runs.
-4. **Cache.** Picks are cached process-wide, keyed on the call's full signature (the model is loaded once per
-   process). On every hit the cached pick is re-checked against the current L1 budget.
+5. **Cache.** Picks are cached process-wide, keyed on the call's full signature (the model is loaded once per
+   process). On every hit the cached pick is re-checked against the current L1 budget, and a pick that found no
+   candidate for lack of L1 is made again once more L1 is free.
 
 A candidate that the device op rejects costs a caught exception and the critical-level log line that every
 `TT_FATAL` writes. Candidates are checked best first, so this happens only when the best-ranked ones are invalid.
