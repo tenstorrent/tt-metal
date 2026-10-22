@@ -952,6 +952,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
+    bool has_operand_activations = false;
+    bool has_post_activations = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1016,6 +1018,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
+        has_post_activations = !post_activations.empty();
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1382,6 +1387,69 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
+
+    // Blackhole sharded FPU sections without operand activations or broadcast unpack and pack a DEST section with one
+    // call: add and sub at any size, mul from 16 tiles per core.
+    const bool block_kernel = arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+                              std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                              !has_operand_activations && num_tiles_per_cycle > 1 &&
+                              compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                              a_data_format == tt::DataFormat::Float16_b &&
+                              b_data_format == tt::DataFormat::Float16_b && c_data_format == tt::DataFormat::Float16_b;
+    const uint32_t block_tiles = c_num_tiles_per_shard.value_or(0);
+    const bool block_pack =
+        block_kernel &&
+        (block_tiles >= 16 || std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL);
+    const auto bf16_or_bfp8 = [](tt::DataFormat f) {
+        return f == tt::DataFormat::Float16_b || f == tt::DataFormat::Bfp8_b;
+    };
+    const bool block_unpack =
+        arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_operand_activations &&
+        !has_post_activations && num_tiles_per_cycle > 1 &&
+        (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
+         // the scalar is a bf16 tile: a bfp8_b a adds or subtracts unpack bound and reads slower in a block
+         (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar &&
+          (a_data_format == b_data_format ||
+           std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL))) &&
+        bf16_or_bfp8(a_data_format) &&
+        bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) &&
+        // a bf16 and a bfp8_b operand add or subtract unpack bound (the 8-bit stall), so the whole-tile wait shows below 16 tiles
+        block_tiles >= ((a_data_format != b_data_format &&
+                         std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) != OpConfig::FpuBinaryOp::MUL)
+                            ? 16u
+                            : 4u);
+    if (block_pack || block_unpack) {
+        compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
+    }
+    if (block_pack) {
+        compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
+    }
+    // Sharded column and scalar broadcast B: A and the output sit whole in L1, so B's tile is held while A goes through
+    // DEST in blocks. The held tile serves at least Wt tiles of A (Wt is in the cache key, the plane is not), and runs
+    // of one or two tiles read slower than per-tile.
+    const uint32_t c_wt = tt::div_up(c.padded_shape()[-1], c.tensor_spec().tile().get_width());
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op && !has_operand_activations &&
+        !has_post_activations && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+        (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
+         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) &&
+        a_sharded && c_sharded && bf16_or_bfp8(a_data_format) && a_data_format == b_data_format &&
+        bf16_or_bfp8(c_data_format) && block_tiles >= 4 && c_wt >= 3) {
+        compute_kernel_defines["BINARY_NG_BCAST_BLOCK"] = fp32_dest_acc_en ? "4" : "8";
+    }
+    // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations && num_tiles_per_cycle > 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+        compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
+    }
+    // Interleaved ops keep it only on a core with at most one DEST section of tiles; the kernel checks its runtime tile
+    // count, as one program serves every tensor volume.
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations && !has_operand_activations &&
+        num_tiles_per_cycle == 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+        compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT_UP_TO"] = "8";
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"

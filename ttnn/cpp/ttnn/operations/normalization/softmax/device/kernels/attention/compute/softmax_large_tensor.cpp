@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -111,9 +114,14 @@ void apply_fused_scale_mask(
         tile_regs_acquire();
         dfb_in_obj.wait_front(static_cast<uint16_t>(rem));
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
+#if defined(ARCH_BLACKHOLE)
+        any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(
+            dfb_in, dfb_fused_scale_mask, 0, 0, 0, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             mul_tiles_bcast_scalar(dfb_in, dfb_fused_scale_mask, cur_dst, 0, cur_dst);
         }
+#endif
         tile_regs_wait();
         tile_regs_commit();
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
@@ -150,9 +158,13 @@ void apply_fused_attn_mask(
             add_tiles(dfb_in, dfb_fused_attn_mask, cur_dst, cur_dst, cur_dst);  // tile *= 1/(sum(exp(x)))
         }
 #else
+#if defined(ARCH_BLACKHOLE)
+        any_tiles_bcast_block<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(dfb_in, dfb_fused_attn_mask, 0, 0, 0, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             add_tiles_bcast_rows(dfb_in, dfb_fused_attn_mask, cur_dst, cur_dst, cur_dst);
         }
+#endif
 #endif
         if (do_mask && cur_blk + rem == dfb_length_t) {
             // add mask to the last register to pad with -inf
@@ -232,9 +244,13 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
         tile_regs_acquire();
 #ifdef NUMERIC_STABLE
+#if defined(ARCH_BLACKHOLE)
+        any_tiles_bcast_block<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(dfb_in, dfb_max, 0, 0, 0, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             sub_tiles_bcast_cols(dfb_in, dfb_max, cur_dst, 0, cur_dst);
         }
+#endif
 #else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             copy_tile(dfb_in, cur_dst, cur_dst);
@@ -309,9 +325,13 @@ void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t df
         dfb_in_obj.wait_front(static_cast<uint16_t>(rem));
         tile_regs_acquire();
         tile_regs_wait();
+#if defined(ARCH_BLACKHOLE)
+        any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(dfb_in, dfb_recip, 0, 0, 0, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             mul_tiles_bcast_cols(dfb_in, dfb_recip, cur_dst, 0, cur_dst);
         }
+#endif
         tile_regs_commit();
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {

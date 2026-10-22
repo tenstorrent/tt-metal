@@ -88,12 +88,20 @@ ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA>
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            true,
+            binary_reuse_dest,
+            false /* unpack_to_dest */,
+            detail::BINARY_REUSE_SRC_DVALID>(false, false, icb0)));
     // Init and execute must use the same face height: the HiFi partial-face
     // path advances DEST separately after each face (tt-metal#50658).
-    MATH(
-        (llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
-            icb0, icb0, false /*acc_to_dest*/)));
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          MATH_FIDELITY,
+          binary_reuse_dest,
+          detail::BINARY_REUSE_SRC_DVALID>(icb0, icb0, false /*acc_to_dest*/)));
 }
 
 /**
@@ -110,7 +118,8 @@ ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index,
           BroadcastType::NONE,
           fp32_dest_acc_en,
           MATH_FIDELITY,
-          binary_reuse_dest>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
+          binary_reuse_dest,
+          detail::BINARY_REUSE_SRC_DVALID>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
 }
 
 #endif  // ARCH_BLACKHOLE

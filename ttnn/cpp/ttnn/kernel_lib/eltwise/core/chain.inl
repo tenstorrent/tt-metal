@@ -1304,13 +1304,28 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                                 : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
                                                            : ckernel::EltwiseBinaryType::ELWMUL;
             if constexpr (Op == BinaryFpuOp::Mul) {
+#if defined(ARCH_BLACKHOLE)
+                // The hand-off that bcast.h's mul_tiles_bcast executes with
+                MATH((llk_math_eltwise_binary_init<
+                      et,
+                      bt,
+                      MATH_FIDELITY,
+                      ckernel::EltwiseBinaryReuseDestType::NONE,
+                      ckernel::detail::bcast_src_dvalid<et, bt>,
+                      ckernel::detail::BCAST_BLOCK_UNPACK>(CbA, CbB, Accumulation != DestAccumulation::Disabled)));
+#else
                 MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
                     CbA, CbB, Accumulation != DestAccumulation::Disabled)));
+#endif
             } else {
                 MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>(
                     CbA, CbB, Accumulation != DestAccumulation::Disabled)));
             }
+#if defined(ARCH_BLACKHOLE)
+            UNPACK((llk_unpack_AB_init<bt, ckernel::detail::bcast_src_dvalid<et, bt>>(CbA, CbB)));
+#else
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
+#endif
         }
     }
 
@@ -1368,6 +1383,44 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         exec(i_flat, i_flat, ht, wt, wt, slot_offset);
     }
+
+#if defined(ARCH_BLACKHOLE)
+    // A broadcast whose A advances one tile per step runs a block of steps as one any_tiles_bcast_block call in kernels
+    // that define ELTWISE_BINARY_BCAST_BLOCK_UNPACK; a column or scalar B keeps one tile, a row or block B advances too.
+    static constexpr auto bcast_et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+                                     : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                                : ckernel::EltwiseBinaryType::ELWMUL;
+    static constexpr bool runs_bcast_block =
+        ckernel::detail::bcast_block_unpack<bcast_et> &&
+        !ckernel::detail::BCAST_F32_OFF<bcast_et, static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast))> &&
+        Bcast != BroadcastDim::None && Accumulation == DestAccumulation::Disabled && !same_dfb &&
+        (AMapping == InputTileMapping::Block || AMapping == InputTileMapping::Row);
+
+    // Arguments as exec's for the block's first step; num_tiles steps into consecutive DEST slots.
+    ALWI void exec_block(
+        uint32_t i_flat_local,
+        uint32_t i_flat_abs,
+        uint32_t ht,
+        uint32_t wt_local,
+        uint32_t wt_abs,
+        uint32_t slot_offset,
+        uint32_t num_tiles) const {
+        const uint32_t a_flat = a_uses_local_idx ? i_flat_local : i_flat_abs;
+        const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
+        const uint32_t a_wt = a_uses_local_idx ? wt_local : wt_abs;
+        const uint32_t b_wt = b_uses_local_idx ? wt_local : wt_abs;
+        const uint32_t a_idx = tile_base_value<AddressingA>(a.tile_base) +
+                               detail::input_idx<AMapping, AWait, APop, AddressingA>(a_flat, ht, a_wt, a.row_stride);
+        const uint32_t b_idx = tile_base_value<AddressingB>(b.tile_base) +
+                               detail::input_idx<BMapping, BWait, BPop, AddressingB>(b_flat, ht, b_wt, b.row_stride);
+        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
+        constexpr auto et = (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
+                            : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                       : ckernel::EltwiseBinaryType::ELWMUL;
+        constexpr bool fixed_b = BMapping == InputTileMapping::Col || BMapping == InputTileMapping::Scalar;
+        any_tiles_bcast_block<et, bt, fixed_b>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot) + slot_offset, num_tiles);
+    }
+#endif
 };
 
 // =============================================================================
@@ -2284,6 +2337,16 @@ struct elem_needs_per_side_idx<E, std::void_t<decltype(E::needs_per_side_idx)>>
 template <class E>
 inline constexpr bool elem_needs_per_side_idx_v = elem_needs_per_side_idx<E>::value;
 
+// elem_runs_bcast_block_v — true for a broadcast BinaryFpu that runs its block as one call (BinaryFpuImpl::runs_bcast_block).
+template <class E, class = void>
+struct elem_runs_bcast_block : std::false_type {};
+
+template <class E>
+struct elem_runs_bcast_block<E, std::void_t<decltype(E::runs_bcast_block)>> : std::bool_constant<E::runs_bcast_block> {};
+
+template <class E>
+inline constexpr bool elem_runs_bcast_block_v = elem_runs_bcast_block<E>::value;
+
 }  // namespace detail
 
 // chain_has_duplicate_upfront_dfbs / chain_pack_writes_collide — pairwise collision
@@ -2838,20 +2901,41 @@ ALWI void elem_apply_compute(
         }
         if constexpr (!eltwise_chain_skip_compute_v) {
             constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
-#pragma GCC unroll 0
-            for (uint32_t j = 0; j < inner_count; ++j) {
-                if constexpr (per_side) {
-                    // Per-side path: chain hands both indices; element picks per operand.
-                    elem.exec(
-                        /*i_flat_local=*/j,
-                        /*i_flat_abs=*/(i_flat + j),
-                        ht,
-                        /*wt_local=*/j,
-                        /*wt_abs=*/(wt + j),
-                        SlotBase + j * chain_lane_width);
+            if constexpr (elem_runs_bcast_block_v<ElemT>) {
+                if (chain_lane_width == 1 && inner_count > 1) {
+                    if constexpr (per_side) {
+                        elem.exec_block(0, i_flat, ht, 0, wt, SlotBase, inner_count);
+                    } else {
+                        const uint32_t i_arg = use_local_idx ? 0 : i_flat;
+                        elem.exec_block(i_arg, i_arg, ht, wt, wt, SlotBase, inner_count);
+                    }
                 } else {
-                    const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-                    elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+#pragma GCC unroll 0
+                    for (uint32_t j = 0; j < inner_count; ++j) {
+                        if constexpr (per_side) {
+                            elem.exec(j, i_flat + j, ht, j, wt + j, SlotBase + j * chain_lane_width);
+                        } else {
+                            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                            elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+                        }
+                    }
+                }
+            } else {
+#pragma GCC unroll 0
+                for (uint32_t j = 0; j < inner_count; ++j) {
+                    if constexpr (per_side) {
+                        // Per-side path: chain hands both indices; element picks per operand.
+                        elem.exec(
+                            /*i_flat_local=*/j,
+                            /*i_flat_abs=*/(i_flat + j),
+                            ht,
+                            /*wt_local=*/j,
+                            /*wt_abs=*/(wt + j),
+                            SlotBase + j * chain_lane_width);
+                    } else {
+                        const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                        elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+                    }
                 }
             }
         }

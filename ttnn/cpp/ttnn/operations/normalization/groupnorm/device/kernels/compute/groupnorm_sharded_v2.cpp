@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
 

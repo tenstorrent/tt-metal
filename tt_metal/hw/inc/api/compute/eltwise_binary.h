@@ -18,6 +18,113 @@
 
 namespace ckernel {
 
+#if defined(ARCH_BLACKHOLE)
+namespace detail {
+// ELTWISE_BINARY_BLOCK_UNPACK true: the *_block forms unpack their tile pairs with one call.
+#if defined(ELTWISE_BINARY_BLOCK_UNPACK)
+constexpr bool BINARY_BLOCK_UNPACK = (ELTWISE_BINARY_BLOCK_UNPACK);
+#else
+constexpr bool BINARY_BLOCK_UNPACK = false;
+#endif
+// Set by the host for every compute kernel. A LoFi kernel with two DEST sections loses the whole-tile wait on per-tile
+// calls, so there the opt-in below keeps the per-face hand-off unless the kernel unpacks blocks.
+#if defined(PER_TILE_HANDOFF_GAINS)
+constexpr bool BINARY_PER_TILE_GAINS = (PER_TILE_HANDOFF_GAINS) || BINARY_BLOCK_UNPACK;
+#else
+constexpr bool BINARY_PER_TILE_GAINS = true;
+#endif
+// A kernel that defines ELTWISE_BINARY_PER_TILE_HANDOFF true (seen by all three threads) before this header hands each
+// operand tile to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the per-face one.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF)
+constexpr bool BINARY_PER_TILE_OPT_IN = (ELTWISE_BINARY_PER_TILE_HANDOFF);
+#else
+constexpr bool BINARY_PER_TILE_OPT_IN = false;
+#endif
+constexpr SrcDvalid BINARY_SRC_DVALID =
+    (BINARY_PER_TILE_OPT_IN && BINARY_PER_TILE_GAINS) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+// ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true gives the per-tile hand-off to the dest-reuse forms alone. The dest-reuse
+// forms gain from it at any fidelity (one hand-off instead of a drain per face), so they follow the opt-in alone.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE)
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID =
+    (ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE || BINARY_PER_TILE_OPT_IN) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#else
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID = BINARY_PER_TILE_OPT_IN ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#endif
+template <EltwiseBinaryReuseDestType reuse_dest>
+constexpr SrcDvalid binary_src_dvalid =
+    reuse_dest == EltwiseBinaryReuseDestType::NONE ? BINARY_SRC_DVALID : BINARY_REUSE_SRC_DVALID;
+#ifdef TRISC_UNPACK
+ALWI void binary_unpack_AB_init(std::uint32_t icb0, std::uint32_t icb1) {
+    llk_unpack_AB_init<BroadcastType::NONE, BINARY_SRC_DVALID>(icb0, icb1, Transpose::None);
+}
+
+template <bool acc_to_dest, EltwiseBinaryReuseDestType reuse_dest>
+ALWI void binary_unpack_A_init(std::uint32_t icb) {
+    llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest, false /* unpack_to_dest */, binary_src_dvalid<reuse_dest>>(
+        false, false, icb);
+}
+#endif  // TRISC_UNPACK
+
+#ifdef TRISC_MATH
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity, EltwiseBinaryReuseDestType reuse_dest>
+ALWI void binary_math_init(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t acc_to_dest) {
+    llk_math_eltwise_binary_init<
+        eltwise_binary_type,
+        BroadcastType::NONE,
+        math_fidelity,
+        reuse_dest,
+        binary_src_dvalid<reuse_dest>,
+        BINARY_BLOCK_UNPACK && reuse_dest == EltwiseBinaryReuseDestType::NONE>(icb0, icb1, acc_to_dest);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    EltwiseBinaryReuseDestType reuse_dest>
+ALWI void binary_math(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t idst) {
+    llk_math_eltwise_binary<
+        eltwise_binary_type,
+        BroadcastType::NONE,
+        is_fp32_dest_acc_en,
+        math_fidelity,
+        reuse_dest,
+        binary_src_dvalid<reuse_dest>>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
+}
+#endif  // TRISC_MATH
+
+template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en, bool fixed_a = false, bool fixed_b = false>
+ALWI void binary_block(
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    UNPACK((llk_unpack_AB_block<fixed_a, fixed_b>(icb0, icb1, start_itile0, start_itile1, ntiles)));
+    MATH(
+        constexpr MathFidelity math_fidelity =
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
+#ifdef TRISC_MATH
+    // Above LoFi the math thread binds, so the section's tiles run as one call; LoFi sections are bound by the pack
+    if constexpr (math_fidelity != MathFidelity::LoFi) {
+        llk_math_eltwise_binary_block<
+            eltwise_binary_type,
+            is_fp32_dest_acc_en,
+            math_fidelity,
+            BINARY_SRC_DVALID,
+            BINARY_BLOCK_UNPACK>(icb0, start_idst, ntiles);
+    } else {
+        for (std::uint32_t i = 0; i < ntiles; ++i) {
+            binary_math<eltwise_binary_type, is_fp32_dest_acc_en, math_fidelity, EltwiseBinaryReuseDestType::NONE>(
+                icb0, icb1, start_idst + i);
+        }
+    }
+#endif
+}
+}  // namespace detail
+#endif  // ARCH_BLACKHOLE
+
 // clang-format off
  /**
  * Template for initializing element-wise binary operations.
@@ -38,12 +145,21 @@ ALWI void binary_tiles_init(
     std::uint32_t icb0, std::uint32_t icb1, bool acc_to_dest = false, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
+#if defined(ARCH_BLACKHOLE)
+    MATH((detail::binary_math_init<eltwise_binary_type, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+        icb0, icb1, acc_to_dest)));
+
+    if constexpr (full_init) {
+        UNPACK((detail::binary_unpack_AB_init(icb0, icb1)));
+    }
+#else
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY>(
         icb0, icb1, acc_to_dest)));
 
     if constexpr (full_init) {
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None)));
     }
+#endif
 }
 
 namespace detail {
@@ -54,6 +170,10 @@ namespace detail {
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_reuse_dest_init(std::uint32_t icb0, std::uint32_t call_line) {
     state_configure(icb0, call_line);
+#if defined(ARCH_BLACKHOLE)
+    UNPACK((detail::binary_unpack_A_init<true /* acc_to_dest */, reuse_dest>(icb0)));
+    MATH((detail::binary_math_init<eltwise_binary_type, MATH_FIDELITY, reuse_dest>(icb0, icb0, false /* acc_to_dest */)));
+#else
 #ifndef ARCH_QUASAR
     UNPACK(constexpr bool acc_to_dest = true);
 #else
@@ -62,6 +182,7 @@ ALWI void binary_reuse_dest_init(std::uint32_t icb0, std::uint32_t call_line) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, reuse_dest>(
         icb0, icb0, false /* acc_to_dest */)));
+#endif
 }
 }  // namespace detail
 
@@ -236,12 +357,17 @@ ALWI void mul_tiles(
     // first = false;
 
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
+#if defined(ARCH_BLACKHOLE)
+    MATH((detail::binary_math<EltwiseBinaryType::ELWMUL, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+        icb0, icb1, idst)));
+#else
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::NONE,
           is_fp32_dest_acc_en,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+#endif
 }
 
 // clang-format off
@@ -266,12 +392,17 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles(
     std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
+#if defined(ARCH_BLACKHOLE)
+    MATH((detail::binary_math<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+        icb0, icb1, idst)));
+#else
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::NONE,
           is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+#endif
 }
 
 // clang-format off
@@ -296,12 +427,17 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles(
     std::uint32_t icb0, std::uint32_t icb1, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
+#if defined(ARCH_BLACKHOLE)
+    MATH((detail::binary_math<EltwiseBinaryType::ELWSUB, is_fp32_dest_acc_en, MathFidelity::LoFi, EltwiseBinaryReuseDestType::NONE>(
+        icb0, icb1, idst)));
+#else
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::NONE,
           is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+#endif
 }
 
 // clang-format off
@@ -337,6 +473,13 @@ ALWI void mul_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWMUL, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         mul_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
@@ -375,6 +518,13 @@ ALWI void add_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         add_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
@@ -413,8 +563,62 @@ ALWI void sub_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWSUB, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Runs the op on ntiles tiles into consecutive DST slots where one operand keeps one tile (a scalar or another constant
+ * tile): fixed_a or fixed_b holds that operand at its start tile index. On Blackhole kernels that define
+ * ELTWISE_BINARY_BLOCK_UNPACK true, the tile pairs are unpacked with one call; elsewhere it runs the op tile by tile.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on
+ * the compute engine.
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                                        | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0   | The index of the first tile in A                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1   | The index of the first tile in B                              | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst     | The index of the first tile in DST REG for the result         | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles         | The number of tiles                                           | uint32_t | ntiles <= DST capacity                         | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType eltwise_binary_type, bool fixed_a, bool fixed_b, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void binary_block_fixed_operand(
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    static_assert(!(fixed_a && fixed_b), "At most one operand stays on one tile");
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<eltwise_binary_type, is_fp32_dest_acc_en, fixed_a, fixed_b>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        const std::uint32_t itile0 = fixed_a ? start_itile0 : start_itile0 + i;
+        const std::uint32_t itile1 = fixed_b ? start_itile1 : start_itile1 + i;
+        if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
+            mul_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD) {
+            add_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        } else {
+            sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, itile0, itile1, start_idst + i);
+        }
     }
 }
 
@@ -438,12 +642,17 @@ ALWI void binary_reuse_dest_tiles(std::uint32_t in_cb_id, std::uint32_t in_tile_
     MATH(
         constexpr MathFidelity math_fidelity =
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
+#if defined(ARCH_BLACKHOLE)
+    MATH((detail::binary_math<eltwise_binary_type, is_fp32_dest_acc_en, math_fidelity, reuse_dest>(
+        in_cb_id, in_cb_id, dst_tile_index)));
+#else
     MATH((llk_math_eltwise_binary<
           eltwise_binary_type,
           BroadcastType::NONE,
           is_fp32_dest_acc_en,
           math_fidelity,
           reuse_dest>(in_cb_id, in_cb_id, dst_tile_index, true /* clear_fp32_dst_acc */)));
+#endif
 }
 }  // namespace detail
 
