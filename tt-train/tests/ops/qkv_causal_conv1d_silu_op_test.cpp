@@ -288,6 +288,8 @@ TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
     EXPECT_THROW(run({64, 128, 64, 64}, 96, 1), std::runtime_error);      // 96 does not divide C = 256
     EXPECT_THROW(run({64, 128, 64, 64}, 64, 3), std::runtime_error);      // T = 64 has only 2 tile rows
     EXPECT_THROW(run({64, 512, 256, 256}, 1024, 1), std::runtime_error);  // 32 tiles per block exceed L1
+    EXPECT_THROW(run({48, 128, 64, 64}, 64, 1), std::runtime_error);      // T is not tile aligned
+    EXPECT_THROW(run({64, 100, 64, 64}, 32, 1), std::runtime_error);      // Q is not tile aligned
 }
 
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
