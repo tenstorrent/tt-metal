@@ -9,7 +9,6 @@
 #include <optional>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>

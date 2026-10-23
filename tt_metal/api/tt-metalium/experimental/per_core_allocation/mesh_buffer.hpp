@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/per_core_allocation/device_memory_span.hpp>
 #include <tt-metalium/hal_types.hpp>
