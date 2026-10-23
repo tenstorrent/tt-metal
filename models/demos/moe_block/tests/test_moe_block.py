@@ -6,6 +6,7 @@
 device's routing, and the routing agreement with the host's), then per-stage device times (TT_METAL_DEVICE_PROFILER=1
 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1) and the wall time of a forward."""
 
+import collections
 import dataclasses
 import statistics
 import time
@@ -273,14 +274,17 @@ _TRACE_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, device_params, model, chunk", _TRACE_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.parametrize("timing", ["wall", "device"])  # (device: the profiler's per-program times of the replays)
 @pytest.mark.timeout(3600)
-def test_moe_block_traced(mesh_device, device_params, model, chunk):
+def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
     """One forward (chunk 1280 or 2048) captured as a trace on the block's input buffer and replayed: each replay's x (from a
     pool of fresh inputs, never the previous one) written into the input buffer first, each replay's output checked
     against its own reference (the device's routing, read from the kept routing rows); MOE_TRACE_REPLAYS (test-only)
     replays. Then the wall time of a replay, with and without the input write, vs an eager forward."""
     import os
 
+    if timing == "device" and os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        pytest.skip("device timing: the device profiler (TT_METAL_DEVICE_PROFILER=1 at process start)")
     m = MODELS[model]
     if os.environ.get("MOE_EXPERTS"):  # (test-only: e.g. the Galaxy's experts per chip on the 2x4)
         m = dataclasses.replace(m, num_experts=int(os.environ["MOE_EXPERTS"]))
@@ -377,6 +381,8 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk):
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         inw.append((time.perf_counter() - t0) * 1e6)
+    if timing == "device":
+        replay_device_times(mesh_device, tid, model)
     ttnn.release_trace(mesh_device, tid)
     ttnn.deallocate(out)
     med = statistics.median
@@ -384,6 +390,56 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk):
         f"MOE_TRACE {model}: replay {med(one):.0f} us wall (median of {ITERS}), back to back {back:.0f} us a replay "
         f"({REP}), with the input write {med(inw):.0f} us; eager forward {med(ew):.0f} us"
     )
+
+
+def replay_device_times(mesh_device, tid, model, batches=(10, 40, 100)):
+    """The profiler on the trace's replays: per replay (trace_id_counter) and chip its programs' device durations, their
+    sum and the replay's span (the first program's start to the last's end: the gaps between programs inside the
+    trace), after `batches` replays a read (how many fit the profiler's buffers)."""
+    per_chip_programs(mesh_device)  # (flush what the capture / correctness replays left)
+    freq = 1.35  # (GHz: the timestamps are device cycles)
+    for n in batches:
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        wall = (time.perf_counter() - t0) * 1e6 / n
+        ttnn.ReadDeviceProfiler(mesh_device)
+        data = ttnn.get_latest_programs_perf_data() or {}
+        reps, other = {}, 0  # (chip, replay) -> [(start, end, duration ns)]
+        for chip, progs in data.items():
+            for p in progs:
+                res = (getattr(p, "program_analyses_results", None) or {}).get(_DURATION_KEY)
+                if res is None:
+                    continue
+                uid = p.program_execution_uid
+                if int(uid.trace_id) != int(tid):
+                    other += 1
+                    continue
+                reps.setdefault((chip, int(uid.trace_id_counter)), []).append(
+                    (int(res.start_timestamp), int(res.end_timestamp), float(res.duration))
+                )
+        counts = sorted({len(v) for v in reps.values()})
+        per_rep = collections.defaultdict(list)
+        for (chip, r), v in reps.items():
+            per_rep[r].append((sum(d for _, _, d in v) / 1e3, (max(e for _, e, _ in v) - min(s_ for s_, _, _ in v))))
+        sums = [max(x for x, _ in v) for v in per_rep.values()]
+        spans = [max(y for _, y in v) / freq / 1e3 for v in per_rep.values()]
+        # (per program of a replay, in start order: its duration on the slowest chip, median over the replays)
+        byidx = collections.defaultdict(list)
+        for r in per_rep:
+            chips = [sorted(v) for (c, rr), v in reps.items() if rr == r]
+            for i in range(min(len(v) for v in chips)):
+                byidx[i].append(max(v[i][2] for v in chips) / 1e3)
+        progs = " | ".join(f"{statistics.median(v):.1f}" for _, v in sorted(byidx.items()))
+        logger.info(f"MOE_TRACE_DEV {model}: programs (us, in order): {progs}")
+        logger.info(
+            f"MOE_TRACE_DEV {model}: {n} replays a read -> {len(per_rep)} replays seen ({other} programs not of the "
+            f"trace), programs a replay a chip {counts}; slowest chip a replay: programs' device sum "
+            f"{statistics.median(sums) if sums else 0:.0f} us, span {statistics.median(spans) if spans else 0:.0f} us "
+            f"(median, max {max(spans) if spans else 0:.0f}); replay wall {wall:.0f} us"
+        )
 
 
 _SE_PARAMS = [

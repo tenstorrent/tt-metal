@@ -1280,3 +1280,18 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   (GX cores a half, partners, NSLOT ring / E slots with FREE credits, the share token, the exchange, the compute's
   CB room): steps 4-7 at 2-4 slots, no deadlock, no slot overwritten in use; without the credits it trips (111 pass).
   Mock Galaxy: the tail engine built + enqueued at 640 and 1024 rows.
+
+### The device profiler under trace (test_moe_block_traced[timing=device])
+- The profiler tags a replay's programs (ProgramExecutionUID.trace_id / trace_id_counter): per replay and chip every
+  program shows with its device duration and start / end. timing "device" (a test parameter; needs the profiler at
+  process start) replays N times, reads once, groups by trace_id_counter.
+- K3 chunk 1280 (fused head + tail): 4 programs a replay a chip, every replay seen at 10 / 40 / 100 replays a read
+  (no overflow at 100). Per program (slowest chip, median): head 526 | dispatch 142.7 | experts_combine 2217 | tail
+  157.7 us; sum 2972-2976, span (first start to last end) 2974-2978: ~2 us of gaps inside a replay; replay wall
+  2991-2998 (back to back): ~20 us of dispatch around a replay. GLM: head 282 | dispatch 135.5 | experts_combine 1229 |
+  tilize 8.2 | add 10.7 | tail_a2a 38.6; sum 1669-1670, span 1671-1672, wall 1693-1698.
+- vs the eager per-stage numbers: head / dispatch / tail within ~1-10 us (the eager head has the x copy); the experts
+  program 80-97 us shorter traced (K3 2217 vs 2299, GLM 1229 vs 1326) - the eager figure includes its launch skew
+  across 120 cores (kernel duration = first core's start to last core's end). Traced device times are the better per-
+  program numbers from here on. Profiler overhead on the fused kernels: none measurable (replay wall with it 2991-2998
+  vs 2991-2997 without). The device CSV carries the trace id / counter columns; tt-perf-report not tried.
