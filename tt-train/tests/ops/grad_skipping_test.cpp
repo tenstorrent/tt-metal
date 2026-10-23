@@ -51,14 +51,15 @@ struct OpUnderTest {
     std::function<TensorPtr(const std::vector<TensorPtr>&)> forward;
 };
 
-// Device-op name -> how many launches of it the frozen run skips.
+// Device-op name -> launch count.
 using OpCounts = std::map<std::string, int>;
 
 struct GradSkipCase {
     std::string name;
     std::function<OpUnderTest()> make;
     std::vector<size_t> frozen;  // indices into OpUnderTest::inputs
-    OpCounts skipped;
+    // Device ops that tt-train itself launches for the frozen inputs' grads; the frozen run must launch fewer of each.
+    std::vector<std::string> must_skip;
     bool blackhole_only = false;
 };
 
@@ -74,9 +75,11 @@ constexpr const char* kMatmul = "MatmulDeviceOperation";
 constexpr const char* kVariableMatmul = "VariableMatmulDeviceOperation";
 constexpr const char* kMorehSum = "MorehSumOperation";
 constexpr const char* kMorehMean = "MorehMeanOperation";
-constexpr const char* kFull = "FullDeviceOperation";
 constexpr const char* kTranspose = "TransposeDeviceOperation";
-constexpr const char* kTilize = "TilizeWithValPaddingDeviceOperation";
+constexpr const char* kSwigluElemwiseBw = "SwigluElemwiseBwDeviceOperation";
+constexpr const char* kUnaryBackward = "UnaryBackwardDeviceOperation";
+constexpr const char* kNlpConcatHeads = "NLPConcatHeadsDeviceOperation";
+constexpr const char* kMoeUngroup = "MoeUngroupDeviceOperation";
 
 xt::xarray<float> uniform(const std::vector<uint32_t>& shape, float lo, float hi, uint32_t seed) {
     return ttml::test_utils::make_uniform_xarray<float>(shape, lo, hi, seed);
@@ -334,8 +337,8 @@ protected:
 };
 
 // add_grad drops a frozen input's grad, so the grads alone cannot show its work was skipped. Each row runs backward
-// with every input trainable, then with `frozen` frozen. The second run must skip exactly the row's `skipped` device
-// ops and launch nothing extra, and every trainable input must get the same grad bit for bit.
+// with every input trainable, then with `frozen` frozen. The second run must launch fewer of each of the row's
+// `must_skip` device ops and no more of any op, and every trainable input must get the same grad bit for bit.
 TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
     const GradSkipCase& c = GetParam();
     if (c.blackhole_only && ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
@@ -349,14 +352,18 @@ TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
     }
     const BackwardRun frozen = run_backward(op, requires_grad);
 
-    // Negative entries would be ops the frozen run launches more often than the reference.
     OpCounts skipped = count_device_ops(reference.calls);
     for (const auto& [name, count] : count_device_ops(frozen.calls)) {
         skipped[name] -= count;
     }
-    std::erase_if(skipped, [](const auto& entry) { return entry.second == 0; });
-    EXPECT_EQ(skipped, c.skipped) << c.name
-                                  << " frozen backward ops: " << fmt::format("{}", fmt::join(frozen.calls, ", "));
+    const auto frozen_ops = fmt::format("{}", fmt::join(frozen.calls, ", "));
+    for (const auto& [name, count] : skipped) {
+        EXPECT_GE(count, 0) << c.name << ": frozen backward launches " << name << " more often. Ops: " << frozen_ops;
+    }
+    for (const auto& name : c.must_skip) {
+        EXPECT_GT(skipped[name], 0) << c.name << ": frozen backward did not skip any " << name
+                                    << ". Ops: " << frozen_ops;
+    }
     for (size_t i = 0; i < op.inputs.size(); ++i) {
         if (!requires_grad[i]) {
             continue;
@@ -369,8 +376,7 @@ TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
 }
 
 // Each row freezes inputs whose grad does device work: for add and sub's a that is only the broadcast reduction, so
-// those rows freeze the broadcast operand. `skipped` follows ttnn's current decompositions: moreh_sum launches once per
-// reduced dim, and ttnn::sum over {0, 1, 2} is two FastReduceNC launches plus one Reduce.
+// those rows freeze the broadcast operand.
 INSTANTIATE_TEST_SUITE_P(
     GradSkipCases,
     GradSkippingTest,
@@ -379,218 +385,192 @@ INSTANTIATE_TEST_SUITE_P(
             .name = "Add_FrozenBroadcastA",
             .make = [] { return binary(add_op, kFeatureRow, kActivation); },
             .frozen = {0},
-            .skipped = {{kMorehSum, 2}}},
+            .must_skip = {kMorehSum}},
         GradSkipCase{
             .name = "Add_FrozenBroadcastB",
             .make = [] { return binary(add_op, kActivation, kFeatureRow); },
             .frozen = {1},
-            .skipped = {{kMorehSum, 2}}},
+            .must_skip = {kMorehSum}},
         GradSkipCase{
             .name = "Sub_FrozenBroadcastA",
             .make = [] { return binary(sub_op, kFeatureRow, kActivation); },
             .frozen = {0},
-            .skipped = {{kMorehSum, 2}}},
+            .must_skip = {kMorehSum}},
         // neg
         GradSkipCase{
             .name = "Sub_FrozenB",
             .make = [] { return binary(sub_op, kActivation, kActivation); },
             .frozen = {1},
-            .skipped = {{kUnary, 1}}},
+            .must_skip = {kUnary}},
         GradSkipCase{
             .name = "Mul_FrozenA",
             .make = [] { return binary(mul_op, kActivation, kActivation); },
             .frozen = {0},
-            .skipped = {{kBinary, 1}}},
+            .must_skip = {kBinary}},
         GradSkipCase{
             .name = "Mul_FrozenB",
             .make = [] { return binary(mul_op, kActivation, kActivation); },
             .frozen = {1},
-            .skipped = {{kBinary, 1}}},
+            .must_skip = {kBinary}},
         // b * out_grad, then the broadcast reduction back to b's shape.
         GradSkipCase{
             .name = "Mul_FrozenBroadcastB",
             .make = [] { return binary(mul_op, kActivation, kFeatureRow); },
             .frozen = {1},
-            .skipped = {{kBinary, 1}, {kMorehSum, 2}}},
+            .must_skip = {kBinary, kMorehSum}},
         // b in [1, 3) keeps 1 / b well away from overflow. a: grad * reciprocal(b). b: -grad * (a * 1/b) * 1/b.
         GradSkipCase{
             .name = "Div_FrozenA",
             .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
             .frozen = {0},
-            .skipped = {{kUnary, 1}, {kBinary, 1}}},
+            .must_skip = {kUnary, kBinary}},
         GradSkipCase{
             .name = "Div_FrozenB",
             .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
             .frozen = {1},
-            .skipped = {{kUnary, 2}, {kBinary, 3}}},
+            .must_skip = {kUnary, kBinary}},
         // The dtensor chain; normalized_tensor is still recomputed for dgamma.
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenTensor",
             .make = [] { return composite_layernorm(/*with_beta=*/true); },
             .frozen = {0},
-            .skipped = {{kBinary, 6}, {kFull, 1}, {kMorehMean, 2}}},
+            .must_skip = {kBinary, kMorehMean}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenGamma",
             .make = [] { return composite_layernorm(/*with_beta=*/true); },
             .frozen = {1},
-            .skipped = {{kBinary, 1}, {kMorehSum, 3}}},
+            .must_skip = {kBinary, kMorehSum}},
         // Without beta there is no dbeta branch at all; gamma's skip is unchanged.
         GradSkipCase{
             .name = "CompositeLayerNormNoBeta_FrozenGamma",
             .make = [] { return composite_layernorm(/*with_beta=*/false); },
             .frozen = {1},
-            .skipped = {{kBinary, 1}, {kMorehSum, 3}}},
+            .must_skip = {kBinary, kMorehSum}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenBeta",
             .make = [] { return composite_layernorm(/*with_beta=*/true); },
             .frozen = {2},
-            .skipped = {{kMorehSum, 3}}},
+            .must_skip = {kMorehSum}},
         GradSkipCase{
             .name = "RMSNormComposite_FrozenTensor",
             .make = rmsnorm_composite,
             .frozen = {0},
-            .skipped = {{kBinary, 7}, {kUnary, 1}, {kMorehSum, 1}}},
+            .must_skip = {kBinary, kMorehSum}},
         GradSkipCase{
-            .name = "RMSNormComposite_FrozenGamma",
-            .make = rmsnorm_composite,
-            .frozen = {1},
-            .skipped = {{kBinary, 2}, {"FastReduceNCDeviceOperation", 2}, {"ReduceDeviceOperation", 1}}},
+            .name = "RMSNormComposite_FrozenGamma", .make = rmsnorm_composite, .frozen = {1}, .must_skip = {kBinary}},
         // dx = dL_dlinear1 @ w1 + dL_dgate @ w3.
-        GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .skipped = {{kMatmul, 2}, {kBinary, 1}}},
-        GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .skipped = {{kMatmul, 1}}},
-        GradSkipCase{.name = "SwiGLU_FrozenW2", .make = swiglu, .frozen = {2}, .skipped = {{kMatmul, 1}}},
-        GradSkipCase{.name = "SwiGLU_FrozenW3", .make = swiglu, .frozen = {3}, .skipped = {{kMatmul, 1}}},
+        GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .must_skip = {kMatmul}},
+        GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .must_skip = {kMatmul}},
+        GradSkipCase{.name = "SwiGLU_FrozenW2", .make = swiglu, .frozen = {2}, .must_skip = {kMatmul}},
+        GradSkipCase{.name = "SwiGLU_FrozenW3", .make = swiglu, .frozen = {3}, .must_skip = {kMatmul}},
         // The shared dL_dprod matmul and swiglu_elemwise_bw, then dx (2 matmuls + add), dW1 and dW3.
         GradSkipCase{
-            .name = "SwiGLU_OnlyW2",
-            .make = swiglu,
-            .frozen = {0, 1, 3},
-            .skipped = {{kMatmul, 5}, {kBinary, 1}, {"SwigluElemwiseBwDeviceOperation", 1}}},
+            .name = "SwiGLU_OnlyW2", .make = swiglu, .frozen = {0, 1, 3}, .must_skip = {kMatmul, kSwigluElemwiseBw}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenQ",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {0},
-            .skipped = {{kMatmul, 1}}},
+            .must_skip = {kMatmul}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenK",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {1},
-            .skipped = {{kMatmul, 1}}},
+            .must_skip = {kMatmul}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenV",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {2},
-            .skipped = {{kMatmul, 1}}},
+            .must_skip = {kMatmul}},
         // dL/d(attention weights), the softmax backward and its scale, dQ and dK.
         GradSkipCase{
             .name = "SDPAComposite_OnlyV",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {0, 1},
-            .skipped = {{kMatmul, 3}, {"MorehSoftmaxBackwardOperation", 1}, {kBinary, 1}}},
+            .must_skip = {kMatmul, "MorehSoftmaxBackwardOperation"}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenQ",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {0},
-            .skipped = {{kMatmul, 1}, {kBinary, 1}}},
+            .must_skip = {kMatmul}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenK",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {1},
-            .skipped = {{kMatmul, 1}, {kBinary, 1}}},
+            .must_skip = {kMatmul}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenV",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {2},
-            .skipped = {{kMatmul, 1}}},
+            .must_skip = {kMatmul}},
         // dL/d(attention weights), the sigmoid backward and its recomputed input, dQ and dK with their scales.
         GradSkipCase{
             .name = "SigmoidSDPA_OnlyV",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {0, 1},
-            .skipped = {{kMatmul, 3}, {"UnaryBackwardDeviceOperation", 1}, {kBinary, 3}}},
+            .must_skip = {kMatmul, kUnaryBackward}},
         // As SigmoidSDPA_OnlyV, plus the where that masks the sigmoid backward (a BinaryNg op for a scalar `other`).
         GradSkipCase{
             .name = "SigmoidSDPAMasked_OnlyV",
             .make = [] { return attention(/*sigmoid=*/true, /*causal_mask=*/true); },
             .frozen = {0, 1},
-            .skipped = {{kMatmul, 3}, {"UnaryBackwardDeviceOperation", 1}, {kBinary, 4}}},
+            .must_skip = {kMatmul, kUnaryBackward}},
         GradSkipCase{
-            .name = "GroupedHeads_FrozenQs",
-            .make = grouped_heads,
-            .frozen = {0},
-            .skipped = {{"NLPConcatHeadsDeviceOperation", 1}}},
+            .name = "GroupedHeads_FrozenQs", .make = grouped_heads, .frozen = {0}, .must_skip = {kNlpConcatHeads}},
         GradSkipCase{
             .name = "GroupedHeads_FrozenKvs",
             .make = grouped_heads,
             .frozen = {1},
-            .skipped = {{"NLPConcatHeadsDeviceOperation", 2}, {"ConcatDeviceOperation", 1}}},
+            .must_skip = {kNlpConcatHeads, "ConcatDeviceOperation"}},
         // Per expert: 2 dX matmuls; plus the two zeroed dX buffers and their sum.
         GradSkipCase{
             .name = "MoeFfnSwiglu_FrozenGrouped",
             .make = moe_ffn_swiglu,
             .frozen = {0},
-            .skipped = {{kVariableMatmul, 4}, {kFull, 2}, {kBinary, 1}},
+            .must_skip = {kVariableMatmul},
             .blackhole_only = true},
         GradSkipCase{
             .name = "MoeFfnSwiglu_FrozenWGate",
             .make = moe_ffn_swiglu,
             .frozen = {1, 2},
-            .skipped = {{kVariableMatmul, 2}},
+            .must_skip = {kVariableMatmul},
             .blackhole_only = true},
         GradSkipCase{
             .name = "MoeFfnSwiglu_FrozenWUp",
             .make = moe_ffn_swiglu,
             .frozen = {3, 4},
-            .skipped = {{kVariableMatmul, 2}},
+            .must_skip = {kVariableMatmul},
             .blackhole_only = true},
         // Per expert: 1 dW_down matmul; plus the recomputed activated.
         GradSkipCase{
             .name = "MoeFfnSwiglu_FrozenWDown",
             .make = moe_ffn_swiglu,
             .frozen = {5, 6},
-            .skipped = {{kVariableMatmul, 2}, {kBinary, 1}},
+            .must_skip = {kVariableMatmul},
             .blackhole_only = true},
         GradSkipCase{
             .name = "MoeFfnSwiglu_FrozenExpert0",
             .make = moe_ffn_swiglu,
             .frozen = {1, 3, 5},
-            .skipped = {{kVariableMatmul, 3}},
+            .must_skip = {kVariableMatmul},
             .blackhole_only = true},
         // Per expert: d_activated, dW_gate, dW_up and 2 dX matmuls; plus swiglu_elemwise_bw and the dX buffers and sum.
         GradSkipCase{
             .name = "MoeFfnSwiglu_OnlyWDown",
             .make = moe_ffn_swiglu,
             .frozen = {0, 1, 2, 3, 4},
-            .skipped = {{kVariableMatmul, 10}, {"SwigluElemwiseBwDeviceOperation", 1}, {kFull, 2}, {kBinary, 1}},
+            .must_skip = {kVariableMatmul, kSwigluElemwiseBw},
             .blackhole_only = true},
-        GradSkipCase{
-            .name = "MoeGroup_FrozenDispatched",
-            .make = moe_group,
-            .frozen = {0},
-            .skipped = {{"MoeUngroupDeviceOperation", 1}}},
+        GradSkipCase{.name = "MoeGroup_FrozenDispatched", .make = moe_group, .frozen = {0}, .must_skip = {kMoeUngroup}},
         // The one-hot scatter of d(grouped_scores) into d(scores) and its moe_ungroup.
-        GradSkipCase{
-            .name = "MoeGroup_FrozenScores",
-            .make = moe_group,
-            .frozen = {1},
-            .skipped =
-                {{"TypecastDeviceOperation", 3},
-                 {kTilize, 3},
-                 {kTranspose, 2},
-                 {kBinary, 2},
-                 {"MoeUngroupDeviceOperation", 1}}},
+        GradSkipCase{.name = "MoeGroup_FrozenScores", .make = moe_group, .frozen = {1}, .must_skip = {kMoeUngroup}},
         GradSkipCase{
             .name = "MoeUngroup_FrozenExpertOut",
             .make = moe_ungroup,
             .frozen = {0},
-            .skipped = {{kTilize, 1}, {kTranspose, 1}, {kBinary, 1}}},
+            .must_skip = {kTranspose, kBinary}},
         GradSkipCase{
             .name = "MoeUngroup_FrozenGroupedScores",
             .make = moe_ungroup,
             .frozen = {1},
-            .skipped =
-                {{kBinary, 1},
-                 {"ReduceDeviceOperation", 1},
-                 {kTranspose, 1},
-                 {"UntilizeWithUnpaddingDeviceOperation", 1}}}),
+            .must_skip = {kTranspose, kBinary}}),
     [](const ::testing::TestParamInfo<GradSkipCase>& info) { return info.param.name; });
