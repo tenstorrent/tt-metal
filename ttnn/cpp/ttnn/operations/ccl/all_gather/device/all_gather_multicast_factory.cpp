@@ -4,515 +4,131 @@
 
 #include "all_gather_multicast_factory.hpp"
 
-#include <tt-metalium/distributed.hpp>
+#include <array>
+#include <optional>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/global_semaphore.hpp"
+#include "all_gather_plan.hpp"
+#include "all_gather_program.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::ccl {
 
-using namespace ::ttnn::ccl;
-
 namespace {
 
-tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
-    const AllGatherParams& operation_attributes,
-    const ttnn::MeshCoordinate& sender_device_coord,
-    const AllGatherInputs& tensor_args,
-    const Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& barrier_sem,
-    const tt::tt_metal::GlobalSemaphore& done_sem,
-    uint32_t num_available_cores) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    tt::tt_metal::ProgramDescriptor desc;
-    TT_FATAL(input_tensor.buffer() != nullptr, "all_gather multicast requires an allocated input buffer");
-    TT_FATAL(output_tensor.buffer() != nullptr, "all_gather multicast requires an allocated output buffer");
+namespace plan_ns = all_gather_plan;
+namespace prog = all_gather_program;
 
-    ////////////////////////////////////////////////////////////////
-    // Fabric setup
-    ////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+// Multicast all_gather (1D line/ring or true 2D).
+//
+// One core per link: its reader reads this device's slice once, writes it into the local output and fills slots;
+// its writer multicasts each packet on every connection (one per direction with a neighbor), alternating two route
+// variants on an even ring. Init and done ride every (connection, variant), so each device receives V * (N - 1) of
+// each, separately counted.
+////////////////////////////////////////////////////////////////
 
-    auto* mesh_device = input_tensor.device();
-    const uint32_t num_devices = operation_attributes.num_devices;
-    uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, sender_device_coord, operation_attributes.cluster_axis);
+tt::tt_metal::ProgramDescriptor build_multicast_program(
+    const AllGatherParams& params,
+    const ttnn::MeshCoordinate& coord,
+    const Tensor& input,
+    const Tensor& output,
+    const plan_ns::AgPlan& plan,
+    uint32_t init_sem,
+    uint32_t done_sem) {
+    auto* mesh_device = input.device();
+    const uint32_t dev = ::ttnn::ccl::get_linearized_index_from_physical_coord(input, coord, params.cluster_axis);
+    const auto src_node = mesh_device->get_fabric_node_id(coord);
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(params.fabric_config);
 
-    // Compute hops + neighbors for each mesh axis.
-    // Each axis ∈ {0, 1} contributes a forward/backward pair: axis 1 -> (E=fwd, W=bwd),
-    // axis 0 -> (S=fwd, N=bwd). In 1D only one axis is active; in 2D both can be.
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
-
-    std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
-    uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
-    bool ew_load_balance = false;
-    bool ns_load_balance = false;
-
-    for (uint32_t axis = 0; axis < 2; ++axis) {
-        const uint32_t axis_size = operation_attributes.axis_num_devices[axis];
-        const bool is_axis_active = axis_size > 1;
-        if (!is_axis_active) {
+    // Neighbors by logical direction (plan_ns::Dir): axis 1 runs E (forward) / W, axis 0 runs S (forward) / N. A
+    // 2-device axis is a line (both neighbors are the same device, one hop).
+    std::array<std::optional<MeshCoordinate>, 4> neighbor{};
+    std::array<bool, 2> axis_ring{};
+    std::array<uint32_t, 4> phys_dir = {plan_ns::kEast, plan_ns::kWest, plan_ns::kNorth, plan_ns::kSouth};
+    for (uint32_t a = 0; a < 2; ++a) {
+        if (params.axis_num_devices[a] <= 1) {
             continue;
         }
-        // A true 2D collective cannot fall back to unicast, so factory selection cannot save us
-        // here. No mesh view bends a true 2D axis today, so this only guards a future one.
-        TT_FATAL(
-            !fabric_is_2d || operation_attributes.axis_is_straight[axis],
-            "AllGather 2D multicast needs mesh axis {} wired straight, but it turns corners",
-            axis);
-
-        const auto axis_topology = operation_attributes.axis_topology[axis];
-        const uint32_t axis_index = sender_device_coord[axis];
-        auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
-            axis_size, axis_index, axis_topology, /*static_alternate=*/false);
-        auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            input_tensor, sender_device_coord, 1, axis_topology, axis);
-        auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            input_tensor, sender_device_coord, -1, axis_topology, axis);
-
-        // A load-balancing technique (alternating between two imbalanced routes) is used
-        // in even-sized rings.
-        const bool axis_load_balance = tt::tt_fabric::is_ring_or_torus(axis_topology) && (axis_size % 2 == 0);
-        if (axis == 1) {
-            e_hops = fwd_hops;
-            w_hops = bwd_hops;
-            e_coord = fwd_coord;
-            w_coord = bwd_coord;
-            ew_load_balance = axis_load_balance;
-        } else {
-            s_hops = fwd_hops;
-            n_hops = bwd_hops;
-            s_coord = fwd_coord;
-            n_coord = bwd_coord;
-            ns_load_balance = axis_load_balance;
+        axis_ring[a] = tt::tt_fabric::is_ring_or_torus(params.axis_topology[a]) && params.axis_num_devices[a] > 2;
+        const auto topology = axis_ring[a] ? params.axis_topology[a] : tt::tt_fabric::Topology::Linear;
+        const uint32_t fwd = a == 1 ? plan_ns::kEast : plan_ns::kSouth;
+        const uint32_t bwd = a == 1 ? plan_ns::kWest : plan_ns::kNorth;
+        neighbor[fwd] = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, 1, topology, a);
+        neighbor[bwd] = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, -1, topology, a);
+    }
+    // 2D routes put a connection's hop counts at the neighbor's physical fabric direction, which depends on where this
+    // device sits. A 1D route is a single hop count, so the slot does not matter there.
+    for (uint32_t d = 0; fabric_2d && d < neighbor.size(); ++d) {
+        if (neighbor[d].has_value()) {
+            const auto dir =
+                tt::tt_fabric::get_eth_forwarding_direction(src_node, mesh_device->get_fabric_node_id(*neighbor[d]));
+            TT_FATAL(
+                dir.has_value() && static_cast<uint32_t>(*dir) < tt::tt_fabric::eth_chan_directions::Z,
+                "all_gather multicast on a 2D fabric needs a cardinal (E/W/N/S) direction to each mesh neighbor");
+            phys_dir[d] = static_cast<uint32_t>(*dir);
         }
     }
+    const auto routes = plan_ns::mcast_routes(
+        plan.N,
+        {params.axis_num_devices[0], params.axis_num_devices[1]},
+        {coord[0], coord[1]},
+        params.cluster_axis,
+        axis_ring,
+        phys_dir);
+    TT_FATAL(!routes.conns.empty(), "all_gather multicast: device {} has no neighbor", dev);
+    // A parity check of two derivations: the plan's variant count (hashed) and this device's routes.
     TT_FATAL(
-        e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
-        "No neighboring devices");
-
-    // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
-    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    auto physical_slot = [&](const MeshCoordinate& neighbor) {
-        const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
-            sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
-        TT_FATAL(
-            dir.has_value() && static_cast<uint32_t>(dir.value()) < tt::tt_fabric::eth_chan_directions::Z,
-            "AllGather expected a cardinal (E/W/N/S) fabric forwarding direction to a mesh neighbor");
-        return static_cast<uint32_t>(dir.value());
-    };
-    uint32_t e_dir = 0, w_dir = 0, n_dir = 0, s_dir = 0;
-    if (e_coord.has_value()) {
-        e_dir = physical_slot(*e_coord);
-    }
-    if (w_coord.has_value()) {
-        w_dir = physical_slot(*w_coord);
-    }
-    if (n_coord.has_value()) {
-        n_dir = physical_slot(*n_coord);
-    }
-    if (s_coord.has_value()) {
-        s_dir = physical_slot(*s_coord);
+        routes.alternates == (plan.variants == 2),
+        "all_gather multicast: route variants disagree with the plan ({} vs {})",
+        routes.alternates,
+        plan.variants);
+    std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+    for (const auto& conn : routes.conns) {
+        TT_FATAL(neighbor[conn.dir].has_value(), "all_gather multicast: no neighbor in direction {}", conn.dir);
+        dst_nodes.push_back(mesh_device->get_fabric_node_id(*neighbor[conn.dir]));
     }
 
-    // Kernel alternates between ranges[] and ranges_alt[] hops on every packet send.
-    // Enabled if any axis is an even-sized ring.
-    const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
+    tt::tt_metal::ProgramDescriptor desc;
+    const CoreRangeSet cores = prog::worker_cores(plan);
+    desc.cbs.push_back(prog::slot_cb(plan, cores));
+    desc.kernels.push_back(prog::reader_kernel(plan, params.force, input, output, cores));
+    desc.kernels.push_back(
+        prog::writer_kernel(plan, params.force, prog::kMulticastWriterKernel, cores, {{"VARIANTS", plan.variants}}));
+    tt::tt_metal::KernelHandle writer_handle = prog::kWriterIdx;  // the connection helper takes it by reference
 
-    // We use an init barrier to wait for remote output tensors to be allocated. This only
-    // matters when the output is freshly allocated by the op; a persistent/preallocated
-    // output is guaranteed to already exist on every device before op kernel begins.
-    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+    for (uint32_t link = 0; link < plan.mcast_cores.size(); ++link) {
+        const CoreCoord& core = plan.mcast_cores[link];
+        const auto ws = plan_ns::schedule(plan, dev, link, 0, 0);
+        prog::add_reader_rt_args(desc.kernels[prog::kReaderIdx], core, input, output, ws, init_sem, done_sem);
 
-    const uint32_t packet_size = operation_attributes.packet_size;
-
-    ////////////////////////////////////////////////////////////////
-    // Core selection
-    ////////////////////////////////////////////////////////////////
-
-    // We allocate one worker core per link, but not per axis.
-    // Each worker handles both dirs (forward and backward) and also both axes (N/S and E/W).
-    // Known limitation: when the two axes have unequal link counts, the larger axis's extra links
-    // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
-    const uint32_t links0 = operation_attributes.axis_num_links[0];
-    const uint32_t links1 = operation_attributes.axis_num_links[1];
-    uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
-
-    // Get worker cores
-    uint32_t num_workers_per_link = 1;
-    // Shrink core usage to fit available core grid.
-    if (min_num_links * num_workers_per_link > num_available_cores) {
-        const uint32_t fitted_links = num_available_cores / num_workers_per_link;
-        TT_FATAL(
-            fitted_links > 0,
-            "all_gather needs at least {} worker core(s) but only {} are available; provide a larger sub_core_grid.",
-            num_workers_per_link,
-            num_available_cores);
-        log_warning(
-            tt::LogOp,
-            "Using {} out of {} Fabric links due to limited {} worker cores. This may lead to performance loss.",
-            fitted_links,
-            min_num_links,
-            num_available_cores);
-        min_num_links = fitted_links;
-    }
-    auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
-        min_num_links,
-        num_workers_per_link,
-        input_tensor.device(),
-        operation_attributes.subdevice_id,
-        /*core_grid_offset=*/CoreCoord{0, 0},
-        operation_attributes.sub_core_grid);
-    TT_FATAL(
-        worker_cores.size() == static_cast<size_t>(min_num_links) * num_workers_per_link,
-        "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
-        "sub_core_grid.",
-        static_cast<size_t>(min_num_links) * num_workers_per_link,
-        min_num_links,
-        num_workers_per_link,
-        worker_cores.size());
-
-    ////////////////////////////////////////////////////////////////
-    // Page indexing
-    //
-    // Glossary:
-    //   input page     -- one page of the input tensor.
-    //   output page    -- one page of the output tensor (the real buffer page).
-    //   chunk          -- one NOC write = min(input_page, output_page) bytes. An input
-    //                     page = split_factor chunks; an output page = output_chunks_per_page
-    //                     chunks. The kernel iterator walks chunks.
-    //   stripe         -- a run of consecutive chunks this device writes before
-    //                     jumping past other devices' contributions.
-    //   stripe jump    -- value the kernel adds to output_page_id at the stripe
-    //                     boundary.
-    //
-    // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
-    //                        chunk lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
-    //
-    // Kernel is a dumb chunk iterator. Iteration pattern is:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    //
-    // Host derives the iterator parameters from input/output page sizes, gather dim,
-    // and device index.
-    ////////////////////////////////////////////////////////////////
-
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const auto& input_shape = input_tensor.padded_shape();
-
-    // --- Copy mode ---
-    // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
-    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity, so
-    // chunk sizing differs by mode:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each chunk
-    //                        lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-    // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
-    // split writes output-content-sized pieces to separate output page bases.
-    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-    const uint32_t output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-    TT_FATAL(
-        output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
-        "concat requires an unpadded input page");  // so slots align to content
-
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
-    TT_FATAL(
-        num_output_chunks / split_factor == num_input_pages,
-        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
-        num_input_pages,
-        split_factor);
-
-    ::ttnn::ccl::validate_packet_size(input_tensor.device()->arch(), packet_size, output_chunk_size);
-
-    // --- CB sizing ---
-    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
-    // output_chunk_size = min(input, output), so the kernel increments both
-    // the cb_read_ptr and cb_write_ptr cleanly.
-    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
-    uint32_t cb_page_size = input_page_size * pages_per_packet;
-    uint32_t cb_depth = 3;
-
-    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
-    // frequency between reader and writer. Note this increases effective CB depth.
-    // Don't do this for row-major layout because of all the careful handling of page sizes.
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        // Empirically determined heuristic, works well for all tensor sizes
-        const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
-        // Find the largest multiplier in [1, ideal] that fits in available L1
-        const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
-        if (multiplier < ideal_multiplier) {
-            log_warning(
-                tt::LogOp,
-                "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-                max_l1_space);
-        }
-        cb_page_size *= multiplier;
-    }
-
-    // --- Stripe geometry ---
-    // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
-    // device contributes per stripe. For a last-dim RM gather this is the *page* count,
-    // which handles sharded RM input (> 1 input page per row).
-    auto tile_spec = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-    uint32_t input_pages_per_stripe = 1;
-    for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
-        uint32_t extent;
-        if (i == -1) {
-            if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                extent = input_shape[i] / tile_spec.get_width();
-            } else {
-                // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
-            }
-        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
-            extent = input_shape[i] / tile_spec.get_height();
-        } else {
-            extent = input_shape[i];
-        }
-        input_pages_per_stripe *= extent;
-    }
-
-    // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
-    // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
-    // a stripe's chunks are laid across output pages via the inner byte-offset counter
-    // and may straddle pages.
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
-    const uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
-    const uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
-    // This device's chunk phase within the output page. Constant across rows because
-    // output_chunks_per_page divides stripe_distance_chunks (valid output sharding).
-    const uint32_t off_start_chunks = (device_idx * output_chunks_per_stripe) % output_chunks_per_page;
-    // Page carries accumulated while walking one full stripe.
-    const uint32_t in_stripe_carries = (off_start_chunks + output_chunks_per_stripe - 1) / output_chunks_per_page;
-    // Value added to output_page_id at the stripe boundary (jump to this device's run
-    // in the next row): pages_per_row minus the carries already taken within the stripe.
-    const uint32_t output_page_stripe_jump = output_pages_per_row - in_stripe_carries;
-    // Per-device byte offset phase the iterator resets to at each stripe boundary.
-    const uint32_t output_page_byte_offset = off_start_chunks * output_chunk_size;
-    TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
-
-    ////////////////////////////////////////////////////////////////
-    // Circular Buffer and Kernel creation
-    ////////////////////////////////////////////////////////////////
-
-    // Input CB
-    uint32_t cb0_id = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = cb_depth * cb_page_size,
-        .core_ranges = worker_core_range,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb0_id),
-            .data_format = df,
-            .page_size = cb_page_size,
-        }}},
-    });
-
-    // KERNEL CREATION
-    // Reader (covers forward directions E-line + S-rect)
-    std::vector<uint32_t> reader_compile_args = {
-        input_page_size,                 // input tensor page size
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
-        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
-        cb0_id,                          // cb id
-        cb_depth,                        // cb depth
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
-        (e_hops > 0) + (s_hops > 0),     // num_connections
-        do_init_barrier,                 // do_init_barrier
-    };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
-
-    // Writer (covers backward directions W-line + N-rect)
-    std::vector<uint32_t> writer_compile_args = {
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
-        output_page_stripe_jump,         // value added to output_page_id at stripe boundary
-        cb0_id,                          // cb id
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
-        (w_hops > 0) + (n_hops > 0),     // num_connections
-        do_init_barrier,                 // do_init_barrier
-    };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
-
-    tt::tt_metal::KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_reader.cpp";
-    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = worker_core_range;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
-    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Writer
-    tt::tt_metal::KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_writer.cpp";
-    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = worker_core_range;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
-    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
-    desc.kernels.push_back(std::move(writer_kernel_desc));
-
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 1;
-
-    ////////////////////////////////////////////////////////////////
-    // Runtime args
-    ////////////////////////////////////////////////////////////////
-
-    for (uint32_t link = 0; link < min_num_links; link++) {
-        CoreCoord core = worker_cores[link];
-        CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-
-        // Set runtime args
-        uint32_t input_pages_per_link = num_input_pages / min_num_links;
-        uint32_t remainder = num_input_pages % min_num_links;
-        uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
-        uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-
-        // Map this worker's slice of input pages to its slice of output chunks. num_output_chunks is
-        // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
-        // matched/concat).
-        uint32_t local_output_start = input_tile_id_start * split_factor;
-        uint32_t local_output_end = input_tile_id_end * split_factor;
-        uint32_t num_worker_output_chunks = local_output_end - local_output_start;
-        // s_start = global chunk index of this worker's first write:
-        //     stripe_index  = local / output_chunks_per_stripe
-        //     pos_in_stripe = local % output_chunks_per_stripe
-        //     s_start       = stripe_index * stripe_distance_chunks    (skip other devices' rows)
-        //                   + device_idx   * output_chunks_per_stripe  (this device's run in the row)
-        //                   + pos_in_stripe
-        uint32_t s_start = (local_output_start / output_chunks_per_stripe) * stripe_distance_chunks +
-                           device_idx * output_chunks_per_stripe + local_output_start % output_chunks_per_stripe;
-        uint32_t output_page_id_start = s_start / output_chunks_per_page;
-        uint32_t output_page_byte_offset_start = (s_start % output_chunks_per_page) * output_chunk_size;
-        uint32_t output_chunk_in_stripe_start = local_output_start % output_chunks_per_stripe;
-
-        // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
-        //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
-        //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
-        // Both equal num_devices - 1.
-        uint32_t barrier_wait_value = num_devices - 1;
-
-        // Slots 0 and 1 are tensor addresses. They are placeholders here so the fabric helper
-        // can append routing words onto a uint32 vector; emplace replaces them with Buffer*.
-        std::vector<uint32_t> reader_rt_args = {
-            0u,                             // input tensor address (Buffer* binding)
-            0u,                             // output tensor address (Buffer* binding)
-            input_tile_id_start,            // input_page_id_start
-            input_tile_id_end,              // input_page_id_end
-            output_page_id_start,           // output page start
-            output_chunk_in_stripe_start,   // initial chunk position within stripe
-            output_page_byte_offset,        // per-device offset phase (reset at stripe boundary)
-            output_page_byte_offset_start,  // worker's initial byte offset within output page
-            num_worker_output_chunks,       // number of output chunks for this worker
-            device_idx,                     // this device's index
-            barrier_sem.address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            done_sem.address(),     // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            virtual_core.x,         // semaphore location (core.x)
-            virtual_core.y,         // semaphore location (core.y)
-            barrier_wait_value,     // barrier counter to wait for
-            e_hops,                 // line_hops
-            e_hops,                 // rect_e_hops
-            w_hops,                 // rect_w_hops
-            s_hops,                 // rect_spine_hops
-            ew_load_balance ? w_hops : e_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
-            e_dir,                              // line_dir
-            e_dir,                              // rect_e_dir
-            w_dir,                              // rect_w_dir
-            s_dir,                              // rect_spine_dir
+        // Init and done go to the same core on every other device (mirror addressing).
+        const CoreCoord mirror = mesh_device->worker_core_from_logical_core(core);
+        std::vector<uint32_t> writer_rt = {
+            ws.last_take,
+            ws.init_send ? 1u : 0u,
+            init_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+            done_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+            static_cast<uint32_t>(mirror.x),
+            static_cast<uint32_t>(mirror.y),
+            static_cast<uint32_t>(routes.conns.size()),
         };
-        // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
-        std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
-        if (e_hops > 0 && e_coord.has_value()) {
-            reader_dst_nodes.push_back(mesh_device->get_fabric_node_id(*e_coord));
+        for (const auto& conn : routes.conns) {
+            writer_rt.push_back(conn.range_v0);
+            writer_rt.push_back(conn.range_v1);
         }
-        if (s_hops > 0 && s_coord.has_value()) {
-            reader_dst_nodes.push_back(mesh_device->get_fabric_node_id(*s_coord));
-        }
-        if (!reader_dst_nodes.empty()) {
-            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id,
-                reader_dst_nodes,
-                {link},
-                desc,
-                reader_kernel_id,
-                core,
-                reader_rt_args,
-                fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
-        }
-        emplace_runtime_args_with_leading_buffers(
-            desc.kernels[reader_kernel_id], core, {input_tensor.buffer(), output_tensor.buffer()}, reader_rt_args);
-
-        std::vector<uint32_t> writer_rt_args = {
-            0u,                             // output tensor address (Buffer* binding)
-            output_page_id_start,           // output page start
-            output_chunk_in_stripe_start,   // initial chunk position within stripe
-            output_page_byte_offset,        // per-device offset phase (reset at stripe boundary)
-            output_page_byte_offset_start,  // worker's initial byte offset within output page
-            num_worker_output_chunks,       // number of output chunks for this worker
-            device_idx,                     // this device's index
-            barrier_sem.address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            done_sem.address(),     // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            virtual_core.x,         // semaphore location (core.x)
-            virtual_core.y,         // semaphore location (core.y)
-            w_hops,                 // line_hops
-            e_hops,                 // rect_e_hops
-            w_hops,                 // rect_w_hops
-            n_hops,                 // rect_spine_hops
-            ew_load_balance ? e_hops : w_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
-            w_dir,                              // line_dir
-            e_dir,                              // rect_e_dir
-            w_dir,                              // rect_w_dir
-            n_dir,                              // rect_spine_dir
-        };
-        // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
-        std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
-        if (w_hops > 0 && w_coord.has_value()) {
-            writer_dst_nodes.push_back(mesh_device->get_fabric_node_id(*w_coord));
-        }
-        if (n_hops > 0 && n_coord.has_value()) {
-            writer_dst_nodes.push_back(mesh_device->get_fabric_node_id(*n_coord));
-        }
-        if (!writer_dst_nodes.empty()) {
-            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id,
-                writer_dst_nodes,
-                {link},
-                desc,
-                writer_kernel_id,
-                core,
-                writer_rt_args,
-                fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
-        }
-        emplace_runtime_args_with_leading_buffers(
-            desc.kernels[writer_kernel_id], core, {output_tensor.buffer()}, writer_rt_args);
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            src_node,
+            dst_nodes,
+            {link},
+            desc,
+            writer_handle,
+            core,
+            writer_rt,
+            fabric_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
+        desc.kernels[prog::kWriterIdx].runtime_args.emplace_back(core, std::move(writer_rt));
     }
-
     return desc;
 }
 
@@ -523,48 +139,23 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
     const AllGatherInputs& tensor_args,
     Tensor& output_tensor,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    const auto& input = tensor_args.input_tensor;
+    auto [plan, workload, init_sem, done_sem] = prog::start_workload(operation_attributes, input, output_tensor);
+    log_debug(
+        tt::LogOp,
+        "all_gather multicast: links={} k={} slot={} B variants={}",
+        plan.choice.links,
+        plan.choice.k,
+        plan.slot_bytes,
+        plan.variants);
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
-    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
-
-    // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
-    // for all remote devices to be ready before beginning operation.
-    // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
-    // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
-    // One semaphore per phase: on a shared one, a fast device's next-launch startup credit could stand in for
-    // a slow device's completion credit, and the op would exit before that device's data has landed.
-    workload_descriptor.semaphores.push_back(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
-    workload_descriptor.semaphores.push_back(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
-    const auto& barrier_sem = workload_descriptor.semaphores[0];
-    const auto& done_sem = workload_descriptor.semaphores[1];
-    log_debug(tt::LogOp, "Semaphore allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
-
-    workload_descriptor.programs.reserve(tensor_coords.coords().size());
+    workload.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
-        auto desc = build_multicast_descriptor_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            output_tensor,
-            barrier_sem,
-            done_sem,
-            available_cores.num_cores());
-        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_multicast_program(operation_attributes, coord, input, output_tensor, plan, init_sem, done_sem)});
     }
-
-    return workload_descriptor;
+    return std::move(workload);
 }
 
 }  // namespace ttnn::operations::ccl

@@ -2,248 +2,155 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// all_gather unicast writer: the slot consumer, one Mux V2 channel. It only sends; it never waits on a semaphore, so
+// its progress depends on nothing downstream (the CB, mux credits and the mux handshakes only).
+//
+// Per slot: wait -> encode each record into the slot's own header (the official setters) -> send header + payload
+// through the mux -> [data_valid at the cadence] -> flush -> pop. Headers live in the slot, so flush-before-pop is
+// what lets both the payload and its header be reused.
+
+#include <cstdint>
+#include <type_traits>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/tensor/noc_traits.h"
-#include "api/core_local_mem.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 
-#include <cstdint>
-#include <utility>
+#include "ag_walk.hpp"
+#include "ag_packet.hpp"
+#include "ag_sync.hpp"
 
-#include "unicast_common.hpp"
+namespace fabric_api = tt::tt_fabric::linear::experimental;
 
-using address_t = uint32_t;
+namespace {
 
-// Store-and-forward writer: CB consumer, owns all fabric. It only ever sends (never waits on a semaphore --
-// its sole backpressure is wait_front). Each iteration drains the CB and unicasts the stripe one hop to the
-// neighbor's output (same address); iteration 0 also writes this device's local data into local output.
-// Maintains the downstream reader's data_valid (= chunks delivered; see the note in unicast_common.hpp), and
-// sends its one-shot "alive" barrier inc up front.
+// Store-and-forward: every packet goes to the immediate neighbor.
+constexpr uint8_t kHops = 1;
+
+// The 2D route rides in the header; on 1D the hop count set by set_state is the whole route. Keyed on the header type
+// because a mux client never gets the FABRIC_2D define.
+FORCE_INLINE void set_route(volatile PACKET_HEADER_TYPE* hdr, uint16_t chip, uint16_t mesh) {
+    if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+        fabric_set_unicast_route(reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(hdr), chip, mesh);
+    }
+}
+
+}  // namespace
+
 void kernel_main() {
-    ///////////////////////////////////////////////////
-    // COMPILE TIME ARGS
-    ///////////////////////////////////////////////////
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr uint32_t A = get_named_compile_time_arg_val("A");
+    constexpr uint32_t P_A = get_named_compile_time_arg_val("P_A");
+    constexpr uint32_t K = get_named_compile_time_arg_val("K");
+    constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
+    constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
+    constexpr uint32_t CB_SLOTS = get_named_compile_time_arg_val("CB_SLOTS");
+    constexpr uint32_t MUX_BUFS = get_named_compile_time_arg_val("MUX_BUFS");
+    constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
 
-#ifdef USE_WORKER_MUX
-    // Fabric-mux geometry, appended by ccl::fabric_mux_connection_ct_args (after the tensor-accessor args).
-    constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 3);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 4);
-#endif
+    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), P_A);
+    static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
 
-    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
-
-    ///////////////////////////////////////////////////
-    // RUNTIME ARGS
-    ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
-    const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const uint8_t barrier_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-dir core
-    [[maybe_unused]] const uint8_t barrier_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
-    const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
-    const uint16_t neighbor_chip_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
+    const bool active = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const uint32_t iters = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t ne = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t last_take = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cadence_slots = get_arg_val<uint32_t>(arg_idx++);
+    const bool init_send = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const uint32_t init_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t data_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mirror_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mirror_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint16_t dst_chip = get_arg_val<uint32_t>(arg_idx++);
+    const uint16_t dst_mesh = get_arg_val<uint32_t>(arg_idx++);
 
-    // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
-    if (num_iters == 0) {
-        return;
-    }
+    // An idle direction (a line end) has no mux. Everything below sits inside this block with no early return, so
+    // an active writer always reaches close(): a mux hangs if any declared channel is never closed.
+    if (active) {
+        Noc noc;
+        CircularBuffer cb(CB_ID);
+        using Sender = tt::tt_fabric::FabricMuxV2Sender<false, MUX_BUFS>;
+        Sender sender = Sender::build_from_args(arg_idx);
+        sender.open();
 
-#ifdef USE_WORKER_MUX
-    // Fabric-mux connection RT args, appended by ccl::fabric_mux_connection_rt_args (17 args). Only appended
-    // for an active direction, so we always have a live connection here (num_iters > 0 implies a neighbor).
-    [[maybe_unused]] const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++) != 0;
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
-#endif
+        // One signal header, re-encoded per signal; a flush always separates two uses.
+        auto* signal = PacketHeaderPool::allocate_header(1);
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            signal, kHops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+        set_route(signal, dst_chip, dst_mesh);
+        if (init_send) {
+            // Tell the neighbor's opposite-direction reader we are alive (our output exists).
+            fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+                &sender,
+                signal,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    ag::fabric_frame_addr(partner_x, partner_y, init_sem), 1});
+            noc.async_writes_flushed();
+        }
+        const uint64_t data_valid = ag::fabric_frame_addr(mirror_x, mirror_y, data_sem);
 
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
-
-    Noc noc;
-    CircularBuffer cb(cb0_id);
-
-    ///////////////////////////////////////////////////
-    // FABRIC INIT
-    ///////////////////////////////////////////////////
-
-#ifdef USE_WORKER_MUX
-    // Multiple workers per direction share one fabric link through a fabric mux. Connect to our channel on the
-    // mux instead of opening a direct connection to the neighbor's ERISC.
-    using SenderT = tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>;
-    SenderT mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-        fabric_mux_x,
-        fabric_mux_y,
-        fabric_mux_channel_id,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_channel_base_address,
-        fabric_mux_connection_info_address,
-        fabric_mux_connection_handshake_address,
-        fabric_mux_flow_control_address,
-        fabric_mux_buffer_index_address,
-        local_flow_control_address,
-        local_teardown_address,
-        local_buffer_index_address);
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
-    tt::tt_fabric::fabric_client_connect(mux_connection);
-    SenderT* sender = &mux_connection;
-#else
-    // Single worker per direction: connect directly to the neighbor's ERISC.
-    tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-    open_connections(fabric_connection, 1, arg_for_fab);
-    using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
-    SenderT* sender = &fabric_connection.get(0).sender;
-#endif
-
-    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender, neighbor_chip_id, neighbor_mesh_id);
-
-    // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
-    // paired writer start writing into our output. Our own reader does the matching wait.
-    if constexpr (do_init_barrier) {
-        fabric.atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
-    }
-
-    const uint64_t downstream_data_valid_addr =
-        safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
-    auto signal = [&](uint32_t chunks) { fabric.atomic_inc(downstream_data_valid_addr, chunks); };
-
-    ///////////////////////////////////////////////////
-    // MAIN
-    ///////////////////////////////////////////////////
-
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
-
-    uint32_t stripe = initial_stripe;
-    for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        const bool last = (iter == num_iters - 1);
-        const uint32_t start = last ? final_start : slice_start;
-        const uint32_t count = last ? final_count : slice_count;
-        const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
-        const bool local_copy = (iter == 0) && (do_local_write != 0);
-        it.init(stripe, start, count);
-
-        uint32_t pending_chunks = 0, pending_pages = 0;
-        for (uint32_t chunks_sent = 0; chunks_sent < count;) {
-            const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_sent);
-            cb.wait_front(1);
-            uint32_t l1_read_addr = cb.get_read_ptr();
-            for (uint32_t i = 0; i < batch; ++i) {
-                auto [page_id, byte_off] = it.next();
-                uint64_t neighbor_addr =
-                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, byte_off);
-                fabric.async_write(l1_read_addr, neighbor_addr);
-
-                if (local_copy) {
-                    // Local data -> our output stripe (same address). Posted write on a separate VC so it
-                    // doesn't contend with the fabric writes on the same NOC.
-                    noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        output_tensor_accessor,
-                        output_chunk_size,
-                        {},
-                        {.page_id = page_id, .offset_bytes = byte_off},
-                        {.vc = NOC_UNICAST_WRITE_VC + 1});
+        ag::SignalCadence cadence(cadence_slots);
+        // The header region is ours for the whole op: route each slot's headers the first time we see that slot.
+        uint32_t routed[CB_SLOTS] = {};
+        uint32_t num_routed = 0;
+        for (uint32_t i = 0; i < iters; ++i) {
+            const uint32_t take = (i + 1 == iters) ? last_take : ne;
+            // An empty pass (empty slice, or an even-ring half of nothing) pushes no slot.
+            for (bool iter_end = take == 0; !iter_end;) {
+                cb.wait_front(1);
+                const uint32_t slot = cb.get_read_ptr();
+                ag::slot_acquire();
+                bool seen = false;
+                for (uint32_t r = 0; r < num_routed; ++r) {
+                    seen = seen || routed[r] == slot;
                 }
-                l1_read_addr += output_chunk_size;
+                ASSERT(seen || num_routed < CB_SLOTS);  // a CB of CB_SLOTS pages has CB_SLOTS slot addresses
+                if (!seen && num_routed < CB_SLOTS) {
+                    for (uint32_t j = 0; j < K; ++j) {
+                        auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.header(slot, j));
+                        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                            hdr, kHops);
+                        set_route(hdr, dst_chip, dst_mesh);
+                    }
+                    routed[num_routed++] = slot;
+                }
+                const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
+                for (uint32_t j = 0; j < info.packets; ++j) {
+                    const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
+                    auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.header(slot, j));
+                    const uint32_t payload = lay.payload(slot, j);
+                    if (rec.cmd.chunk_count == 1) {
+                        hdr->to_noc_unicast_write(
+                            tt::tt_fabric::NocUnicastCommandHeader{rec.cmd.noc_address[0]}, rec.payload_bytes);
+                        fabric_api::fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::None>(
+                            &sender, hdr, payload);
+                    } else {
+                        hdr->to_noc_unicast_scatter_write(rec.cmd, rec.payload_bytes);
+                        fabric_api::fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::None>(
+                            &sender, hdr, payload);
+                    }
+                }
+                // Same sender as the data, so the channel's FIFO lands the signal after the units it counts.
+                if (const uint32_t units = cadence.on_slot(info)) {
+                    fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+                        UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+                        &sender, signal, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{data_valid, units});
+                }
+                // Payload, headers and the signal have left L1 before the reader may refill the slot.
+                noc.async_writes_flushed();
+                cb.pop_front(1);
+                iter_end = info.iter_end != 0;
+                ag::test_delay<WDELAY>();
             }
-            if (local_copy) {
-                noc.async_writes_flushed<NocOptions::POSTED>();
-            }
-            fabric.async_writes_flushed();
-            cb.pop_front(1);
-
-            pending_chunks += batch;
-            if (granular && ++pending_pages == data_valid_granularity) {
-                signal(pending_chunks);
-                pending_chunks = 0;
-                pending_pages = 0;
-            }
-            chunks_sent += batch;
         }
-        // Trailing chunks of a relayed stripe, or the whole of a sink stripe (granular == false).
-        if (pending_chunks > 0) {
-            signal(pending_chunks);
-        }
-        stripe = (stripe + stripe_step) % num_devices;
+        noc.async_write_barrier();
+        sender.close();
     }
-
-    ///////////////////////////////////////////////////
-    // CLEANUP
-    ///////////////////////////////////////////////////
-
-    // Commit our own NOC writes (the iter-0 local copy, plus the packet writes into the mux buffer) before
-    // teardown.
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
-
-#ifdef USE_WORKER_MUX
-    // The mux forwards our buffered packets asynchronously, and close()/graceful-termination do NOT wait for
-    // in-flight packets to drain. Spin until the mux has forwarded everything (all channel slots freed).
-    // get_num_free_write_slots() invalidates the L1 cache internally.
-    while (mux_connection.get_num_free_write_slots() != fabric_mux_num_buffers_per_channel) {
-    }
-
-    // Disconnect from the mux. Worker 0 (termination master) waits for every peer to disconnect, then tells the
-    // mux to gracefully terminate (drain, then exit); the rest just signal the master.
-    tt::tt_fabric::fabric_client_disconnect(mux_connection);
-    if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
-        uint64_t master_sync_addr =
-            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(master_sync_addr, 1);
-        noc_async_atomic_barrier();
-    }
-#else
-    close_connections(fabric_connection);
-#endif
-    noc.async_write_barrier();
 }

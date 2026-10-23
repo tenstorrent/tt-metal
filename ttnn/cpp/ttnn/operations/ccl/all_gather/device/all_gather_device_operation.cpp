@@ -4,6 +4,7 @@
 
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
+#include "all_gather_plan.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -85,10 +86,9 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape);
     }
 
-    // NOTE: implementation-specific constraints (row-major page alignment, tile
-    // padding on the gather dim, input/output page-size ratios, concat vs multi-shard,
-    // etc.) are not checked here. use_composite_all_gather() checks those and routes
-    // to composite path if needed.
+    // NOTE: implementation-specific constraints (alignment, tile padding on the gather dim, page-size ratios, L1 and
+    // cores) are not checked here: the plan's legality (all_gather_plan::make_plan_in / legality) decides them and
+    // all_gather() routes anything no native algorithm handles to composite.
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
@@ -215,60 +215,13 @@ AllGatherDeviceOperation::create_op_performance_model(
 }
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // Pick the kernel algorithm based on limitations and heuristics
-    bool use_unicast = false;
-    if (args.is_true_2d()) {
-        // Limitation: Unicast algorithm currently does not support true 2D topologies
-        use_unicast = false;
-        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
-    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
-        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
-        use_unicast = true;
-    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // Limitation: NeighborExchange only permits 1-hop unicast
-        use_unicast = true;
-    } else {
-        // Heuristics: Decide between multicast or unicast algorithm
-        const auto& input_tensor = tensor_args.input_tensor;
-        const uint32_t axis = args.get_1d_axis();
-        switch (input_tensor.device()->arch()) {
-            case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
-                if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
-                }
-                break;
-            }
-            case tt::ARCH::BLACKHOLE: {
-                // Multicast only wins the small-volume + large-page corner; unicast is
-                // bandwidth-optimal and wins outright once ~4MB cross a link (at any page size).
-                // Between, the multicast-favorable per-link-byte ceiling scales with the actual page
-                // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
-                // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
-                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
-                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-
-                // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
-                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-                const uint64_t per_link_bytes =
-                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
-
-                // Page^2 ceiling, anchored so a 2KB page permits multicast up to 1MB/link, capped at
-                // unicast's 4MB bandwidth floor. (2KB/1MB are the anchor; txn is the real page size.)
-                constexpr uint64_t anchor_page = 2048, anchor_ceiling = 1'000'000, unicast_bw_floor = 4'000'000;
-                const uint64_t mcast_ceiling =
-                    std::min(unicast_bw_floor, (txn * txn * anchor_ceiling) / (anchor_page * anchor_page));
-                use_unicast = per_link_bytes >= mcast_ceiling;
-                break;
-            }
-            default: break;  // uncalibrated arch
-        }
+    const AllGatherParams& args, const AllGatherInputs& /*tensor_args*/) {
+    // all_gather() planned the call (all_gather_plan::make_plan); the choice is part of the hashed params.
+    switch (args.choice.algo) {
+        case AgAlgo::Unicast: return AllGatherUnicastFactory{};
+        case AgAlgo::Multicast: return AllGatherMulticastFactory{};
+        default: TT_THROW("all_gather: no native algorithm was planned ({})", static_cast<int>(args.choice.algo));
     }
-
-    return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
 }
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(
@@ -296,7 +249,8 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const AgForce& force) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in AllGatherParams.
@@ -322,37 +276,61 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
-    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     log_debug(
         tt::LogOp,
-        "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}, packet_size: {} B",
+        "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}",
         fabric_config,
         axis_topology,
         axis_num_devices,
-        axis_num_links,
-        packet_size);
+        axis_num_links);
+
+    // The persistent output is the buffer actually written, so it defines the output config; compute_output_specs
+    // must not name another memory. Only the buffer type is compared: full equality would reject ND-sharded configs,
+    // which compute_output_specs_helper normalizes.
+    if (memory_config.has_value() && persistent_output_tensor.has_value()) {
+        TT_FATAL(
+            memory_config->buffer_type() == persistent_output_tensor->memory_config().buffer_type(),
+            "all_gather was given a memory_config ({}) in a different memory than the output_tensor's ({}). They must "
+            "agree; omit memory_config to take it from the output tensor.",
+            *memory_config,
+            persistent_output_tensor->memory_config());
+    }
+    const std::optional<MemoryConfig> output_memory_config =
+        persistent_output_tensor.has_value() ? std::optional<MemoryConfig>(persistent_output_tensor->memory_config())
+                                             : memory_config;
 
     // Resolve the user's gather dim to a from-the-end index (see AllGatherParams::dim_from_end)
     const auto& logical_shape = input_tensor.logical_shape();
     const int32_t gather_dim_from_end =
         static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
 
+    AllGatherParams params{
+        gather_dim_from_end,
+        compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, output_memory_config),
+        cluster_axis,
+        fabric_config,
+        axis_topology,
+        axis_is_straight,
+        axis_num_devices,
+        axis_num_links,
+        num_devices,
+        subdevice_id,
+        sub_core_grid};
+    params.facts = all_gather_plan::make_facts(*mesh_device, subdevice_id, sub_core_grid);
+    params.force = force;
     return {
-        AllGatherParams{
-            gather_dim_from_end,
-            compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config),
-            cluster_axis,
-            fabric_config,
-            axis_topology,
-            axis_is_straight,
-            axis_num_devices,
-            axis_num_links,
-            num_devices,
-            packet_size,
-            subdevice_id,
-            sub_core_grid},
+        std::move(params),
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
+}
+
+all_gather_plan::AgPlan plan_all_gather(AllGatherParams& params, const AllGatherInputs& inputs) {
+    const auto& out_spec = inputs.persistent_output_tensor.has_value() ? inputs.persistent_output_tensor->tensor_spec()
+                                                                       : params.output_spec;
+    auto plan =
+        all_gather_plan::make_plan(all_gather_plan::make_plan_in(params, inputs.input_tensor.tensor_spec(), out_spec));
+    params.choice = plan.choice;
+    return plan;
 }
 
 }  // namespace ttnn::operations::ccl
@@ -368,7 +346,12 @@ Tensor all_gather(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     auto [params, inputs] = ttnn::operations::ccl::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
+        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid, {});
+    const auto plan = ttnn::operations::ccl::plan_all_gather(params, inputs);
+    TT_FATAL(
+        plan.choice.algo != ttnn::operations::ccl::AgAlgo::Composite,
+        "prim::all_gather has no native algorithm for this input ({}); use ttnn::all_gather",
+        plan.composite_reason);
     return ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);
 }
 

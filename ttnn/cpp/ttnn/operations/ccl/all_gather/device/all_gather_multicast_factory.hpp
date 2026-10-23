@@ -12,6 +12,7 @@
 
 namespace ttnn::operations::ccl {
 
+// One core per link reads its slice once and multicasts it to every other device of the collective (1D or 2D).
 struct AllGatherMulticastFactory {
     // Workload-scoped semaphores; one ProgramDescriptor per coord; tensor addresses are Buffer* bindings.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(

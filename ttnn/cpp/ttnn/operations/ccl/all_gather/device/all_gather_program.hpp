@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <vector>
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "all_gather_plan.hpp"
+
+// Program pieces both all_gather factories share: the workload prologue (plan and semaphores), the slot CB, the
+// kernels and the runtime argument tables they read. Every value comes from the plan or the tensors, so a cached
+// program depends only on hashed params and Buffer* bindings.
+namespace ttnn::operations::ccl::all_gather_program {
+
+inline constexpr const char* kUnicastWriterKernel =
+    "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_writer.cpp";
+inline constexpr const char* kMulticastWriterKernel =
+    "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_writer.cpp";
+
+// Kernel order in each program: the reader, then the writer.
+inline constexpr uint32_t kReaderIdx = 0;
+inline constexpr uint32_t kWriterIdx = 1;
+
+// Reader on NOC0 and writer on NOC1: the two RISCs of a core must use different NOCs, and the swap measured 12%
+// slower on BH line n = 3.
+inline constexpr tt::tt_metal::NOC kReaderNoc = tt::tt_metal::NOC::NOC_0;
+inline constexpr tt::tt_metal::NOC kWriterNoc = tt::tt_metal::NOC::NOC_1;
+// Mux V2 forwarder NOC (NOC1 measured 1.8-2.3x slower on BH).
+inline constexpr tt::tt_metal::NOC kMuxForwarderNoc = tt::tt_metal::NOC::NOC_0;
+
+// The plan of one call, re-expanded from the hashed choice, and a workload holding its two GlobalSemaphores (init,
+// then data_valid / done) on the plan's worker cores.
+struct WorkloadStart {
+    all_gather_plan::AgPlan plan;
+    tt::tt_metal::WorkloadDescriptor workload;
+    uint32_t init_sem = 0, data_sem = 0;
+};
+WorkloadStart start_workload(const AllGatherParams& params, const Tensor& input, const Tensor& output);
+
+// Worker cores of the plan: unicast group workers (not muxes), or the multicast cores.
+CoreRangeSet worker_cores(const all_gather_plan::AgPlan& plan);
+
+// The slot CB: kCbSlots pages of plan.slot_bytes on `cores`.
+tt::tt_metal::CBDescriptor slot_cb(const all_gather_plan::AgPlan& plan, const CoreRangeSet& cores);
+
+// The reader kernel (ag_reader.cpp) on `cores`. Named CT args: A, P_A, K, SLOT_BYTES, CB_ID, UI, UO, S, N, E,
+// DST_CROSS, SRC_CROSS, RDELAY; positional CT args: TensorAccessorArgs(input), TensorAccessorArgs(output).
+tt::tt_metal::KernelDescriptor reader_kernel(
+    const all_gather_plan::AgPlan& plan,
+    const AgForce& force,
+    const Tensor& input,
+    const Tensor& output,
+    const CoreRangeSet& cores);
+
+// A writer kernel on `cores`. Named CT args: A, P_A, K, SLOT_BYTES, CB_ID, CB_SLOTS, WDELAY, then `extra`.
+tt::tt_metal::KernelDescriptor writer_kernel(
+    const all_gather_plan::AgPlan& plan,
+    const AgForce& force,
+    const char* source,
+    const CoreRangeSet& cores,
+    const tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs& extra);
+
+// Reader runtime args (ag_reader.cpp reads them in this order):
+//   input (Buffer*), output (Buffer*), e0, ne, iters, stripe0, stripe_step, last_skip, last_take, iter_units,
+//   init_wait, end_wait, local_copy, init_sem, data_sem.
+void add_reader_rt_args(
+    tt::tt_metal::KernelDescriptor& reader,
+    const CoreCoord& core,
+    const Tensor& input,
+    const Tensor& output,
+    const all_gather_plan::WorkerSched& ws,
+    uint32_t init_sem,
+    uint32_t data_sem);
+
+}  // namespace ttnn::operations::ccl::all_gather_program
