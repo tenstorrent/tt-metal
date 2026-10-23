@@ -5,11 +5,11 @@
 // DM producer kernel for BenchmarkCaseSix (worst-case-four init benchmark).
 //
 // Six DM threads (DM0–DM5) run this kernel. Each DM checks its mhartid and
-// issues one implicit NOC read per DFB it produces, then calls
-// dfb_finish_single_implicit_read_producer() (no collective thread sync).
-// DFB IDs use the low-level uint16_t constructor (explicit risc masks, no bindings).
+// issues one implicit NOC read per DFB it produces; firmware finishes each DFB
+// once the kernel returns. DFB IDs use the low-level uint16_t constructor
+// (explicit risc masks, no bindings).
 //
-// Drains the full ring per DFB (num_entries=1): 1 implicit read + finish per DFB.
+// Drains the full ring per DFB (num_entries=1): 1 implicit read per DFB.
 //
 // DFB layout (24 DFBs total, 16×1Sx2A + 8×1Sx1A):
 //
@@ -24,12 +24,7 @@
 //     DFB 18–19 : DM3 → Neo1
 //     DFB 20–21 : DM2 → Neo3
 //     DFB 22–23 : DM4 → Neo0
-//
-// Quasar launches this kernel on num_threads_per_cluster=6 DM harts, but each DFB
-// has a single producer. Use dfb_finish_single_implicit_read_producer() instead of
-// finish() to skip the collective sync_threads barrier in handle_final_credits.
 
-#include "dfb_bench_finish_helper.h"
 #include "dfb_implicit_read_helper.h"
 
 void kernel_main() {
@@ -41,7 +36,6 @@ void kernel_main() {
     auto issue_and_finish = [&](uint16_t id) {
         DataflowBuffer dfb(id);
         // dfb_issue_implicit_read(noc, dfb);
-        // dfb_finish_single_implicit_read_producer(dfb);
     };
 
     if (dm_id == 4) {
