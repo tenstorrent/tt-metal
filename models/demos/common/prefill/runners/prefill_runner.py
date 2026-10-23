@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import time
+from dataclasses import dataclass, fields
 from typing import Optional
 
 import torch
@@ -33,6 +34,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import (
+    export_d2d_pipeline_descriptor,
     indexer_indices_global_spec,
     make_h2d_spec,
     num_mtp_tokens,
@@ -139,6 +141,8 @@ _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_si
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+# Hybrid page pool v2: the engine finds each rank's D2D receiver from the exported pipeline descriptor.
+HYBRID_PAGE_POOL_V2 = os.environ.get("PREFILL_HYBRID_PAGE_POOL_V2", "0") == "1"
 # GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
 SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
 
@@ -236,6 +240,23 @@ def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
         tt_ids, tt_metadata = outs
     meta = _decode_metadata(tt_metadata)
     return tt_ids, tt_mtp_tokens, meta, tt_metadata
+
+
+@dataclass
+class D2DBoundary:
+    """The D2D channels across one pipeline-stage boundary, from this rank's side: the receivers
+    on its inbound boundary, or the senders on its outbound one.
+
+    Every channel carries the same chunk, so the engine ungates all of an inbound boundary's
+    receivers together. A new channel goes here as a field, and channels() picks it up.
+    """
+
+    activation: Optional[object] = None
+    # GLM-5.3 indexer top-k, when the first layer past the boundary is a shared-indexer layer.
+    indices: Optional[object] = None
+
+    def channels(self) -> list:
+        return [getattr(self, f.name) for f in fields(self) if getattr(self, f.name) is not None]
 
 
 def build_d2d_pipeline_endpoints(
@@ -380,15 +401,15 @@ def _d2d_send(
 
 
 def _forward_shutdown(
-    d2d_out,
+    outbound: D2DBoundary,
     rank: int,
     d2d_rows: int,
     d2d_width: int,
     planes: int = 1,
-    idx_out=None,
     idx_shape: Optional[tuple] = None,
 ) -> None:
     # `planes` must match this rank's OUTBOUND spec, not its inbound one.
+    d2d_out, idx_out = outbound.activation, outbound.indices
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
         torch.zeros(1, planes, d2d_rows, d2d_width),
@@ -423,8 +444,9 @@ def _forward_shutdown(
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
-def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
+def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
+    d2d_out, idx_out = outbound.activation, outbound.indices
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ())
     inputs = get_inputs(words) if get_inputs is not None else None
@@ -443,12 +465,11 @@ def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
-def _lease_reclaim(d2d_in, d2d_out, idx_in=None, idx_out=None) -> None:
-    for service in (d2d_in, idx_in, d2d_out, idx_out):
-        if service is not None:
-            service.wait_for_fabric_links()
-    if d2d_in is not None:
-        d2d_in.release_fabric_links()
+def _lease_reclaim(inbound: D2DBoundary, outbound: D2DBoundary) -> None:
+    for service in inbound.channels() + outbound.channels():
+        service.wait_for_fabric_links()
+    if inbound.activation is not None:
+        inbound.activation.release_fabric_links()
 
 
 def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
@@ -475,13 +496,13 @@ def _compute_and_send(
     c: int,
     inp,
     meta: Optional[dict],
-    d2d_out,
+    outbound: D2DBoundary,
     d2h_service=None,
     metadata_msg=None,
     mtp_tokens=None,
     indices=None,
-    idx_out=None,
 ) -> float:
+    d2d_out, idx_out = outbound.activation, outbound.indices
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
@@ -531,11 +552,9 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
-    if d2d_out is not None:
-        d2d_out.wait_for_fabric_links()
-    if idx_out is not None:
-        idx_out.wait_for_fabric_links()
+def _drain_and_log_e2e(runtime, rank: int, outbound: D2DBoundary, first_compute_start, n_done: int, t0: float) -> None:
+    for service in outbound.channels():
+        service.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
@@ -552,14 +571,14 @@ def run_request_loop(
     d2d_width: int,
     outbound_planes: int = 1,
     h2d_service=None,
-    d2d_in=None,
-    d2d_out=None,
+    inbound: Optional[D2DBoundary] = None,
+    outbound: Optional[D2DBoundary] = None,
     d2h_service=None,
     layer_ack_service=None,
     before_first_chunk=None,
-    idx_in=None,
-    idx_out=None,
 ) -> None:
+    inbound = inbound or D2DBoundary()
+    outbound = outbound or D2DBoundary()
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -571,14 +590,14 @@ def run_request_loop(
     c = 0
     first = None
     while not _shutdown:
-        _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
+        _lease_reclaim(inbound, outbound)
         if cfg.is_first_rank:
             inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+            inp, meta, metadata_msg = _d2d_recv(inbound.activation)
             mtp_tokens = None
-        indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
+        indices = _d2d_recv_indices(inbound.activation, inbound.indices) if inbound.indices is not None else None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
@@ -587,15 +606,14 @@ def run_request_loop(
                 ttnn.deallocate(mtp_tokens)
             if indices is not None:
                 ttnn.deallocate(indices)
-            if d2d_out is not None:
+            if outbound.activation is not None:
                 _forward_shutdown(
-                    d2d_out,
+                    outbound,
                     rank,
                     d2d_rows,
                     d2d_width,
                     outbound_planes,
-                    idx_out,
-                    runtime.indexer_indices_shape() if idx_out is not None else None,
+                    runtime.indexer_indices_shape() if outbound.indices is not None else None,
                 )
             break
         warmup = _is_warmup_sentinel(meta)
@@ -616,19 +634,18 @@ def run_request_loop(
             c,
             inp,
             meta,
-            d2d_out,
+            outbound,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,
             mtp_tokens=mtp_tokens,
             indices=indices,
-            idx_out=idx_out,
         )
         if first is None:
             first = t
         c += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
+    _drain_and_log_e2e(runtime, rank, outbound, first, c, t0)
 
 
 def _print_config() -> None:
@@ -650,6 +667,7 @@ def _print_config() -> None:
         ("PREFILL_MTP_DECODE_LEVELS", str(MTP_DECODE_LEVELS)),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
+        ("PREFILL_HYBRID_PAGE_POOL_V2", str(int(HYBRID_PAGE_POOL_V2))),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -694,6 +712,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
+        "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
+        "PREFILL_MASTER_RANK": int(os.environ.get("PREFILL_MASTER_RANK", "0")),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -824,16 +844,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
 
-    d2d_in = d2d_out = idx_in = idx_out = None
+    inbound, outbound = D2DBoundary(), D2DBoundary()
+    socket_receivers_file = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(
+        inbound.activation, outbound.activation = build_d2d_pipeline_endpoints(
             mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
         )
         idx_inbound = getattr(runtime, "receives_indexer_indices", False)
         idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         if idx_inbound or idx_outbound:
-            idx_in, idx_out = build_d2d_index_endpoints(
+            inbound.indices, outbound.indices = build_d2d_index_endpoints(
                 mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound
             )
         ttnn.distributed_context_barrier()
@@ -841,6 +862,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
+    if HYBRID_PAGE_POOL_V2:
+        # Published even on a single rank, so the engine always finds the file.
+        boundaries = [inbound.channels()] if inbound.channels() else []
+        socket_receivers_file = export_d2d_pipeline_descriptor(boundaries, rank, service_id, master_rank)
     router = None
     d2h_service = None
     layer_ack_service = None
@@ -952,8 +977,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
 
     def _capture_trace() -> None:
-        if d2d_out is not None:
-            _forward_send_warmup(runtime, d2d_out, rank, idx_out)
+        if outbound.activation is not None:
+            _forward_send_warmup(runtime, outbound, rank)
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -979,13 +1004,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_width=d2d_activation_width,
             outbound_planes=d2d_out_planes,
             h2d_service=h2d_service,
-            d2d_in=d2d_in,
-            d2d_out=d2d_out,
+            inbound=inbound,
+            outbound=outbound,
             d2h_service=d2h_service,
             layer_ack_service=layer_ack_service,
             before_first_chunk=_capture_trace if traced else None,
-            idx_in=idx_in,
-            idx_out=idx_out,
         )
     finally:
         import gc
@@ -993,7 +1016,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if layer_ack_service is not None:
             layer_ack_service.stop()
             layer_ack_service = None
-        h2d_service = d2d_in = d2d_out = idx_in = idx_out = d2h_service = None
+        socket_receivers_file = h2d_service = inbound = outbound = d2h_service = None
         gc.collect()
         if producer is not None:
             producer.shutdown()
