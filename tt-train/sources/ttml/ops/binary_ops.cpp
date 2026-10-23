@@ -210,7 +210,11 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::divide(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad()) || was_broadcasted(b, out->get_grad())) {
+        if (!autograd::any_requires_grad(a, b)) {
+            return;
+        }
+        if ((a->get_requires_grad() && was_broadcasted(a, out->get_grad())) ||
+            (b->get_requires_grad() && was_broadcasted(b, out->get_grad()))) {
             throw std::runtime_error("Broadcasting is not supported in the backward pass of operator/");
         }
         auto res = ttnn::div_bw(
