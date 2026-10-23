@@ -74,6 +74,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         LLK_ASSERT(num_tiles == 1, "rmsnorm-style transpose path supports num_tiles==1 only");
         LLK_ASSERT(num_faces == 4, "rmsnorm-style transpose path supports num_faces==4 only");
         constexpr std::uint32_t replay_buf_len = 5;
+        block_replay_body()                    = BlockReplayBody::None;
         load_replay_buf(
             0,
             replay_buf_len,

@@ -37,6 +37,7 @@ using namespace ckernel::unpacker;
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
 {
+    block_replay_body() = BlockReplayBody::None;
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape);
 

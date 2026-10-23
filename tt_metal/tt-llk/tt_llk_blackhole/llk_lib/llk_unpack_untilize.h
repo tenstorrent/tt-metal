@@ -30,6 +30,8 @@ using namespace ckernel::unpacker;
  */
 inline void _llk_unpack_untilize_mop_config_()
 {
+    block_replay_body() = BlockReplayBody::None;
+
     constexpr std::uint32_t replay_buf_len = 6;
     load_replay_buf(
         0,

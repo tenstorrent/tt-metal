@@ -609,14 +609,15 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 }
 
 /**
- * Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the PackMode::Default program.
- * @tparam pack_mode: Packing layout, must be PackMode::Default.
+ * Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the program the last pack init set up.
+ * @tparam pack_mode: Packing layout of that program, values = <Default/Tilize>.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
-    static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Tilize, "Blackhole: _llk_pack_block_ supports PackMode::Default and PackMode::Tilize only");
 
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
     LLK_ASSERT(
@@ -628,10 +629,48 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
     program_packer_destination(address);
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
-    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    // A tilize outer loop packs a face pair and steps Z one pair, so Z walks on into the next tile.
+    constexpr std::uint32_t faces_per_outer_loop = (pack_mode == PackMode::Tilize) ? 2 : 1;
+    const std::uint32_t outer_loop_len           = (TILE_NUM_FACES / faces_per_outer_loop) * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
+/**
+ * Pack num_tiles consecutive 32x32 tiles with the program _llk_pack_init_<PackMode::Tilize> set up, one tile per MOP run so
+ * every tile closes, to L1 tiles tile_stride bytes apart. Block-float outputs need the close of each tile.
+ * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
+ * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_tilize_block_closed_(
+    const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    if (tile_stride != pack_ch1_w_stride)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride = tile_stride;
+    }
+
+    // The tilize program packs two face pairs and steps Z two pairs, into the next tile, and closes the tile in its last pack.
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TT_MOP(1, 0, 0);
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 0, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
 /**

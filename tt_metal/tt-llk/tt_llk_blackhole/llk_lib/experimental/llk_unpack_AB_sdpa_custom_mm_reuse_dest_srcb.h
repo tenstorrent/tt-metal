@@ -50,6 +50,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // Practical limit is 16 due to dst size.
 
     constexpr std::uint32_t REPLAY_BUF_LEN = 30;
+    block_replay_body()                    = BlockReplayBody::None;
     load_replay_buf(
         0,
         REPLAY_BUF_LEN,
