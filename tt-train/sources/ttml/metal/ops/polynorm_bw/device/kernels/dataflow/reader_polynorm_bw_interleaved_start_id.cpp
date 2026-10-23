@@ -18,6 +18,7 @@
 //
 // The two passes read the same DRAM data but push to the same CBs (cb_x, cb_dout)
 // which are consumed and popped by the compute kernel between passes.
+// Pass 2 only runs when dL/dx is requested (COMPUTE_GRAD_INPUT).
 // ============================================================================
 
 #include <algorithm>
@@ -25,6 +26,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
 
 void kernel_main() {
     uint32_t arg_idx = 0U;
@@ -88,13 +95,15 @@ void kernel_main() {
         }
 
         // Pass 2: x + dout for emit_output (grad_x)
-        for (uint32_t col = 0; col < Wt; col += block_size) {
-            const uint32_t current_block_size = std::min(block_size, Wt - col);
-            const uint32_t block_start_idx = row_start_idx + col;
-            read_tiles_by_row(
-                cb_x, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row(
-                cb_dout, dL_dout_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+        if constexpr (compute_grad_input) {
+            for (uint32_t col = 0; col < Wt; col += block_size) {
+                const uint32_t current_block_size = std::min(block_size, Wt - col);
+                const uint32_t block_start_idx = row_start_idx + col;
+                read_tiles_by_row(
+                    cb_x, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+                read_tiles_by_row(
+                    cb_dout, dL_dout_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+            }
         }
     }
 }

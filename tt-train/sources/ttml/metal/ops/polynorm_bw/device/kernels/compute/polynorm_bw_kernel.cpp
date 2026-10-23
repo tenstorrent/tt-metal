@@ -79,6 +79,20 @@
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
+// Which outputs to produce. Pass 1 and its reductions are needed for both: dL/dx uses inv_rms_k and γ_k, and the
+// packed partials use dw_k and Σdout.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
+#ifdef COMPUTE_PACKED_PARTIALS
+constexpr bool compute_packed_partials = true;
+#else
+constexpr bool compute_packed_partials = false;
+#endif
+
 inline uint32_t get_num_inner() {
     return get_arg_val<uint32_t>(0);
 }
@@ -376,6 +390,10 @@ void accumulate_all_sums_for_row() {
     cb_reserve_back(cb_sum_x3dout, onetile);
     cb_reserve_back(cb_db_acc, onetile);
 
+    // copy_tile_to_reg does not reconfigure SrcA, and the previous row may have left it at Float32 (the α tiles at
+    // the end of Pass 2 when the packed partials are skipped).
+    reconfig_data_format_srca(cb_x);
+
     for (uint32_t col = 0; col < num_inner; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, num_inner - col);
         cb_wait_front(cb_x, block_size);
@@ -543,6 +561,12 @@ void emit_output_for_row() {
     cb_pop_front(cb_gamma_3, onetile);
 }
 
+// Wait for and drop a tile whose consumer is skipped.
+inline void discard_tile(const uint32_t cb) {
+    cb_wait_front(cb, onetile);
+    cb_pop_front(cb, onetile);
+}
+
 // --- Main entry point ---
 
 void kernel_main() {
@@ -578,17 +602,35 @@ void kernel_main() {
         compute_dw_and_gamma(cb_sum_x2dout, cb_inv_rms_x2, cb_gamma_2);
         compute_dw_and_gamma(cb_sum_x3dout, cb_inv_rms_x3, cb_gamma_3);
 
-        // Fold w0/w1/w2 into inv_rms once per row so Pass-2 drops 3 muls + 3 CB reads per output tile.
-        prepare_weighted_inv_rms_for_row();
+        if constexpr (compute_grad_input) {
+            // Fold w0/w1/w2 into inv_rms once per row so Pass-2 drops 3 muls + 3 CB reads per output tile.
+            prepare_weighted_inv_rms_for_row();
 
-        // Pass 2: re-read x + dout, emit per-element grad_x
-        emit_output_for_row();
+            // Pass 2: re-read x + dout, emit per-element grad_x
+            emit_output_for_row();
+        } else {
+            // γ_k and inv_rms_k only feed grad_x. Freeing cb_inv_rms_x also leaves its slot for dL/db below.
+            discard_tile(cb_gamma_1);
+            discard_tile(cb_gamma_2);
+            discard_tile(cb_gamma_3);
+            discard_tile(cb_inv_rms_x);
+            discard_tile(cb_inv_rms_x2);
+            discard_tile(cb_inv_rms_x3);
+        }
 
-        // Reduce accumulated Σdout → dL/db scalar (reuses cb_inv_rms_x slot)
-        reduce_sum_to_scalar(cb_db_acc, cb_inv_rms_x);
+        if constexpr (compute_packed_partials) {
+            // Reduce accumulated Σdout → dL/db scalar (reuses cb_inv_rms_x slot)
+            reduce_sum_to_scalar(cb_db_acc, cb_inv_rms_x);
 
-        // Pack [dw0, dw1, dw2, db] into 4 tiles for on-device final reduction in host wrapper
-        emit_packed_partials_for_row();
+            // Pack [dw0, dw1, dw2, db] into 4 tiles for on-device final reduction in host wrapper
+            emit_packed_partials_for_row();
+        } else {
+            // dw_k (left in the cb_sum_x*dout slots) and Σdout only feed the packed partials.
+            discard_tile(cb_sum_xdout);
+            discard_tile(cb_sum_x2dout);
+            discard_tile(cb_sum_x3dout);
+            discard_tile(cb_db_acc);
+        }
     }
 
     // Release constant tiles
