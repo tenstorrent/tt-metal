@@ -1151,3 +1151,22 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - LoudBox (12 x 10 grid, 110 engine cores): device time 120-135 us (slowest chip; chip 0's kernels end ~104), chunk
   cadence ~15 us = matmul 8.3 + finish (s, partner add, x s, + se: ~20 tile ops) 3.6 + squares / s 2. PCC 0.99993+,
   300-call soak min 0.999910.
+- Step B: the latent all-gather in the tail's program, landing straight in the engine's L1. Ports on the column right
+  of the engine (fabric_all_gather's _plan with an explicit placement down that column - its placement probe needs a
+  row of 4 free cores; balanced ring: the opposite block half each way): a port (direction d, link l) carries K half l
+  of its blocks (own first, then the ones it relays) into the next chip's engine rows l RT .., share by share (row tile,
+  column: its K tiles), packets of 3 tiles; a share's last packet a fused write + increment of the owner's landed word
+  of the block's chunk position there. Each chip's chunk order: own, then by hop distance (ties: the previous chip).
+  Relays read a share from this chip's owner once its landed word says so. The fence: a port's ready (a global
+  semaphore, re-armed by its waiter) from the port that writes into it, sent at program start.
+- Bring-up: (1) the relay's NoC-read copy of the landed word polled without invalidate_l1_cache: a stale cached zero.
+  (2) the landed word had two consumers (the engine's share multicast, a relaying port) and the engine's re-arm wiped
+  it before the relay saw it: hang (DPRINT on the ports: every sender's first share sent, every relay waiting on its
+  first share). Now the landed words only count up (every landing of every call) and each consumer waits for >= its
+  own call count (an L1 word it bumps at program start: the engine NCRISC's after the landed words, the port readers'
+  in port_epoch) - no re-arm to race, trace-safe. (3) one packet a barrier / flush: ~9 GB/s a link (228 us); the
+  ports now move groups of 8 packets (one read barrier, one flush; a relay waiting mid-group pushes the group early,
+  padded, its packet count in a 16 B CB) - 148 us.
+- LoudBox: the tail is one program, 148 us device time (slowest chip) vs all-gather 83 + norm / up 163 + add 17 = 263
+  in 4 programs; gather-bound on the line (chip 3's last block at ~110 us; link floor for the line's busiest hop,
+  3 half-blocks of 573 KB: 73 us). 300-call soak min PCC 0.999913.

@@ -45,8 +45,9 @@ constexpr uint32_t KH = get_compile_time_arg_val(0), PNMAX = get_compile_time_ar
 constexpr uint32_t NCK = get_compile_time_arg_val(3), GX = get_compile_time_arg_val(4), WTB = get_compile_time_arg_val(5);
 constexpr uint32_t NSLOT = get_compile_time_arg_val(6), KT = get_compile_time_arg_val(7), XT = get_compile_time_arg_val(8);
 // (SA0 + c: chunk c's shares in; SP0 + c: its E tiles; SX: the partner's exchanges (cumulative: it sends in chunk
-// order); SW: W' K ranges in, a bit each (1 << r added by range r's reader); SL: my BRISC's shares loaded)
-constexpr uint32_t SA0 = 0, SP0 = NCK, SX = 2 * NCK, SFREE = 2 * NCK + 1, SL = 2 * NCK + 2, SW = 2 * NCK + 3;
+// order); SW: W' K ranges in, a bit each (1 << r added by range r's reader). My share of chunk c landed: the global
+// semaphore at sl + 16 c (chunk 0: my BRISC; the others: the fabric - the upstream port's last packet of the share))
+constexpr uint32_t SA0 = 0, SP0 = NCK, SX = 2 * NCK, SFREE = 2 * NCK + 1, SW = 2 * NCK + 2;
 constexpr uint32_t CB_W = 0, CB_A = 1, CB_PART = 2, CB_PMY = 3, CB_ONES = 4, CB_XSEND = 6, CB_XRECV = 8, CB_SE = 9;
 constexpr uint32_t CB_OUT = 10;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
@@ -70,6 +71,7 @@ void kernel_main() {
     const uint32_t z_addr = get_arg_val<uint32_t>(a++), ak0 = get_arg_val<uint32_t>(a++), ak1 = get_arg_val<uint32_t>(a++);
     const uint32_t se_addr = get_arg_val<uint32_t>(a++), NTO = get_arg_val<uint32_t>(a++), f0 = get_arg_val<uint32_t>(a++);
     const uint32_t fn = get_arg_val<uint32_t>(a++), land = get_arg_val<uint32_t>(a++), SHMAX = get_arg_val<uint32_t>(a++);
+    const uint32_t sl = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a;
     const auto zg = TensorAccessor(z_args, z_addr, 2048);
     const auto sg = TensorAccessor(s_args, se_addr, 2048);
@@ -79,14 +81,12 @@ void kernel_main() {
         for (uint32_t i = 0; i < 512; ++i) o[i] = 0x3F803F80u;
     }
     cb_push_back(CB_ONES, 1);
-    // my z share of chunk c (K tiles kh0 + ak0 .. of its row tile r) into my landing region
-    auto share = [&](uint32_t c) {
-        const uint32_t R = get_arg_val<uint32_t>(ord + c) * RT + r, dst = land + c * SHMAX * 2048;
-        for (uint32_t k = ak0; k < ak1; ++k) noc_async_read(zg.get_noc_addr(R * KT + kh0 + k), dst + (k - ak0) * 2048, 2048);
+    {  // my share of my own rows (chunk 0: K tiles kh0 + ak0 .. of my row tile r of y_own) into my landing region; the
+       // other chunks' shares land there by the fabric
+        for (uint32_t k = ak0; k < ak1; ++k) noc_async_read(zg.get_noc_addr(r * KT + kh0 + k), land + (k - ak0) * 2048, 2048);
         noc_async_read_barrier();
-        *sem(SL) = c + 1;
-    };
-    share(0);  // (the NCRISC multicasts it while W' loads)
+        noc_semaphore_inc(get_noc_addr(sl), 1);  // (the NCRISC multicasts it while W' loads)
+    }
     {  // W': my K range of my half column's [K half][pn] (one contiguous bank region: one burst), then down the half column
         DeviceZoneScopedN("TL-WLOAD");
         const uint32_t src = get_write_ptr(CB_W) + wk0 * pn * WTB, bytes = (wk1 - wk0) * pn * WTB;
@@ -99,7 +99,6 @@ void kernel_main() {
         }
         noc_semaphore_inc(get_noc_addr(get_semaphore(SW)), 1u << r);
     }
-    for (uint32_t c = 1; c < NCK; ++c) share(c);
     for (uint32_t c = 0; c < NCK; ++c) {  // my se tiles (the columns I finish)
         const uint32_t R = get_arg_val<uint32_t>(ord + c) * RT + r;
         cb_reserve_back(CB_SE, fn);
@@ -128,7 +127,14 @@ void kernel_main() {
     const uint32_t land = get_arg_val<uint32_t>(a++), SHMAX = get_arg_val<uint32_t>(a++), ring = get_arg_val<uint32_t>(a++);
     const uint32_t part = get_arg_val<uint32_t>(a++), xrecv = get_arg_val<uint32_t>(a++);
     const uint32_t mx = get_arg_val<uint32_t>(a++), my = get_arg_val<uint32_t>(a++), py = get_arg_val<uint32_t>(a++);
+    const uint32_t sl = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a, xs = ord + NCK, wkb = xs + GX;  // (chunk order; my row's NoC x by column; W' K range bounds)
+    auto landed = [&](uint32_t c) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + 16 * c); };
+    // (the landed words only count up - every landing of every call; this call's: >= my call count, kept after them -
+    // so a share read by both me and a relaying port needs no re-arm either of us could race)
+    volatile tt_l1_ptr uint32_t* epw = landed(NCK);
+    const uint32_t ep = *epw + 1;
+    *epw = ep;
     const auto og = TensorAccessor(o_args, o_addr, 2048);
     auto row = [&](uint32_t addr) { return get_noc_multicast_addr(rx, my, lx, my, addr); };  // (NOC1: right end first)
     uint32_t cs = 0, wr = 0;
@@ -141,7 +147,7 @@ void kernel_main() {
             ++wr;
         }
         // my share of chunk cs: loaded (BRISC), its slot free on the whole row, my turn in the row (column order)
-        if (cs >= NCK || *sem(SL) < cs + 1 || (cs >= NSLOT && *sem(SFREE) < GX * (cs - NSLOT + 1))) return;
+        if (cs >= NCK || *landed(cs) < ep || (cs >= NSLOT && *sem(SFREE) < GX * (cs - NSLOT + 1))) return;
         if (*sem(SA0 + cs) < cx) return;
         DeviceZoneScopedN("TL-SHARE");
         const uint32_t src = land + cs * SHMAX * 2048, dst = ring + ((cs % NSLOT) * KH + ak0) * 2048;
@@ -369,6 +375,183 @@ void kernel_main() {
 }
 """
 
+# ---- the latent all-gather's ports (one per direction and link, on the column left of the engine) ----
+# A port (d, l) sends half l of the K tiles of its blocks (own first, then the ones it relays) to the next chip in
+# direction d, straight into the engine cores' landing regions there: share by share (row tile r, column cx: K tiles
+# kh(l) + ak(cx)), packets of up to RP tiles; a share's last packet a fused write + increment of the owner's landed word
+# of the block's chunk position there. A relayed share is read from this chip's owner once its landed word says so.
+_PORT_CT = r"""
+#include "api/debug/dprint.h"
+constexpr uint32_t RT = get_compile_time_arg_val(0), GX = get_compile_time_arg_val(1), RP = get_compile_time_arg_val(2);
+constexpr uint32_t SHMAX = get_compile_time_arg_val(3), KT = get_compile_time_arg_val(4), CBP = 0, CBM = 1;
+constexpr uint32_t PG = get_compile_time_arg_val(5);  // (packets a group: the reader's barrier, the sender's flush)
+// the shares of a unit, in the walk both kernels follow: part 0 every column, 1 / 2 the first / second half of them
+template <typename F>
+FORCE_INLINE void walk(uint32_t part, uint32_t ak, F&& f) {
+    for (uint32_t r = 0; r < RT; ++r)
+        for (uint32_t cx = 0; cx < GX; ++cx) {
+            if ((part == 1 && cx >= GX / 2) || (part == 2 && cx < GX / 2)) continue;
+            const uint32_t k0 = get_arg_val<uint32_t>(ak + 2 * cx), k1 = get_arg_val<uint32_t>(ak + 2 * cx + 1);
+            for (uint32_t t0 = k0; t0 < k1; t0 += RP) f(r, cx, k0, t0, (k1 - t0 < RP ? k1 - t0 : RP), t0 + RP >= k1);
+        }
+}
+"""
+
+_PORT_READER = (
+    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n'
+    + _PORT_CT
+    + r"""
+constexpr auto y_args = TensorAccessorArgs<6>();
+// NoC0: my own block's shares from DRAM (y_own), the relayed ones from this chip's owners (once landed), into the CB
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t y_addr = get_arg_val<uint32_t>(a++), kh0 = get_arg_val<uint32_t>(a++), land = get_arg_val<uint32_t>(a++);
+    const uint32_t sl = get_arg_val<uint32_t>(a++), poll = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++);
+    const uint32_t epa = get_arg_val<uint32_t>(a++);  // (my call count: a landed word of this call is >= it)
+    volatile tt_l1_ptr uint32_t* epw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(epa);
+    const uint32_t ep = *epw + 1;
+    *epw = ep;
+    const uint32_t units = a, ak = units + n, xs = ak + 2 * GX, ys = xs + GX;  // (unit: part | position here << 8)
+#ifdef TL_DPRINT
+    DPRINT("PR start n {}\n", n);
+#endif
+    const auto yg = TensorAccessor(y_args, y_addr, 2048);
+    volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll);
+    // a group: PG packets' slots reserved, read, one barrier, pushed whole (padded) with its packet count in CBM - a
+    // relayed share not landed yet ends the group early (never hold read packets while waiting)
+    uint32_t b = 0, wp = 0;
+    auto flush = [&]() {
+        noc_async_read_barrier();
+        cb_reserve_back(CBM, 1);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CBM)) = b;
+        cb_push_back(CBM, 1);
+        cb_push_back(CBP, PG * RP);
+        b = 0;
+    };
+    for (uint32_t u = 0; u < n; ++u) {
+        const uint32_t w = get_arg_val<uint32_t>(units + u), part = w & 0xFF, pos = w >> 8;
+        walk(part, ak, [&](uint32_t r, uint32_t cx, uint32_t k0, uint32_t t0, uint32_t m, bool) {
+            const uint32_t ox = get_arg_val<uint32_t>(xs + cx), oy = get_arg_val<uint32_t>(ys + r);
+            if (u > 0 && t0 == k0) {  // (a relayed share: landed at its owner here - its landed word, over the NoC)
+                auto in = [&]() {
+                    noc_async_read(get_noc_addr(ox, oy, sl + 16 * pos), poll, 4);
+                    noc_async_read_barrier();
+                    invalidate_l1_cache();  // (the copy just landed: not the cached word)
+                    return *pw >= ep;
+                };
+                if (!in()) {
+                    if (b > 0) flush();
+                    while (!in()) {
+                    }
+                }
+            }
+            if (b == 0) {
+                cb_reserve_back(CBP, PG * RP);
+                wp = get_write_ptr(CBP);
+            }
+            const uint32_t dst = wp + b * RP * 2048;
+            if (u == 0) {  // (my own rows)
+                for (uint32_t t = 0; t < m; ++t) noc_async_read(yg.get_noc_addr(r * KT + kh0 + t0 + t), dst + t * 2048, 2048);
+            } else {
+                noc_async_read(get_noc_addr(ox, oy, land + (pos * SHMAX + t0 - k0) * 2048), dst, m * 2048);
+            }
+            if (++b == PG) flush();
+        });
+    }
+    if (b > 0) flush();
+}
+"""
+)
+
+_PORT_SENDER = (
+    r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+using namespace tt::tt_fabric;
+"""
+    + _PORT_CT
+    + r"""
+// NoC1: the fence (my ready to the port that writes into this chip; the next chip's ready before I write there), then
+// every packet of my units into the next chip's owners
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t land = get_arg_val<uint32_t>(a++), sl = get_arg_val<uint32_t>(a++), ready = get_arg_val<uint32_t>(a++);
+    const uint32_t send_ready = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
+    const uint16_t mesh_id = get_arg_val<uint32_t>(a++), chip_id = get_arg_val<uint32_t>(a++);
+    const uint32_t n = get_arg_val<uint32_t>(a++), units = a, ak = units + n, xs = ak + 2 * GX, ys = xs + GX;
+    a = ys + RT;
+    if (n == 0 && !send_ready) return;
+    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
+    (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
+    conn.open();
+    if (send_ready) {  // (this program runs: everything before it on this chip is done - my landing regions are free)
+        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(rx, ry, ready), 1, true});
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+    }
+#ifdef TL_DPRINT
+    DPRINT("PS start n {} send_ready {} chip {}\n", n, send_ready, (uint32_t)chip_id);
+#endif
+    if (n > 0) {
+        volatile tt_l1_ptr uint32_t* rd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready);
+        noc_semaphore_wait_min(rd, 1);
+#ifdef TL_DPRINT
+        DPRINT("PS ready\n");
+#endif
+        noc_semaphore_inc(get_noc_addr(ready), 0u - 1u);  // (re-arm: one ready a call)
+        noc_async_atomic_barrier();
+    }
+    // the reader's groups: PG slots each, its packet count in CBM; a header a slot, one flush a group
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[PG];
+    hdrs[0] = hdr;
+    for (uint32_t h = 1; h < PG; ++h) {
+        hdrs[h] = PacketHeaderPool::allocate_header();
+        (void)fabric_set_unicast_route(hdrs[h], chip_id, mesh_id);
+    }
+    uint32_t gi = 0, gn = 0;
+    auto next_group = [&]() {
+        if (gn > 0) {
+            noc_async_writes_flushed();  // (the group's packets and headers have left L1)
+            cb_pop_front(CBP, PG * RP);
+        }
+        cb_wait_front(CBM, 1);
+        gn = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CBM));
+        cb_pop_front(CBM, 1);
+        cb_wait_front(CBP, PG * RP);
+        gi = 0;
+    };
+    for (uint32_t u = 0; u < n; ++u) {
+        const uint32_t w = get_arg_val<uint32_t>(units + u), part = w & 0xFF, pos = w >> 8;  // (pos: there)
+        walk(part, ak, [&](uint32_t r, uint32_t cx, uint32_t k0, uint32_t t0, uint32_t m, bool last) {
+            if (gi == gn) next_group();
+            const uint32_t ox = get_arg_val<uint32_t>(xs + cx), oy = get_arg_val<uint32_t>(ys + r);
+            const uint64_t dst = get_noc_addr(ox, oy, land + (pos * SHMAX + t0 - k0) * 2048, 0);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hd = hdrs[gi];
+            if (last) {
+                hd->to_noc_fused_unicast_write_atomic_inc(
+                    NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(ox, oy, sl + 16 * pos, 0), 1, true}, m * 2048);
+            } else {
+                hd->to_noc_unicast_write(NocUnicastCommandHeader{dst}, m * 2048);
+            }
+            conn.wait_for_empty_write_slot();
+            conn.send_current_slot_non_blocking(get_read_ptr(CBP) + gi * RP * 2048, m * 2048, reinterpret_cast<uint32_t>(hd));
+            ++gi;
+        });
+    }
+    if (gn > 0) {
+        noc_async_writes_flushed();
+        cb_pop_front(CBP, PG * RP);
+    }
+    conn.close();
+}
+"""
+)
+
 
 def _split(n, parts):
     """n into parts contiguous ranges, as even as possible: [(k0, k1)]."""
@@ -404,6 +587,8 @@ class TailEngine:
         NSLOT=None,
         fidelity=ttnn.MathFidelity.HiFi2,
         w_dtype=ttnn.bfloat8_b,
+        topology=ttnn.Topology.Linear,
+        num_links=2,
     ):
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
@@ -454,9 +639,76 @@ class TailEngine:
         assert o <= ARENA_MAX, f"tail_engine: arena {o >> 10} KB > {ARENA_MAX >> 10} KB"
         self.off, self.arena_bytes = off, o
         self.crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
+        self._gather_plan(topology, num_links)
         self.arena = None
+        self.dbg = "#define TL_DPRINT\n" if __import__("os").environ.get("TL_DPRINT") else ""  # (probe)
         self.keep_arena = False
         self.state = dict(key=None)
+
+    # ---- the gather's plan ----
+    def _gather_plan(self, topology, num_links):
+        """The latent all-gather over TP into the engines' landing regions: fabric_all_gather's plan (line / ring,
+        balanced ring: the opposite block half each way) with its ports on the column right of the engine; link l
+        carries K half l (engine rows l RT ..). Per chip its chunk order: own block first, then by hop distance."""
+        from ttnn.bringup.combine_rf.fabric_all_gather_py import _plan
+
+        assert num_links == 2, "a link a K half"
+        mesh, GX, GY, cx0 = self.mesh, self.GX, self.GY, self.cx0
+        col = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0 + GX, 0), ttnn.CoreCoord(cx0 + GX, GY - 1))])
+        # (the ports' column has no row with room for fabric_all_gather's placement probe: placed down it - fwd above,
+        # bwd below, a link apart)
+        rows = [GY // 10, 3 * GY // 10, 6 * GY // 10, 8 * GY // 10]
+        place = {
+            (0, d, l): ttnn.CoreCoord(cx0 + GX, rows[2 * i + l]) for i, d in enumerate(("fwd", "bwd")) for l in range(2)
+        }
+        self.chips, self.ring = _plan(  # (not the memoized plan: a placement dict is no key)
+            mesh,
+            cluster_axis=1,
+            topology=topology,
+            num_links=num_links,
+            placement=place,
+            balance=True,
+            sub_core_grid=col,
+        )
+        G = self.NCK
+        for coord, ch in self.chips.items():
+            p = ch["rings"][0]["p"]
+            dist = lambda q: min((q - p) % G, (p - q) % G) if self.ring else abs(q - p)  # noqa: E731
+            # (a chip's chunk order, by TP position q - the plan's "out" index; ties: the previous chip first)
+            ch["order"] = sorted(range(G), key=lambda q: (dist(q), (q - p) % G != G - 1, q))
+        self.port_xy = sorted({(c.x, c.y) for ch in self.chips.values() for c in ch["ports"].values()})
+        self.port_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in self.port_xy]
+        )
+        # (the fence: a port's ready counter - persistent, re-armed by its waiter; the engine cores' landed words: a
+        # word a chunk position, 16 B apart, re-armed by their NCRISC)
+        self.ready = ttnn.create_global_semaphore(mesh, self.port_crs, 0)
+        # (+ the engine NCRISC's call count after them; the ports' readers keep theirs in port_epoch)
+        self.landed = ttnn.from_torch(
+            torch.zeros(GX * GY, 4 * (G + 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(self.crs, [1, 4 * (G + 1)], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        self.port_epoch = ttnn.from_torch(
+            torch.zeros(len(self.port_xy), 4, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(self.port_crs, [1, 4], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        self.RP = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 2048)
 
     # ---- weights ----
     def upload(self, w_up_cols, g):
@@ -488,8 +740,10 @@ class TailEngine:
 
     # ---- arena ----
     def alloc_arena(self):
-        n = self.GX * self.GY
-        shard = ttnn.ShardSpec(self.crs, [1, self.arena_bytes // 4], ttnn.ShardOrientation.ROW_MAJOR)
+        # (the ports' staging is carved from the same range: L1 is allocated in lockstep over the grid)
+        crs = ttnn.CoreRangeSet(list(self.crs.ranges()) + list(self.port_crs.ranges()))
+        n = self.GX * self.GY + len(self.port_xy)
+        shard = ttnn.ShardSpec(crs, [1, self.arena_bytes // 4], ttnn.ShardOrientation.ROW_MAJOR)
         self.arena = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, n, self.arena_bytes // 4]),
             ttnn.uint32,
@@ -504,13 +758,17 @@ class TailEngine:
             ttnn.deallocate(self.arena)
 
     # ---- the program ----
-    def _program(self, z, w, se, out, order):
+    def _program(self, coord, y, w, se, out):
+        """Chip coord's program: the engine (every core of the rectangle) and its gather ports."""
         mesh, GX, GY, cx0, RT = self.mesh, self.GX, self.GY, self.cx0, self.RT
+        ch = self.chips[coord]
+        order = ch["order"]
         b, off = int(self.arena.buffer_address()), self.off
+        sl = int(self.landed.buffer_address())
         virt = lambda cx, cy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + cx, cy))  # noqa: E731
         cbs = []
 
-        def cb(i, key, size, dt, page, blocks):
+        def cb(i, key, size, dt, page, blocks, crs=None):
             # (the plan check of se_engine3: a block addressed from the CB's pointer must not straddle its end - every
             # core pushes one size here and the dataflow ends read page by page, so each size must divide the CB)
             for blk in set(blocks):
@@ -518,7 +776,7 @@ class TailEngine:
                     _ring_pages(size // page, [blk]) == size // page
                 ), f"tail_engine: CB {key} ({size // page} pages) takes blocks of {blk}: one would straddle its end"
             d = ttnn.cb_descriptor_from_sharded_tensor(
-                i, self.arena, address_offset=off[key], total_size=size, core_ranges=self.crs
+                i, self.arena, address_offset=off[key], total_size=size, core_ranges=crs or self.crs
             )
             d.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(d)
@@ -535,6 +793,20 @@ class TailEngine:
         cb(CB_XRECV, "xrecv", self.NCK * XT * 4096, ttnn.float32, 4096, [XT])
         cb(CB_SE, "se", self.FNR * 2048, ttnn.bfloat16, 2048, self.FNS)
         cb(CB_OUT, "out", self.FNR * 2048, ttnn.bfloat16, 2048, self.FNS)
+        # the ports' staging (carved at the arena's start on the port cores) and their poll word after it
+        PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151)
+        PSTAGE = 2 * PG * self.RP
+        assert PSTAGE * 2048 + 64 + 64 <= self.arena_bytes
+        d = ttnn.cb_descriptor_from_sharded_tensor(
+            0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=self.port_crs
+        )
+        d.format_descriptors = [ttnn.CBFormatDescriptor(0, ttnn.bfloat16, 2048)]
+        cbs.append(d)
+        d = ttnn.cb_descriptor_from_sharded_tensor(
+            1, self.arena, address_offset=PSTAGE * 2048 + 64, total_size=4 * 16, core_ranges=self.port_crs
+        )
+        d.format_descriptors = [ttnn.CBFormatDescriptor(1, ttnn.uint32, 16)]
+        cbs.append(d)
         ct = [self.KH, self.PNMAX, RT, self.NCK, GX, self.wtb, self.NSLOT, self.KT, XT]
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         wkb = [k0 for k0, _ in self.wk] + [self.KH]
@@ -561,7 +833,7 @@ class TailEngine:
                     v.x,
                     yt,
                     yb,
-                    int(z.buffer_address()),
+                    int(y.buffer_address()),
                     ak0,
                     ak1,
                     int(se.buffer_address()),
@@ -570,6 +842,7 @@ class TailEngine:
                     fn,
                     b + off["land"],
                     self.SHMAX,
+                    sl,
                 ] + list(order)
                 n_rt[cx0 + cx][cy] = (
                     [
@@ -592,12 +865,57 @@ class TailEngine:
                         v.x,
                         v.y,
                         virt(cx, (cy + RT) % GY).y,
+                        sl,
                     ]
                     + list(order)
                     + [virt(c2, cy).x for c2 in range(GX)]
                     + wkb
                 )
                 c_rt[cx0 + cx][cy] = [pn, fo, fn, ak0, ak1, 0] + wkb[1:]
+        # ---- ports ----
+        from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, _needs_ready
+
+        node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
+        pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        prog = ttnn.ProgramDescriptor()
+        akf = [k for k0k1 in self.ak for k in k0k1]
+        pep = int(self.port_epoch.buffer_address())
+        xs = [virt(c2, 0).x for c2 in range(GX)]
+        for (j, dd, l), core in ch["ports"].items():
+            rg = ch["rings"][j]
+            peer = rg["next"] if dd == "fwd" else rg["prev"]
+            sends = rg[dd] if peer is not None else []
+            ys = [virt(0, r + RT * l).y for r in range(RT)]
+            here = [part | order.index(q) << 8 for q, part in sends]
+            pr_rt[core.x][core.y] = (
+                [int(y.buffer_address()), self.kh[l][0], b + off["land"], sl, b + PSTAGE * 2048, len(sends), pep]
+                + here
+                + akf
+                + xs
+                + ys
+            )
+            send_ready = _needs_ready(self.chips, coord, j, dd)
+            rc = (
+                virt(*[0, 0])
+                if not send_ready
+                else mesh.worker_core_from_logical_core(self.chips[peer]["ports"][(j, _OPP[dd], l)])
+            )
+            args = [
+                b + off["land"],
+                sl,
+                int(ttnn.get_global_semaphore_address(self.ready)),
+                int(send_ready),
+                rc.x,
+                rc.y,
+            ]
+            if rg.get(f"{dd}_links"):
+                pnode = node(peer)
+                there = [part | self.chips[peer]["order"].index(q) << 8 for q, part in sends]
+                args += [int(pnode.mesh_id), int(pnode.chip_id), len(sends)] + there + akf + xs + ys
+                args += list(ttnn.setup_fabric_connection(node(coord), pnode, rg[f"{dd}_links"][l], prog, core))
+            else:
+                args += [0, 0, 0] + akf + xs + ys
+            ps_rt[core.x][core.y] = args
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
@@ -611,12 +929,13 @@ class TailEngine:
         for i in (CB_ACCM, CB_SQM, CB_XRECV):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         comp.unpack_to_dest_mode = modes
-        kernels = [
+        pct = [RT, GX, self.RP, self.SHMAX, self.KT, PG]
+        prog.kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=_BRISC,
                 source_type=st,
                 core_ranges=self.crs,
-                compile_time_args=ct + acc(z) + acc(se),
+                compile_time_args=ct + acc(y) + acc(se),
                 runtime_args=b_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_0),
             ),
@@ -636,37 +955,48 @@ class TailEngine:
                 runtime_args=c_rt,
                 config=comp,
             ),
+            ttnn.KernelDescriptor(
+                kernel_source=self.dbg + _PORT_READER,
+                source_type=st,
+                core_ranges=self.port_crs,
+                compile_time_args=pct + acc(y),
+                runtime_args=pr_rt,
+                config=dm("RISCV_1", ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=self.dbg + _PORT_SENDER,
+                source_type=st,
+                core_ranges=self.port_crs,
+                compile_time_args=pct,
+                runtime_args=ps_rt,
+                config=dm("RISCV_0", ttnn.NOC.NOC_1),
+            ),
         ]
-        assert RT <= 32
-        nsem = 2 * self.NCK + 4
-        prog = ttnn.ProgramDescriptor()
+        nsem = 2 * self.NCK + 3
         prog.cbs = cbs
         prog.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.crs, initial_value=0) for i in range(nsem)]
-        prog.kernels = kernels
         prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)
-        self.state["prog"] = prog
-        return self._mesh(prog)
+        return prog
 
-    def _mesh(self, prog):
-        R, C = tuple(self.mesh.shape)
+    def _mesh(self):
         md = ttnn.MeshProgramDescriptor()
-        md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))] = prog
+        for (r, c), prog in self.state["progs"].items():
+            md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
         return md
 
     def _rebind(self):
-        """The cached program's CBs (all arena-backed) onto the arena taken again at the same address."""
+        """The cached programs' CBs (all arena-backed) onto the arena taken again at the same address."""
         tmpl = ttnn.cb_descriptor_from_sharded_tensor(0, self.arena)
-        prog = self.state["prog"]
-        cbs = list(prog.cbs)
-        for c in cbs:
-            c.set_buffer_from_cb(tmpl)
-        prog.cbs = cbs
-        self.state["md"] = self._mesh(prog)
+        for prog in self.state["progs"].values():
+            cbs = list(prog.cbs)
+            for c in cbs:
+                c.set_buffer_from_cb(tmpl)
+            prog.cbs = cbs
+        self.state["md"] = self._mesh()
 
-    def run(self, z, w, se, out=None, order=None):
-        """z [1, 1, rows, Hr] TILE (DRAM), se [1, 1, rows, Ho] TILE -> out [1, 1, rows, Ho] bf16 TILE. The arena is taken
-        for the call and given back."""
-        order = list(order if order is not None else range(self.NCK))
+    def run(self, y, w, se, out=None):
+        """y [1, 1, rows / G, Hr] TILE (DRAM): this chip's owned rows (the gather brings the rest of the mesh row's);
+        se [1, 1, rows, Ho] TILE -> out [1, 1, rows, Ho] bf16 TILE. The arena is taken for the call and given back."""
         if out is None:
             out = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, self.rows, self.Ho]),
@@ -676,13 +1006,19 @@ class TailEngine:
                 ttnn.DRAM_MEMORY_CONFIG,
             )
         base = self.alloc_arena()
-        key = (base, int(z.buffer_address()), int(w.buffer_address()), int(se.buffer_address()))
-        key += (int(out.buffer_address()), tuple(order))
+        key = (
+            base,
+            int(y.buffer_address()),
+            int(w.buffer_address()),
+            int(se.buffer_address()),
+            int(out.buffer_address()),
+        )
         if self.state["key"] != key:
-            self.state.update(key=key, md=self._program(z, w, se, out, order))
+            self.state["progs"] = {coord: self._program(coord, y, w, se, out) for coord in self.chips}
+            self.state.update(key=key, md=self._mesh())
         else:
             self._rebind()
-        ttnn.generic_op([z, w, se, out, self.arena], self.state["md"])
+        ttnn.generic_op([y, w, se, out, self.arena], self.state["md"])
         if not self.keep_arena:  # (keep_arena: a test reads it back)
             self.free_arena()
         return out

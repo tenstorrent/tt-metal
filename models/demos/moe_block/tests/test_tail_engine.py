@@ -44,42 +44,35 @@ def test_tail_engine(mesh_device, device_params):
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(0, 1))
     calls = int(os.environ.get("TAIL_CALLS", "3"))
-    for call in range(calls):
-        z = (torch.randn(R, C, ROWS, Hr, generator=g_) * (1.0 + call)).to(torch.bfloat16)
+    S = ROWS // C  # (a chip's owned rows: the gather brings its mesh row's others)
+
+    def inputs(scale):
+        y = (torch.randn(R, C, S, Hr, generator=g_) * scale).to(torch.bfloat16)
         se = (torch.randn(R, C, ROWS, Ho, generator=g_) * 0.5).to(torch.bfloat16)
-        zt = ttnn.from_torch(z, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+        yt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
         st = ttnn.from_torch(se, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
-        out = eng.run(zt, w, st)
-        y = ttnn.to_torch(out, mesh_composer=composer).float()
+        return y, se, yt, st
+
+    for call in range(calls):
+        y, se, yt, st = inputs(1.0 + call)
+        out = eng.run(yt, w, st)
+        dev = ttnn.to_torch(out, mesh_composer=composer).float()
         worst = 1.0
-        probe = 0
         for r in range(R):
+            zf = torch.cat([y[r, c] for c in range(C)]).float()  # (the mesh row's rows, TP order)
+            sc = torch.rsqrt(zf.pow(2).mean(-1, keepdim=True) + m.norm_eps)
             for c in range(C):
-                zf = z[r, c].float()
-                sc = torch.rsqrt(zf.pow(2).mean(-1, keepdim=True) + m.norm_eps)
-                raw = (zf * gn) @ w_up.T[:, c * Ho : (c + 1) * Ho]
-                ref = {
-                    0: raw * sc + se[r, c].float(),
-                    1: se[r, c].float(),
-                    2: raw,
-                    3: sc.expand(-1, Ho),
-                    4: zf.pow(2).sum(-1, keepdim=True).expand(-1, Ho),
-                }[probe]
-                p_ = pcc(y[r, c], ref)
-                if probe == 4 and r == 0 and c == 0:
-                    logger.info(
-                        f"sumsq dev/ref rows 0..7: {(y[r, c][:8, 0] / ref[:8, 0]).tolist()}; cols of row 0: {y[r, c][0, :6].tolist()}"
-                    )
+                ref = ((zf * gn) @ w_up.T[:, c * Ho : (c + 1) * Ho]) * sc + se[r, c].float()
+                p_ = pcc(dev[r, c], ref)
                 if p_ < 0.999 and worst == 1.0:
                     logger.info(
-                        f"chip ({r}, {c}): y nan {int(y[r, c].isnan().sum())}, |y| {y[r, c].abs().mean():.4f} vs |ref| "
-                        f"{ref.abs().mean():.4f}; per 32-row block PCC "
-                        f"{[round(pcc(y[r, c][i:i + 32], ref[i:i + 32]), 3) for i in range(0, ROWS, 32)]}"
+                        f"chip ({r}, {c}): per 32-row block PCC "
+                        f"{[round(pcc(dev[r, c][i:i + 32], ref[i:i + 32]), 3) for i in range(0, ROWS, 32)]}"
                     )
                 worst = min(worst, p_)
         logger.info(f"TAIL call {call}: PCC min over chips {worst:.6f}")
         assert worst > 0.999, f"call {call}: PCC {worst:.6f}"
-        for t in (zt, st, out):
+        for t in (yt, st, out):
             ttnn.deallocate(t)
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         per_chip_programs(mesh_device)
