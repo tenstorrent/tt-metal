@@ -40,6 +40,8 @@ public:
 
 private:
     distributed::MeshDevice* device_;
+    // Semaphores may outlive the MeshDevice; the destructor only frees the region if it is still alive.
+    std::weak_ptr<distributed::MeshDevice> weak_device_;
     CoreRangeSet cores_;
     uint32_t capacity_;
     DeviceAddr slot_stride_ = 0;

@@ -151,7 +151,11 @@ bool is_subset(const CoreRangeSet& subset, const CoreRangeSet& superset) {
 
 GlobalSemaphoreSpaceImpl::GlobalSemaphoreSpaceImpl(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t capacity) :
-    device_{&device}, cores_{std::move(cores)}, capacity_{capacity}, slot_in_use_(capacity, false) {
+    device_{&device},
+    weak_device_{device.shared_from_this()},
+    cores_{std::move(cores)},
+    capacity_{capacity},
+    slot_in_use_(capacity, false) {
     TT_FATAL(cores_.num_cores() > 0, "GlobalSemaphoreSpace needs at least one core");
     TT_FATAL(capacity_ > 0, "GlobalSemaphoreSpace capacity must be non-zero");
 
@@ -186,11 +190,12 @@ GlobalSemaphoreSpaceImpl::GlobalSemaphoreSpaceImpl(
 }
 
 GlobalSemaphoreSpaceImpl::~GlobalSemaphoreSpaceImpl() {
-    if (allocation_id_ == 0 || !device_->is_initialized()) {
+    const auto device = weak_device_.lock();
+    if (allocation_id_ == 0 || device == nullptr || !device->is_initialized()) {
         return;
     }
     try {
-        device_->allocator_impl()->persistent_l1().deallocate(allocation_id_);
+        device->allocator_impl()->persistent_l1().deallocate(allocation_id_);
     } catch (...) {
         // Destructors must not throw. A missing allocation indicates an internal lifetime error.
         log_warning(tt::LogMetal, "GlobalSemaphoreSpace: persistent L1 release failed");

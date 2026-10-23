@@ -30,12 +30,12 @@ class GlobalSemaphoreSpaceImpl;
  * can then be created from it at any time, including after programs have run and while they stay
  * cached.
  *
- * Every core of the space holds capacity() * (L1 alignment) bytes, used or not. The space keeps that
- * memory until it and every semaphore created from it are destroyed.
+ * Every core of the space holds capacity() * (L1 alignment) bytes, used or not. Each semaphore keeps
+ * its space alive, so that memory is freed once the space and all of its semaphores are destroyed.
  */
 class GlobalSemaphoreSpace {
 public:
-    // Internal (CreateGlobalSemaphoreSpace).
+    // Use CreateGlobalSemaphoreSpace() instead of calling this directly.
     explicit GlobalSemaphoreSpace(std::shared_ptr<GlobalSemaphoreSpaceImpl> impl);
 
     GlobalSemaphoreSpace(const GlobalSemaphoreSpace&) = delete;
@@ -53,12 +53,11 @@ public:
      * Throws if capacity() semaphores are already live.
      *
      * The semaphore has the same L1 address on every one of its cores, on every device of the mesh.
-     * Copies refer to the same semaphore; its slot returns to the space when the last copy is
-     * destroyed. Keep a copy alive until every program and trace that uses it has finished.
+     * Copies refer to the same semaphore, and its slot goes back to the space when the last copy is
+     * destroyed. Programs and traces only get the address, so keep a copy alive until they finish.
      *
-     * reset_semaphore_value() blocks until the write has landed, and is ordered after programs
-     * previously enqueued on command queue 0 only. The kernels' protocol must have consumed every
-     * increment it expects (including ones sent over fabric) before those programs finish.
+     * reset_semaphore_value() waits until the write lands. It only waits for programs on command
+     * queue 0, so make sure no kernel (on this chip or another) is still signalling the semaphore.
      */
     GlobalSemaphore create_semaphore(const CoreRangeSet& cores);
 

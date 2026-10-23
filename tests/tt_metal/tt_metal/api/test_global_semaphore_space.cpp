@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -21,6 +22,7 @@
 #include <tt-metalium/experimental/global_semaphore_space.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program_cache.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
@@ -186,6 +188,56 @@ TEST_F(MeshDispatchFixture, GlobalSemaphoreSpaceMustPrecedeProgramLocalL1) {
         RunProgram(mesh_device, workload);
         EXPECT_ANY_THROW(CreateGlobalSemaphoreSpace(*mesh_device, cores, 1));
     }
+}
+
+std::shared_ptr<distributed::MeshDevice> OpenUnitMesh() {
+    return distributed::MeshDevice::create_unit_mesh(
+        0,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        MetalContext::instance().resolve_dispatch_core_config());
+}
+
+TEST(GlobalSemaphoreSpaceDeviceLifetime, SemaphoreAndSpaceCanOutliveTheMeshDevice) {
+    auto mesh_device = OpenUnitMesh();
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+    std::optional<experimental::GlobalSemaphoreSpace> space = CreateGlobalSemaphoreSpace(*mesh_device, cores, 2);
+    std::optional<GlobalSemaphore> sem = space->create_semaphore(cores);
+
+    const std::weak_ptr<distributed::MeshDevice> weak_device = mesh_device;
+    mesh_device->close();
+    mesh_device.reset();
+    ASSERT_TRUE(weak_device.expired());
+
+    EXPECT_NO_THROW(space.reset());
+    EXPECT_NO_THROW(sem.reset());
+}
+
+// CCL ops keep their semaphores in the cached program, and MeshDevice::close() leaves the program cache in
+// place, so those semaphores are released from inside ~MeshDevice.
+TEST(GlobalSemaphoreSpaceDeviceLifetime, SemaphoreInProgramCacheIsReleasedWithTheMeshDevice) {
+    struct SharedVariables {
+        GlobalSemaphore sem;
+    };
+
+    auto mesh_device = OpenUnitMesh();
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+    {
+        auto space = CreateGlobalSemaphoreSpace(*mesh_device, cores, 1);
+        mesh_device->enable_program_cache();
+        Program program = CreateProgram();
+        CreateKernel(program, kBlankKernel, cores, Riscv0());
+        program_cache::detail::CachedMeshWorkload<SharedVariables> cached(
+            MakeWorkload(*mesh_device, std::move(program)), SharedVariables{space.create_semaphore(cores)});
+        mesh_device->get_program_cache().insert(
+            program_cache::detail::ProgramCacheKey{.hash = 0x6E5E, .canonical = "global-semaphore-space-lifetime"},
+            program_cache::detail::CachedProgramFactory(std::move(cached), 0));
+    }
+    ASSERT_GT(mesh_device->num_program_cache_entries(), 0u);
+
+    mesh_device->close();
+    EXPECT_NO_THROW(mesh_device.reset());
 }
 
 // ---------------------------------------------------------------------------------------------------------------
