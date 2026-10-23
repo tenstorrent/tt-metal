@@ -59,10 +59,31 @@ ALWI void tile_regs_release_math_only() {
 }
 
 /**
+ * tile_regs_release() without the DMANOP pair after the offset write, the half's words fixed by one branch.
+ * fp32 DEST accumulation keeps the regular release, which the lean form reads slower there.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_release_lean() {
+    if constexpr (is_fp32_dest_acc_en) {
+        tile_regs_release<is_fp32_dest_acc_en>();
+    } else {
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, false, 3>()));
+    }
+}
+
+/**
  * After the last tile_regs_release_math_only(): MATH clears all of DST once the pack has released it, so sections
  * acquired the default way find their halves clear.
  */
 ALWI void tile_regs_math_only_end() { MATH((llk_math_dest_clear_region_end())); }
 
+}  // namespace ckernel
+#else
+namespace ckernel {
+// Other architectures keep the one release sequence.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_release_lean() {
+    tile_regs_release<is_fp32_dest_acc_en>();
+}
 }  // namespace ckernel
 #endif
