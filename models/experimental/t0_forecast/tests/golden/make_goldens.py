@@ -61,6 +61,7 @@ CONVENTIONS = {
     "scaler_zero_no_value": False,
 }
 THREADS = 8
+BENCH_SEEDS = {"paper": 41, "long_context": 42, "multivariate": 43}
 GIFT_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 SHAPES = {
     # name: (batch, variates, context, horizon, series per CPU chunk)
@@ -89,6 +90,65 @@ def synthetic(n: int, width: int, seed: int) -> np.ndarray:
         + col(noise) * rng.standard_normal((n, width))
     )
     return y.astype(np.float32)
+
+
+KINDS = ("random_walk_seasonal", "noisy_seasonal", "intermittent", "level_shift", "trend")
+KIND_PROBS = (0.30, 0.20, 0.15, 0.15, 0.20)
+
+
+def _season(t: np.ndarray, period: float, phase: float) -> np.ndarray:
+    return np.sin(2 * np.pi * t / period + phase) + 0.3 * np.sin(4 * np.pi * t / period + 2 * phase)
+
+
+def _realistic_row(rng: np.random.Generator, kind: str, width: int) -> np.ndarray:
+    """One series of ``kind``; magnitudes span 0.1..1000, seasonal SNR near 1 for the noisy kinds."""
+    t = np.arange(width, dtype=np.float64)
+    period = float(rng.choice([7.0, 12.0, 24.0, 48.0, 96.0, 168.0]))
+    phase = rng.uniform(0.0, 2 * np.pi)
+    scale = 10.0 ** rng.uniform(-1.0, 3.0)
+    level = rng.normal(0.0, 3.0) * scale
+    season = _season(t, period, phase)
+    noise = rng.standard_normal(width)
+    if kind == "random_walk_seasonal":
+        walk = np.cumsum(rng.normal(0.0, rng.uniform(0.02, 0.1), width))
+        return level + scale * (walk + season + rng.uniform(0.7, 1.3) * noise)
+    if kind == "noisy_seasonal":
+        envelope = 1.0 + 0.5 * np.sin(2 * np.pi * t / (7 * period) + phase)
+        return level + scale * (envelope * season + rng.uniform(0.7, 1.3) * noise)
+    if kind == "intermittent":
+        rate = np.exp(rng.uniform(-0.5, 2.0) + 0.8 * season)
+        return ((rng.random(width) < rng.uniform(0.05, 0.5)) * rng.poisson(rate)).astype(np.float64)
+    if kind == "level_shift":
+        steps = np.zeros(width)
+        for start in rng.integers(0, width, int(rng.integers(1, 6))):
+            steps[start:] += rng.choice([-1.0, 1.0]) * rng.uniform(1.0, 5.0)
+        return level + scale * (steps + 0.5 * season + rng.uniform(0.5, 1.0) * noise)
+    trend = rng.normal(0.0, 0.002) * t
+    return level + scale * (trend + season + 0.1 * noise)
+
+
+def realistic(n: int, width: int, seed: int) -> tuple[np.ndarray, list[str]]:
+    """``[n, width]`` float32 series drawn from ``KINDS`` with ``KIND_PROBS`` (seeded), and each row's kind."""
+    rng = np.random.default_rng(seed)
+    kinds = [KINDS[i] for i in rng.choice(len(KINDS), size=n, p=KIND_PROBS)]
+    return np.stack([_realistic_row(rng, k, width) for k in kinds]).astype(np.float32), kinds
+
+
+def realistic_groups(series: int, variates: int, width: int, seed: int) -> tuple[np.ndarray, list[str]]:
+    """``[series, variates, width]``: each series' variates share a common component of its kind (loading 0.5..1.5)
+    plus their own seasonal phase and noise, so group attention has cross-row signal."""
+    rng = np.random.default_rng(seed)
+    kinds = [KINDS[i] for i in rng.choice(len(KINDS), size=series, p=KIND_PROBS)]
+    t = np.arange(width, dtype=np.float64)
+    out = np.empty((series, variates, width))
+    for b, kind in enumerate(kinds):
+        common = _realistic_row(rng, kind, width)
+        spread = max(float(np.std(common)), 1e-3)
+        for v in range(variates):
+            own = _season(t, float(rng.choice([12.0, 24.0, 168.0])), rng.uniform(0, 2 * np.pi))
+            row = rng.uniform(0.5, 1.5) * common + spread * (0.3 * own + 0.5 * rng.standard_normal(width))
+            out[b, v] = np.maximum(row, 0.0) if kind == "intermittent" else row
+    return out.astype(np.float32), kinds
 
 
 def e2e_inputs(width: int, seed: int) -> np.ndarray:
@@ -307,10 +367,12 @@ def golden_modules(m, out: Path) -> dict:
 
 def golden_bench(m, out: Path, name: str) -> dict:
     batch, variates, context, horizon, chunk = SHAPES[name]
-    seed = {"paper": 11, "long_context": 12, "multivariate": 13}[name]
-    x = torch.from_numpy(synthetic(batch * variates, context, seed))
+    seed = BENCH_SEEDS[name]
     if variates > 1:
-        x = x.reshape(batch, variates, context)
+        values, kinds = realistic_groups(batch, variates, context, seed)
+    else:
+        values, kinds = realistic(batch, context, seed)
+    x = torch.from_numpy(values)
     hook = ReadoutHead(m, horizon // m.config.patch_size)
     levels = list(m.config.quantile_levels)
     raw = []
@@ -327,6 +389,7 @@ def golden_bench(m, out: Path, name: str) -> dict:
         "head_readout": head,
         "cpu_s": cpu_s,
         "cpu_chunk": chunk,
+        "kinds": kinds,
     }
     path = out / f"bench_{name}.pt"
     save(data, path)
@@ -448,7 +511,7 @@ def main():
                 "inputs": {
                     "single": "10 + sin(2 pi t / 24) + 0.01 t + 0.1 N(0,1) (numpy default_rng(0)), context 2048 / 8192",
                     "modules": "torch.Generator seed 1234; x = 4 N(0,1) for layers, 2 N(0,1) for the head",
-                    "bench": "synthetic(n, width, seed): level + trend + 2 harmonics + noise; seeds paper 11, long 12, multi 13",
+                    "bench": "realistic / realistic_groups: per series a kind from KINDS with KIND_PROBS (random walk + seasonal at SNR ~1 0.30, noisy heteroscedastic seasonal 0.20, intermittent counts 0.15, level shifts 0.15, smooth trend 0.20), magnitudes 0.1..1000; multivariate variates share a series component; seeds paper 41, long 42, multi 43",
                     "e2e": "e2e_inputs(2048, seed=21): 16 smooth, 16 counts, 16 leading NaN, 16 gaps",
                     "paths": "synthetic(8, 2000, 31) at horizon 40; synthetic(12, 2048, 32) as 4 x 3 with leading NaN",
                 },
@@ -471,6 +534,7 @@ def main():
         path = info.pop("path")
         manifest["goldens"][path.name] = {
             "sha256": sha256(path),
+            "script_sha256": manifest["generator"]["script_sha256"],
             "bytes": path.stat().st_size,
             "created": datetime.now().isoformat(timespec="seconds"),
             "seconds": round(time.perf_counter() - start, 1),

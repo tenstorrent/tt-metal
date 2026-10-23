@@ -106,11 +106,11 @@
   },
   "generator": {
     "script": "models/experimental/t0_forecast/tests/golden/make_goldens.py",
-    "script_sha256": "12db7c2c26ad69d9477ccca047879fd056c1bb1e4f6f023a10f1c61a3b71ce82",
+    "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
     "inputs": {
       "single": "10 + sin(2 pi t / 24) + 0.01 t + 0.1 N(0,1) (numpy default_rng(0)), context 2048 / 8192",
       "modules": "torch.Generator seed 1234; x = 4 N(0,1) for layers, 2 N(0,1) for the head",
-      "bench": "synthetic(n, width, seed): level + trend + 2 harmonics + noise; seeds paper 11, long 12, multi 13",
+      "bench": "realistic / realistic_groups: per series a kind from KINDS with KIND_PROBS (random walk + seasonal at SNR ~1 0.30, noisy heteroscedastic seasonal 0.20, intermittent counts 0.15, level shifts 0.15, smooth trend 0.20), magnitudes 0.1..1000; multivariate variates share a series component; seeds paper 41, long 42, multi 43",
       "e2e": "e2e_inputs(2048, seed=21): 16 smooth, 16 counts, 16 leading NaN, 16 gaps",
       "paths": "synthetic(8, 2000, 31) at horizon 40; synthetic(12, 2048, 32) as 4 x 3 with leading NaN"
     },
@@ -121,9 +121,10 @@
   "goldens": {
     "single.pt": {
       "sha256": "36968de2f3a282ab29367635995d2f4617aa8b3ef98f5aeb83aa1474b25ab517",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
       "bytes": 20603017,
-      "created": "2026-10-23T15:02:07",
-      "seconds": 1.5,
+      "created": "2026-10-23T15:46:56",
+      "seconds": 2.1,
       "contents": [
         "attention_0.in",
         "attention_0.out",
@@ -215,9 +216,10 @@
     },
     "modules.pt": {
       "sha256": "728e22118a638e7bae517bc37e3763bd13ef08980e268350f807b80117e26175",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
       "bytes": 17343503,
-      "created": "2026-10-23T15:02:12",
-      "seconds": 0.3,
+      "created": "2026-10-23T15:47:01",
+      "seconds": 0.4,
       "contents": [
         "group_layer_g1",
         "group_layer_g4",
@@ -230,10 +232,11 @@
       ]
     },
     "e2e.pt": {
-      "sha256": "33037f61eb64273dd09a36481739febc567d07bf06103c11fa5082f236c7f02d",
+      "sha256": "4d7dde62760d3f0664f01b6996e3b31a850b3a296c8d0cfa1c70425a3a7b8608",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
       "bytes": 2394909,
-      "created": "2026-10-23T15:03:39",
-      "seconds": 87.0,
+      "created": "2026-10-23T15:48:29",
+      "seconds": 87.9,
       "contents": [
         "context",
         "cpu_s",
@@ -245,13 +248,14 @@
         "raw21",
         "settings"
       ],
-      "cpu_s": 32.45906246127561
+      "cpu_s": 35.242856779135764
     },
     "single_long.pt": {
       "sha256": "126305fe155eeee3ddd0418380b0612b33ace94886912f74abda6f2193a8269d",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
       "bytes": 89955024,
-      "created": "2026-10-23T15:02:11",
-      "seconds": 4.2,
+      "created": "2026-10-23T15:47:01",
+      "seconds": 5.3,
       "contents": [
         "attention_0.in",
         "attention_0.out",
@@ -342,57 +346,63 @@
       ]
     },
     "bench_paper.pt": {
-      "sha256": "276180ae7cc6c71dc8d043eb4ceb0f5009ee28759722c7caded34d633f868cd8",
-      "bytes": 19400901,
-      "created": "2026-10-23T15:08:53",
-      "seconds": 306.7,
+      "sha256": "1f78e38891d560e1fdd8cd99fb5058e07b03da6d4a22e8639bb3b0c9e8e5b81a",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
+      "bytes": 19403077,
+      "created": "2026-10-23T15:53:47",
+      "seconds": 308.8,
       "contents": [
         "context",
         "cpu_chunk",
         "cpu_s",
         "head_readout",
         "horizon",
+        "kinds",
         "raw21"
       ],
-      "cpu_s": 306.251975745894,
+      "cpu_s": 308.453257816378,
       "shape": [
         1024,
         2048
       ]
     },
     "bench_long_context.pt": {
-      "sha256": "e4fd745d506c09780933c069f20aadc09c744f5a3a0c69bcd5ff26fcefd4a270",
-      "bytes": 6555908,
-      "created": "2026-10-23T15:09:31",
-      "seconds": 37.9,
+      "sha256": "6e194da6055735506f1e14e894bf81338666707c355bc774281399f4eb61e7b7",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
+      "bytes": 6556100,
+      "created": "2026-10-23T15:54:19",
+      "seconds": 32.2,
       "contents": [
         "context",
         "cpu_chunk",
         "cpu_s",
         "head_readout",
         "horizon",
+        "kinds",
         "raw21"
       ],
-      "cpu_s": 37.83752732723951,
+      "cpu_s": 32.12183967931196,
       "shape": [
         32,
         8192
       ]
     },
     "bench_multivariate.pt": {
-      "sha256": "aa34ec333a4cb4fe2bf988ce7815426209a25ac23ee65bfe18c7d2a413c132e4",
-      "bytes": 19400964,
-      "created": "2026-10-23T15:13:56",
-      "seconds": 264.7,
+      "sha256": "a840dfc5a24e24ee9826531484aed96e6da0a71c82a43ac0fc3c479fe8e32c99",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
+      "bytes": 19401348,
+      "created": "2026-10-23T15:59:29",
+      "seconds": 309.4,
       "contents": [
         "context",
         "cpu_chunk",
         "cpu_s",
         "head_readout",
         "horizon",
+        "kinds",
         "raw21"
       ],
-      "cpu_s": 264.30521944211796,
+      "cpu_s": 309.01521713798866,
       "shape": [
         128,
         8,
@@ -401,9 +411,10 @@
     },
     "paths.pt": {
       "sha256": "24ec1f1def09b028e68f72fb5fae087d3cd48da1811edfd2a8296722fd4b0e81",
+      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
       "bytes": 770917,
-      "created": "2026-10-23T15:03:46",
-      "seconds": 7.9,
+      "created": "2026-10-23T15:48:38",
+      "seconds": 9.3,
       "contents": [
         "multi_context",
         "multi_gift21",
