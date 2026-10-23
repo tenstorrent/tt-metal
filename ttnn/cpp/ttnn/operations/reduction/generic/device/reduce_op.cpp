@@ -290,7 +290,7 @@ Tensor reduce(
     if (decomposes_hw) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // Keep the W intermediate in FP32 (only H packs to BF16) to preserve accumulation
-        // precision. Applies to SUM only:
+        // precision. Applies to SUM and AVG (mean), which both accumulate:
         // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
         // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
         // MAX/MIN must not use this path: the MIN still lowered to -MAX(-x) (bfloat8_b, fast-mode
@@ -299,11 +299,25 @@ Tensor reduce(
         // accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
         const bool keep_w_fp32 =
-            reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
+            (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG) &&
             ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
               prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
              (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
+
+        // The H step reads the W intermediate. An FP32 intermediate loses its extra precision in FPU since it
+        // truncates FP32 to TF32 on the way into SrcA/SrcB. For BF16 inputs, the H step moves to the SFPU path
+        // where mean is computed as a sum followed by a multiplication by scaler.
+        const bool h_step_sfpu_fp32 =
+            keep_w_fp32 && !use_sfpu_reduce && !fast_and_approximate_mode && arch != tt::ARCH::QUASAR;
+        const bool h_use_sfpu_reduce = use_sfpu_reduce || h_step_sfpu_fp32;
+        const auto h_reduce_math = h_step_sfpu_fp32 ? tt::tt_metal::ReduceOpMath::SUM : prim_reduce_math;
+        const auto h_scaler_mode = h_step_sfpu_fp32 ? ttnn::prim::derive_scaler_mode(
+                                                          reduce_math, out_w_dtype, tt::tt_metal::ReduceOpDim::H, true)
+                                                    : scaler_mode;
+        const bool h_use_post_mul = h_scaler_mode == ttnn::prim::ScalerMode::PostMul;
+        const float h_reduce_scaler = h_use_post_mul ? 1.0f : scaler;
+        const float h_post_mul = h_use_post_mul ? scaler : 1.0f;
 
         const Tensor output_tensor = ttnn::prim::reduce(
             prepared_input,
@@ -327,19 +341,19 @@ Tensor reduce(
 
         return ttnn::prim::reduce(
             output_tensor,
-            prim_reduce_math,
+            h_reduce_math,
             tt::tt_metal::ReduceOpDim::H,
-            reduce_scaler,
+            h_reduce_scaler,
             output_mem_config,
             out_final_dtype,
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/post_mul,
-            scaler_mode,
+            /*post_mul_scaler=*/h_post_mul,
+            h_scaler_mode,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_reduce);
+            /*use_sfpu_reduce=*/h_use_sfpu_reduce);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
