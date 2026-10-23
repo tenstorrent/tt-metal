@@ -373,13 +373,10 @@ def head_layer_norm(device, y, w_gnorm, head_mean, eps: float = df.NORM_EPS):
     return out
 
 
-def slstm_layer(
-    device, x, w: TtSLSTM, precision: Precision, head_mean, steps: int, debug: dict | None = None, step_hook=None
-):
-    """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies."""
+def slstm_prepare(x, w: TtSLSTM, precision: Precision):
+    """``Wx`` time-major ``[T, 1, B, 2048]`` fp32 (gate bias folded) from the residual stream ``x``."""
     import ttnn
 
-    B, _, T, _ = tuple(x.shape)
     xn = rms_norm(x, df.NORM_EPS)
     xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
     free(xn)
@@ -387,10 +384,17 @@ def slstm_layer(
     free(xT)
     WxT = ttnn.add(wx, w.bias)  # fp32 gate bias
     free(wx)
-    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, step_hook=step_hook)
-    free(WxT, c, n, m)
+    return WxT
+
+
+def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, debug: dict | None = None):
+    """``x + GroupNorm(y)`` from the per-step outputs ``ys`` (padded with zeros to ``T``)."""
+    import ttnn
+
+    B, _, T, _ = tuple(x.shape)
+    steps = len(ys)
     if steps < T:
-        ys.append(const(device, 0.0, (T - steps, 1, B, ys[0].shape[-1])))
+        ys = [*ys, const(device, 0.0, (T - steps, 1, B, ys[0].shape[-1]))]
     Y = ttnn.concat(ys, dim=0)  # [T, 1, B, 512] fp32
     free(*ys)
     yn = head_layer_norm(device, Y, w.w_gnorm, head_mean)
@@ -401,6 +405,16 @@ def slstm_layer(
     out = ttnn.add(x, y)
     free(y)
     return out
+
+
+def slstm_layer(
+    device, x, w: TtSLSTM, precision: Precision, head_mean, steps: int, debug: dict | None = None, step_hook=None
+):
+    """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies."""
+    WxT = slstm_prepare(x, w, precision)
+    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, step_hook=step_hook)
+    free(WxT, c, n, m)
+    return slstm_finish(device, x, ys, w, head_mean, debug=debug)
 
 
 # ---------------------------------------------------------------------------------------- variate mixer
