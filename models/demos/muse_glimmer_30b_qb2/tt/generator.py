@@ -18,12 +18,13 @@ try:
     from readiness_check.contract import Generator
 except ImportError:  # Serving images (TTI/CI) do not ship the bring-up runtime.
     from models.demos.muse_glimmer_30b_qb2.tt.readiness_contract import Generator
+
 from transformers import TokenizersBackend
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 import ttnn
 from models.demos.muse_glimmer_30b_qb2.tt.model import SNAPSHOT, MuseGlimmerModel
 from models.demos.muse_glimmer_30b_qb2.tt.prepared_prefill import PreparedPrefill
-from models.common.modules.sampling.sampling_1d import Sampling1D
 
 
 class MuseGlimmerGenerator(Generator):
