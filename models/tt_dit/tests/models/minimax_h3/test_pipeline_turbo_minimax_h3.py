@@ -4,7 +4,7 @@
 """End-to-end generation under a lightx2v MiniMax-H3-Turbo (or HyperFlow) adapter at its own working point.
 
 Env: MINIMAX_H3_TURBO_LORA_PATH (required), MINIMAX_H3_TURBO_KEYFRAME (fl2va), MINIMAX_H3_TURBO_TASK
-(fl2va|t2va), MINIMAX_H3_TURBO_POINT (768p|544p|hyperflow), MINIMAX_H3_TURBO_NFE (4|8).
+(fl2va|t2va|ref2va), MINIMAX_H3_TURBO_POINT (768p|544p|hyperflow), MINIMAX_H3_TURBO_NFE (4|8).
 
 Scale is ``__metadata__["alpha"] / rank`` (0.0625 for Turbo), resolved by the loader; 1.0 would be 16x too
 strong yet still produce video. 768p was distilled at video shift 6, 544p and HyperFlow at 12 (audio 3).
@@ -25,11 +25,12 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils import tensor as tt_tensor
 from ....utils.video import Audio, export_video_audio_yuv
-from .common import GALAXY_MESHES
+from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -61,8 +62,9 @@ if NUM_FORWARDS not in TURBO_NUM_FORWARDS:
     raise ValueError(f"MINIMAX_H3_TURBO_NFE must be one of {TURBO_NUM_FORWARDS}, got {NUM_FORWARDS}")
 NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 
-# One adapter file serves both; the keyframe is the only difference between the two tasks.
+# ref2va loads `transformer_ref/`; only an adapter that lists it (HyperFlow) may bind there.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
+TASKS = ("fl2va", "t2va", "ref2va")
 
 # 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
 DEVICE_BOUND_TARGETS = 52 * 4
@@ -113,8 +115,8 @@ def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
-    if TASK not in ("fl2va", "t2va"):
-        raise ValueError(f"MINIMAX_H3_TURBO_TASK must be fl2va or t2va, got {TASK!r}")
+    if TASK not in TASKS:
+        raise ValueError(f"MINIMAX_H3_TURBO_TASK must be one of {TASKS}, got {TASK!r}")
     lora_path = os.environ.get("MINIMAX_H3_TURBO_LORA_PATH")
     if not lora_path:
         pytest.skip("set MINIMAX_H3_TURBO_LORA_PATH to a lightx2v Minimax-h3-Turbo adapter")
@@ -122,25 +124,37 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
     if TASK == "fl2va" and not keyframe_path:
         pytest.skip("set MINIMAX_H3_TURBO_KEYFRAME to the conditioning image for the fl2va task")
 
-    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    is_ref2va = TASK == "ref2va"
+    weights = weights_dir("transformer_ref" if is_ref2va else "transformer", "text_encoder", "vae", "audio_vae")
     keyframe = Image.open(keyframe_path).convert("RGB") if TASK == "fl2va" else None
+    references = [MiniMaxH3Reference(image=create_fractal_image(1024, 1024))] if is_ref2va else None
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    if is_ref2va and os.environ.get("MINIMAX_H3_DIT_FSDP") != "1":
+        # With transformer_ref resident, the ref2va bucket ladder (up to 326k rows) leaves no DRAM for the
+        # token refiner on BH 4x8. Audio traces are per bucket, so they go too. FSDP keeps both.
+        ladder = {"bucket_denoise": False, "trace_audio": False}
+    else:
+        ladder = {}
 
     pipeline = MiniMaxH3TurboPipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
-        dit_fsdp=False,
+        task="ref2va" if is_ref2va else "t2va",
+        # ref2va: mesh preset's residency (FSDP on WH 4x8).
+        dit_fsdp=None if is_ref2va else False,
         vae_output_type="yuv420",
         lora_path=lora_path,
         video_shift=VIDEO_SHIFT,
         audio_shift=AUDIO_SHIFT,
+        **ladder,
     )
+    conditioning = {"references": references} if is_ref2va else {"image": keyframe}
 
     # Construction warms only the 5 s rung; warm this duration so compiles stay out of the measurement.
     with pipeline.quiet():
         pipeline(
             PROMPT,
-            image=keyframe,
+            **conditioning,
             num_frames=num_frames,
             height=HEIGHT,
             width=WIDTH,
@@ -149,16 +163,18 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         )
 
     benchmark_profiler = BenchmarkProfiler()
+    # Repeated request: state left on device (e.g. ref2va conditioning rows) must not leak into the next.
     output = run_warm_generation(
         pipeline,
         PROMPT,
-        image=keyframe,
+        **conditioning,
         num_frames=num_frames,
         height=HEIGHT,
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
         profiler=benchmark_profiler,
+        warmup_steps=None,
     )
 
     # `load_h3_adapter_into` raises on unplaceable targets; confirm something (and for HyperFlow, all) bound.
