@@ -22,12 +22,12 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "matmul_dataflow_common_metal2.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     Noc noc;
-    constexpr auto M_tiles = get_arg(args::M_tiles);
-    constexpr auto padded_M_tiles = get_arg(args::padded_M_tiles);
+    constexpr auto M_cores = get_arg(args::M_cores);
     constexpr auto K_tiles = get_arg(args::K_tiles);
     constexpr auto padded_K_tiles = get_arg(args::padded_K_tiles);
     constexpr auto N_tiles = get_arg(args::N_tiles);
@@ -35,7 +35,6 @@ void kernel_main() {
     constexpr auto M_block_tiles = get_arg(args::M_block_tiles);
     constexpr auto K_block_tiles = get_arg(args::K_block_tiles);
     constexpr auto N_block_tiles = get_arg(args::N_block_tiles);
-    constexpr auto M_blocks_per_core = get_arg(args::M_blocks_per_core);
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto in1_tile_size = get_arg(args::in1_tile_size);
     // Tile stride for the output L1 walks in write_block_sync*. (It also fed the legacy
@@ -58,8 +57,7 @@ void kernel_main() {
     const auto in1_dest_noc_y = get_arg(args::in1_dest_noc_y);
     const auto in1_sender_noc_x = get_arg(args::in1_sender_noc_x);
     const auto in1_sender_noc_y = get_arg(args::in1_sender_noc_y);
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    const auto in0_idx = get_arg(args::in0_idx);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
     const auto defer_write_k_block = get_arg(args::defer_write_k_block);
@@ -68,6 +66,15 @@ void kernel_main() {
 #ifdef FUSE_TERNARY
     const auto broadcast_ternary_b = get_arg(args::broadcast_ternary_b);
 #endif  // FUSE_TERNARY
+
+    // The row count is a common runtime arg; uniform per-core ranges (unclamped: trailing cores
+    // clip against M_tiles below) so every core walks the same block count as its neighbours.
+    const uint32_t M_tiles = get_arg(args::M_tiles);
+    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, M_cores);
+    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
+    const uint32_t padded_M_tiles = M_tiles_per_core * M_cores;
+    const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
 
     const auto in1_reader = TensorAccessor(tensor::in1);
 

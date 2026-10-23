@@ -16,65 +16,72 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
+#include "minimal_matmul_runtime_args.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     Noc noc;
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    Semaphore<> in1_sender_semaphore(get_compile_time_arg_val(14));
-    Semaphore<> in1_receiver_semaphore(get_compile_time_arg_val(15));
-    Semaphore<> in1_valid_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    constexpr uint32_t M_cores = get_compile_time_arg_val(0);
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(8);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(10);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(11);
+    Semaphore<> in1_sender_semaphore(get_compile_time_arg_val(12));
+    Semaphore<> in1_receiver_semaphore(get_compile_time_arg_val(13));
+    Semaphore<> in1_valid_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(15);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(16);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(17);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(18);
 
-    // Load input/output addresses and range parameters
+    // The row count and every buffer address are common runtime args (one word per launch).
+    using Crta = ttnn::experimental::prim::minimal_matmul_common_args::Dm;
+    const uint32_t M_tiles = get_common_arg_val<uint32_t>(Crta::M_tiles);
+    const uint32_t in1_addr = get_common_arg_val<uint32_t>(Crta::in_addr);
+    const uint32_t in2_addr = get_common_arg_val<uint32_t>(Crta::in2_addr);
+
     uint32_t argidx = 0;
-    const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
-    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
-    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(Crta::ternary_a_addr);
+    const uint32_t ternary_b_addr = get_common_arg_val<uint32_t>(Crta::ternary_b_addr);
     const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
 #endif  // FUSE_TERNARY
 
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
+    // Uniform per-core row ranges (unclamped: trailing cores clip against M_tiles below) so every
+    // core walks the same block count as its forwarding neighbours.
+    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, M_cores);
+    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
+    const uint32_t padded_M_tiles = M_tiles_per_core * M_cores;
+    const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    constexpr auto in1_args = TensorAccessorArgs<19>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks)
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, out_addr_rt_arg_idx, out_tile_size);
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, Crta::out_addr, out_tile_size);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
@@ -146,7 +153,7 @@ void kernel_main() {
 #ifdef FUSE_AG
     // Receiver for ccl fusing
     MinimalMatmulOpReceiver fused_op_receiver;
-    uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+    uint32_t fused_op_rt_args_idx = argidx;
     uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
     uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
     uint8_t k_block_device_expected[num_k_blocks]{};
@@ -167,8 +174,8 @@ void kernel_main() {
 #endif
 
 #ifdef SRS_FUSE_OP_SIGNALER
-    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
-    uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+    // OpSignaler runtime args follow the fixed per-core args and the optional FUSE_AG args
+    uint32_t srs_fuse_signaler_rt_args_idx = argidx;
 #ifdef FUSE_AG
     srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
 #endif
