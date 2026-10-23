@@ -8,7 +8,8 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
-from .format_config import DataFormat
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .format_config import DataFormat, is_dest_acc_needed
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -18,6 +19,7 @@ from .llk_params import (
     ApproximationMode,
     BroadcastType,
     DataCopyType,
+    DestAccumulation,
     DestSync,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
@@ -89,6 +91,56 @@ class THROTTLE_LEVEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
+
+
+@dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul math with one MOP per reuse row."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_ROW_MOP"
+
+
+# Operand formats of 8 bits per datum or less (_llk_unpack_AB_matmul_narrow_format_).
+MATMUL_NARROW_STREAM_FORMATS = (
+    DataFormat.Bfp8,
+    DataFormat.Bfp8_b,
+    DataFormat.Bfp4_b,
+    DataFormat.Bfp2_b,
+    DataFormat.Fp8_e4m3,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+)
+
+
+@dataclass
+class MATMUL_STREAM_NARROW(TemplateParameter):
+    """Blackhole matmul unpack that streams an operand of 8 bits per datum or less into a 16-bit DEST."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_STREAM_NARROW"
+
+    @staticmethod
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int) -> list:
+        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST), else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if dest_sync != DestSync.Full:
+            return []
+        if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
+            return []
+        streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
+        return (
+            [MATMUL_STREAM_NARROW()] if streamed in MATMUL_NARROW_STREAM_FORMATS else []
+        )
+
+
+@dataclass
+class MATMUL_UNPACK_TTSYNC(TemplateParameter):
+    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_UNPACK_TTSYNC"
 
 
 @dataclass
@@ -916,6 +968,49 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
+
+
+@dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
+
+    def __init__(self, pack_block: int = 0):
+        self.matmul_pack_block = int(pack_block)
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
 
 
 @dataclass
