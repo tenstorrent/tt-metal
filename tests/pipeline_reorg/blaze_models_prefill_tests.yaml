@@ -2033,9 +2033,10 @@
   sp_config: sc4
 
 
-# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Its own stage, like the K3 verifier leg:
-# four galaxies are the scarcest resource in the pool. PCC stops at 55k, where the drafter golden does.
-- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
+# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Eager at 1M with 34 slots, the ceiling the
+# drafter's K/V leaves on the last rank, as K3's own leg runs eager at its ceiling. Slot 0 is PCC'd on 55k,
+# where the drafter golden stops; the request is timed to 1M.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 34 users, 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2045,56 +2046,6 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi_k3 sc4
   test_type: k3_dspark_runner
-  test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      timeout: 30
-      tier: 1
-      release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-# The multi-user counterpart of the leg above, as Kimi-K2.7's DFlash leg allocates 68 slots: traced K3 holds one
-# KDA slot, so this one runs eager. 64 slots are allocated (measured to fit at 256k); slot 0 is PCC'd.
-- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 64 users, 55k@5k + perf 250k@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi_k3_eager sc4
-  test_type: k3_dspark_eager_runner
-  test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      timeout: 200
-      tier: 1
-      release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-# The DSpark counterpart of the K3 leg above at its own shape: eager, 1M, and close to the slot ceiling the
-# drafter's K/V leaves on the last rank (about 30 at 1M). Slot 0 is PCC'd on 55k; the request is timed to 1M.
-- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 30 users, 55k@5k + perf 1M@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi_k3_eager_1m sc4
-  test_type: k3_dspark_eager_1m_runner
   test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
   test_group: disagg_prefill
   skus:
