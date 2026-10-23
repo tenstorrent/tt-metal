@@ -349,9 +349,11 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
         run.devices.push_back(dev);
         run.programs.push_back(std::move(program));
     }
-    // ready: every sender has zeroed its words (else the first call's grants could be wiped)
+    // ready: every sender has zeroed its words (else the first call's grants could be wiped) - a mock cluster runs
+    // nothing: no ready to wait for (host-side builds)
     const auto t0 = std::chrono::steady_clock::now();
-    for (IDevice* dev : run.devices) {
+    const bool mock = cluster.get_target_device_type() == tt::TargetDevice::Mock;
+    for (IDevice* dev : mock ? std::vector<IDevice*>{} : run.devices) {
         for (const auto& c : run.cores) {
             const CoreCoord v = dev->virtual_core_from_logical_core(c, tt::CoreType::DRAM);
             uint32_t w = 0;

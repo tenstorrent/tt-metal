@@ -586,6 +586,9 @@ def _place_ports(mesh_device, chips, allowed=None):
             for li, l in enumerate(p["links"]):
                 exy = eth_noc_coord(mesh_device, coord, eth[(coord, p["peer"], l)])
                 core = _worker_nearest_noc1(mesh_device, coord, exy, taken, allowed)
+                if core is None:  # (no Ethernet core reported - the mock cluster runs no probe: the first free core)
+                    x, y = min((xy for xy in allowed if xy not in taken), key=lambda xy: (xy[1], xy[0]))
+                    core = ttnn.CoreCoord(x, y)
                 taken.add((core.x, core.y))
                 port_core[(coord, d, li)] = core
     return port_core

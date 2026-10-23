@@ -1243,3 +1243,20 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
            block 2519 -> 3150 (1.25); fused 1280: head ~388, dispatch 162, experts 1288, tail ~88 = ~1925
   GLM ops: head 334 -> 462 (1.38) | dispatch 164 -> 236 (1.44) | experts 471 -> 581 (1.23) | tail 45 -> 64 (1.44) |
            block 1014 -> 1344 (1.33); fused 1280: head ~165, dispatch 167, experts 435, tail 43 = ~810
+
+### Generalizing the fused head / tail - step 1: ring / torus eligibility
+- FusedHead.fits refused any wrapped axis ("the LoudBox's lines, 2 links") though HeadSE3 / TailEngine carry the ring
+  schedules (protocol models, mock builds); now it requires only 2 links (the exchange's ports and the tail's K halves
+  are a link each) - lines or rings on either axis. FusedTail follows the head.
+- The planner's / combine's accumulator count was a LoudBox constant (FusedHead.A 12 / 16): on the torus every chip
+  has 8 dispatch ports (4 on the line's ends... ), the combine planned one fewer (11 / 15) and the head's planner
+  disagreed. Now planned once in MoEBlock from the cells the experts' flat plan leaves free less the combine's ports
+  (tt_k3_token_split_moe.planned_accumulators, the combine_cells / combine_port_cells helpers its own build uses), the
+  head built with it and the exchange's combine pinned to it (ports-apart mode; asserted) - the LoudBox's 12 / 16 again.
+- Host-only robustness for the mock: the dispatch's port placement falls back to the first free cell when the
+  Ethernet probe reports nothing (no execution); flat_drisc_ensure skips its senders' ready wait on a mock cluster.
+- tests/test_block_mock_galaxy.py (8 x 4, FABRIC_2D_TORUS_XY, TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 so
+  the experts' DRISC layout holds as on the Galaxy): MoEBlock with head / tail "auto" at chunk 5120 (640 rows a mesh
+  row) - GLM-Flash (288 experts, 9 a chip): fused head; K3 (896, 28 a chip): fused head + fused tail; a forward's
+  programs built and enqueued on all 32 chips. 2 pass; the head / tail mock builds 3 pass.
+- LoudBox 2x4 line unchanged: accumulators 16 / 12, PCC K3 0.99610 / GLM 0.98668, traced back to back 2997 / 1695 us.

@@ -333,8 +333,15 @@ class MoEBlock(LightweightModule):
         if model.latent_dim is not None:  # (the fused head does the latent down: only the up is used then)
             self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
         self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes)
+        # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
+        # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
+        acc = None
+        if self.head_mode == "fused":
+            from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import planned_accumulators
+
+            acc = planned_accumulators(mesh_device, self.experts.op.plan, (g.tp_wraps, g.sp_wraps))
         self.exchange = TokenExchange(
-            mesh_device, g, model, self.experts, dispatch_in_program=options.experts_during_dispatch
+            mesh_device, g, model, self.experts, dispatch_in_program=options.experts_during_dispatch, accumulators=acc
         )
         self.stage_hook = None  # (profiling: called with the stage name after every stage)
         self.keep_taps = False  # (debug: keep the last call's routing rows for taps(); "device": as a device tensor -
@@ -358,7 +365,9 @@ class MoEBlock(LightweightModule):
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
             holes = [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
-            self.fused = FusedHead(mesh_device, g, model, weights, holes, deterministic=options.deterministic)
+            self.fused = FusedHead(
+                mesh_device, g, model, weights, holes, deterministic=options.deterministic, accumulators=acc
+            )
             self._warm_up_head()
             self.fused.head.settle_arena()
             ttnn.deallocate(hole)
@@ -692,7 +701,6 @@ class FusedHead:
     ROWS = 640  # (rows a mesh row the engine is built for: GY x MT row tiles, one chunk - the RS needs one)
     HOLE = 24 * 1024  # (L1 a core kept above the head's arena for what the exchange keeps: its words, ~17 KB)
     HOLE_HEAD = 8 * 1024  # (two, for what the head keeps after placing its arena, and again: ~5 KB, ~1 KB)
-    A = {False: 12, True: 16}  # (the combine's accumulators at that load - by latent: the exchange must agree)
 
     @staticmethod
     def fits(g: Geometry, model: MoEModel, dtypes: MoEDtypes):
@@ -709,13 +717,17 @@ class FusedHead:
         rc = model.router
         if rc.score_func != "sigmoid" or not rc.normalize_topk or rc.expert_groups != 1:
             return "router: sigmoid scores, normalized top-K, no expert groups"
-        if g.links != 2 or g.tp_wraps or g.sp_wraps:
-            return "the LoudBox's lines, 2 links"
+        # (lines or rings on either axis - the gather's / RS's / routing exchange's ring schedules; 2 links: the
+        # exchange's ports and the tail's K halves are a link each)
+        if g.links != 2:
+            return f"{g.links} links (built for 2)"
         if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity != ttnn.MathFidelity.HiFi2:
             return "shared expert: bf8 weights at HiFi2"
         return True
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, l1_hole=None, deterministic=False):
+    def __init__(
+        self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, l1_hole=None, deterministic=False, accumulators=12
+    ):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
@@ -737,7 +749,7 @@ class FusedHead:
             latent=latent,
             # (the planner's row capacity: the head's (2 S K + 32 EPC: the router cores' L1), within the exchange's
             # worst case - its plan tensors take a prefix)
-            routing=RoutingSpec(A=self.A[latent is not None], torus=(g.tp_wraps, g.sp_wraps)),
+            routing=RoutingSpec(A=accumulators, torus=(g.tp_wraps, g.sp_wraps)),
             l1_hole=l1_hole,
         )
         # the shared expert TP-split: chip column c holds I_s slice c (gate / up columns, down rows)
@@ -767,7 +779,7 @@ class FusedHead:
         blk = exchange.block
         assert (
             blk.A == self.head.routing.A
-        ), f"the combine's accumulators {blk.A} != the fused head planner's {self.head.routing.A}: FusedHead.A"
+        ), f"the combine's accumulators {blk.A} != the fused head planner's {self.head.routing.A}"
         assert self.head.routing.rows_cap <= blk.rows_cap
         for k, t in self.head.routing.outs.items():
             ttnn.deallocate(t)
@@ -1004,9 +1016,12 @@ class TokenExchange:
     owners' rows. Built by the block after its head and tail ran once (the arena's address is baked into its kernels),
     rebuilt (with a warning) only if L1 allocated since moved the arena."""
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts, dispatch_in_program=False):
+    def __init__(
+        self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts, dispatch_in_program=False, accumulators=None
+    ):
         self.mesh, self.g, self.model, self.experts = mesh, g, model, experts
         self.dispatch_in_program = dispatch_in_program
+        self.accumulators = accumulators  # (the combine's, planned with the fused head; None: its own choice)
         self.block = None
         self.builds = 0
 
@@ -1028,6 +1043,7 @@ class TokenExchange:
             torus=(g.tp_wraps, g.sp_wraps),
             joint_routing=True,
             combine_auto_cfg=True,
+            combine_accumulators=self.accumulators,
             dispatch_in_program=self.dispatch_in_program,
         )
         self.builds += 1

@@ -90,6 +90,31 @@ class K3MoEWeights:
     pool: list = field(default_factory=list)  # P x (w1 gate [I, latent], w3 up [I, latent], w2 down [latent, I])
 
 
+def combine_cells(mesh_device, plan):
+    """The cells the flat expert plan leaves free (logical (x, y), row-major): the combine's (and its ports')."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    # (DRISC: only the reader cells still running Tensix readers / the launcher are taken; the rest go to combine)
+    rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
+    taken = {tuple(c) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for c in plan[k]}
+    return [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+
+
+def combine_port_cells(mesh_device, cells, torus):
+    """The combine's port cells among `cells` (one a direction and link: 2 links)."""
+    from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
+
+    chips_, _, _ = mesh_plan(mesh_device, 2, torus)
+    return {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
+
+
+def planned_accumulators(mesh_device, plan, torus):
+    """The combine's accumulator count in the ports-apart mode: every free cell not a port, at most A_MAX."""
+    from ttnn.bringup.combine_rf.sparse_combine_rf import A_MAX
+
+    cells = combine_cells(mesh_device, plan)
+    return min(A_MAX, len(cells) - len(combine_port_cells(mesh_device, cells, torus)))
+
+
 def random_k3_weights(d: K3Dims, pool_size=8, seed=0):
     g = torch.Generator().manual_seed(seed)
     r = lambda *s, sc=0.02: torch.randn(*s, generator=g) * sc  # noqa: E731
@@ -166,6 +191,7 @@ class TtK3TokenSplitMoE:
         shared_axis=1,
         joint_routing=False,
         combine_auto_cfg=False,
+        combine_accumulators=None,
         dispatch_in_program=False,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
@@ -392,10 +418,8 @@ class TtK3TokenSplitMoE:
         self.writers = len(plan["down"]) + (len(plan["rdn"]) if plan["rdown"] else 0)
         grid = mesh_device.compute_with_storage_grid_size()
         # (DRISC: only the reader cells still running Tensix readers / the launcher are taken; the rest go to combine)
-        rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
-        taken = {tuple(c) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for c in plan[k]}
         pcores = {(i % 8, i // 8) for i in range(planner_cores)}
-        self.cells = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+        self.cells = combine_cells(mesh_device, plan)
         wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in wcores])
         # (the writers' words first: persistent L1 above the arena, not stranded in the middle when it is freed)
@@ -654,16 +678,21 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
             from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
 
-            chips_, _, _ = mesh_plan(mesh_device, 2, self.torus)
-            port_cells = {(v.x, v.y) for v in place_ports(mesh_device, chips_, self.cells).values()}
+            port_cells = combine_port_cells(mesh_device, self.cells, self.torus)
             piece = max(7168, 2 * d.latent)
+            # (combine_accumulators: the count the caller planned with - the MoE block's fused head planner bakes it:
+            # the ports-apart mode at exactly that many)
+            pin = dict(a_max=combine_accumulators, mode="ports apart") if combine_accumulators else {}
             auto = combine_auto(
                 self.N, S, d.latent, len(self.cells), len(port_cells), arena_bytes=a_rows * 64, l1=True, depth=8,
-                piece_max=piece,
+                piece_max=piece, **pin,
             )  # fmt: skip
             assert auto[
                 "fits"
             ], f"combine: does not fit ({len(self.cells)} cells, {a_rows * 64 >> 10} KB): {auto['why']}"
+            assert (
+                not combine_accumulators or auto["n_acc"] == combine_accumulators
+            ), f"combine: {auto['n_acc']} accumulators, {combine_accumulators} planned"
             acc_on_ports = auto["acc_on_ports"]
             copt = dict(
                 n_acc=auto["n_acc"], depth=auto["depth"], inj_slots=auto["inj_slots"], local_keep=auto["local_keep"]
