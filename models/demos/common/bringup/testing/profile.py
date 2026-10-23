@@ -111,9 +111,16 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     return {"tokens": seq, "chunk": chunk, "ms": total * 1e3, "chunk_ms": per}
 
 
-def want_ops(s) -> bool:
-    """The per-op breakdown (spec perf.op_profile or BRINGUP_PROFILE_OPS=1; the final X.3 sets it)."""
-    return bool(s.get("perf.op_profile")) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
+def want_ops(s, rt: bool = False) -> bool:
+    """The per-op breakdown. F187 (owner): every profile on the real-time profiler records it (perf.op_profile, default
+    true: the op rows come from the same unsynced run, only host bookkeeping is added), so the dashboard's per-section
+    op list is always the profiled code's. On the device profiler (cross-checks) its op mode syncs after every call (a
+    minute per layer): only when the spec sets perf.op_profile itself or BRINGUP_PROFILE_OPS=1."""
+    if os.environ.get("BRINGUP_PROFILE_OPS") == "1":
+        return True
+    if rt:
+        return bool(s.get("perf.op_profile"))
+    return s.has("perf.op_profile") and bool(s.get("perf.op_profile"))
 
 
 def op_layers(s, layers: list[int], rt: bool = False) -> list[int]:
@@ -389,7 +396,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     ops, timeline = None, None
     reload()
     if backend == "rt":  # F155: one run, no syncs: sections, and with op mode the op rows and the timeline
-        ops_on = want_ops(s)
+        ops_on = want_ops(s, rt=True)
         gap[0] = 0.0
         profiler.enable(mesh, rt=True, calls=ops_on)
         try:
