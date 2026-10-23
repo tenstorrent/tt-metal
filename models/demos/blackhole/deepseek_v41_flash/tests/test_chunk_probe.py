@@ -155,6 +155,23 @@ def test_chunk_probe(mesh_device):
             rec.clear()
             c0 = ncap[0]
             t0 = time.perf_counter()
+            n_pieces = int(
+                os.environ.get("PROBE_PIECES", "1")
+            )  # the prompt in several calls (server chunk steps): every piece ends on a chunk multiple
+            cuts_ = [E * (i + 1) // n_pieces // CHUNK * CHUNK for i in range(n_pieces - 1)]
+            cuts_ = [c for i, c in enumerate(cuts_) if c > (cuts_[i - 1] if i else 0)]
+            st_ = 0
+            for (
+                c_
+            ) in cuts_:  # non-final pieces (the first token of a piece that does not end the prompt is meaningless)
+                m.prefill_interleaved(
+                    [(b, toks[b], st_, c_) for b in USERS],
+                    CHUNK,
+                    s_pad_max=WMAX if MODE == "single" else None,
+                    want_logits=False,
+                )
+                st_ = c_
+            items = [(b, toks[b], st_, E) for b in USERS]
             res = m.prefill_interleaved(
                 items,
                 CHUNK,
@@ -200,6 +217,9 @@ def test_chunk_probe(mesh_device):
             from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as _P
             from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as _PC
 
+            m.flush_key_exports(
+                why="probe read"
+            )  # (the key hand-off is lazy: it runs before the first decode step or on demand)
             st_, cols_, U_ = {}, m.cols, m.U
             full_ = _PC.read_shard(m.pool.pool, 0)[0, 0]
             for src in _PC._sources(m):
@@ -234,6 +254,7 @@ def test_chunk_probe(mesh_device):
         ):  # plain eager decode steps after the prefill: tokens / logits of the 4 users must agree (identical prompts)
             nstep = int(os.environ["PROBE_DECODE"])
             tok_ = torch.tensor([int(res[b][0]) for b in range(B)], dtype=torch.long)
+            dec_lg = []
             for k_ in range(nstep):
                 pos_ = torch.full((B,), E + k_, dtype=torch.long)
                 out_ = m.decode_forward(tok_, pos_, enable_trace=False, reload_inputs=True)
@@ -242,6 +263,12 @@ def test_chunk_probe(mesh_device):
                     f"PROBE DECODE step {k_}: tokens {[int(x) for x in out_]} max |logit(user b) - logit(user 0)| {[float((lg_[b] - lg_[0]).abs().max()) for b in range(1, B)]}"
                 )
                 tok_ = out_.clone().long()
+                dec_lg.append(lg_.clone())
+            if os.environ.get("PROBE_DECODE_SAVE"):
+                torch.save(
+                    {"logits": dec_lg, "first": [int(res[b][0]) for b in USERS]},
+                    f"{os.environ['PROBE_DECODE_SAVE']}.E{E}.lazy{os.environ.get('DSV41_PF_LAZY_EXPORT', '1')}",
+                )
         if SAME and os.environ.get("PROBE_NOLOGITS") != "1":
             lg = torch.stack([res[b][1] for b in USERS]).float()
             log(

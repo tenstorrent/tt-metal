@@ -1150,7 +1150,15 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         )
         return out.argmax_ids[:, :1].to(torch.int32).reshape(W, 1)
 
+    def _flush_keys(self, why):
+        fl = getattr(self.m, "flush_key_exports", None)  # (a model without the lazy key hand-off has nothing pending)
+        if fl is not None:
+            fl(why=why)
+
     def decode_forward(self, tokens, start_pos, *args, **kwargs):
+        self._flush_keys(
+            "decode"
+        )  # the key hand-off of the prompts that finished (recorded by Model.prefill_interleaved, lazily) runs before the first step that reads the decode key slab
         if self.spec is not None and kwargs.get("spec_mode") is None and kwargs.get("num_valid_drafts") is None:
             out = self._fresh_rows_via_spec(tokens, start_pos, args, kwargs)
             if out is not None:
@@ -1891,6 +1899,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         the captured verify trace), so its first decode step is a real verify, not a forced single-token round."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        self._flush_keys("draft seeding")  # (a replay seeding reads the decode key slab)
         t_prop = time.perf_counter()
         K = self.spec.k
         W = int(committed_tokens.shape[0])

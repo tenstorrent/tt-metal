@@ -901,6 +901,7 @@ class Model:
         hashes = self.hasher(tp, torch.zeros(B, dtype=torch.long)) if self.host_rows is not None else None
         if active is not None and self.host_rows is not None:
             st_cache[keep] = saved
+        self.flush_key_exports(why="non-interleaved prefill")  # (its replays overwrite the carried key FIFOs)
         self._res, self._last_pos, self._want_logits = {}, lens - 1, want_logits
         if active is not None:  # inactive users: no last token inside any chunk -> first token -1
             self._res = {b: (-1, None) for b in range(B) if not bool(active[b])}
@@ -983,6 +984,7 @@ class Model:
         self.pool.admit(b, 1)
         self.pool.sync_page_table()
         getattr(self, "pf_resume", {}).pop(b, None)
+        self.drop_key_exports([b])
 
     def _export_state(self, NA, UD):  # NA: entries per piece
         """Persistent device tensors of the key hand-off for slab length ``NA`` / ``UD`` users per row (allocated before any trace capture by ``warm_key_export``; the values are rewritten
@@ -1265,6 +1267,48 @@ class Model:
                 self._export_user_keys(ix, dec.k_cache, i_src, u_dst, sorted(rws), off, n)
         ttnn.synchronize_device(self.md)
 
+    # ---- lazy key hand-off (DSV41_PF_LAZY_EXPORT=1, default): the server does not know which chunk step is the LAST of a prompt (the plugin sends the END of the scheduled chunk, never the prompt length),
+    # so a step that ends a user's chunk only RECORDS the export (``_kx_pending[b] = (window end, prompt end of the call, prefill slot in the mesh row)``) and the export of the whole key prefix runs
+    # once, when the keys are needed: before the first decode / verify step (``flush_key_exports()`` at the top of ``decode_forward`` / ``decode_forward_bucket`` and of the adapter's decode and
+    # drafter entry points), before the carried state of the user's slot is overwritten (``_slot_alloc`` eviction, a trace re-capture, an unmasked replay, a non-interleaved prefill). A new prompt of the
+    # user, ``release_user`` and a state release drop the record (the keys of an unfinished prompt are never read). Without it every chunk step re-exported the whole prefix (0.09 s early, 0.2 s at 64k,
+    # 0.58 s late in a 1M prompt) although only the last export is ever read.
+    def _lazy_key_export(self):
+        return os.environ.get("DSV41_PF_LAZY_EXPORT", "1") == "1"
+
+    def flush_key_exports(self, users=None, why=""):
+        """Run the recorded key hand-offs (of ``users``; default every user) now. -> seconds (0.0 when nothing was pending)."""
+        pend = self.__dict__.get("_kx_pending")
+        if not pend:
+            return 0.0
+        sel = list(pend) if users is None else [b for b in users if b in pend]
+        if not sel:
+            return 0.0
+        t0 = time.perf_counter()
+        by_end = {}
+        for b in sel:
+            by_end.setdefault(pend[b][0], []).append(b)
+        ends = {b: pend[b][1] for b in sel}
+        i_src = {b: pend[b][2] for b in sel}
+        for b in sel:
+            del pend[b]
+        for s_end in sorted(by_end):
+            self._export_keys_users(by_end[s_end], ends, s_end, lambda b: i_src[b])
+        dt = time.perf_counter() - t0
+        st = self.__dict__.setdefault("kx_stats", {"flushes": 0, "users": 0, "seconds": 0.0})
+        st["flushes"] += 1
+        st["users"] += len(sel)
+        st["seconds"] += dt
+        self.log(f"  key export flush ({why or 'on demand'}): users {sorted(sel)}, {dt * 1e3:.0f} ms")
+        return dt
+
+    def drop_key_exports(self, users=None):
+        """Forget the recorded key hand-offs of ``users`` (default all): the state they refer to is gone or superseded."""
+        pend = self.__dict__.get("_kx_pending")
+        if pend:
+            for b in list(pend) if users is None else users:
+                pend.pop(b, None)
+
     # prefill slots (DSV41_PREFILL_UP < users per row): the traced chunk holds Up users per mesh row; a user that is being prefilled owns one slot of its row (its carried state
     # lives there) until it is finished or evicted by another user
     def _slot_alloc(self, wave, resume):
@@ -1291,6 +1335,8 @@ class Model:
                 sl = free[0] if free else cand[0]
             o = owner[sl]
             if o is not None and o != b:
+                if self.__dict__.get("_kx_pending"):
+                    self.flush_key_exports([o], "slot eviction")  # (its carried key FIFO is about to be overwritten)
                 resume.pop(o, None)
                 of.pop(o, None)
             if b in of and of[b] != sl:
@@ -1384,16 +1430,23 @@ class Model:
                 k = self._pf_pick_bucket(e, C, buckets, True)
             groups.setdefault(k, []).append((b, t, st, e))
         res, tms = {}, []
-        for k in sorted(groups, reverse=True):  # (continuations of the large context first: they are the long ones)
-            grp = groups[k]
-            pm.use_dyn(k)
-            if getattr(self, "apc", None) is not None:
-                self.apc.store.tag = k
-            vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
-            res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None))
-            for g in grp:
-                of[g[0]] = k
-            tms.append((k, [g[0] for g in grp], dict(self.timing)))
+        self.flush_key_exports(
+            why="S_pad contexts"
+        )  # (the key FIFOs of the contexts are separate: every group exports eagerly)
+        self._kx_eager = True
+        try:
+            for k in sorted(groups, reverse=True):  # (continuations of the large context first: they are the long ones)
+                grp = groups[k]
+                pm.use_dyn(k)
+                if getattr(self, "apc", None) is not None:
+                    self.apc.store.tag = k
+                vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
+                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None))
+                for g in grp:
+                    of[g[0]] = k
+                tms.append((k, [g[0] for g in grp], dict(self.timing)))
+        finally:
+            self._kx_eager = False
         tm = {}
         for _, _, d in tms:
             for key, v in d.items():
@@ -1455,6 +1508,10 @@ class Model:
             pm.post_replay_hooks.append(self._post_chunk)
             self._hooks_set = pm
         pm.timing = {}
+        if self.__dict__.get("_kx_pending") and (
+            pm.dyn is None or pm.dyn.C != C or pm.dyn.S_pad != S_pad or pm.dyn_trace is None
+        ):
+            self.flush_key_exports(why="trace re-capture")  # (the key FIFOs of the finished prompts are re-allocated)
         if pm.capture_dyn(
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
@@ -1466,8 +1523,14 @@ class Model:
             self.release_trace()
             self.log_dram("after capture_dyn")
         masked = getattr(pm.dyn, "umask", None) is not None
+        lazy_kx = (
+            masked and self._lazy_key_export() and not self.__dict__.get("_kx_eager", False)
+        )  # (an unmasked trace overwrites the carried state of every user: no deferral)
+        if not lazy_kx:
+            self.flush_key_exports(why="eager mode")
         for b, t, st, e in items:
             if st == 0:
+                self.drop_key_exports([b])  # (a new prompt of the user: the keys of the previous one are never read)
                 self.pool.release(b)
                 self.pool.admit(b, e + 1)
             else:
@@ -1607,13 +1670,18 @@ class Model:
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
                     te0 = time.perf_counter()
-                    for s_end in sorted({x for _, x in done}):
-                        self._export_keys_users(
-                            [b for b, x in done if x == s_end],
-                            ends,
-                            s_end,
-                            (lambda b: slot_of[b] % Up) if general else (lambda b: b % U),
-                        )
+                    if lazy_kx:
+                        pend = self.__dict__.setdefault("_kx_pending", {})
+                        for b, x in done:
+                            pend[b] = (x, ends[b], slot_of[b] % Up if general else b % U)
+                    else:
+                        for s_end in sorted({x for _, x in done}):
+                            self._export_keys_users(
+                                [b for b, x in done if x == s_end],
+                                ends,
+                                s_end,
+                                (lambda b: slot_of[b] % Up) if general else (lambda b: b % U),
+                            )
                     t_exp += time.perf_counter() - te0
                     for it in part:
                         b, _, _, e = it
@@ -1819,6 +1887,7 @@ class Model:
         """One decode step of every user. tokens [B] = the token fed at position current_pos [B] (per user). Returns the next greedy tokens [B].
         ``reload_inputs=False`` (steady state): the device already holds the fed-back token / position (device loop); only the Engram rows of
         ``tokens`` are uploaded."""
+        self.flush_key_exports(why="decode")
         t0 = time.perf_counter()
         self.pool.ensure(
             current_pos, lookahead=16
@@ -2136,6 +2205,7 @@ class Model:
     def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True, samp=None):
         """One decode step at ``Ub`` users per mesh row (``Ub`` = U: the full model). tokens / current_pos [4 Ub] in bucket row order, ``phys`` [4 Ub] the model user of every row
         (``r * U + u``, u < Ub). -> next greedy tokens [4 Ub]."""
+        self.flush_key_exports(why="decode bucket")
         if Ub == self.U:
             return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True, samp=samp)
         return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace, samp=samp)
@@ -2185,6 +2255,7 @@ class Model:
         """
         from models.demos.blackhole.deepseek_v41_flash.tt import reconfigure as RC
 
+        self.drop_key_exports()
         for h in generator_hooks:
             h()
         self.release_trace()  # decode trace
