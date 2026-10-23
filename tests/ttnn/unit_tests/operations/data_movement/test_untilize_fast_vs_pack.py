@@ -186,13 +186,14 @@ def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_ar
     return ttnn.to_torch(tt_out).view(torch.int16)
 
 
-def _block(width):
-    return max(b for b in range(1, 9) if width % b == 0)
+def _block(width, fp32_dest=False):
+    # A 32-bit DEST half holds four tiles, so the pack reference blocks stay at four or less there.
+    return max(b for b in range(1, 5 if fp32_dest else 9) if width % b == 0)
 
 
 def _compare(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
     fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [1, int(in_dtype != ttnn.bfloat16)], fp32_dest)
-    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width, fp32_dest)], fp32_dest)
     mismatched = (fast != pack).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
 
@@ -262,7 +263,7 @@ def test_fast_and_pack_untilize_match_bfp4(device, width, tile_rows):
 
 def _compare_helper(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
     helper = _untilize(device, tt_in, in_dtype, num_rows, width, HELPER_COMPUTE, [], fp32_dest)
-    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width, fp32_dest)], fp32_dest)
     mismatched = (helper != pack).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
 
