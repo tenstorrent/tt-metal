@@ -73,3 +73,52 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:UInt4,
   - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:Int4,
   - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:UInt4,
+
+  # --- ttnn sim_quasar sanity legs (#61750, tests/pipeline_reorg/ttnn_sanity_tests.yaml) ---
+  # Cases of those four suites that do not pass on the simulator: main @ 4e533daf360, ttsim v1.13.0,
+  # two-compute-node grid, one process per case with a 10-min cap (sweep details in #61750). A whole file
+  # is listed when every case in it fails.
+  #
+  # ttsim does not implement NoC multicast on the RoCC command path: the process aborts with
+  # "UnimplementedFunctionality: rocc_cmdbuf_wr_reg: bits with no storage: cmd_buf=0 reg_index=35".
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode_small_grid.py::test_paged_scaled_dot_product_attention_decode_split_small_grid[1core-ttnn_mesh_device0]
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_scaled_dot_product_attention_decode_small_grid.py::test_paged_scaled_dot_product_attention_decode_split_small_grid[2core-ttnn_mesh_device0]
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_rms_norm.py::test_rms_norm[03_32x2048_bf16_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py::test_rms_norm[01_32x128_bf16_int-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py::test_rms_norm[02_8x128_bf16_int-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_rms_norm.py::test_rms_norm[07_32x2560_bf16_int-dram-ttnn_mesh_device0]
+  # yolo conv2d: 36 of its 37 emulator cases abort on that multicast gap or give no result in 10 min.
+  - models/experimental/ops/quasar/tests/yolo_ops/test_conv2d.py
+  # No result after 10 min at 100 % CPU (the resnet pool ops, sharded->interleaved, the yolo detect-head
+  # concat and permute, paged_update_cache).
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py
+  - models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py::test_quasar_to_memory_config_sharded_to_interleaved[quasar-device_params0]
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_update_cache.py::test_paged_update_cache[00_128x8x32x64_bf8_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw20-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw40-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_nhwc_to_nchw-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_transpose-ttnn_mesh_device0]
+  # Bfp8_b is not supported on Quasar ("DFB ... has data format 'Bfp8_b' which is not supported on
+  # architecture quasar").
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_split.py::test_split[00_32x151936_bf8_int-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_to_layout.py::test_to_layout[03_32x151936_bf8_int-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_untilize.py::test_untilize[00_32x37984_bf8_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_to_layout.py::test_to_layout_rowmajor_to_tile_bf8[l_p5_20x512-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_to_layout.py::test_to_layout_rowmajor_to_tile_bf8[s_p4_40x256-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_to_memory_config.py::test_to_memory_config_dtype_cast[anchors-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_to_memory_config.py::test_to_memory_config_dtype_cast[strides-640-ttnn_mesh_device0]
+  # Op gaps on the two-core grid, one each: L1 OOM across the 2 banks; a captured 32-core grid that fails
+  # instead of skipping; a self-looped DFB; a UInt32 DFB; implicit-sync DFB descriptor overflow (uint8);
+  # the moreh_softmax kernel's moreh_common.hpp takes DataflowBuffer& without template arguments, so it
+  # does not build on Quasar (same shape as the chain.inl regression #61760 fixed).
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_concat.py::test_concat[00_32x26720_bf8_int-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_nlp_concat_heads_decode.py::test_nlp_concat_heads_decode[00_32x128_bf16_hs-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[00_1_i32_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[01_1_u32_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[detect_out-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[dist2bbox-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]
