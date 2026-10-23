@@ -60,7 +60,6 @@ enum class EnvVarID {
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
-    TT_METAL_QUASAR_VARIANT,                  // Quasar IP variant (register headers and LLK arch/<variant> directory)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
@@ -414,6 +413,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
         "Cannot enable both debug printing and the streaming profiler");
+    // The NOC debug dump only reads the profiler's DRAM buffers, so data that trace-only or accumulate profiling keeps
+    // in L1 would never reach the host.
+    TT_FATAL(
+        !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
+        "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
+        "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -573,39 +578,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Hardware-detected architecture
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
-
-        // TT_METAL_QUASAR_VARIANT
-        // Quasar IP variant. Selects the variant's register headers under tt_metal/hw/inc/internal/tt-2xx/
-        // and, when tt_metal/tt-llk/tt_llk_quasar/arch/<variant> exists, the LLK headers that shadow the
-        // base Quasar ones. The IP numbers 2.0.1 and 2.0.2 are aliases for horizon and trinity.
-        // Default: unset (base Quasar part, also spelled quasar or 2.0.0)
-        // Usage: export TT_METAL_QUASAR_VARIANT=trinity
-        case EnvVarID::TT_METAL_QUASAR_VARIANT: {
-            std::string variant(value);
-            std::transform(
-                variant.begin(), variant.end(), variant.begin(), [](unsigned char c) { return std::tolower(c); });
-            if (variant.empty() || variant == "quasar" || variant == "2.0.0") {
-                break;
-            }
-            if (variant == "2.0.1") {
-                variant = "horizon";
-            } else if (variant == "2.0.2") {
-                variant = "trinity";
-            }
-            const bool plain_name = std::all_of(variant.begin(), variant.end(), [](unsigned char c) {
-                return std::islower(c) || std::isdigit(c) || c == '_';
-            });
-            TT_FATAL(plain_name, "TT_METAL_QUASAR_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
-            const bool has_register_headers = variant == "horizon" || variant == "trinity";
-            const auto dir = std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / variant;
-            TT_FATAL(
-                has_register_headers || std::filesystem::is_directory(dir),
-                "TT_METAL_QUASAR_VARIANT '{}' is not a known IP variant and has no directory {}",
-                variant,
-                dir.string());
-            this->quasar_variant = variant;
-            break;
-        }
 
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.

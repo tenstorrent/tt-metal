@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -1915,6 +1917,96 @@ TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
                                         << "} expected exactly 1 tray on that host";
         }
     }
+}
+
+// MetalContext::initialize pins UMD's remote-transfer cores to these channels. Every chosen MMIO chip must be one of
+// this host's fabric chips, and every chosen channel must link directly to one of that MMIO chip's own remote
+// (non-MMIO) chips on this host, never to another MMIO chip or off-host. Every local MMIO chip with such a remote chip
+// must get exactly one channel per remote chip (the dispatch link).
+void expect_remote_transfer_dispatch_channels_valid(std::optional<size_t> expected_num_mmio_chips = std::nullopt) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto dispatch_chans = get_remote_transfer_dispatch_channels(control_plane, cluster);
+
+    std::set<ChipId> local_fabric_chips;
+    for (const auto& [fabric_node, physical_chip] :
+         control_plane.get_topology_mapper().get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
+        local_fabric_chips.insert(physical_chip);
+    }
+    const auto mmio_chips = cluster.mmio_chip_ids();
+    const auto& eth_connections = cluster.get_ethernet_connections();
+
+    // The remote chips each local MMIO chip reaches over a direct, on-host link.
+    std::map<ChipId, std::set<ChipId>> direct_remote_chips;
+    for (const auto mmio_chip : mmio_chips) {
+        const auto chip_links = eth_connections.find(mmio_chip);
+        if (!local_fabric_chips.contains(mmio_chip) || chip_links == eth_connections.end()) {
+            continue;
+        }
+        const auto& controlled = cluster.get_devices_controlled_by_mmio_device(mmio_chip);
+        for (const auto& [chan, peer] : chip_links->second) {
+            const ChipId peer_chip = std::get<0>(peer);
+            if (peer_chip != mmio_chip && !mmio_chips.contains(peer_chip) && controlled.contains(peer_chip) &&
+                local_fabric_chips.contains(peer_chip)) {
+                direct_remote_chips[mmio_chip].insert(peer_chip);
+            }
+        }
+    }
+
+    if (expected_num_mmio_chips.has_value()) {
+        EXPECT_EQ(dispatch_chans.size(), *expected_num_mmio_chips);
+    }
+    EXPECT_EQ(dispatch_chans.size(), direct_remote_chips.size());
+    for (const auto& [mmio_chip, remote_chips] : direct_remote_chips) {
+        const auto chosen = dispatch_chans.find(mmio_chip);
+        ASSERT_NE(chosen, dispatch_chans.end()) << "MMIO chip " << mmio_chip << " has remote chips but no channel";
+        EXPECT_EQ(chosen->second.size(), remote_chips.size())
+            << "MMIO chip " << mmio_chip << ": expected one dispatch channel per directly connected remote chip";
+    }
+    for (const auto& [mmio_chip, chans] : dispatch_chans) {
+        EXPECT_TRUE(mmio_chips.contains(mmio_chip)) << "chip " << mmio_chip << " is not an MMIO chip";
+        EXPECT_TRUE(local_fabric_chips.contains(mmio_chip)) << "chip " << mmio_chip << " is not in this host's mesh";
+        const auto chip_links = eth_connections.find(mmio_chip);
+        ASSERT_NE(chip_links, eth_connections.end());
+        const auto& remote_chips = direct_remote_chips[mmio_chip];
+        for (const auto chan : chans) {
+            const auto link = chip_links->second.find(chan);
+            ASSERT_NE(link, chip_links->second.end())
+                << "MMIO chip " << mmio_chip << " channel " << +chan << " has no on-host link";
+            EXPECT_TRUE(remote_chips.contains(std::get<0>(link->second)))
+                << "MMIO chip " << mmio_chip << " channel " << +chan << " leads to chip " << std::get<0>(link->second)
+                << ", which is not one of its directly connected remote chips";
+        }
+    }
+}
+
+TEST(MultiHost, TestDual2x4RemoteTransferDispatchChannels) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for T3K");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Each host is a full T3K: 4 MMIO chips, each with one remote chip.
+    expect_remote_transfer_dispatch_channels_valid(4);
+}
+
+TEST(MultiHost, TestSplit2x2RemoteTransferDispatchChannels) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    expect_remote_transfer_dispatch_channels_valid();
+}
+
+TEST(MultiHost, TestBigMesh2x4RemoteTransferDispatchChannels) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    expect_remote_transfer_dispatch_channels_valid();
 }
 
 }  // namespace tt::tt_fabric::multi_host_tests

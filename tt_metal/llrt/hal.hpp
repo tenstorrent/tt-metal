@@ -392,6 +392,8 @@ public:
 };
 
 class Hal {
+    friend class HalJitBuildQueryQuasar;
+
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
@@ -408,6 +410,7 @@ public:
 
 private:
     tt::ARCH arch_;
+    IpVariant quasar_arch_variant_{IpVariant::GRENDEL};
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -490,7 +493,8 @@ private:
         bool is_simulator,
         bool enable_blackhole_dram_programmable_cores,
         bool enable_aerisc_ptp_trace);
-    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+    void initialize_qa(
+        uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -519,7 +523,8 @@ public:
         bool enable_dram_backed_cq,
         bool is_simulator = false,
         bool enable_blackhole_dram_programmable_cores = false,
-        bool enable_aerisc_ptp_trace = false);
+        bool enable_aerisc_ptp_trace = false,
+        IpVariant quasar_arch_variant = IpVariant::GRENDEL);
 
     tt::ARCH get_arch() const { return arch_; }
 
