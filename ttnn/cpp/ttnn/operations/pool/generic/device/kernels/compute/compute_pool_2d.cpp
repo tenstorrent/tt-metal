@@ -102,6 +102,8 @@ void kernel_main() {
     constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
     // Without tilize reconfiguration every block is max_tiles_per_iter tiles, a compile time count for the unpack walk.
     constexpr uint32_t unpack_block_tiles = (!tilize_reconfig && max_tiles_per_iter >= 4) ? max_tiles_per_iter : 0;
+    // Every reduction chunk fills all 16 rows of each input face, so the unpack clears nothing.
+    constexpr bool unpack_full_face = window_size_hw % (num_faces_in_input_tile == 4 ? TILE_HEIGHT : FACE_HEIGHT) == 0;
 
     DataflowBuffer in_scalar_dfb_0(in_scalar_cb_id_0);
     DataflowBuffer in_scalar_dfb_1(in_scalar_cb_id_1);
@@ -173,7 +175,13 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 curr_in_dfb.wait_front(1);
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool, unpack_block_tiles>(
+                unpack_tilizeA_B_block<
+                    neginf_srca_maxpool,
+                    true,
+                    false,
+                    zero_srca_avgpool,
+                    unpack_block_tiles,
+                    unpack_full_face>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
                     tiles_to_reduce,

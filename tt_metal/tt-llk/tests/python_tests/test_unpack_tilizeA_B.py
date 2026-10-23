@@ -40,9 +40,10 @@ class BlockTiles(TemplateParameter):
     """The compile time tiles per block block_tiles of _llk_unpack_tilizeA_B_block_ (0 below four tiles)."""
 
     tiles: int = 0
+    full: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"#define TILES_PER_BLOCK_CT {self.tiles}"
+        return f"#define TILES_PER_BLOCK_CT {self.tiles}\n#define FULL_FACE_CT {self.full}"
 
 
 @skip_for_wormhole
@@ -90,7 +91,7 @@ def test_unpack_tilizeA_B(
         templates=[
             MATH_OP(mathop=MathOperation.ReduceColumn, pool_type=pool_type),
             MATH_FIDELITY(MathFidelity.HiFi4),
-            BlockTiles(ct_dim // num_blocks if ct_dim // num_blocks >= 4 else 0),
+            BlockTiles(ct_dim // num_blocks if ct_dim // num_blocks >= 4 else 0, 1 if face_r_dim == 16 else 0),
         ],
         runtimes=[
             generate_input_dim((32, cols), (32, cols)),

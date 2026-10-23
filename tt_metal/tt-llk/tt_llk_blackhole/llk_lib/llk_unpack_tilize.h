@@ -701,10 +701,14 @@ inline void _llk_unpack_tilizeA_B_block_init_(
 }
 
 // face selects the tile's column half (Y) and row half (W).
-template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, std::uint32_t tile_y = 0>
+template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, std::uint32_t tile_y = 0, bool full_face = false>
 inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
 {
-    if constexpr (neginf_srcA)
+    if constexpr (full_face)
+    {
+        // A full face writes all 16 SrcA rows, so there is nothing to clear
+    }
+    else if constexpr (neginf_srcA)
     {
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
     }
@@ -724,23 +728,29 @@ inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
 }
 
 // One tile of a block walked by the Y counter; tile_y is the tile's first face column inside its group of four tiles (the immediate holds 0 to 7).
-template <std::uint32_t tile_y, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce>
+template <std::uint32_t tile_y, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, bool full_face>
 inline void _llk_unpack_tilizeA_B_walk_tile_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
 {
     TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 
-    _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
-    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+    _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y, full_face>(face_r_dim);
+    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y, full_face>(face_r_dim);
     if (num_faces > 2)
     {
-        _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
-        _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y>(face_r_dim);
+        _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y, full_face>(face_r_dim);
+        _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, tile_y, full_face>(face_r_dim);
     }
 }
 
 // One configuration context acquire covers the block: the RISC programs the first tile's address, the instruction stream advances it
 // one tile column (CFGSHIFTMASK) per further tile. Call the block init with matching template args first and the block uninit after.
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false, std::uint32_t block_tiles = 0>
+template <
+    bool neginf_srcA          = false,
+    std::uint32_t reload_srcB = false,
+    bool zero_srcA            = false,
+    bool zero_srcA_reduce     = false,
+    std::uint32_t block_tiles = 0,
+    bool full_face            = false>
 inline void _llk_unpack_tilizeA_B_block_(
     const std::uint32_t unpA_src_format,
     const std::uint32_t face_r_dim,
@@ -754,6 +764,7 @@ inline void _llk_unpack_tilizeA_B_block_(
     LLK_ASSERT(face_r_dim >= 1 && face_r_dim <= FACE_R_DIM, "face_r_dim must be 1 to 16");
     LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
     LLK_ASSERT(block_tiles == 0 || block_tiles == num_tiles, "block_tiles is the compile time num_tiles");
+    LLK_ASSERT(!full_face || face_r_dim == FACE_R_DIM, "full_face needs 16 row faces");
     const std::uint32_t address_a = base_address_a + (SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1);
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -794,15 +805,15 @@ inline void _llk_unpack_tilizeA_B_block_(
 
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 
-                _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
                 if (num_faces > 1)
                 {
-                    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                    _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
                 }
                 if (num_faces > 2)
                 {
-                    _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
-                    _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                    _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
+                    _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
                 }
             }
         }
@@ -826,16 +837,16 @@ inline void _llk_unpack_tilizeA_B_block_(
                 switch (tile & 3)
                 {
                     case 0:
-                        _llk_unpack_tilizeA_B_walk_tile_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        _llk_unpack_tilizeA_B_walk_tile_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, full_face>(face_r_dim, num_faces);
                         break;
                     case 1:
-                        _llk_unpack_tilizeA_B_walk_tile_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        _llk_unpack_tilizeA_B_walk_tile_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, full_face>(face_r_dim, num_faces);
                         break;
                     case 2:
-                        _llk_unpack_tilizeA_B_walk_tile_<4, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        _llk_unpack_tilizeA_B_walk_tile_<4, neginf_srcA, reload_srcB, zero_srcA_reduce, full_face>(face_r_dim, num_faces);
                         break;
                     default:
-                        _llk_unpack_tilizeA_B_walk_tile_<6, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim, num_faces);
+                        _llk_unpack_tilizeA_B_walk_tile_<6, neginf_srcA, reload_srcB, zero_srcA_reduce, full_face>(face_r_dim, num_faces);
                         break;
                 }
             }
@@ -861,15 +872,15 @@ inline void _llk_unpack_tilizeA_B_block_(
 
             TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 
-            _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+            _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
             if (num_faces > 1)
             {
-                _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
             }
             if (num_faces > 2)
             {
-                _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
-                _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce>(face_r_dim);
+                _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
+                _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, 0, full_face>(face_r_dim);
             }
         }
     }

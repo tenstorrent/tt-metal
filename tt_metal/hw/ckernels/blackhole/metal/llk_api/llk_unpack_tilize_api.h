@@ -282,7 +282,8 @@ template <
     std::uint32_t reload_srcB = false,
     bool zero_srcA = false,
     bool zero_srcA_reduce = false,
-    std::uint32_t block_tiles = 0>
+    std::uint32_t block_tiles = 0,
+    bool full_face = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -314,7 +315,7 @@ inline void llk_unpack_tilizeA_B_block(
 
     WAYPOINT("UPTW");
 
-    _llk_unpack_tilizeA_B_block_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles>(
+    _llk_unpack_tilizeA_B_block_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles, full_face>(
         unpack_src_format[operandA_id], face_r_dim, base_address_a, address_b, 0, block_c_tiles_a, num_faces);
 
     WAYPOINT("UPTD");

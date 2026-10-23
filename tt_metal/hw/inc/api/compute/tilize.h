@@ -204,6 +204,7 @@ ALWI void tilize_block(
  * | Template   | zero_srcA        | Zero source A flag                       | bool         | true/false  | False    |
  * | Template   | zero_srcA_reduce | Zero source A for reduce flag            | bool         | true/false  | False    |
  * | Template   | block_tiles      | block when a compile time 4 or more      | uint32_t     | 0, >= 4     | False    |
+ * | Template   | full_face        | Operand A faces have 16 rows (no clear)  | bool         | true/false  | False    |
  * | Function   | icb0             | Input circular buffer A identifier       | uint32_t     | 0 to 31     | True     |
  * | Function   | icb1             | Input circular buffer B identifier       | uint32_t     | 0 to 31     | True     |
  * | Function   | block            | Size of tile block to work on            | uint32_t     | > 0         | True     |
@@ -217,10 +218,11 @@ template <
     std::uint32_t reload_srcB = true,
     bool zero_srcA = false,
     bool zero_srcA_reduce = false,
-    std::uint32_t block_tiles = 0>
+    std::uint32_t block_tiles = 0,
+    bool full_face = false>
 ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b) {
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles>(
+    UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce, block_tiles, full_face>(
         icb0, icb1, block, tile_idx_b)));
 #else
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(

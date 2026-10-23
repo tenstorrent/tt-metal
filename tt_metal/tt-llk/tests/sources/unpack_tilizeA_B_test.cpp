@@ -57,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src, formats.unpack_A_dst, params.TILE_CNT, num_faces, UNPB_FACE_R_DIM, face_r_dim);
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        _llk_unpack_tilizeA_B_block_<NEGINF_SRCA, true, false, ZERO_SRCA_REDUCE, TILES_PER_BLOCK_CT>(
+        _llk_unpack_tilizeA_B_block_<NEGINF_SRCA, true, false, ZERO_SRCA_REDUCE, TILES_PER_BLOCK_CT, FULL_FACE_CT>(
             formats.unpack_A_src,
             face_r_dim,
             L1_ADDRESS(params.buffer_A[0]),
