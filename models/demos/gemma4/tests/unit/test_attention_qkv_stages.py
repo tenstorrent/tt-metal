@@ -100,10 +100,18 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
     cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos2d, layout=ttnn.TILE_LAYOUT))
     sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin2d, layout=ttnn.TILE_LAYOUT))
 
+    # --- fused path first: its in-place shards are allocated right under xqkv, as in the model (the composite
+    # path's intermediates then land in the holes the freed shards leave, and the later cache-write / SDPA programs
+    # see the model's L1 layout on the head_dim-512 layers at 32 users) ---
+    q2, k2, v2 = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated)
+    q_sharded_mem = q2.memory_config()
+    gq, gk = _gamma_tiles(weights, config.head_dim)
+    nq, nk, nv = QkvNormRope.op(q2, k2, v2, gq, gk, cos_pos, sin_pos, eps)
+
     # --- composite path (tt/attention/decode.py, GEMMA4_HEAD_NORM_4D=1) ---
     os.environ["GEMMA4_HEAD_NORM_4D"] = "1"
     q, k, v = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated)
-    q_sharded_mem = q.memory_config()
+    ttnn.deallocate(xqkv)  # dead after the two splits (the model frees it after its one)
     qc = apply_per_head_norm(ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG), weights.q_norm_weight, eps)
     kc = apply_per_head_norm(ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG), weights.k_norm_weight, eps)
     vc = apply_per_head_norm(ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG), None, eps, with_scale=False)
@@ -115,17 +123,7 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
         sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
         qc = apply_rope_decode_peruser(qc, cos_b, sin_b)
         kc = apply_rope_decode_peruser(kc, cos_b, sin_b)
-    kc_sh = ttnn.to_memory_config(kc, q_sharded_mem)
-    vc_sh = ttnn.to_memory_config(vc, q_sharded_mem)
-
-    # --- fused path ---
-    q2, k2, v2 = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated)
-    ttnn.deallocate(xqkv)  # dead after the two splits (the model frees it after its one); its L1 shard is the
-    # largest live buffer on the head_dim-512 layers at 32 users and the cache-write program below needs the room
-    gq, gk = _gamma_tiles(weights, config.head_dim)
-    nq, nk, nv = QkvNormRope.op(q2, k2, v2, gq, gk, cos_pos, sin_pos, eps)
-    # the shards the two paths consumed are dead: free their L1 like the model does (at 32 users on the head_dim-512
-    # layers the decode SDPA program's static buffers need the room)
+    # the shards the two paths consumed are dead: free their L1 like the model does
     for t in (q, k, v, q2, k2, v2):
         if not any(t is o for o in (nq, nk, nv)):  # in-place form: the fused outputs are q2 / k2 / v2 themselves
             t.deallocate(True)
@@ -190,8 +188,14 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
         caches.append((kcache, vcache))
     # the same fill for both caches: re-seed per user above makes the two fills identical
     eff_bs = effective_block_size(caches[0][0], config.head_dim, nkv_local)
-    # stage 3: cache writes (composite k/v into cache 0, fused k/v into cache 1), then the written rows
-    for (kcache, vcache), (kk, vv) in zip(caches, ((kc_sh, vc_sh), (nk, nv))):
+    # stage 3: cache writes (fused k/v into cache 1 with the model's live set, then the composite k/v, resharded
+    # only now, into cache 0), then the written rows
+    kc_sh = vc_sh = None
+    for (kcache, vcache), (kk, vv) in zip(reversed(caches), ((nk, nv), (None, None))):
+        if kk is None:
+            kc_sh = ttnn.to_memory_config(kc, q_sharded_mem)
+            vc_sh = ttnn.to_memory_config(vc, q_sharded_mem)
+            kk, vv = kc_sh, vc_sh
         ttnn.experimental.paged_update_cache(
             kcache,
             kk,
@@ -208,7 +212,10 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
             block_size=eff_bs,
             num_kv_heads=nkv_local,
         )
-    for t in (kc_sh, vc_sh, nk, nv):  # consumed by the cache update
+        if kk is nk:
+            nk.deallocate(True)  # consumed; the composite reshards below take their place
+            nv.deallocate(True)
+    for t in (kc_sh, vc_sh):  # consumed by the cache update
         t.deallocate(True)
     kcs = [_dev0(c[0], mesh_device) for c in caches]
     vcs = [_dev0(c[1], mesh_device) for c in caches]
