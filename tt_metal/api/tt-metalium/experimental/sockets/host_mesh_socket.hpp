@@ -1,0 +1,130 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace tt::tt_metal::distributed {
+
+class D2HSocket;
+class H2DSocket;
+
+namespace host_transport {
+class HostTransport;
+class RelayEndpoint;
+}  // namespace host_transport
+
+/**
+ * @brief A D2D socket that reaches its peer over the host network instead of
+ *        TT-Fabric.
+ *
+ * @code
+ *   sender tensix --D2H--> host RAM --net--> host RAM --H2D--> receiver tensix
+ * @endcode
+ *
+ * Needs no new device primitives: socket_api.h already branches on the is_d2h /
+ * is_h2d discriminators this socket sets, so kernels drive an ordinary
+ * Socket{Sender,Receiver}Interface. Only the payload-move call differs.
+ *
+ * Requires vIOMMU, an MPI build, and endpoints on PCIe x8 chips for any real
+ * throughput. See
+ * tech_reports/TT-Distributed/HostMeshSocket.md.
+ */
+class HostMeshSocket {
+public:
+    struct TransportConfig {
+        /// Must divide fifo_size and match the page size the kernels set.
+        uint32_t page_size = 0;
+        /// Upper bound on the pages handed to the transport per relay poll. 0 (default): no cap.
+        /// The relay forwards whatever has arrived at each poll, so a lone page leaves at once and
+        /// pages that pile up while the link is behind leave together; the peer ring depth bounds it.
+        uint32_t max_batch_pages = 0;
+        /// False: no relay thread, caller must call poll().
+        bool own_relay_thread = true;
+        /// Receiver leg. DEVICE_PULL: the receiver kernel reads pages from the pinned host ring over
+        /// PCIe. HOST_DMA: the relay DMAs each arrived page into the receiver's L1 ring and the
+        /// kernel reads it locally (same kernel path as a D2D socket).
+        H2DMode h2d_mode = H2DMode::DEVICE_PULL;
+        /// Depth of the pinned host rings, in pages: the sender's D2H ring and the receiver's
+        /// landing ring, which is also the ring the host hop's credits run over. Host memory is
+        /// cheap and deep rings are what let the sender run far ahead of the link, so this is
+        /// independent of (and at least) the socket's fifo_size, which under HOST_DMA sizes only
+        /// the L1 ring the DMA engine drains into. 0: 16 MiB worth of pages.
+        uint32_t host_ring_pages = 0;
+    };
+
+    HostMeshSocket(
+        const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, const TransportConfig& transport);
+    ~HostMeshSocket();
+
+    HostMeshSocket(const HostMeshSocket&) = delete;
+    HostMeshSocket& operator=(const HostMeshSocket&) = delete;
+    HostMeshSocket(HostMeshSocket&&) noexcept;
+    HostMeshSocket& operator=(HostMeshSocket&&) noexcept;
+
+    /// Same on every endpoint core, so a multi-core kernel takes one value.
+    DeviceAddr get_config_buffer_address() const;
+    std::shared_ptr<MeshBuffer> get_config_buffer() const;
+    /// Receiver-side landing buffer, allocated exactly as D2D allocates its data
+    /// buffer. Not the FIFO -- that is the pinned host ring -- but the same size
+    /// and shape, so a receiver kernel pulls into it where a D2D kernel would
+    /// find its pages. Raises on a sender, as D2D does.
+    std::shared_ptr<MeshBuffer> get_data_buffer() const;
+    const SocketConfig& get_config() const;
+    SocketEndpoint get_socket_endpoint_type() const;
+    /// Always true: the two endpoints are on different ranks by construction.
+    bool is_rank_scoped_socket() const { return true; }
+    std::vector<MeshCoreCoord> get_active_cores() const;
+    MeshDevice* get_mesh_device() const;
+
+    /// Only valid when own_relay_thread is false; an endpoint is single-consumer.
+    bool poll();
+
+    /// Sender: blocks until the NIC has read every page the local device produced.
+    ///
+    /// Receiver: returns immediately. Waiting for device consumption would
+    /// deadlock -- the peer pipelines into the next round, so it would block on
+    /// pages only the caller's next kernel launch reads. A receiver's sync point
+    /// is its own program completion.
+    ///
+    /// Raises if the relay failed; this is how a relay-thread error surfaces.
+    void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    uint64_t pages_transferred() const;
+
+    /// Per-batch hop stamps taken by the relay, each on its own host's clock.
+    /// Off by default: costs a timestamp per batch. Enable on both endpoints.
+    struct HopSamples {
+        /// Sender host: transport send issued -> source ring slot released (the
+        /// NIC finished reading it). The device's D2H credit follows this.
+        std::vector<uint64_t> send_to_release_ns;
+        /// Sender host: transport send issued -> peer reports its device consumed
+        /// the batch. The streaming ack round trip.
+        std::vector<uint64_t> send_to_credit_ns;
+        /// Receiver host: batch published to the device -> device acked it. The
+        /// H2D leg as the host sees it.
+        std::vector<uint64_t> publish_to_drain_ns;
+    };
+    void set_latency_sampling(bool enabled);
+    /// Sender only: the send_to_credit samples. Kept for callers that want just
+    /// the ack round trip.
+    std::vector<uint64_t> take_latency_samples_ns();
+    /// Every hop this endpoint stamps; a sender fills the first two, a receiver
+    /// the third.
+    HopSamples take_hop_samples();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace tt::tt_metal::distributed

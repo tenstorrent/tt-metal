@@ -165,7 +165,7 @@ def load_gbench_d2h_throughput_csv(path):
     return _drop_zero_throughput_rows(df, "BM_D2HSocketThroughput")
 
 
-_H2D_MODE_MAP = {0: "HOST_PUSH", 1: "DEVICE_PULL"}
+_H2D_MODE_MAP = {0: "HOST_PUSH", 1: "DEVICE_PULL", 2: "HOST_DMA"}
 
 
 def load_gbench_h2d_throughput_csv(path):

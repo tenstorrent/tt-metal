@@ -15,7 +15,8 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
+# Overridable (-DULFM_PREFIX=/nonexistent) to build against the system MPI instead, e.g. one with UCX.
+set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm CACHE PATH "ULFM OpenMPI install prefix")
 
 # Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
 if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
@@ -82,6 +83,37 @@ if(USE_MPI)
     )
 endif()
 
+# The host-interconnect socket (device -> host -> network -> host -> device)
+# carries its host-to-host hop over MPI, so it exists exactly when MPI does. Set
+# TT_METAL_ENABLE_HOST_TRANSPORT explicitly to force it on or off.
+set(TT_METAL_HOST_TRANSPORT_MPI ${USE_MPI} CACHE INTERNAL "Build the MPI host-socket backend")
+
+if(NOT DEFINED TT_METAL_ENABLE_HOST_TRANSPORT)
+    set(TT_METAL_ENABLE_HOST_TRANSPORT
+        ${TT_METAL_HOST_TRANSPORT_MPI}
+        CACHE INTERNAL
+        "Build the host-interconnect socket transport"
+    )
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    if(NOT TT_METAL_HOST_TRANSPORT_MPI)
+        message(
+            FATAL_ERROR
+            "TT_METAL_ENABLE_HOST_TRANSPORT is ON but no MPI build is available; enable ENABLE_DISTRIBUTED"
+        )
+    endif()
+    message(STATUS "Host-interconnect sockets enabled (mpi)")
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        host_mesh_socket.cpp
+        host_transport/host_transport.cpp
+        host_transport/mpi_transport.cpp
+        host_transport/socket_relay.cpp
+    )
+endif()
+
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
@@ -108,6 +140,15 @@ add_dependencies(distributed metalium_GeneratedHeaders)
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+endif()
+
+if(TT_METAL_ENABLE_HOST_TRANSPORT)
+    target_compile_definitions(
+        distributed
+        PUBLIC
+            TT_METAL_HOST_TRANSPORT=1
+            TT_METAL_HOST_TRANSPORT_MPI=1
+    )
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

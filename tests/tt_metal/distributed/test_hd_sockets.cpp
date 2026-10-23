@@ -411,7 +411,7 @@ TEST_F(HDSocketFixture, H2DSocket) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL, H2DMode::HOST_DMA}) {
         for (const auto& recv_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (!is_device_coord_mmio_mapped(mesh_device_, recv_coord)) {
                 continue;
@@ -465,7 +465,7 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    for (auto h2d_mode : {H2DMode::DEVICE_PULL, H2DMode::HOST_PUSH}) {
+    for (auto h2d_mode : {H2DMode::DEVICE_PULL, H2DMode::HOST_PUSH, H2DMode::HOST_DMA}) {
         for (const auto& socket_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (!is_device_coord_mmio_mapped(mesh_device_, socket_coord)) {
                 continue;
@@ -493,7 +493,7 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    for (auto h2d_mode : {H2DMode::DEVICE_PULL, H2DMode::HOST_PUSH}) {
+    for (auto h2d_mode : {H2DMode::DEVICE_PULL, H2DMode::HOST_PUSH, H2DMode::HOST_DMA}) {
         for (const auto& socket_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (!is_device_coord_mmio_mapped(mesh_device_, socket_coord)) {
                 continue;

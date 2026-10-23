@@ -47,20 +47,15 @@ public:
     void broadcast(ttsl::Span<std::byte> buf, Rank root) const override;
     void all_reduce(
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
-    void reduce(
-        ttsl::Span<std::byte> send_buf,
-        ttsl::Span<std::byte> recv_buf,
-        ReduceOp op,
-        DType dtype,
-        Rank root) const override;
+    void reduce(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root)
+        const override;
     void gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
     void scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
     void all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
     void all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
     void reduce_scatter(
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
-    void scan(
-        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+    void scan(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
     void translate_ranks_to_other_ctx(
         ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const override;
@@ -73,6 +68,7 @@ public:
 
     /* ------------- message snooping ------------- */
     std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const override;
+    std::optional<std::size_t> try_snoop_incoming_msg_size(Rank source, Tag tag) const override;
 
 private:
     int rank_{0};
