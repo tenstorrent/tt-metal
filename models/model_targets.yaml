@@ -1804,7 +1804,11 @@ targets:
               # 2026-09-08: a 167 ms reading (run 34013235507) fell under the 178 floor; recenter
               # on 260 so the tol-0.4 band [156, 364] still covers both clusters. Validated on run
               # 34255378909 (job 102166690435).
-              prefill_time_to_first_token: 260
+              # 2026-10-23: the ~327ms cluster is gone; main measured 154-215ms over 10-12..10-22
+              # (154ms on 10-18 already tripped the 156 floor), and with the SDPA precision recipes
+              # (#60197/#59523) prefill is faster still (145ms, run 39757627820). Recenter on 200
+              # so the tol-0.4 band is [120, 280].
+              prefill_time_to_first_token: 200
               prefill_time_to_first_token_tolerance: 0.4
               # decode_t/s/u is run-to-run unstable (see #48510). The earlier 18.0 center
               # (set pre-data, post-#48037) is now stale-low: the last 8 scheduled runs
