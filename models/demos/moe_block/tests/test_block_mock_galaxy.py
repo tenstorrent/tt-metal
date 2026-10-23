@@ -26,8 +26,18 @@ pytestmark = pytest.mark.skipif(
 GALAXY_EXPERTS = {"glm53_flash": 288, "k3_448": 896}  # (the real models' experts: 9 / 28 a chip)
 
 
-@pytest.mark.parametrize("model", ["glm53_flash", "k3_448"])
-def test_block_mock_galaxy(model):
+CASES = [  # (model, chunk: 5120 / 8192 = 640 / 1024 rows a mesh row, the router's placement)
+    ("glm53_flash", 5120, "auto"),
+    ("glm53_flash", 8192, "auto"),
+    ("k3_448", 5120, "auto"),
+    ("k3_448", 5120, "engine"),
+    ("k3_448", 5120, "router_cores"),
+    ("k3_448", 8192, "auto"),
+]
+
+
+@pytest.mark.parametrize("model, chunk, router", CASES, ids=[f"{m}-{c}-{r}" for m, c, r in CASES])
+def test_block_mock_galaxy(model, chunk, router):
     import dataclasses
 
     from conftest import set_fabric
@@ -43,13 +53,16 @@ def test_block_mock_galaxy(model):
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=0)
     R, C = 8, 4
     try:
-        block = MoEBlock(mesh, m, 5120, random_weights(m), WeightCache(path=None, layer=0), options=MoEOptions())
+        block = MoEBlock(
+            mesh, m, chunk, random_weights(m), WeightCache(path=None, layer=0), options=MoEOptions(router=router)
+        )
         g = block.geometry
-        assert g.tp_wraps and g.sp_wraps and g.tokens_per_row == 640
+        rows = chunk // R
+        assert g.tp_wraps and g.sp_wraps and g.tokens_per_row == rows
         assert block.head_mode == "fused", "auto: the fused head on the Galaxy torus"
         assert (block.tail is not None) == (m.latent_dim is not None), "auto: the fused tail for the latent model"
         x = ttnn.from_torch(
-            torch.zeros(R, C, 640, m.emb_dim // C),
+            torch.zeros(R, C, rows, m.emb_dim // C),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
@@ -57,7 +70,7 @@ def test_block_mock_galaxy(model):
         )
         ttnn.copy(x, block.input_buffer())
         out = block(block.input_buffer())  # (every program of the forward built and enqueued on every chip)
-        assert tuple(out.shape)[-2:] == (640, m.emb_dim // C)
+        assert tuple(out.shape)[-2:] == (rows, m.emb_dim // C)
         ttnn.deallocate(out)
         ttnn.deallocate(x)
     finally:

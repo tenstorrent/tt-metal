@@ -203,13 +203,18 @@ class HeadSE3:
                     ),
                 )
                 return True
-            except ValueError as err:
+            except (ValueError, RuntimeError) as err:  # (an arena too large: the engine's check, or the allocator's)
+                if isinstance(err, RuntimeError) and "Out of Memory" not in str(err):
+                    raise
                 last_err = err
                 return False
 
-        # (auto placement: if no layout fits with the logits on the engine, the router cores - self._rc_only)
-        for self._rc_only in (False, True)[: 2 if router is not None and router.on_engine is None else 1]:
-            if any(build(GY, MT, kb) for (GY, MT, _) in layouts for kb in kbs):
+        # (auto placement: the logits on the engine only at the preferred layout - else the router cores there,
+        # not a costlier layout for the engine's sake - self._rc_only)
+        auto = router is not None and router.on_engine is None
+        for self._rc_only in (False, True)[: 2 if auto else 1]:
+            lays = layouts[:1] if auto and not self._rc_only else layouts
+            if any(build(GY, MT, kb) for (GY, MT, _) in lays for kb in kbs):
                 break
         else:
             raise ValueError(f"HeadSE3: no layout / K step fits L1 at {rows} rows ({last_err})")
