@@ -266,6 +266,26 @@ public:
     // in the returned result and in X280Tile::last_failure().
     CleanupResult cleanup(SessionId id, std::chrono::milliseconds timeout);
 
+    // Takes the selected harts of a runtime-owned tile back to resident idle
+    // with an RNMI, from any instruction boundary: a hart that ignores STOP, a
+    // WFI with interrupts off, an interrupts-off spin, an exception loop, a
+    // trapped hart. Never touches reset, PLL4, the idle image, other tiles or
+    // Tensix.
+    //
+    // A live session on the tile is ended: it is claimed as cleanup() claims
+    // it (a concurrent cleanup() returns AlreadyRestoring, a later one
+    // UnknownSession) and the request must select all four harts. The tile is
+    // healthy again exactly when the outcome is Revived, which is the one
+    // software path that clears the health latch. A hart inside a NoC access
+    // that never completes takes no RNMI: NotResponding, and an ASIC reset
+    // remains the recovery.
+    //
+    // Requires a tile booted by this runtime's resident idle, which carries
+    // the handler and whose boot writes the handler registers (NotInstalled
+    // otherwise; nothing is written). Blocks for at most twice the request's
+    // timeout plus register I/O.
+    ReviveResult revive(X280Tile& tile, const ReviveRequest& request = {});
+
 private:
     static RuntimeOpenResult open_impl(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, RuntimeOpenConfig config);
