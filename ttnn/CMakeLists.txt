@@ -241,6 +241,8 @@ target_sources(
         FILES
             ${ttnn_kernels}
             cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
+            cpp/ttnn/operations/data_movement/untilize/device/kernels/untilize_row_split.hpp
+            cpp/ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp
             cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp
             cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp
     PRIVATE
