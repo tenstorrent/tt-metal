@@ -1621,18 +1621,51 @@
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
-    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
+    # Single-clip sanity gate (CLIP + loose VBench floors); the multi-seed gate runs in the perf leg.
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and t2v"
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc4:
+      # single clip ~28 min on main, ~25 of it VBench
+      timeout: 40
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Wan2.2-T2V-A14B multihost quad perf tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
     # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
-    # it is scored on CPU after the devices are closed, so the pipeline test skips its single-clip gate.
+    # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1642,15 +1675,6 @@
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v" || exit $?
-    export RUN_VBENCH=0
-    python3 "${TTRUN_PY}" \
-      --skip-executable-check \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${MGD}" \
-      --hosts "${RESOLVED_HOSTS}" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and t2v" || exit $?
     mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
         --bundle "${VBENCH_EXPORT_DIR}"
@@ -1659,9 +1683,8 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
-      # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
-      timeout: 95
+      # perf ~20 min + 8 traced gate clips + CPU scoring of 5 metrics; unmeasured
+      timeout: 75
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1674,18 +1697,51 @@
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
-    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
+    # Single-clip sanity gate (CLIP + loose VBench floors); the multi-seed gate runs in the perf leg.
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and i2v"
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc4:
+      # single clip ~4 min on main
+      timeout: 20
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Wan2.2-I2V-A14B multihost quad perf tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
+    MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
     # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
-    # it is scored on CPU after the devices are closed, so the pipeline test skips its single-clip gate.
+    # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1695,15 +1751,6 @@
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v" || exit $?
-    export RUN_VBENCH=0
-    python3 "${TTRUN_PY}" \
-      --skip-executable-check \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${MGD}" \
-      --hosts "${RESOLVED_HOSTS}" \
-      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
-      -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p and i2v" || exit $?
     mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
         --bundle "${VBENCH_EXPORT_DIR}"
@@ -1712,9 +1759,8 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
-      # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
-      timeout: 95
+      # perf ~24 min + 8 traced gate clips + CPU scoring of 2 metrics; unmeasured
+      timeout: 50
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
