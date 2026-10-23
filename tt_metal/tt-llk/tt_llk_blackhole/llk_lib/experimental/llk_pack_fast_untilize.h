@@ -281,7 +281,7 @@ inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32
     TTI_NOP; // WRCFG needs a one-instruction bubble before a consuming PACR
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, std::uint32_t pass_unit_cap = block_ct_dim>
 inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
 {
     static_assert(
@@ -319,9 +319,9 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
 
-    constexpr bool is_strided_row = full_ct_dim > block_ct_dim;
+    constexpr bool is_strided_row = full_ct_dim > pass_unit_cap;
     _llk_pack_fast_untilize_configure_addrmod_<is_strided_row>();
-    if constexpr (full_ct_dim > block_ct_dim)
+    if constexpr (is_strided_row)
     {
         const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM);
         _llk_pack_fast_untilize_program_output_row_stride_(output_row_stride);
@@ -571,11 +571,11 @@ inline void _llk_pack_fast_untilize_pass_block_strided_(
 }
 
 // Programs the MOP for the first unit of a whole-row init, so block calls of that unit keep it.
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, std::uint32_t pass_unit_cap = block_ct_dim>
 inline void _llk_pack_fast_untilize_init_mop_()
 {
     pack_fast_untilize_mop_key = 0;
-    if constexpr (full_ct_dim <= block_ct_dim && block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
+    if constexpr (full_ct_dim <= pass_unit_cap && block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
     {
         _llk_pack_fast_untilize_pass_mop_config_(full_ct_dim, FAST_UNTILIZE_PHASE_ROWS, false);
         pack_fast_untilize_mop_key = full_ct_dim | FAST_UNTILIZE_PASS_MOP_KEY;

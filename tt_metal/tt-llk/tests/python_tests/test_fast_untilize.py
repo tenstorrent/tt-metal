@@ -252,6 +252,21 @@ def test_fast_untilize_face_pass_rows(formats, dimensions, dest_sync):
     )
 
 
+# With a 32-bit DEST, dense input takes face-pair passes from five tiles: rows of up to eight tiles in one unit, wider rows in units of up to eight (a rest of 9 splits 5 + 4).
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    dimensions=[(rt, ct) for rt in [1, 2] for ct in [9, 10, 11, 13, 14, 17, 18, 24, 25, 33, 40]],
+    dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
+)
+def test_fast_untilize_32bit_dest_pass_rows(formats, dimensions, dest_sync):
+    _run_fast_untilize_correctness(
+        formats, DestAccumulation.Yes, dimensions, dest_sync, "row_id"
+    )
+
+
 def test_fast_untilize_wide_full_ct_dim_133_bf16():
     _run_fast_untilize_correctness(
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),

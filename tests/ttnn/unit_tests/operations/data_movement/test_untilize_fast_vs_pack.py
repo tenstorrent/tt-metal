@@ -82,6 +82,19 @@ void kernel_main() {
 }
 """
 
+HELPER_COMPUTE = """
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+void kernel_main() {
+    constexpr uint32_t width = get_compile_time_arg_val(0);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
+    compute_kernel_hw_startup(0, 16);
+    compute_kernel_lib::untilize<width, 0, 16>(num_rows);
+}
+"""
+
 # The untilize helper's pack path: one block for rows up to 8 tiles, else blocks of the largest divisor up to 8.
 PACK_COMPUTE = """
 #include <cstdint>
@@ -122,7 +135,7 @@ def _cb(cb_id, dtype, num_pages):
     )
 
 
-def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_args):
+def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_args, fp32_dest=False):
     row_datums = width * TILE
     num_tiles = (num_rows // TILE) * width
     tt_out = ttnn.from_torch(
@@ -149,7 +162,7 @@ def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_ar
             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
             core_ranges=_core(),
             compile_time_args=[width, num_rows // TILE, *extra_args],
-            config=ttnn.ComputeConfigDescriptor(),
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
         ttnn.KernelDescriptor(
             kernel_source=WRITER,
@@ -177,9 +190,9 @@ def _block(width):
     return max(b for b in range(1, 9) if width % b == 0)
 
 
-def _compare(device, tt_in, in_dtype, num_rows, width):
-    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [1, int(in_dtype != ttnn.bfloat16)])
-    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)])
+def _compare(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
+    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [1, int(in_dtype != ttnn.bfloat16)], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)], fp32_dest)
     mismatched = (fast != pack).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
 
@@ -219,6 +232,14 @@ def test_fast_and_pack_untilize_match_bf16(device, width):
     _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width)
 
 
+# With a 32-bit DEST, a row of 5 to 8 tiles takes two face-pair passes of the whole row; the others keep chunks of up to four tiles.
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16])
+def test_fast_and_pack_untilize_match_bf16_fp32_dest(device, width):
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width, fp32_dest=True)
+
+
 # Rests of 1 to 8 tiles (17, 18 to 23, 24, 33, 34 to 39, 40) go as a chunk, 9 to 15 as a pass unit; 32 and 256 rows.
 BFP_WIDTHS = [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, *range(17, 24), 24, 25, 31, 32, 33, *range(34, 40), 40]
 
@@ -237,3 +258,26 @@ def test_fast_and_pack_untilize_match_bfp4(device, width, tile_rows):
     raw, num_rows = _bfp4_raw_tiles(width, tile_rows)
     tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     _compare(device, tt_in, ttnn.bfloat4_b, num_rows, width)
+
+
+def _compare_helper(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
+    helper = _untilize(device, tt_in, in_dtype, num_rows, width, HELPER_COMPUTE, [], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)], fp32_dest)
+    mismatched = (helper != pack).nonzero()
+    assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
+
+
+# The untilize helper picks the fast form per width and format at compile time (a SrcA bank per tile, face-pair passes at a 32-bit DEST).
+@pytest.mark.parametrize("fp32_dest", [False, True])
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9, 12, 16])
+def test_untilize_helper_matches_pack_bf16(device, width, fp32_dest):
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare_helper(device, tt_in, ttnn.bfloat16, values.shape[0], width, fp32_dest)
+
+
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9])
+def test_untilize_helper_matches_pack_bfp8(device, width):
+    raw, num_rows = _bfp8_raw_tiles(width, 1)
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare_helper(device, tt_in, ttnn.bfloat8_b, num_rows, width)

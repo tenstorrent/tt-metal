@@ -168,28 +168,39 @@ inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const 
 
 // Face-pair passes: SrcA brings two faces per tile, placed at rows t * 32 and t * 32 + 16, so a pass of up to sixteen
 // tiles fills one 16-bit DEST half with the layout of a chunk's first strip.
-template <std::uint32_t tile_index>
+template <std::uint32_t tile_index, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_untilize_copy_face_pair_(const std::uint32_t unit_dim)
 {
     if constexpr (tile_index < FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
     {
         if (tile_index < unit_dim)
         {
-            _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
-            _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
-            _llk_math_fast_untilize_copy_face_pair_<tile_index + 1>(unit_dim);
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                _llk_math_fast_untilize_copy_face_fp32_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
+                _llk_math_fast_untilize_copy_face_fp32_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
+            }
+            else
+            {
+                _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
+                _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
+            }
+            _llk_math_fast_untilize_copy_face_pair_<tile_index + 1, is_fp32_dest_acc_en>(unit_dim);
         }
     }
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_untilize_pass_block_(const std::uint32_t dst_index, const std::uint32_t unit_dim)
 {
-    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "BH fast-untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(
+        unit_dim >= 2 && unit_dim <= (is_fp32_dest_acc_en ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST : FAST_UNTILIZE_MAX_PASS_UNIT_DIM),
+        "BH fast-untilize face passes support unit_dim 2 to 16 (2 to 8 at 32 bit)");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 
-    _llk_math_fast_untilize_copy_face_pair_<0>(unit_dim);
+    _llk_math_fast_untilize_copy_face_pair_<0, is_fp32_dest_acc_en>(unit_dim);
 
     math::clear_dst_reg_addr();
 }
