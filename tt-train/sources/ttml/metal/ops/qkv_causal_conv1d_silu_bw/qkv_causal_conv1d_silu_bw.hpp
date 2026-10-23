@@ -35,7 +35,10 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     uint32_t channel_chunk_size = 0,
     uint32_t row_splits = 0);
 
+// input [1,T,Q+K+V] and history [1,3,Q+K+V] are ROW_MAJOR bf16; grad_q/k/v [1,T,.] and the taps are TILE bf16.
 // Returns (grad_input [1,T,Q+K+V] TILE, grad_tap0..3 shaped like the taps). History gets no gradient.
+// Unlike the forward there is no sequence-parallel or actual_start support: each device's input is one
+// independent sequence that starts from history, so do not pair it with a sequence-parallel forward.
 // channel_chunk_size = 0 and row_splits = 0 are picked by qkv_causal_conv1d_silu_bw_work_split.
 // With compute_tap_grads = false the tap gradients are nullopt and their work is skipped.
 std::tuple<
