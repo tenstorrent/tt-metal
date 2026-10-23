@@ -480,6 +480,24 @@ def test_bitwise_uint32_full_range(device, ttnn_function):
     assert torch.equal(z_torch, tt_out)
 
 
+@pytest.mark.parametrize("scalar", [2147483648, 3000000001, 4294967295])
+@pytest.mark.parametrize(
+    "ttnn_function, torch_function",
+    [
+        (ttnn.bitwise_and, torch.bitwise_and),
+        (ttnn.bitwise_or, torch.bitwise_or),
+        (ttnn.bitwise_xor, torch.bitwise_xor),
+    ],
+)
+def test_bitwise_uint32_scalar_above_int32_max(device, ttnn_function, torch_function, scalar):
+    x_torch = torch.linspace(0, 4294967295, 2048, dtype=torch.float64).to(dtype=torch.uint32).reshape(32, 64)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, scalar), dtype=torch.uint32)
+
+    assert torch.equal(torch_function(x_torch, scalar), tt_out)
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [

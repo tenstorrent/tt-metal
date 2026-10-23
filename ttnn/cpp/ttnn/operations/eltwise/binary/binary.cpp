@@ -431,7 +431,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(NAME, OP_TYPE)                                            \
     Tensor NAME(                                                                                           \
         const Tensor& lhs,                                                                                 \
-        int32_t rhs,                                                                                       \
+        int64_t rhs_in,                                                                                    \
         const std::optional<MemoryConfig>& memory_config,                                                  \
         const std::optional<Tensor>& output,                                                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                       \
@@ -439,6 +439,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                        \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                   \
+        const auto rhs = static_cast<int32_t>(static_cast<uint32_t>(rhs_in));                               \
         /* Fast path: unary SFPU handles scalar bitwise/shift directly with no activations. */             \
         if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&           \
             rhs_activations.empty()) {                                                                     \

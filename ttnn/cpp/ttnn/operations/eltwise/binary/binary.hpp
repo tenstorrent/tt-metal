@@ -172,7 +172,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        int32_t rhs,                                                                      \
+        int64_t rhs,                                                                      \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \

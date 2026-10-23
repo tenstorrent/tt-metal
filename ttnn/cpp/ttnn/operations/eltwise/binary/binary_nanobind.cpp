@@ -163,7 +163,7 @@ using InplaceTensorFn = Tensor (*)(
 
 using BitwiseScalarFn = Tensor (*)(
     const Tensor&,
-    int32_t,
+    int64_t,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
