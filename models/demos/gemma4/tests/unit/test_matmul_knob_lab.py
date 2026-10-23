@@ -465,6 +465,15 @@ def _note(exc: BaseException) -> str:
     return "_".join(text.split())[:140] or type(exc).__name__
 
 
+def _buffer_address(t):
+    """The device buffer address of a tensor (None when the binding has no accessor)."""
+    fn = getattr(t, "buffer_address", None)
+    try:
+        return fn() if callable(fn) else None
+    except Exception:
+        return None
+
+
 @contextmanager
 def _env(overrides):
     saved = {k: os.environ.get(k) for k in overrides}
@@ -709,12 +718,42 @@ class ShapeLab:
         lin = self.lin
         ckc = self.ckc(fidelity, fp32) if fidelity else None
         out = out or OUT
-        if form == "model":
+        if form == "model" and (
+            self.batch == TILE_SIZE or self.act_kind != "dram" or (env or {}).get("GEMMA4_DRAM_SHARD_ROW_VIEW") == "1"
+        ):
             x = self.x_act
 
             def call():
                 lin._decode_pc = pc
                 return lin(x, compute_kernel_config=ckc, out_memory_config=self.out_mc(out) if out != "ws" else None)
+
+        elif form == "model":
+            # The model's batch < 32 path (DramShardedLinear.__call__: FillPad, reshard in, kernel, reshard out,
+            # Slice) replayed without its deallocate of the padded row tile: ttnn.pad on a one-row tile fills the
+            # implicit padding in place and aliases the input, which the model may free (an intermediate there)
+            # but the lab's persistent activation must survive every call of the traced loop.
+            x, w, act_mc = self.x_act, lin.weight, self.ds_act_mc
+            pad, b, n = TILE_SIZE - self.batch, self.batch, self.n
+            out_mc = self.out_mc(out) if out != "ws" else ttnn.DRAM_MEMORY_CONFIG
+
+            def call():
+                x_run = ttnn.pad(x, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+                x_sh = ttnn.to_memory_config(x_run, act_mc)
+                if _buffer_address(x_run) not in (None, _buffer_address(x)):
+                    x_run.deallocate(True)
+                res = ttnn.linear(
+                    x_sh,
+                    w,
+                    program_config=pc,
+                    compute_kernel_config=ckc,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                x_sh.deallocate(True)
+                moved = ttnn.to_memory_config(res, out_mc)
+                res.deallocate(True)
+                sliced = ttnn.slice(moved, [0, 0, 0, 0], [1, 1, b, n])
+                moved.deallocate(True)
+                return sliced
 
         elif form == "explicit":
             w, act_mc, x_in, x_ready = lin.weight, self.ds_act_mc, self.x32, self.x_ds is self.x_act
