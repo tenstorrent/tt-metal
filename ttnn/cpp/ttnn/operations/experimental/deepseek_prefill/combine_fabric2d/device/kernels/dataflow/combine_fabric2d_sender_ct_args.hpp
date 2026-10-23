@@ -28,12 +28,23 @@ struct SenderCtArgs {
     uint32_t freed_slot;
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
-    uint32_t fwd_sem_addr;
     uint32_t final_sem_addr;
     uint32_t first_packet_bytes;
-    uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
+    // ONE core, TWO credits. The downstream chip's reverse-direction stream worker is both the core this
+    // sender grants a LAUNCH credit to -- the cross-launch guard, which says the region may be written at
+    // all -- and the core owed the per-PAGE channel credits this sender couriers for the opposite reader on
+    // this chip. They coincide because reverse_stream(s) and s ^ 1 are the same stream, so one pair of NoC
+    // coordinates serves both. The two credits are otherwise independent: different addresses, different
+    // lifetimes, one per launch against one per freed page.
+    uint32_t credit_noc_x;
     uint32_t credit_noc_y;
     uint32_t launch_credit_addr;
+    uint32_t num_vcs;
+    // Courier duty. This sender carries the credits of the OPPOSITE direction's reader on this chip,
+    // because that reader owes them to the chip this sender already points at. Nothing to do with this
+    // stream's own tokens -- the two are peers.
+    uint32_t pkt_hdr_credit_addr;
+    uint32_t credit_done_addr;  // that reader's end-of-stream flag, on this core
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
@@ -44,6 +55,9 @@ struct SenderCtArgs {
         const op::CombineFabric2dInputs& tensor_args,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
+        // The opposite direction's worker on the downstream chip: where this sender posts the credits it
+        // couriers, since that is the reader whose writes into this chip they free.
+        const op::StreamPlacement& downstream_opposite,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
@@ -60,15 +74,27 @@ struct SenderCtArgs {
         freed_slot(plan.ring_freed_slot),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr),
         final_sem_addr(plan.final_arrived_addr),
         first_packet_bytes(cmbf2d::first_packet_bytes(token_size_bytes)),
-        credit_noc_x(static_cast<uint32_t>(plan.launch_credit_core.x)),
-        credit_noc_y(static_cast<uint32_t>(plan.launch_credit_core.y)),
-        launch_credit_addr(plan.launch_credit_addr) {}
+        // plan.launch_credit_core is this same core -- the program factory asserts it sends back to us --
+        // so the one pair serves the launch credit and the couriered channel credits alike.
+        credit_noc_x(static_cast<uint32_t>(downstream_opposite.worker_virtual.x)),
+        credit_noc_y(static_cast<uint32_t>(downstream_opposite.worker_virtual.y)),
+        launch_credit_addr(plan.launch_credit_addr),
+        num_vcs(static_cast<uint32_t>(plan.vc_arrived_addr.size())),
+        pkt_hdr_credit_addr(l1.pkt_hdr_credit),
+        credit_done_addr(plan.credit_done_addr) {
+        // Per channel: where its arrival counter sits on the downstream reader, where the credit we
+        // courier lands over there, and where our own courier queue is on this core.
+        for (uint32_t v = 0; v < num_vcs; v++) {
+            blocks_.push_back(plan.vc_arrived_addr[v]);
+            blocks_.push_back(plan.vc_freed_addr[v]);
+            blocks_.push_back(plan.vc_outbox_addr[v]);
+        }
+    }
 
     std::vector<uint32_t> to_ct_word_arr() const {
-        return {
+        std::vector<uint32_t> word_arr{
             num_l1_slots,
             token_size_bytes,
             forwarding_metadata_size,
@@ -83,13 +109,22 @@ struct SenderCtArgs {
             freed_slot,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
-            fwd_sem_addr,
             final_sem_addr,
             first_packet_bytes,
             credit_noc_x,
             credit_noc_y,
-            launch_credit_addr};
+            launch_credit_addr,
+            num_vcs,
+            pkt_hdr_credit_addr,
+            credit_done_addr};
+        word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
+        return word_arr;
     }
+
+private:
+    std::vector<uint32_t> blocks_;
+
+public:
 #else
     constexpr SenderCtArgs() :
         num_l1_slots(get_compile_time_arg_val(0)),
@@ -106,12 +141,21 @@ struct SenderCtArgs {
         freed_slot(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
-        fwd_sem_addr(get_compile_time_arg_val(14)),
-        final_sem_addr(get_compile_time_arg_val(15)),
-        first_packet_bytes(get_compile_time_arg_val(16)),
-        credit_noc_x(get_compile_time_arg_val(17)),
-        credit_noc_y(get_compile_time_arg_val(18)),
-        launch_credit_addr(get_compile_time_arg_val(19)) {}
+        final_sem_addr(get_compile_time_arg_val(14)),
+        first_packet_bytes(get_compile_time_arg_val(15)),
+        credit_noc_x(get_compile_time_arg_val(16)),
+        credit_noc_y(get_compile_time_arg_val(17)),
+        launch_credit_addr(get_compile_time_arg_val(18)),
+        num_vcs(get_compile_time_arg_val(19)),
+        pkt_hdr_credit_addr(get_compile_time_arg_val(20)),
+        credit_done_addr(get_compile_time_arg_val(21)) {}
+
+    // Words per channel in the block that follows the scalars.
+    static constexpr uint32_t VC_WORDS = 3;
+    static constexpr uint32_t vc_base = 22;
+    uint32_t vc_arrived_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 0]; }
+    uint32_t vc_freed_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 1]; }
+    uint32_t vc_outbox_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 2]; }
 
     // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
     // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel
