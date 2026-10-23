@@ -245,10 +245,11 @@ class TTResLayer:
         return x
 
     @staticmethod
-    def run_per_camera(layers, x):
+    def run_per_camera(layers, x, group_input=None):
         """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
         cameras at a time: its rows go into L1, pass through every block of every layer there, and
-        the last layer's output is gathered back into one DRAM batch. Only that output crosses DRAM."""
+        the last layer's output is gathered back into one DRAM batch. Only that output crosses DRAM.
+        ``group_input``, given a group's index, returns its input already in L1 instead."""
         first = layers[0]
         assert all(layer.cameras == first.cameras for layer in layers), "chained layers share a group size"
         assert all(layer.whole_first_block is None for layer in layers[1:]), "only a run's first layer reads DRAM"
@@ -259,18 +260,23 @@ class TTResLayer:
         # temporaries the size of the group; those go through DRAM, and one copy brings the group
         # into L1.
         aligned = rows % ttnn.TILE_SIZE == 0
-        outs = []
-        for group in range(first.batch_size // first.cameras):
+
+        def slice_group(group):
             y = ttnn.slice(
                 x,
                 [0, 0, group * rows, 0],
                 [1, 1, (group + 1) * rows, first.in_channels],
                 memory_config=first.layer[0].input_memory_config if aligned else ttnn.DRAM_MEMORY_CONFIG,
             )
-            if not aligned:
-                staged = y
-                y = ttnn.to_memory_config(staged, first.layer[0].input_memory_config)
-                ttnn.deallocate(staged)
+            if aligned:
+                return y
+            staged = ttnn.to_memory_config(y, first.layer[0].input_memory_config)
+            ttnn.deallocate(y)
+            return staged
+
+        outs = []
+        for group in range(first.batch_size // first.cameras):
+            y = (group_input or slice_group)(group)
             for layer in layers:
                 for block in layer.layer:
                     y = block(y)
@@ -824,6 +830,13 @@ class TTResNet:
         ttnn.deallocate(nhcw)
         x = ttnn.reshape(nhwc, (1, 1, n * h * w, c))
         x, out_h, out_w = self.conv1(x)
+        first = self.res_layers[0]
+        if first.cameras == 1 and first.whole_first_block is None:
+            # layer1 runs per camera: each camera's conv output is pooled in L1 and goes straight
+            # into layer1's first block, so the pooled batch never reaches DRAM.
+            x = ttnn.reshape(x, (1, 1, n * out_h * out_w, x.shape[-1]))
+            signpost(header="ResNet Stem End")
+            return self._run_layers(x, group_input=lambda camera: self._pool_camera(x, camera, out_h, out_w))
         pool = self.maxpool_args
         x = ttnn.max_pool2d(
             input_tensor=x,
@@ -844,7 +857,49 @@ class TTResNet:
         # happens once here rather than in both of layer1's first linears.
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
         signpost(header="ResNet Stem End")
+        return self._run_layers(x)
 
+    def _pool_camera(self, x, camera, height, width):
+        """Camera ``camera`` of the stem conv's ``height x width`` DRAM output ``x``, max pooled in L1
+        into layer1's first block's layout."""
+        pool = self.maxpool_args
+        channels = x.shape[-1]
+        rows = height * width
+        grid = self.conv1.device.compute_with_storage_grid_size()
+        shard_rows = math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y)) * ttnn.TILE_SIZE
+        sharded = ttnn.create_sharded_memory_config(
+            shape=(shard_rows, channels),
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        image = ttnn.slice(x, [0, 0, camera * rows, 0], [1, 1, (camera + 1) * rows, channels], memory_config=sharded)
+        # The input is freed once the halo has read it, which leaves the pool room for its output.
+        pooled = ttnn.max_pool2d(
+            input_tensor=image,
+            batch_size=1,
+            input_h=height,
+            input_w=width,
+            channels=channels,
+            kernel_size=[pool.kernel_size, pool.kernel_size],
+            stride=[pool.stride, pool.stride],
+            padding=[pool.padding, pool.padding],
+            dilation=[pool.dilation, pool.dilation],
+            ceil_mode=False,
+            deallocate_input=True,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+        layout = self.res_layers[0].layer[0].input_memory_config
+        if pooled.memory_config() == layout:
+            return pooled
+        out = ttnn.to_memory_config(pooled, layout)
+        ttnn.deallocate(pooled)
+        return out
+
+    def _run_layers(self, x, group_input=None):
+        """The layers on the stem's output ``x``; ``group_input`` feeds the first per-camera run
+        instead (TTResLayer.run_per_camera)."""
         outs = []
         i = 0
         while i < self.num_layers:
@@ -864,7 +919,7 @@ class TTResNet:
             region = f"ResNet Layer{i + 1}" if i == j else f"ResNet Layer{i + 1}-{j + 1}"
             signpost(header=f"{region} Start")
             if cameras is not None:
-                x = TTResLayer.run_per_camera(self.res_layers[i : j + 1], x)
+                x = TTResLayer.run_per_camera(self.res_layers[i : j + 1], x, group_input if i == 0 else None)
             else:
                 x = self.res_layers[i](x)
             signpost(header=f"{region} End")
