@@ -666,7 +666,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self.interleave = _interleave_on()
         if _apc_on() and hasattr(self.m, "enable_apc"):
             apc = self.m.enable_apc(
-                int(float(os.environ.get("DSV41_APC_GB", "6")) * 2**30), os.environ.get("DSV41_APC_POLICY", "pow2")
+                int(float(os.environ.get("DSV41_APC_GB", "50")) * 2**30), os.environ.get("DSV41_APC_POLICY", "pow2")
             )
             if apc is not None:  # (None: the model refused, e.g. read mode with an fp8 pool)
                 logger.info(
