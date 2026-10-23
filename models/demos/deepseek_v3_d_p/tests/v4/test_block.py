@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.v4.helpers import pack_streams, unpack_streams
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Block
@@ -47,25 +48,6 @@ _CASES = [
     pytest.param(DeepSeekV4FlashConfig, 0.99, 3, "heavily_compressed_attention", "moe", id="flash-L3-hca-topk"),
 ]
 _SEED = 42
-
-
-def _pack_streams(x, tp_factor):
-    """[1, S, n, D] -> [1, 1, S, n*D], ordered for a TP-sharded mesh.
-
-    The device packs the streams on the last dim, and TP shards that dim contiguously -- so a plain
-    reshape would hand chip 0 the whole of stream 0 instead of its own D-slice of every stream. The
-    columns are reordered chip-major-then-stream so the contiguous split lands right; inside a chip
-    the order is stream-major again, which is what the hyper-connection slices.
-    """
-    b, seq, n, d = x.shape
-    return x.reshape(b, seq, n, tp_factor, d // tp_factor).permute(0, 1, 3, 2, 4).reshape(b, 1, seq, n * d)
-
-
-def _unpack_streams(t, n, tp_factor):
-    """The inverse of _pack_streams: [1, 1, S, n*D] -> [1, S, n, D]."""
-    b, _, seq, width = t.shape
-    d = width // n
-    return t.reshape(b, seq, tp_factor, n, d // tp_factor).permute(0, 1, 3, 2, 4).reshape(b, seq, n, d)
 
 
 def _test_config(model_config, layer_idx):
@@ -188,7 +170,7 @@ def test_v4_block(
     )
 
     tt_input = ttnn.from_torch(
-        _pack_streams(ref_in, tp_factor),
+        pack_streams(ref_in, tp_factor),
         device=mesh_device,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
@@ -198,7 +180,7 @@ def test_v4_block(
     tt_out = block(tt_input, actual_isl=seq_len, input_ids=input_ids)
 
     full = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3)))
-    out = _unpack_streams(full, n, tp_factor)
+    out = unpack_streams(full, n, tp_factor)
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
     _, pcc_msg = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), block_pcc)

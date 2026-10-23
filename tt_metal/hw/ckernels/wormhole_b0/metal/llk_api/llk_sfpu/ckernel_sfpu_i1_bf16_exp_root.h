@@ -10,13 +10,6 @@
 #include "ckernel_sfpu_i1_bf16_mirrored_terminals.h"
 #include "ckernel_sfpu_i1_bf16_exp_root_core.h"
 namespace ckernel::sfpu::bf16::i1 {
-// Prgm0 is the root's seed magic; the call loads the two Newton constants itself, as stock's init
-// leaves Prgm1 and Prgm2 alone.
-template <typename Config>
-inline void init_exp_root() {
-    sfpi::vConstIntPrgm0 = Config::kRootMagic;
-}
-
 template <typename Config, int Iterations = 32>
 inline void calculate_exp_root() {
     static_assert(Iterations == 32, "selected exp-root requires a complete tile");
