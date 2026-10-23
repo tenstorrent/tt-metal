@@ -79,3 +79,42 @@ def test_head_mock_galaxy(rs):
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_tail_mock_galaxy():
+    """The fused K3 tail (tt/tail_engine.py) planned, built and enqueued on the mock Galaxy: the TP ring's balanced
+    schedule (the opposite block half each way), the ports on the column right of the 11 x 10 engine, every chip's
+    program (engine + ports) at the Galaxy per-chip shapes (640 rows a mesh row, latent 3584 -> H / TP 1792)."""
+    from models.demos.moe_block.tt.tail_engine import TailEngine
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D_TORUS_X)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    R, C, Hr, Ho = 8, 4, 3584, 1792
+    try:
+        eng = TailEngine(mesh, rows=640, Hr=Hr, Ho=Ho, chunks=C, eps=1e-6, topology=ttnn.Topology.Ring)
+        assert eng.ring and (eng.GX, eng.GY) == (11, 10)
+        for coord, ch in eng.chips.items():
+            rg = ch["rings"][0]
+            p = rg["p"]
+            assert rg["fwd"] == [(p, 0), ((p - 1) % C, 1)] and rg["bwd"] == [(p, 0), ((p + 1) % C, 2)], (coord, rg)
+            assert ch["order"] == [p, (p - 1) % C, (p + 1) % C, (p + 2) % C], (coord, ch["order"])
+            assert all(c.x == eng.GX for c in ch["ports"].values())
+        mapper = ttnn.ShardTensor2dMesh(mesh, dims=(0, 1), mesh_shape=(R, C))
+        y = ttnn.from_torch(
+            torch.zeros(R, C, 640 // C, Hr),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=mapper,
+        )
+        se = ttnn.from_torch(
+            torch.zeros(R, C, 640, Ho), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper
+        )
+        w = eng.upload([torch.zeros(Hr, Ho)] * (R * C), torch.ones(Hr))
+        out = eng.run(y, w, se)
+        for t in (out, y, se, w):
+            ttnn.deallocate(t)
+        del eng
+        gc.collect()
+    finally:
+        ttnn.close_mesh_device(mesh)

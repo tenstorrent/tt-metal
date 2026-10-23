@@ -570,6 +570,19 @@ void kernel_main() {
 )
 
 
+def chunk_order(p, G, ring):
+    """Chip p's chunk positions -> TP positions q (the plan's "out" index): own first, then by hop distance (ties: the
+    previous chip first) - roughly the order the gather lands them."""
+    dist = lambda q: min((q - p) % G, (p - q) % G) if ring else abs(q - p)  # noqa: E731
+    return sorted(range(G), key=lambda q: (dist(q), (q - p) % G != G - 1, q))
+
+
+def share_in_part(cx, GX, part):
+    """A share (column cx) belongs to a unit's part: 0 every column, 1 / 2 the first / second half (a ring's opposite
+    block split between the directions) - the ports' walk."""
+    return part == 0 or (part == 1 and cx < GX // 2) or (part == 2 and cx >= GX // 2)
+
+
 def _split(n, parts):
     """n into parts contiguous ranges, as even as possible: [(k0, k1)]."""
     base, rem = divmod(n, parts)
@@ -690,10 +703,7 @@ class TailEngine:
         )
         G = self.NCK
         for coord, ch in self.chips.items():
-            p = ch["rings"][0]["p"]
-            dist = lambda q: min((q - p) % G, (p - q) % G) if self.ring else abs(q - p)  # noqa: E731
-            # (a chip's chunk order, by TP position q - the plan's "out" index; ties: the previous chip first)
-            ch["order"] = sorted(range(G), key=lambda q: (dist(q), (q - p) % G != G - 1, q))
+            ch["order"] = chunk_order(ch["rings"][0]["p"], G, self.ring)
         self.port_xy = sorted({(c.x, c.y) for ch in self.chips.values() for c in ch["ports"].values()})
         self.port_crs = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in self.port_xy]

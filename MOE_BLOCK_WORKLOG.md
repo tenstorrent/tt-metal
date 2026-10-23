@@ -1190,3 +1190,15 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
               6 programs (5 traced: no x copy)
   Traced replay 3171-3202 -> 3051-3073 us. Soaks: eager 300 (PCC 0.99624), traced 300 (min 0.99604, routing
   identical every replay); GLM-Flash unchanged (tail ops: no latent), soaked 100 + 100.
+- CPU protocol model (tests/test_tail_protocol_model.py): ports with _schedule's line / balanced-ring schedules, the
+  ready fence, shares as 1-2 packets (the last increments), monotonic landed words with per-consumer call counts, one
+  in-order FIFO a directed link, 3 calls back to back per chip, random interleavings, G 2 / 3 / 4 / 8: no deadlock, no
+  packet into a chip before it started that call, every landing at the chunk position expecting its block, every
+  share landed exactly once a call; without the ready wait the fence check trips (43 pass). Mock Galaxy (8 x 4,
+  FABRIC_2D_TORUS_X): the tail's ring plan (the opposite block half each way), its chunk order, the ports on column
+  11, every chip's program built and enqueued (test_head_mock_galaxy: 3 pass with the head's two).
+- Galaxy projection of the tail (TP ring of 4): a link direction carries 1.5 half-blocks (860 KB, ~36 us at 2 x 23.6
+  GB/s for the two halves), so every remote block lands before the engine reaches it - compute-bound: chunk 0's start
+  (~30 us, the slowest chip on the LoudBox: W' + its own rows tilized and row-multicast) + 4 x the compute-bound chunk
+  cadence (~14.5 us: matmul 8.3 + finish 3.5 + squares / s / partner ~2.5) = ~88 us, vs the ops tail ~229 (all-gather
+  on the ring ~41, norm / up 163, add 17, tilize 8). Block (Galaxy-projected): ~2043 -> ~1860 us.
