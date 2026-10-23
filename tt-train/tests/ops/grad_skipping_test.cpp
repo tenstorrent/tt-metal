@@ -27,6 +27,7 @@
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/polynorm_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
@@ -76,6 +77,9 @@ constexpr const char* kVariableMatmul = "VariableMatmulDeviceOperation";
 constexpr const char* kMorehSum = "MorehSumOperation";
 constexpr const char* kMorehMean = "MorehMeanOperation";
 constexpr const char* kTranspose = "TransposeDeviceOperation";
+constexpr const char* kReduce = "ReduceDeviceOperation";
+constexpr const char* kSlice = "SliceDeviceOperation";
+constexpr const char* kConcat = "ConcatDeviceOperation";
 constexpr const char* kSwigluElemwiseBw = "SwigluElemwiseBwDeviceOperation";
 constexpr const char* kUnaryBackward = "UnaryBackwardDeviceOperation";
 constexpr const char* kNlpConcatHeads = "NLPConcatHeadsDeviceOperation";
@@ -143,13 +147,15 @@ OpUnderTest binary(
         .forward = [op](const std::vector<TensorPtr>& in) { return op(in[0], in[1]); }};
 }
 
+using LayerNormOp = TensorPtr (*)(const TensorPtr&, const TensorPtr&, std::optional<TensorPtr>);
+
 // Inputs: tensor, gamma, then beta when `with_beta`.
-OpUnderTest composite_layernorm(bool with_beta) {
+OpUnderTest layernorm(LayerNormOp layernorm_op, bool with_beta) {
     OpUnderTest op{
         .inputs = {{uniform(kActivation, -1.F, 1.F, 1U)}, {uniform(kFeatureRow, 0.5F, 1.5F, 2U)}},
-        .forward = [](const std::vector<TensorPtr>& in) {
+        .forward = [layernorm_op](const std::vector<TensorPtr>& in) {
             const auto beta = in.size() > 2U ? std::optional(in[2]) : std::nullopt;
-            return ttml::ops::composite_layernorm(in[0], in[1], beta);
+            return layernorm_op(in[0], in[1], beta);
         }};
     if (with_beta) {
         op.inputs.push_back({uniform(kFeatureRow, -1.F, 1.F, 3U)});
@@ -162,6 +168,27 @@ OpUnderTest rmsnorm_composite() {
         .inputs = {{uniform(kActivation, -1.F, 1.F, 1U)}, {uniform(kFeatureRow, 0.5F, 1.5F, 2U)}},
         .forward = [](const std::vector<TensorPtr>& in) {
             return ttml::ops::rmsnorm_composite(in[0], in[1], /*epsilon=*/1e-6F);
+        }};
+}
+
+OpUnderTest rmsnorm() {
+    return OpUnderTest{
+        .inputs = {{uniform(kActivation, -1.F, 1.F, 1U)}, {uniform(kFeatureRow, 0.5F, 1.5F, 2U)}},
+        .forward = [](const std::vector<TensorPtr>& in) {
+            return ttml::ops::rmsnorm(in[0], in[1], /*epsilon=*/1e-6F);
+        }};
+}
+
+// Inputs: x [2, 1, 32, 64], weight [1, 1, 1, 3], bias [1, 1, 1, 1].
+OpUnderTest polynorm3(bool composite) {
+    return OpUnderTest{
+        .inputs =
+            {{uniform(kActivation, -1.F, 1.F, 1U)},
+             {uniform({1U, 1U, 1U, 3U}, 0.5F, 1.5F, 2U)},
+             {uniform({1U, 1U, 1U, 1U}, -1.F, 1.F, 3U)}},
+        .forward = [composite](const std::vector<TensorPtr>& in) {
+            return composite ? ttml::ops::polynorm3_composite(in[0], in[1], in[2])
+                             : ttml::ops::polynorm3(in[0], in[1], in[2]);
         }};
 }
 
@@ -432,25 +459,47 @@ INSTANTIATE_TEST_SUITE_P(
         // The dtensor chain; normalized_tensor is still recomputed for dgamma.
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenTensor",
-            .make = [] { return composite_layernorm(/*with_beta=*/true); },
+            .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {0},
             .must_skip = {kBinary, kMorehMean}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenGamma",
-            .make = [] { return composite_layernorm(/*with_beta=*/true); },
+            .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {1},
             .must_skip = {kBinary, kMorehSum}},
         // Without beta there is no dbeta branch at all; gamma's skip is unchanged.
         GradSkipCase{
             .name = "CompositeLayerNormNoBeta_FrozenGamma",
-            .make = [] { return composite_layernorm(/*with_beta=*/false); },
+            .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/false); },
             .frozen = {1},
             .must_skip = {kBinary, kMorehSum}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenBeta",
-            .make = [] { return composite_layernorm(/*with_beta=*/true); },
+            .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {2},
             .must_skip = {kMorehSum}},
+        // dx is skipped inside layernorm_bw, which is still launched for dgamma and dbeta, so there is no op to count;
+        // the row checks that their grads are unchanged.
+        GradSkipCase{
+            .name = "LayerNorm_FrozenTensor",
+            .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
+            .frozen = {0}},
+        // The kernel skips the frozen side's partials and the wrapper skips their reduction.
+        GradSkipCase{
+            .name = "LayerNorm_FrozenGamma",
+            .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
+            .frozen = {1},
+            .must_skip = {kReduce}},
+        GradSkipCase{
+            .name = "LayerNormNoBeta_FrozenGamma",
+            .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/false); },
+            .frozen = {1},
+            .must_skip = {kReduce}},
+        GradSkipCase{
+            .name = "LayerNorm_FrozenBeta",
+            .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
+            .frozen = {2},
+            .must_skip = {kReduce}},
         GradSkipCase{
             .name = "RMSNormComposite_FrozenTensor",
             .make = rmsnorm_composite,
@@ -458,6 +507,53 @@ INSTANTIATE_TEST_SUITE_P(
             .must_skip = {kBinary, kMorehSum}},
         GradSkipCase{
             .name = "RMSNormComposite_FrozenGamma", .make = rmsnorm_composite, .frozen = {1}, .must_skip = {kBinary}},
+        // dx is skipped inside rmsnorm_bw, which is still launched for dgamma, so there is no op to count; the row
+        // checks that gamma's grad is unchanged.
+        GradSkipCase{.name = "RMSNorm_FrozenTensor", .make = rmsnorm, .frozen = {0}},
+        // The kernel skips the dgamma partials and the wrapper skips their reduction.
+        GradSkipCase{.name = "RMSNorm_FrozenGamma", .make = rmsnorm, .frozen = {1}, .must_skip = {kReduce}},
+        // dx is skipped inside polynorm3_bw, which is still launched for dw and db, so there is no op to count; the
+        // row checks that their grads are unchanged.
+        GradSkipCase{
+            .name = "PolyNorm3_FrozenInput", .make = [] { return polynorm3(/*composite=*/false); }, .frozen = {0}},
+        // dw and db share the packed partials: the kernel skips them, and the wrapper their reduction, only when both
+        // weight and bias are frozen; otherwise only the frozen side's extraction is skipped.
+        GradSkipCase{
+            .name = "PolyNorm3_FrozenWeight",
+            .make = [] { return polynorm3(/*composite=*/false); },
+            .frozen = {1},
+            .must_skip = {kSlice, kConcat}},
+        GradSkipCase{
+            .name = "PolyNorm3_FrozenBias",
+            .make = [] { return polynorm3(/*composite=*/false); },
+            .frozen = {2},
+            .must_skip = {kSlice}},
+        GradSkipCase{
+            .name = "PolyNorm3_FrozenWeightAndBias",
+            .make = [] { return polynorm3(/*composite=*/false); },
+            .frozen = {1, 2},
+            .must_skip = {kReduce, kSlice, kConcat}},
+        GradSkipCase{
+            .name = "PolyNorm3Composite_FrozenInput",
+            .make = [] { return polynorm3(/*composite=*/true); },
+            .frozen = {0},
+            .must_skip = {kBinary}},
+        GradSkipCase{
+            .name = "PolyNorm3Composite_FrozenWeight",
+            .make = [] { return polynorm3(/*composite=*/true); },
+            .frozen = {1},
+            .must_skip = {kBinary, kReduce, kConcat}},
+        GradSkipCase{
+            .name = "PolyNorm3Composite_FrozenBias",
+            .make = [] { return polynorm3(/*composite=*/true); },
+            .frozen = {2},
+            .must_skip = {kReduce}},
+        // Only db is left, so the shared x^2, x^3 and their RMS normalizations are skipped too.
+        GradSkipCase{
+            .name = "PolyNorm3Composite_OnlyBias",
+            .make = [] { return polynorm3(/*composite=*/true); },
+            .frozen = {0, 1},
+            .must_skip = {kUnary, kBinary, kReduce, kConcat}},
         // dx = dL_dlinear1 @ w1 + dL_dgate @ w3.
         GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .must_skip = {kMatmul}},
         GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .must_skip = {kMatmul}},
