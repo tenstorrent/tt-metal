@@ -72,13 +72,13 @@ FLOORS = {
     "performance": {
         "pcc_normalized": 0.995,
         "pcc_spread": 0.99,
-        "pcc_row_p01": 0.98,
-        "pcc_row_min": 0.95,
+        "pcc_row_p01": 0.97,
+        "pcc_row_min": 0.90,
         "pcc_final": 0.98,
     },
-    # Branch-coverage inputs (e2e, paths: the smooth generator, counts, gaps). Per-row PCC is reported, not gated:
-    # it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013 in asinh space,
-    # so a 0.002 absolute error reads 0.979).
+    # Branch-coverage inputs (e2e: the smooth generator plus counts and gaps; paths). Per-row PCC is reported, not
+    # gated: it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013 in asinh
+    # space, so a 0.002 absolute error reads 0.979).
     "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99},
     "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99},
     "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.99},

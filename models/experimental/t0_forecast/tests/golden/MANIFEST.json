@@ -106,13 +106,13 @@
   },
   "generator": {
     "script": "models/experimental/t0_forecast/tests/golden/make_goldens.py",
-    "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
+    "script_sha256": "0cbacf4528d5771713d7c8a3d9b962119126bbdeef3b24328601f65c76dd7257",
     "inputs": {
       "single": "10 + sin(2 pi t / 24) + 0.01 t + 0.1 N(0,1) (numpy default_rng(0)), context 2048 / 8192",
       "modules": "torch.Generator seed 1234; x = 4 N(0,1) for layers, 2 N(0,1) for the head",
       "bench": "realistic / realistic_groups: per series a kind from KINDS with KIND_PROBS (random walk + seasonal at SNR ~1 0.30, noisy heteroscedastic seasonal 0.20, intermittent counts 0.15, level shifts 0.15, smooth trend 0.20), magnitudes 0.1..1000; multivariate variates share a series component; seeds paper 41, long 42, multi 43",
       "e2e": "e2e_inputs(2048, seed=21): 16 smooth, 16 counts, 16 leading NaN, 16 gaps",
-      "paths": "synthetic(8, 2000, 31) at horizon 40; synthetic(12, 2048, 32) as 4 x 3 with leading NaN"
+      "paths": "realistic(8, 2000, 31) at horizon 40; realistic_groups(4, 3, 2048, 32) with leading NaN and a PAD row"
     },
     "seeds": {
       "torch.manual_seed": 0
@@ -410,11 +410,11 @@
       ]
     },
     "paths.pt": {
-      "sha256": "24ec1f1def09b028e68f72fb5fae087d3cd48da1811edfd2a8296722fd4b0e81",
-      "script_sha256": "d602e10ebf42117b89ee735e1ae98a2047323f2f8e86e57e9467c7b4c8a59b1e",
+      "sha256": "0e0f6b57fcf3a56acf06aaf122ec4016d37605df5637bfcc9f28765944a8c2ed",
+      "script_sha256": "0cbacf4528d5771713d7c8a3d9b962119126bbdeef3b24328601f65c76dd7257",
       "bytes": 770917,
-      "created": "2026-10-23T15:48:38",
-      "seconds": 9.3,
+      "created": "2026-10-23T16:19:04",
+      "seconds": 11.4,
       "contents": [
         "multi_context",
         "multi_gift21",

@@ -433,8 +433,8 @@ def golden_paths(m, out: Path) -> dict:
     two patches, 40 steps kept), and 4 series x 3 variates whose rows start with NaN, trimmed to PAD under the
     GIFT-Eval settings (all-PAD patches inside a series: the time mask and the group mask paths)."""
     levels21 = list(m.config.quantile_levels)
-    uni = torch.from_numpy(synthetic(8, 2000, seed=31))
-    multi = torch.from_numpy(synthetic(12, 2048, seed=32)).reshape(4, 3, 2048)
+    uni = torch.from_numpy(realistic(8, 2000, seed=31)[0])
+    multi = torch.from_numpy(realistic_groups(4, 3, 2048, seed=32)[0])
     for b, lead in enumerate((0, 100, 700, 1300)):
         multi[b, 1, :lead] = float("nan")
         multi[b, 2, : lead // 2] = float("nan")
@@ -513,7 +513,7 @@ def main():
                     "modules": "torch.Generator seed 1234; x = 4 N(0,1) for layers, 2 N(0,1) for the head",
                     "bench": "realistic / realistic_groups: per series a kind from KINDS with KIND_PROBS (random walk + seasonal at SNR ~1 0.30, noisy heteroscedastic seasonal 0.20, intermittent counts 0.15, level shifts 0.15, smooth trend 0.20), magnitudes 0.1..1000; multivariate variates share a series component; seeds paper 41, long 42, multi 43",
                     "e2e": "e2e_inputs(2048, seed=21): 16 smooth, 16 counts, 16 leading NaN, 16 gaps",
-                    "paths": "synthetic(8, 2000, 31) at horizon 40; synthetic(12, 2048, 32) as 4 x 3 with leading NaN",
+                    "paths": "realistic(8, 2000, 31) at horizon 40; realistic_groups(4, 3, 2048, 32) with leading NaN and a PAD row",
                 },
                 "seeds": {"torch.manual_seed": 0},
             },
