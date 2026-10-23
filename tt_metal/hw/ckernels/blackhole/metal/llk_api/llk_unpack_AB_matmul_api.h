@@ -247,3 +247,48 @@ inline void llk_unpack_AB_matmul(
         rt_dim,
         kt_dim);
 }
+
+// llk_unpack_AB_matmul for num_k k steps in one call: in0 advances one tile and in1 in1_k_stride tiles per step.
+inline void llk_unpack_AB_matmul_k(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t num_k,
+    const std::uint32_t in1_k_stride) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const bool partial_face_a = get_operand_partial_face(operandB_id);
+    const bool partial_face_b = get_operand_partial_face(operandA_id);
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id)));
+
+    WAYPOINT("UPMW");
+    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()>(
+        get_local_cb_interface(operandA_id).fifo_rd_ptr - 1,
+        get_local_cb_interface(operandB_id).fifo_rd_ptr - 1,
+        tile_index_a,
+        tile_index_b,
+        get_local_cb_interface(operandA_id).fifo_page_size,
+        get_local_cb_interface(operandB_id).fifo_page_size,
+        partial_face_a,
+        partial_face_b,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        num_k,
+        in1_k_stride);
+    WAYPOINT("UPMD");
+}

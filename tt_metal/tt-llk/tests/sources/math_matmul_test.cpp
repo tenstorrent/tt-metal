@@ -120,6 +120,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
+                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()>(
+                        L1_ADDRESS(buffer_A[0]),
+                        L1_ADDRESS(buffer_B[0]),
+                        0,
+                        0,
+                        TILE_SIZE_UNPACK_B,
+                        TILE_SIZE_UNPACK_A,
+                        PARTIAL_FACE_B,
+                        PARTIAL_FACE_A,
+                        CT_DIM,
+                        RT_DIM,
+                        KT_DIM,
+                        KT_DIM,
+                        CT_DIM);
+#else
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
                         _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
@@ -135,6 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             RT_DIM,
                             KT_DIM);
                     }
+#endif
                 }
             }
         }
@@ -143,6 +160,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 
 #endif
+// zone markers of the other threads keep their line numbers
+#line 146
 
 #ifdef LLK_TRISC_MATH
 
