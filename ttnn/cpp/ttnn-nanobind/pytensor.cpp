@@ -5,6 +5,7 @@
 #include "pytensor.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -29,6 +30,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
@@ -71,7 +73,9 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
-using tt::tt_metal::experimental::per_core_allocation::SRAMTensorViewAddress;
+using tt::tt_metal::experimental::per_core_allocation::NodeLocalSpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeDeviceLocalMemorySpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
@@ -472,20 +476,27 @@ void pytensor_module_types(nb::module_& mod) {
 }
 
 void pytensor_module(nb::module_& mod) {
+    nb::class_<NodeLocalSpan>(mod, "NodeLocalSpan", "A contiguous span of caller-owned SRAM on one core.")
+        .def(nb::init<DeviceAddr, uint64_t>(), nb::arg("address"), nb::arg("size"))
+        .def_rw("address", &NodeLocalSpan::address)
+        .def_rw("size", &NodeLocalSpan::size);
+    nb::class_<PerNodeDeviceLocalMemorySpan>(mod, "PerNodeDeviceLocalMemorySpan")
+        .def(nb::init<std::unordered_map<CoreCoord, NodeLocalSpan>>(), nb::arg("per_node_spans"))
+        .def_rw("per_node_spans", &PerNodeDeviceLocalMemorySpan::per_node_spans);
+    nb::class_<PerNodeMeshDeviceMemorySpan>(mod, "PerNodeMeshDeviceMemorySpan")
+        .def(
+            nb::init<std::unordered_map<distributed::MeshCoordinate, PerNodeDeviceLocalMemorySpan>>(),
+            nb::arg("per_device_spans"))
+        .def_rw("per_device_spans", &PerNodeMeshDeviceMemorySpan::per_device_spans);
     mod.def(
         "experimental_create_sram_tensor_view",
-        [](distributed::MeshDevice& mesh,
-           const TensorSpec& spec,
-           const std::vector<SRAMTensorViewAddress>& placements) {
-            auto buffer =
-                tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, placements);
+        [](distributed::MeshDevice& mesh, const TensorSpec& spec, const PerNodeMeshDeviceMemorySpan& memory) {
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, memory);
             std::vector<distributed::MeshCoordinate> coords;
-            std::unordered_set<distributed::MeshCoordinate> seen;
-            for (const auto& [location, address] : placements) {
-                if (seen.insert(location.device_coord).second) {
-                    coords.push_back(location.device_coord);
-                }
+            for (const auto& [coord, local] : memory.per_device_spans) {
+                coords.push_back(coord);
             }
+            std::sort(coords.begin(), coords.end());
             TensorTopology topology(
                 distributed::MeshShape(coords.size()), {distributed::MeshMapperConfig::Replicate{}}, coords);
             return Tensor(DeviceStorage(
@@ -493,10 +504,11 @@ void pytensor_module(nb::module_& mod) {
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("tensor_spec"),
-        nb::arg("placements"),
+        nb::arg("memory"),
         nb::keep_alive<0, 1>(),
-        "Create a non-owning SRAM tensor view. Metal validates coverage, alignment and SRAM bounds; "
-        "the caller validates backing bounds and retains backing storage.");
+        "Create a non-owning SRAM tensor view. Metal validates coverage, alignment, SRAM bounds and padded "
+        "tensor footprints within the supplied spans; the caller guarantees those spans are backed and retains "
+        "storage.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
