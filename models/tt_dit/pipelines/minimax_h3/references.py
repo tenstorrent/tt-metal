@@ -55,12 +55,9 @@ from .packing import (
     MINIMAX_H3_MIN_DURATION,
 )
 from .packing_ref2va import (
-    MINIMAX_H3_MAX_REFERENCE_AUDIOS,
-    MINIMAX_H3_MAX_REFERENCE_IMAGES,
-    MINIMAX_H3_MAX_REFERENCE_VIDEOS,
-    MINIMAX_H3_MAX_REFERENCES,
     MiniMaxH3PreparedReference,
     MiniMaxH3Reference,
+    check_reference_kinds,
     prepare_reference_frames,
     prepare_reference_image,
     prepare_reference_waveform,
@@ -86,26 +83,10 @@ MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS = math.ceil(
 def check_references(references: Sequence[MiniMaxH3Reference]) -> list[str]:
     """Validate a ``references`` list against the documented per-request limits.
 
-    Returns the modality of each entry, in request order. The "audio cannot be
-    alone" rule is the reference's: an audio reference has to be paired with at
-    least one image or video, because a ref2va request with no visual reference has
-    nothing to condition the picture on.
+    Returns the modality of each entry, in request order.
     """
-    if not references:
-        raise ValueError("ref2va needs at least one reference; use a t2va call for text-only requests")
-
-    kinds = [reference_kind(index, entry) for index, entry in enumerate(references)]
-    for kind, limit in (
-        ("image", MINIMAX_H3_MAX_REFERENCE_IMAGES),
-        ("video", MINIMAX_H3_MAX_REFERENCE_VIDEOS),
-        ("audio", MINIMAX_H3_MAX_REFERENCE_AUDIOS),
-    ):
-        if kinds.count(kind) > limit:
-            raise ValueError(f"H3 accepts at most {limit} {kind} references, got {kinds.count(kind)}")
-    if len(kinds) > MINIMAX_H3_MAX_REFERENCES:
-        raise ValueError(f"H3 accepts at most {MINIMAX_H3_MAX_REFERENCES} references in total, got {len(kinds)}")
-    if set(kinds) == {"audio"}:
-        raise ValueError("an audio reference must be paired with at least one image or video reference")
+    kinds = [reference_kind(index, entry) for index, entry in enumerate(references or [])]
+    check_reference_kinds(kinds)
     return kinds
 
 

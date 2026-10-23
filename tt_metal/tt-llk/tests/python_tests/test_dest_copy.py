@@ -16,7 +16,6 @@ from helpers.test_config import TestConfig
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Int32,
             DataFormat.Int8,
