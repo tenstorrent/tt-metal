@@ -2079,7 +2079,7 @@ TEST_F(FusedAllGatherMatmulHookTest, StridedAllGatherMinimalMatmulAsyncLabelsEve
                 /*mm_block_ht=*/std::nullopt,
                 /*mm_block_wt=*/std::nullopt},
             MinimalMatmulParams{.chunks = chunks},
-            /*all_gather_core_grid_offset=*/CoreCoord{0, 0},
+            /*all_gather_core_grid_offset=*/tt::tt_metal::CoreCoord{0, 0},
             /*read_local_slice_from_input=*/false,
             StridedAllGatherAsync{}};
         const StridedAllGatherMinimalMatmulAsyncInputs args{input, weight, /*persistent_output_buffer=*/std::nullopt};
