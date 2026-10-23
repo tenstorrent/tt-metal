@@ -14,6 +14,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import torch
@@ -22,12 +23,15 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _PCC_THRESHOLD, _trace_wall_samples_ms
+from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _trace_wall_samples_ms
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
+    make_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
@@ -41,8 +45,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     import_state,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
-
-pytest_plugins = ("models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf",)
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 
@@ -68,6 +70,25 @@ _TIMING_SAMPLES = int(os.getenv("KDA_ADAPTER_TIMING_SAMPLES", "20"))
 _TIMING_REPETITIONS = int(os.getenv("KDA_ADAPTER_TIMING_REPS", "100"))
 _LAYER_REPETITIONS = int(os.getenv("PERF_REPS", "10"))
 _LAYER_IDX = 1
+_PCC_THRESHOLD = 0.9995
+
+
+@pytest.fixture(scope="session")
+def kimi_k3_production_reference(
+    kimi_k3_checkpoint_dir: Path,
+) -> Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]]:
+    """Return a lazy loader for the session-cached production-length CPU oracle."""
+    cached_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float] | None = None
+
+    def load() -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
+        nonlocal cached_reference
+        if cached_reference is None:
+            case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
+            golden_output, golden_state, elapsed = load_or_compute_cpu_reference(case)
+            cached_reference = case, golden_output, golden_state, elapsed
+        return cached_reference
+
+    return load
 
 
 def _summary(samples_ms: list[float]) -> dict[str, float | list[float]]:
@@ -200,7 +221,7 @@ def test_kimi_k3_state_adapter_cost(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)
