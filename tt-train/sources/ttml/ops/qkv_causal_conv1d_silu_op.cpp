@@ -64,6 +64,25 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
         "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V] or [1,1,T,Q+K+V], got {}",
         input_shape);
     auto x = rank3(input->get_value());
+    constexpr uint32_t tile = 32;
+    const auto x_shape = x.logical_shape();
+    TT_FATAL(
+        x_shape[1] % tile == 0 && q_width % tile == 0 && k_width % tile == 0 && v_width % tile == 0,
+        "qkv_causal_conv1d_silu: T, Q, K and V must be multiples of 32, got T={} Q={} K={} V={}",
+        x_shape[1],
+        q_width,
+        k_width,
+        v_width);
+    TT_FATAL(
+        x_shape[2] == q_width + k_width + v_width,
+        "qkv_causal_conv1d_silu: input has {} channels, Q+K+V is {}",
+        x_shape[2],
+        q_width + k_width + v_width);
+    const auto history_shape = rank3(history).logical_shape();
+    TT_FATAL(
+        history_shape[1] == 3 && history_shape[2] == x_shape[2],
+        "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V], got {}",
+        history.logical_shape());
     // The backward gets the caller's value: 0 lets it pick its own chunk together with the row split.
     const uint32_t forward_chunk_size =
         channel_chunk_size != 0 ? channel_chunk_size

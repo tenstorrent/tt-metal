@@ -292,6 +292,24 @@ TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
     EXPECT_THROW(run({64, 100, 64, 64}, 32, 1), std::runtime_error);      // Q is not tile aligned
 }
 
+// The forward rejects what the backward would reject, before any work is done.
+TEST_F(QkvCausalConv1dSiluTest, ForwardRejectsInvalidShapes) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto run = [&](const Shape& s, uint32_t q_width) {
+        const auto p = random_problem(s, 3);
+        auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
+        auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+        std::array<TensorPtr, 4> taps;
+        for (size_t j = 0; j < 4; ++j) {
+            taps[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ false);
+        }
+        ops::qkv_causal_conv1d_silu(input, history, taps[0], taps[1], taps[2], taps[3], q_width, s.K, s.V);
+    };
+    EXPECT_THROW(run({48, 64, 64, 64}, 64), std::runtime_error);  // T is not tile aligned
+    EXPECT_THROW(run({64, 64, 64, 64}, 32), std::runtime_error);  // Q + K + V is not the channel count
+}
+
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
 TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
     using namespace ttml;
