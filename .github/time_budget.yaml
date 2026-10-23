@@ -371,8 +371,12 @@ models:
     bh_p150: 27
     bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 355
-    bh_sc4: 160
+    bh_sc1: 215
+    # Wan2.2 T2V/I2V single galaxy legs (perf-gated, 65 + 75 min), moved from bh_sc1.
+    bh_sc1_high_power: 140
+    # Wan2.2 T2V/I2V quad legs (perf-gated, 95 + 95 min), moved from bh_sc4; +30 for the
+    # multi-seed VBench gate (#60481).
+    bh_sc4_high_power: 190
   e2e_tier2:
     wh_llmbox_perf: 270
     wh_n150: 56

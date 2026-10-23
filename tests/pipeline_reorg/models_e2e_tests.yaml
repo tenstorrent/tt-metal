@@ -1715,7 +1715,8 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4:
+    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
+    bh_sc4_high_power:
       # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
       # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
       timeout: 95
@@ -1767,7 +1768,8 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc4:
+    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
+    bh_sc4_high_power:
       # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
       # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
       timeout: 95
@@ -1798,7 +1800,8 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc1:
+    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
+    bh_sc1_high_power:
       timeout: 65
       tier: 1
       release_ready: true
@@ -1830,7 +1833,8 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc1:
+    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
+    bh_sc1_high_power:
       timeout: 75
       tier: 1
       release_ready: true
