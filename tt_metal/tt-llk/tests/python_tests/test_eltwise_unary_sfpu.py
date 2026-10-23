@@ -870,7 +870,7 @@ def _relu_max_probe_spec(threshold, formats, dest_acc):
         values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
     if negative_zero_delivered(formats.input_format, dest_acc):
         values.append(-0.0)
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+    if unpacks_to_dest(formats.input_format, dest_acc):
         values += [
             _FP32_MIN_SUBNORMAL,
             -_FP32_MIN_SUBNORMAL,

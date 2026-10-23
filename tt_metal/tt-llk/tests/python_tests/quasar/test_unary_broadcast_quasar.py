@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -122,9 +123,7 @@ def test_unary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(

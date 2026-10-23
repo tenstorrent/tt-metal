@@ -9,6 +9,7 @@ the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
 
+from enum import Enum
 from typing import List, Optional, Union
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
@@ -163,24 +164,55 @@ def effective_dest_acc(
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
+def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
+    """Normalise a two-state Enum-or-bool test flag to a plain bool.
+
+    DestAccumulation and ApproximationMode wrap True and False, so ``bool(member)`` is True
+    for *both* — ``.No`` included, which silently selects the True branch. Read ``.value``
+    for an enum, take a bool as-is, reject anything else.
+
+    *enum_name* is checked too, because both enums' ``.Yes`` wraps True and duck-typing on
+    ``.value`` would accept the wrong one.
+    """
+    flag = getattr(value, "value", value)
+    if not isinstance(flag, bool):
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    if isinstance(value, Enum) and type(value).__name__ != enum_name:
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got the "
+            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
+            f"otherwise select a branch silently"
+        )
+    return flag
+
+
+def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
+    """Normalise a 32-bit-destination flag to a plain bool.
+
+    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
+    is True for *both* of them -- ``DestAccumulation.No`` included, which would evaluate
+    every triple as the 32-bit-dest case and silently flip specials on and off for whole
+    rows of the matrix.
+
+    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
+    rather than guessing.
+    """
+    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
+
+
 def unpacks_to_dest(
     input_format: DataFormat,
     dest_acc: Union[bool, DestAccumulation],
     tilize: Tilize = Tilize.No,
 ) -> bool:
-    """Does the unpack write *input_format* straight into Dest, rather than through
-    SrcA and the datacopy? A 32-bit input at dest_acc=Yes, except a tilized Float32
-    input, which always goes through SrcA.
-
-    *dest_acc* may be a ``DestAccumulation`` member or a plain bool. The member is not
-    tested for truthiness: both of its values wrap a bool, so ``bool(DestAccumulation.No)``
-    is True.
-    """
+    """Does *input_format* unpack straight into Dest instead of through SrcA? A 32-bit
+    input at dest_acc=Yes, except a tilized Float32 input."""
     if tilize == Tilize.Yes and input_format == DataFormat.Float32:
         return False
-    return (
-        input_format.is_32_bit() and DestAccumulation(dest_acc) == DestAccumulation.Yes
-    )
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
 _2X_L1_FORMAT = {

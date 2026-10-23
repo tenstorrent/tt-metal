@@ -207,8 +207,8 @@ def received_inputs(
     0.996 both arrive as exactly 1.0, and ``atanh`` of them is the pole.
     """
     from helpers.bfp_format_utils import BFP_BLOCK
+    from helpers.data_format_inference import _dest_acc_flag
     from helpers.golden_generators import quantize_input_to_unpack_format
-    from helpers.sfpu_domains import _dest_acc_flag
 
     # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
     # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
@@ -300,8 +300,8 @@ def dest_holds(
     past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
     flush at the 2**-14 boundary (one side zero, the other at most 2**-14). Any other
     answer -- wrong-signed, or more than 2x short of the edge -- is the op's."""
+    from helpers.data_format_inference import _dest_acc_flag
     from helpers.llk_params import format_dict
-    from helpers.sfpu_domains import _dest_acc_flag
 
     holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
     # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold
