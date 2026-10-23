@@ -73,7 +73,7 @@ def _pcc(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _parse_custom_config(name: str) -> WanDBCacheConfig:
-    """``custom:rdt=0.06&Fn=2&Bn=0&ts=1&mc=2&mcs=12&warm=4&cfgsep=0`` -> WanDBCacheConfig.
+    """``custom:rdt=0.06&Fn=2&Bn=0&ts=1&mc=2&wi=1&mcs=12&warm=4&cfgsep=0`` -> WanDBCacheConfig.
 
     ``mcs`` sets ``max_cached_steps`` on both experts (the preset caps high/low at 8/20 otherwise).
     """
@@ -96,6 +96,8 @@ def _parse_custom_config(name: str) -> WanDBCacheConfig:
             shared["taylorseer_order"] = int(v)
         elif k == "mc":
             shared["max_continuous_cached_steps"] = int(v)
+        elif k == "wi":
+            shared["warmup_interval"] = int(v)
         elif k == "cfgsep":
             shared["cfg_diff_compute_separate"] = bool(int(v))
         elif k == "mcs":

@@ -46,26 +46,35 @@ class WanDBCacheConfig:
 
     @classmethod
     def default(cls, **shared: object) -> WanDBCacheConfig:
-        """Default preset: cache-dit's Wan 2.2 example settings (F1B0, threshold 0.08, at most 2
-        consecutive cached steps; the high-noise expert warms up for 4 steps and caches at most 8, the
-        low-noise expert warms up for 2 and caches at most 20), plus ``cfg_diff_compute_separate=False``
-        (the unconditional branch's diff tracks the conditional one to 3 decimals, so it reuses that
-        decision and skips one host readback per step).
+        """Default preset: the standard Wan 2.2 DBCache recipe, cache-dit's Wan 2.2 example with the
+        threshold, consecutive cap and warmup interval set explicitly. F1B0, ``residual_diff_threshold=0.12``,
+        at most 2 consecutive cached steps, warmup at interval 2 (the high-noise expert warms up over 4 steps
+        and caches at most 8, the low-noise expert over 2 steps and at most 20), TaylorSeer order 1 and
+        separate CFG decisions per branch. The cache-dit equivalent is ``--Fn 1 --Bn 0 --rdt 0.12 --mcc 2
+        --warmup-interval 2 --taylorseer --taylorseer-order 1`` on top of the example's per-expert budgets.
 
-        Measured with the pipeline's default ``flow_shift=5`` schedule (BH 4x8, 81 frames, 40 steps):
-        480p 1.60x denoising speedup at PCC 0.91 against the uncached video, 720p 1.52x at PCC 0.89.
-        With ``flow_shift=12`` (the official Wan 2.2 A14B T2V schedule) 0.08 caches the fast-changing
-        early high-noise steps and drifts to a different trajectory (PCC ~0.85); use
-        ``default(residual_diff_threshold=0.05)`` there for PCC > 0.95 at ~1.2x.
+        Measured on I2V-A14B at 1280x720 (81 frames, 40 steps, UniPC ``flow_shift=5``, boundary 0.9, BH 4x8
+        Galaxy) over ten image/prompt pairs: 1.99x end-to-end against the uncached pipeline (1.93x-2.03x per
+        pair; 8 H200s give 1.89x with the same recipe and inputs), mean PCC 0.935 against the uncached
+        video (median ~0.965), the same cost the recipe has on the H200 (0.943), and a blind reviewer could
+        not tell cached from uncached videos. The high-noise expert caches 7-8 of its 15 steps and the
+        low-noise expert 14 of 25.
+
+        The quality setting is one override away: ``default(residual_diff_threshold=0.06, taylorseer_order=0,
+        warmup_interval=1)`` stays at PCC >= 0.99 on I2V and 0.98 on T2V at ~1.3x. With ``flow_shift=12``
+        (the official Wan 2.2 A14B T2V schedule) even 0.06 caches the fast-changing early high-noise steps;
+        use ``residual_diff_threshold=0.05`` there for PCC > 0.95 at ~1.2x.
 
         ``shared`` overrides the common fields.
         """
         base = DBCacheConfig(
             Fn_compute_blocks=1,
             Bn_compute_blocks=0,
-            residual_diff_threshold=0.08,
+            residual_diff_threshold=0.12,
             max_continuous_cached_steps=2,
-            cfg_diff_compute_separate=False,
+            warmup_interval=2,
+            taylorseer_order=1,
+            cfg_diff_compute_separate=True,
         ).replace(**shared)
         return cls(
             high_noise=base.replace(max_warmup_steps=4, max_cached_steps=8),
