@@ -60,8 +60,11 @@ class WanDBCacheConfig:
         not tell cached from uncached videos. The high-noise expert caches 7-8 of its 15 steps and the
         low-noise expert 14 of 25.
 
-        The quality setting is one override away: ``default(residual_diff_threshold=0.06, taylorseer_order=0,
-        warmup_interval=1)`` stays at PCC >= 0.99 on I2V and 0.98 on T2V at ~1.3x. With ``flow_shift=12``
+        This is the I2V default (`WanPipelineConfig.default` applies it for ``model_type="i2v"``). T2V is
+        not cached by default: the same recipe drifts on T2V (PCC 0.90 / 18.1 dB at 480p, 0.71 / 13.4 dB at
+        720p against the uncached video), so pass a config explicitly there. The quality setting is one
+        override away: ``default(residual_diff_threshold=0.06, taylorseer_order=0, warmup_interval=1)``
+        stays at PCC >= 0.99 on I2V and 0.98 on T2V at ~1.3x. With ``flow_shift=12``
         (the official Wan 2.2 A14B T2V schedule) even 0.06 caches the fast-changing early high-noise steps;
         use ``residual_diff_threshold=0.05`` there for PCC > 0.95 at ~1.2x.
 
