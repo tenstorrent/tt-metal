@@ -836,8 +836,10 @@ def test_concat_codegen_auto_routes_to_codegen(device, shapes, kwargs, dtype, la
     entries_before = device.num_program_cache_entries()
     out = ttnn.concat(xt, **kwargs)
     assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed a supported case to native (program cache did not grow); expected codegen"
-    assert device.num_program_cache_entries() > entries_before, msg
+    # Hand patch: Wormhole routes width concats to native; `_expect_codegen` is defined below the block.
+    expect = _expect_codegen(device, shapes, kwargs["dim"])
+    msg = f"auto routed a supported case to the wrong implementation; expected {'codegen' if expect else 'native'}"
+    assert (device.num_program_cache_entries() > entries_before) == expect, msg
 
 
 @pytest.mark.parametrize("shapes,kwargs,dtype,layout,placement", _CACHE_HIT, ids=_CACHE_HIT_IDS)
