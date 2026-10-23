@@ -1394,14 +1394,15 @@ class TtK3TokenSplitMoE:
             y = y2
         return y
 
-    def routed_prepped(self, prep, op, hook=None):
+    def routed_prepped(self, prep, op, hook=None, tilize=True):
         """routed_only, with the routing gather, the planner and the dispatch prep done upstream (the MoE block's fused
         head): the plan already in self.planner.outs, prep = (the dispatch buffer [1, 1, N S, H] with this chip's own
-        rows, the route words) -> the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
+        rows, the route words) -> the routed experts' sum [S, H] bf16 TILE (a fresh tensor); tilize False: the
+        combine's row-major output itself ([1, 1, S, H], persistent - the MoE block's fused tail tilizes it)."""
         assert self.routed_only and self.sparse_dispatch
         mark = hook or (lambda _: None)
         if self.dispatch_in_program:
-            return self._routed_in_program(prep, op, mark)
+            return self._routed_in_program(prep, op, mark, tilize)
         arena = self.alloc_arena()
         mark("arena_zero")
         xg = self.dispatch(
@@ -1411,11 +1412,13 @@ class TtK3TokenSplitMoE:
         self.experts_combine(xg, self.planner.outs, arena, op)
         ttnn.deallocate(arena)
         mark("experts_combine")
+        if not tilize:
+            return self.out
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")
         return y
 
-    def _routed_in_program(self, prep, op, mark):
+    def _routed_in_program(self, prep, op, mark, tilize=True):
         """routed_prepped with the dispatch inside the experts' program (dispatch_in_program): the arena zeroed (its own
         program: the dispatch's END barrier then also covers every chip's zeroing), the manifest for the call, one
         program for the dispatch + experts + combine, the tilize."""
@@ -1452,6 +1455,8 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(self._man)
         ttnn.deallocate(arena)
         mark("dispatch_experts_combine")
+        if not tilize:
+            return self.out
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")
         return y

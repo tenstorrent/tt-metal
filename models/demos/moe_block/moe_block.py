@@ -132,6 +132,10 @@ class MoEOptions:
     # routing exchange + planner, dispatch prep, latent); "ops" a program a stage; "auto": fused where it is built
     # (640 rows a mesh row: chunk 1280 on the 2x4, the Galaxy's per-chip load)
     head: Literal["auto", "fused", "ops"] = "auto"
+    # the tail (latent models): "fused" one program a chip (tt/tail_engine.py: the latent all-gather into the engine's
+    # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); "ops" its ops; "auto": fused
+    # where it is built (with the fused head, 640 rows a mesh row)
+    tail: Literal["auto", "fused", "ops"] = "auto"
 
 
 @dataclass(frozen=True)
@@ -344,6 +348,12 @@ class MoEBlock(LightweightModule):
         # head keeps after placing its arena, and after placing it again (the head frees them then) - nothing kept
         # stranded below the arena, where the other programs' circular buffers go; the head built and run once, its
         # arena settled (free L1 right above it filled) and freed.
+        tfits = FusedTail.fits(g, model, self.head_mode)
+        assert options.tail != "fused" or tfits is True, f"the fused tail: {tfits}"
+        self.tail = None
+        if options.tail == "fused" or (options.tail == "auto" and tfits is True):
+            # (before the tail's warm-up: its persistent words go with the tail's other one-time L1)
+            self.tail = FusedTail(mesh_device, g, model, weights, self._tp_topology())
         if self.head_mode == "fused":
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
@@ -362,7 +372,8 @@ class MoEBlock(LightweightModule):
         logger.info(
             f"MoEBlock: mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens} ({g.tokens_per_row} rows a mesh row, "
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
-            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}; flat layout "
+            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}; tail "
+            f"{'fused' if self.tail else 'ops'}{'' if tfits is True or model.latent_dim is None else f' (fused: {tfits})'}; flat layout "
             f"{self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
 
@@ -388,10 +399,16 @@ class MoEBlock(LightweightModule):
                 self._taps = dict(rows_dev=out.pop("rows"))
             elif self.keep_taps:
                 self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(out["rows"])])
-            y_own = self.exchange.prepped((out["xbuf"], out["route"]), hook=self.stage_hook)  # owners' sums [S/N, Hr]
+            # owners' sums [S/N, Hr] (the fused tail: the combine's row-major rows, tilized in its program)
+            y_own = self.exchange.prepped((out["xbuf"], out["route"]), hook=self.stage_hook, tilize=self.tail is None)
             for k in ("rows", "xbuf", "route", "latent"):
                 if k in out and out[k].is_allocated():
                     ttnn.deallocate(out[k])
+            if self.tail is not None:
+                y = self.tail(y_own, se)
+                ttnn.deallocate(se)
+                self._mark("tail")
+                return y
             return self._tail(y_own, se)
         rows, own, se = self._head(x)
         # ---- exchange ----
@@ -435,6 +452,19 @@ class MoEBlock(LightweightModule):
         se = self._zeros(
             (1, 1, g.tokens_per_row, m.emb_dim // g.tp) if self.latent else (1, 1, g.tokens_per_chip, m.emb_dim)
         )
+        if self.tail is not None:
+            y0 = ttnn.from_torch(
+                torch.zeros(1, 1, g.tokens_per_chip, m.routed_width),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            out = self.tail(y0, se)
+            for t in (out, y0, se):
+                ttnn.deallocate(t)
+            ttnn.synchronize_device(self.mesh_device)
+            return
         out = self._tail(self._zeros((g.tokens_per_chip, m.routed_width)), se, mark=False)
         ttnn.deallocate(out)
         ttnn.synchronize_device(self.mesh_device)
@@ -753,6 +783,46 @@ class FusedHead:
         return se, out
 
 
+class FusedTail:
+    """K3's tail as one program a chip (tt/tail_engine.py TailEngine): the latent all-gather over TP into the engine's
+    L1, the combine's own rows tilized there, rms norm (folded: g into W_up, 1 / rms on the fp32 sums), the up
+    projection split by columns, + the shared expert's output -> [S/SP, H/TP]."""
+
+    @staticmethod
+    def fits(g: Geometry, model: MoEModel, head_mode):
+        """True, or why not."""
+        if model.latent_dim is None:
+            return "no latent"
+        if head_mode != "fused":
+            return "the fused head (its shared expert's output, width split)"
+        if g.tokens_per_row != FusedHead.ROWS:
+            return f"{g.tokens_per_row} rows a mesh row: built for {FusedHead.ROWS} (one row tile a core a K half)"
+        return True
+
+    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology):
+        from models.demos.moe_block.tt.tail_engine import TailEngine
+
+        H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
+        self.eng = TailEngine(
+            mesh,
+            rows=g.tokens_per_row,
+            Hr=Hr,
+            Ho=H // tp,
+            chunks=tp,
+            eps=model.norm_eps,
+            topology=topology,
+            num_links=g.links,
+        )
+        up = w.latent["up"].float()  # [H, Hr]
+        Ho = H // tp
+        gn = w.latent["norm"].float() if model.latent_norm else torch.ones(Hr)
+        self.w = self.eng.upload([up.T[:, (d % tp) * Ho : (d % tp + 1) * Ho].contiguous() for d in range(g.chips)], gn)
+
+    def __call__(self, y_rm, se):
+        """y_rm: the combine's row-major output [1, 1, S/N, Hr]; se [1, 1, S/SP, H/TP] TILE -> [1, 1, S/SP, H/TP]."""
+        return self.eng.run(y_rm, self.w, se)
+
+
 class Router:
     """Gate weight split along H over TP ([H/TP, E] a chip, replicated over SP); fp32 partial logits, reduce-scattered
     by tokens to the owners (the block does the collective), then the selection once per token on its owner
@@ -971,13 +1041,14 @@ class TokenExchange:
         x2 = ttnn.reshape(own, [self.g.tokens_per_chip, self.model.routed_width])
         return self.block.routed(x2, rows, None, self.experts.op, hook=hook)
 
-    def prepped(self, prep, hook=None):
+    def prepped(self, prep, hook=None, tilize=True):
         """The fused head did the routing gather, the planner (into this block's plan tensors) and the dispatch prep:
-        prep = (the dispatch buffer with each chip's own rows, the route words) -> [S/N, Hr] TILE."""
+        prep = (the dispatch buffer with each chip's own rows, the route words) -> [S/N, Hr] TILE (tilize False: the
+        combine's row-major output, persistent)."""
         assert (
             self.block.arena_fits()
         ), "MoEBlock exchange: L1 moved the arena (the fused head bakes the plan's tensors)"
-        return self.block.routed_prepped(prep, self.experts.op, hook=hook)
+        return self.block.routed_prepped(prep, self.experts.op, hook=hook, tilize=tilize)
 
 
 # ---------------------------------------------------------------------------------------------------------------------

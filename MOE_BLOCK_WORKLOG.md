@@ -1176,3 +1176,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   owners like a relayed one. Tiles stay on the wire (a remote row's K half is needed tiled by every core of its row:
   row packets would mean 320 B packets or a whole row tile tilized on one core per chunk, ~7 us on the path). 155 us
   (148 before; run-to-run +- 10), 200-call soak min PCC 0.999914.
+
+### The fused K3 tail in MoEBlock.forward (MoEOptions.tail: auto | fused | ops)
+- FusedTail (with the fused head, 640 rows a mesh row: K3 at chunk 1280 on the 2x4 = the Galaxy's per-chip load):
+  the exchange hands the combine's row-major output (routed_prepped(tilize=False): self.out, persistent) and the tail
+  engine runs the gather, the tilize of the own rows, norm, up, + the shared expert -> [S/SP, H/TP]. W_up's column
+  slices with the norm weight folded uploaded at build; the engine built before the tail's warm-up (its persistent
+  words with the tail's one-time L1).
+- Per stage, LoudBox device time (slowest chip, median of 5), K3 chunk 1280, same session:
+  ops tail:   head 538.9 | arena_zero 5.1 | dispatch 135.9 | experts_combine 2303.6 | tilize 7.8 | tail_ag 82.8 |
+              latent_up 163.1 (2) | add 17.3 = 3255 us, 10 programs
+  fused tail: head 532.5 | arena_zero 5.1 | dispatch 135.1 | experts_combine 2286.5 | tail 152.6 = 3112 us,
+              6 programs (5 traced: no x copy)
+  Traced replay 3171-3202 -> 3051-3073 us. Soaks: eager 300 (PCC 0.99624), traced 300 (min 0.99604, routing
+  identical every replay); GLM-Flash unchanged (tail ops: no latent), soaked 100 + 100.

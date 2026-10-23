@@ -154,9 +154,11 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     T, H = chunk, m.emb_dim
     w = random_weights(m)
     t0 = time.perf_counter()
-    # (MOE_HEAD: the head as one fused program, a program a stage, or where built - test-only)
+    # (MOE_HEAD / MOE_TAIL: the head / tail as one fused program, a program a stage, or where built - test-only)
     opts = MoEOptions(
-        head=os.environ.get("MOE_HEAD", "auto"), experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0")))
+        head=os.environ.get("MOE_HEAD", "auto"),
+        tail=os.environ.get("MOE_TAIL", "auto"),
+        experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0"))),
     )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
