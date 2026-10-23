@@ -141,6 +141,9 @@ def _chunked_prefill_capabilities():
     # NO admission window (user decision): the plugin of record starts a prefill step as soon as a request arrives, vLLM's natural step-by-step admission applies. The capability stays at 0 for plugins that
     # read it (``DSV41_PREFILL_ADMIT_MS`` / ``TT_PREFILL_ADMIT_WINDOW_MS`` in the environment can still turn the hold on for experiments).
     caps["prefill_admission_window_ms"] = float(os.environ.get("DSV41_PREFILL_ADMIT_MS", "0"))
+    # the first prefill step of an idle engine is capped at one chunk (plugin TTScheduler._schedule_prefill_only): requests that arrive a few ms later share the NEXT step instead of trailing a lone request
+    # that took the whole token budget (a 5 s head start at budget 8192); nothing is held. ``DSV41_PREFILL_FIRST_STEP`` overrides (tokens, 0 = no cap).
+    caps["prefill_first_step_tokens"] = int(os.environ.get("DSV41_PREFILL_FIRST_STEP", str(chunk)))
     if _apc_on():
         # the scheduler rounds vLLM's prefix-cache hits down to the grid of the snapshot policy (a hit the model cannot resume from would make it recompute the whole prompt in one call)
         caps["prefix_cache_hit_policy"] = os.environ.get("DSV41_APC_POLICY", "pow2")
