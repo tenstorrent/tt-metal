@@ -190,7 +190,7 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
         constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
         auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
         // dL_dQ and dL_dK share the softmax backward; dL_dV does not need it.
-        if (query->get_requires_grad() || key->get_requires_grad()) {
+        if (ttml::autograd::any_requires_grad(query, key)) {
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
             ttnn::Tensor dL_dattention_weights =
                 group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
@@ -305,6 +305,9 @@ autograd::TensorPtr scaled_dot_product_attention(
                 "scaled_dot_product_attention: backward ran twice with a gate. The first pass overwrote the "
                 "forward output, so retain_graph=true is not supported for the gated op.");
         }
+        if (!autograd::any_requires_grad(query, key, value, gate_ptr)) {
+            return;
+        }
         const ttnn::Tensor attn_output = saved_attn_output.value();
         if (gate_ptr) {
             saved_attn_output.reset();  // consumed: this pass overwrites Y with dG
@@ -380,7 +383,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
             }
 
             // grad_q and grad_k share the sigmoid backward; grad_v does not need it.
-            if (!query->get_requires_grad() && !key->get_requires_grad()) {
+            if (!ttml::autograd::any_requires_grad(query, key)) {
                 return;
             }
             auto grad_attention_weights =
