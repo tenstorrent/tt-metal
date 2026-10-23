@@ -386,3 +386,18 @@
 - Warm 60-layer chunk, traced: start 0 200.0 -> 161.5 ms, start 51200 242.7 -> 204.3 ms. s56320 max rel 0.138
   (limit 0.15): little precision headroom is left. Measured but not taken: global ring_mla LoFi (layer 59 bias 0.0126
   with these switches), MLP / projection LoFi and fp32_gamma norms (see the next entries if taken).
+
+## Manual perf pass: measured and not taken (not pipeline-generated), 2026-10-23
+- s56320 ladder probes on the previous commit's tree (limits unchanged: rel 0.15, bias 0.005):
+  - global ring_mla LoFi (gemma4_d_p): FAIL, layer 59 bias 0.0140, max rel 0.159;
+  - MLP LoFi: FAIL, bias 0.0092;
+  - projections LoFi: pass but max rel 0.147 and bias 0.0040 (no margin left), not taken;
+  - NORM_WEIGHT=fp32_gamma: pass, bias 0.0045 (from 0.0019) for ~0.5 ms per 6 layers, not taken (switch kept, off).
+- No gain (6-layer traced stacks, 15-30 repeats): global ring_mla K splits 2 or K chunk 128, sliding SDPA q64 / K
+  splits 2-3 / HiFi2 / LoFi, async TP collectives, CCL links / topology / transport, MATMUL_CORE_GRID=auto (slower).
+  Global q chunk 128 overflows the kernel config buffer. A 1D whole-grid config for the fp32 RoPE rotation matmuls
+  clashes with the L1 activations (static circular buffers over L1 buffers).
+- all_gather_minimal_matmul_async (fused TP gather + matmul) needs equal activation and weight dtypes (bf16 x bfp8
+  here). The framework's op-mode device profiler hung on this model; Tracy (`python -m tracy -p -r`) works on short
+  stacks (BENCH_LAYERS=6); a 60-layer op-by-op Tracy chunk takes ~16 minutes.
+- Benchmark: `BENCH_MAX_SEQ` sizes the cache (10240 reproduces the contract test's ring_mla kernel size).

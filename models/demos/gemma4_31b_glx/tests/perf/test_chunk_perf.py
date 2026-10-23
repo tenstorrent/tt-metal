@@ -27,7 +27,7 @@ import torch
 import ttnn
 
 HF = "/mnt/models/huggingface/hub/models--google--gemma-4-31B-it/snapshots/3548789868c5356dbf307c98e6f609007b82b3eb"
-CHUNK, MAX_SEQ = 5120, 56320
+CHUNK, MAX_SEQ = 5120, int(os.environ.get("BENCH_MAX_SEQ", "56320"))
 TRACE_REGION = int(os.environ.get("BENCH_TRACE_REGION", 200 * 1024 * 1024))
 
 
