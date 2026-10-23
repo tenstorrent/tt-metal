@@ -348,7 +348,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false>
+template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false, bool end_fold = false>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -382,7 +382,7 @@ inline void matmul_configure_mop(
 
     // The last phase ends on a MVMUL that clears the held source and resets the fidelity phase through ADDR_MOD_3,
     // so the MOP needs no end op slot.
-    constexpr bool endfold = high_fidelity && !load_only;
+    constexpr bool endfold = high_fidelity && !load_only && end_fold;
     if constexpr (endfold)
     {
         addr_mod_t {
@@ -1070,6 +1070,8 @@ inline void matmul_configure_mop_throttled(
  * @tparam tile_mop: One MOP and one DEST offset write per output tile instead of the default one MOP per reuse row for
  *         full 32x32 tiles at THROTTLE_LEVEL 0; _llk_math_matmul_ must pass the same value.
  * @tparam tiny_16_rows: Lets the row form serve 16 row in0 tiles (8 rows and fewer always); false at DestSync.Half with a 32-bit DEST, where it is slower.
+ * @tparam end_fold: Ends a high fidelity tile MOP on the MVMUL that clears the held source, one issue slot less per tile; true at
+ *         DestSync.Full only, where freeing the source a cycle earlier never slows a block.
  * @tparam in1_order: For in1 32x16 tiles, 1 alternates the DEST row groups and 0 keeps the pair order; 1 needs in1 32x16 and
  *         in0 other than 16x32.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
@@ -1078,7 +1080,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1132,7 +1134,7 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, end_fold>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
@@ -1152,7 +1154,7 @@ inline void _llk_math_matmul_init_(
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, end_fold>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = (ct_dim >= rt_dim));
