@@ -217,8 +217,10 @@ vllm serve ... \
   --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
 ```
 
-- **Who speculates.** A lane drafts after a step that ran one request in it; a lane with several requests declines
-  (`num_valid` 0) and decodes as before. A verify answers in the accept mode the plugin asks for: `argmax_ids` when
+- **Who speculates.** A lane drafts 3 tokens after a step that ran one request in it, 1 token for each of two
+  requests that ran in one pass with at most one draft each (the pair draft, below); a lane with more requests
+  declines (`num_valid` 0) and decodes as before. `spec_plan` declares the cap per lane's live rows (`k_by_rows`
+  ((1, 3), (2, 1), (4, 1)), which the plugin reads per lane). A verify answers in the accept mode the plugin asks for: `argmax_ids` when
   every request of the step is greedy; `fused_sample` when a request samples with only temperature / top_k / top_p
   inside the device sampler's bounds (acceptance on device, below); `logits` otherwise (the plugin's host walk, for
   penalties, logprobs, grammar, token filters).
@@ -230,7 +232,8 @@ vllm serve ... \
   not depend on the positions, so it is repeated with one slot's position each. A block that carries drafts beside
   another request (one joined after the proposal) is packed into passes of 4 slots.
 - **Draft** (`tt/mtp.py`): one traced program per replica, each MTP layer with its own KV cache, a ring of 256
-  positions addressed at 256 + t % 256 with RoPE at t. With every layer (the default, below) pass i runs layer i over
+  positions per request slot, ring r addressed at 512 r + 256 + t % 256 with RoPE at t (one page table row serves
+  every slot and ring). With every layer (the default, below) pass i runs layer i over
   the draft's rows. With one layer the fill pass runs the MTP layer over the committed tokens, each slot taking the
   target's final normed hidden there (the persistent buffer of the last layer's fused norm) and the embedding of the
   committed token; two steps on the last slot feed the layer its own output (vLLM's MTP proposer with one layer).
@@ -305,7 +308,8 @@ vllm serve ... \
   reload. A prefill may run while a
   deferred verify is in flight: it writes only its slots' page-table rows and K / V, behind the verify on the device
   queue, and the verify's pages are already on their way to the host, so its read and propose follow as usual;
-  nothing chains onto it afterwards, and the lane's MTP ring restarts.
+  nothing chains onto it afterwards, and the prompt's slot's MTP ring restarts (the other requests' rings stay;
+  without the history every ring restarts).
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
@@ -327,8 +331,8 @@ vllm serve ... \
   kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The chained verifies on hardware with every MTP layer and the backfill (the relay, deferred reads and
   chained verifies ran on BH Galaxy with one layer); the accept step's SampleScan on all-greedy passes (only
-  SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
-  verify rows exceed the 4-user kernels); the trace region size with both extra traces.
+  SampleVerify's argmax walk is needed there); more than two speculating requests per lane, or two with more
+  than one draft each (16 / 32 verify rows exceed the 4-user kernels); the trace region size with the extra traces.
 
 ### One MTP layer per draft
 
@@ -376,8 +380,8 @@ whole sequence after steps of every accepted count (`tests/test_spec_decode_host
   at bfloat8_b), plus the serial K / V writes of up to 4 slots in passes 2 and 3, the plan, tokens and gather ops
   (~0.1 ms), minus the one-layer derive program's ~16 small ops: about 2.8-3.0 ms (to measure; `MIMO_VLLM_TIMING=1`
   reports it as the chained draft wait). Memory per replica: 2 more layers, ~0.74 GB (92 MB per chip; eh_proj 8192 x 4096, SWA
-  q / k / v / o, dense MLP 4096 -> 16384 -> 4096), 2 more ring caches (~0.2 MB per chip each), the stash (256 KB of
-  hidden rows per chip, one 128-byte page) and the inputs (9 pages of 128 bytes).
+  q / k / v / o, dense MLP 4096 -> 16384 -> 4096), 2 more ring caches (~0.7 MB per chip each, a ring per request
+  slot), the stash (256 KB of hidden rows per chip, one 128-byte page) and the inputs (9 pages of 128 bytes).
 - **Tests.** `tests/test_spec_chain_host.py`: the chain step's description against propose's, the plan step against
   plan_mtp_layers for every commit count, a plain step's slot, stash hits, misses and holes, the ring's wrap and the
   context end, the tokens step against mtp_layer_tokens, and the whole program's mirror against the reference
@@ -441,6 +445,44 @@ with one mechanism, for 1 and 3 MTP layers:
   up to 127 real rows x 1 or 3 layers, as 256-row passes: about 1 ms on device (to measure). Memory per chip: 4.3 MB
   of history rows (4 slots x 132 x 4096 bf16), a 4 KB page, ~6 KB of backfill inputs (and 2 x 256 x 128 bf16 cos /
   sin tails with compact RoPE tables).
+
+### Two requests per lane (the pair draft)
+
+A lane holding two requests used to decline drafting. With `MIMO_SPEC_PAIR=1` (default; `0` restores that, for A/B)
+it drafts one token for each, and both are verified in the lane's one 4-slot pass (2 x (last token + 1 draft)), the
+plugin capping a lane of two at one draft each (`k_by_rows`) and trimming carried drafts so a lane's rows fit 4 slots.
+
+- **Sources** (`reference/spec_decode.py` `draft_sources`): a lane step that ran exactly two requests in one pass,
+  each with at most one draft (a plain step of two, or a verify of two), drafts for both, in slot order; any other
+  step of several requests (a rider, a request still carrying two drafts) drafts nothing.
+- **Rings.** Each request slot has its own MTP ring in every layer's cache (4 rings of 4 blocks, the table 32 blocks
+  wide, the 4 blocks after the rings the backfill's scratch: 32 physical blocks per layer, ~0.7 MB per chip each), so
+  the two requests never read each other's K / V and a request going back to drafting alone finds layer 0 where it
+  left it. The adapter tracks every ring (`MtpRing`: the request, its last row or the handle whose page gives it, and
+  whether every layer holds it, with the lane's stash); a single draft with every layer after pair drafts backfills
+  layers 1 and 2 (the backfill plan addresses the request's ring), as does any draft whose ring does not continue.
+- **Program** (`tt/mtp.py` `_body_pair`, its own trace beside the single draft's): its inputs from the packed upload
+  (`pack_mtp_pair`: tokens, fill cache positions in each request's ring, the anchors, RoPE indices; `derive_pair`),
+  one pass of MTP layer 0 over both requests' committed slots on the step's own final norm rows (layer 0 at B - 1 with
+  x[B], draft 1 of either drafter; it re-runs nothing), then the pair drafts step (each source's anchor and draft).
+  Compiled before the decode capture (`warm_pair`, the pass's programs are the single draft's pass 0), captured with
+  the other MTP traces. Its trace is about a third of the every-layer draft's (one pass instead of three).
+- **Chain** (`kernels/spec_chain.cpp`, mirror `reference/spec_chain.py`). The chain row names both sources (each its
+  columns, slots, MTP ring, relay and the page group it relays from; the pair word); the chain step writes the pair
+  upload from groups 0 and 1 of the accept page, declining each source on its own at the context limit; the result
+  page has a status (drafting, anchor, bonus, pair) and a drafts section per source. A verify chained onto a pair's
+  relays both chain rows from their page groups (a chain row verifies at most the one draft its section holds), or
+  one of them (the other request finished); that request then drafts alone, and with every layer the backfill runs
+  behind the relayed pass, reading its first row from the verify upload on device (`backfill_row` relay slot).
+- **Tests** (no device): `tests/test_spec_pair_host.py` (planning, the rings' addressing, the chain / drafts / relay
+  mirrors against the host plans for every pair of counts, the plan step's ring, the pair drafter against a
+  recomputation of layer 0 over each request's whole sequence, speculative greedy of two requests equal to plain
+  greedy); `tests/test_spec_pair_adapter_host.py` (the adapter on fake lanes through 1 -> 2 -> 1 -> 3 -> 2 requests,
+  synchronous and chained: the oracle's tokens step for step, each population's drafts from the request's own ring,
+  the relayed backfill); the kernels compiled on the host against the mirrors (`kcheck`: every mode on random pair
+  cases and whole chained pair flows).
+- **Open.** On hardware: the pair trace's size in the trace region, acceptance of layer 0's draft per pair, and the
+  throughput at concurrency 8 (two requests per lane).
 
 ## Not done
 

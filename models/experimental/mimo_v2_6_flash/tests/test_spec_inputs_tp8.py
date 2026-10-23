@@ -474,7 +474,8 @@ def test_mtp_history_tp8(mesh_device, layers):
     plan = MeshPlan(dp_submeshes(mesh_device)[0])
     mesh = plan.mesh_device
     rep = plan.replicate()
-    hist = MtpHistory(plan, B, hidden_size, layers)
+    spec = SpecInputs(plan, B, REP)
+    hist = MtpHistory(plan, B, hidden_size, layers, verify_upload=spec.verify_packed)
     li = make_layer_inputs(plan, B, hidden_size) if layers > 1 else None
     hist.warm(li)
     mirror = History(hidden_size)
@@ -513,7 +514,6 @@ def test_mtp_history_tp8(mesh_device, layers):
         mesh_mapper=rep,
     )
     src = device_rows(torch.zeros(B, hidden_size))
-    spec = SpecInputs(plan, B, REP)
 
     def decode():
         hist.stage(tokens_tt)
@@ -567,11 +567,17 @@ def test_mtp_history_tp8(mesh_device, layers):
                     e = entry(slot, q)
                     mirror.page[e], mirror.page[len(mirror.page) // 2 + e] = q, rng.randrange(152576)
             upload_ints(plan, mirror.page, hist.page)
-            for upload in (backfill_row(B, slot, a), backfill_row(B)):
+            # A relayed backfill reads a from the verify upload (a chained verify's position at verify slot 1).
+            vpos = torch.full((B,), -1, dtype=torch.int32)
+            vpos[1] = a
+            vtok = torch.zeros(B, dtype=torch.int32)
+            ttnn.copy_host_to_device_tensor(spec.verify_host(vtok, vpos), spec.verify_packed)
+            verify_words = pack_verify(vtok, vpos).tolist()
+            for upload in (backfill_row(B, slot, a), backfill_row(B), backfill_row(B, slot, relay_slot=1)):
                 stash = stash_page(B, [1, 2, 3, 4], [5, 6, 7, 8]) if li is not None else None
                 if li is not None:
                     upload_ints(plan, stash, li.stash)
-                want, new = backfill_plan(upload, mirror.page, layers, stash)
+                want, new = backfill_plan(upload, mirror.page, layers, stash, verify=verify_words)
                 upload_ints(plan, upload, hist.upload)
                 (run if a % 2 else replay)()
                 for name, t in (("hidden", hist.hidx), ("rope", hist.rope), ("table", hist.table)):
@@ -706,3 +712,109 @@ def test_spec_relay_tp8(mesh_device):
                 assert got == [w & 0xFFFFFFFF for w in want_verify], f"case {k} chip {c}: verify upload"
             for c, got in enumerate(words_of(ctrl)):
                 assert got == want_ctrl, f"case {k} chip {c}: control page"
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_spec_chain_pair_tp8(mesh_device):
+    """The pair draft's kernel steps against their mirrors (reference/spec_chain.py), eager and traced: the chain step
+    on two sources (every pair of counts, the ring's wrap, a source declined at the limit), the pair drafts step, and
+    the relay of a pair page into two chain rows, into one from either group, and of too many drafts (idle)."""
+    from models.experimental.mimo_v2_6_flash.reference.spec_decode import draft_sources
+    from models.experimental.mimo_v2_6_flash.tests.test_spec_chain_host import accept_page as accept_groups
+
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    spec = SpecInputs(plan, B, REP)
+
+    def u32(n):
+        return ttnn.from_torch(
+            torch.zeros(1, n, dtype=torch.int32),
+            device=mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    accept, argmax, heads = u32(ACCEPT_WORDS), u32(B), [u32(B) for _ in range(MAX_DRAFTS)]
+    ctrl = u32(GROUPS * GROUP_WORDS)
+    chain = SpecChain(plan, spec, accept, argmax, heads)
+
+    def run():
+        chain.chain()
+        chain.pair_drafts()
+
+    replay = replayed(mesh, run)
+    replay_relay = replayed(mesh, lambda: chain.relay(ctrl))
+    rng = random.Random(3)
+    limit = MAX_SEQ_LEN - MAX_DRAFTS
+
+    def pass_of(rows):
+        (vp,) = plan_verify_passes(rows)
+        tok = torch.zeros(B, dtype=torch.int32)
+        pos = torch.full((B,), -1, dtype=torch.int32)
+        tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+        pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+        return vp, tok, pos
+
+    def rows_of(firsts, drafts):
+        rows = []
+        for row, p, n in zip((3, 5), firsts, drafts):
+            rows.append(
+                (
+                    row,
+                    [rng.randrange(152576) for _ in range(n + 1)] + [0] * (3 - n),
+                    list(range(p, p + n + 1)) + [-1] * (3 - n),
+                    n,
+                )
+            )
+        return rows
+
+    pages = []
+    for bonus, nx, ny in itertools.product((1, 255, 256, 257, 4000, limit - 1), (0, 1), (0, 1)):
+        for mx, my in itertools.product(range(1, nx + 2), range(1, ny + 2)):
+            if bonus - mx < 0:
+                continue
+            vp, tok, pos = pass_of(rows_of((bonus - mx, 9000 - my), (nx, ny)))
+            row = torch.tensor(chain_row(B, draft_sources([vp]), limit, ring=[1, 3], pair=True), dtype=torch.int32)
+            acc = accept_groups(
+                [(mx, [rng.randrange(152576) for _ in range(mx)]), (my, [rng.randrange(152576) for _ in range(my)])]
+            )
+            ids = [rng.randrange(152576) for _ in range(B)]
+            head = [rng.randrange(152576) for _ in range(B)]
+            want_mtp, header = chain_step(pack_verify(tok, pos, row).tolist(), acc, ids)
+            want = header + drafts_step(want_mtp, [head], pair=True)
+            for runner in (run, replay):
+                ttnn.copy_host_to_device_tensor(spec.verify_host(tok, pos, row), spec.verify_packed)
+                upload_words(plan, acc, accept)
+                upload_words(plan, ids, argmax)
+                upload_words(plan, head, heads[0])
+                runner()
+                for c, got in enumerate(words_of(spec.mtp_packed)):
+                    assert got == [w & 0xFFFFFFFF for w in want_mtp], f"bonus {bonus} chip {c}: pair upload"
+                for c, got in enumerate(words_of(chain.result)):
+                    assert got == want, f"bonus {bonus} chip {c}: result page"
+            if nx == ny == 1:
+                pages.append((bonus, want))
+    for bonus, page in pages:
+        for hints, keep in (((1, 1), (0, 1)), ((1, 1), (0,)), ((1, 1), (1,)), ((2, 1), (0,))):
+            firsts = (bonus + 3, 9003)
+            rows = [rows_of(firsts, hints)[k] for k in keep]
+            vp, tok, pos = pass_of(rows)
+            sources = draft_sources([vp])
+            row = chain_row(
+                B, sources, limit, relay=True, ring=[1, 3][: len(sources)], group=list(keep), pair=len(sources) == 2
+            )
+            row = torch.tensor(row, dtype=torch.int32)
+            ctrl_words = control_words(pass_inputs(vp, None)[1])
+            want_verify, want_ctrl = relay_step(pack_verify(tok, pos, row).tolist(), page, ctrl_words)
+            for runner in (lambda: chain.relay(ctrl), replay_relay):
+                ttnn.copy_host_to_device_tensor(spec.verify_host(tok, pos, row), spec.verify_packed)
+                upload_words(plan, page, chain.result)
+                upload_words(plan, ctrl_words, ctrl)
+                runner()
+                for c, got in enumerate(words_of(spec.verify_packed)):
+                    assert got == [w & 0xFFFFFFFF for w in want_verify], f"relay {keep} chip {c}: verify upload"
+                for c, got in enumerate(words_of(ctrl)):
+                    assert got == want_ctrl, f"relay {keep} chip {c}: control page"
