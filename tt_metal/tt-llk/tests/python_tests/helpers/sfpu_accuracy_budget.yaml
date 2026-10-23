@@ -2245,6 +2245,46 @@ Log:
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-20}
 
 
+Log10:  # Wormhole in the craq-sim simulator (30e35f9b, bit-exact SFPU model), not silicon
+  - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 5, measured: 4, run: 2026-10-15}  # max 4 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "No", max_ulp: 3, measured: 2, run: 2026-10-15}  # max 2 ULP
+  - {in: Bfp4_b, out: Float16_b, dest: "Yes", max_ulp: 0, measured: 0, run: 2026-10-15}  # max 0 ULP
+  - {in: Bfp4_b, out: Float32, dest: "No", max_ulp: 144180, measured: 131072, run: 2026-10-15}  # max 131072 ULP
+  - {in: Bfp4_b, out: Float32, dest: "Yes", max_ulp: 35926, measured: 32660, run: 2026-10-15}  # max 32660 ULP
+  - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 5, measured: 4, run: 2026-10-15}  # max 4 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 3, measured: 2, run: 2026-10-15}  # max 2 ULP
+  - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0, measured: 0, run: 2026-10-15}  # max 0 ULP
+  - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 144180, measured: 131072, run: 2026-10-15}  # max 131072 ULP
+  - {in: Bfp8_b, out: Float32, dest: "Yes", max_ulp: 36042, measured: 32765, run: 2026-10-15}  # max 32765 ULP
+  - {in: Float16, out: Bfp8_b, dest: "No", metric: tolerance, measured: 16392, run: 2026-10-15}  # max 16392 ULP, block-quantized
+  - {in: Float16, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 16392, run: 2026-10-15}  # max 16392 ULP, block-quantized
+  - {in: Float16, out: Float16, dest: "No", max_ulp: 7, measured: 6, run: 2026-10-15}  # max 6 ULP
+  - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "No", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float16, out: Float16_b, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float16, out: Float32, dest: "No", max_ulp: 54068, measured: 49152, run: 2026-10-15}  # max 49152 ULP
+  - {in: Float16, out: Float32, dest: "Yes", max_ulp: 4507, measured: 4097, run: 2026-10-15}  # max 4097 ULP
+  - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
+  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 5, measured: 4, run: 2026-10-15}  # max 4 ULP
+  - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0, measured: 0, run: 2026-10-15}  # max 0 ULP
+  - {in: Float16_b, out: Float32, dest: "No", max_ulp: 72090, measured: 65536, run: 2026-10-15}  # max 65536 ULP
+  - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36043, measured: 32766, run: 2026-10-15}  # max 32766 ULP
+  - {in: Float32, out: Bfp8_b, dest: "No", metric: tolerance, measured: 3, run: 2026-10-15}  # max 3 ULP, block-quantized
+  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 14459, run: 2026-10-15}  # max 14459 ULP, block-quantized
+  - {in: Float32, out: Float16, dest: "No", max_ulp: 7, measured: 6, run: 2026-10-15}  # max 6 ULP
+  - {in: Float32, out: Float16, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float32, out: Float16_b, dest: "No", max_ulp: 2, measured: 1, run: 2026-10-15}  # max 1 ULP
+  - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1, measured: 0, run: 2026-10-15}  # max 0 ULP
+  - {in: Float32, out: Float32, dest: "No", max_ulp: 72090, measured: 65536, run: 2026-10-15}  # max 65536 ULP
+  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 3, measured: 2, run: 2026-10-15}  # max 2 ULP
+
+
 Log1p:
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 385, run: 2026-10-20}
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 385, run: 2026-10-20}
