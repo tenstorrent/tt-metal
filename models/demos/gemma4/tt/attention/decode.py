@@ -155,9 +155,15 @@ def decode_forward(
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
         for t in (tt_q, tt_k, tt_v):
             t.deallocate(True)
-        # q stays height-sharded into SDPA (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py);
-        # k / v stay sharded for the paged cache update below.
-        tt_q, tt_k, tt_v = nq, nk, nv
+        # k / v stay sharded for the paged cache update below. q stays height-sharded into SDPA on the sliding
+        # layers (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py); on the global layers
+        # (head_dim 512) the SDPA program's static buffers plus the sharded q, k, v shards overflow L1 at 32 users
+        # ("statically allocated dataflow buffers clash with L1 buffers"), so q takes the DRAM form there.
+        tt_q = nq
+        if config.head_dim >= 512:
+            tt_q = ttnn.to_memory_config(nq, ttnn.DRAM_MEMORY_CONFIG)
+            nq.deallocate(True)
+        tt_k, tt_v = nk, nv
     else:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
@@ -352,6 +358,10 @@ def decode_forward(
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)
+            if fused_qkv:
+                # the fused op's k / v shards are dead once written: free their L1 before SDPA
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
     else:
         k_cache = tt_k
         v_cache = tt_v
