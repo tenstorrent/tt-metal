@@ -148,7 +148,16 @@ def test_chunk_probe(mesh_device):
             int(x) for x in os.environ.get("PROBE_USERS", ",".join(str(b) for b in range(B))).split(",")
         ]  # users in the call (the others stay idle: a lone request of the server)
         items = [(b, toks[b], 0, E) for b in USERS]
+        cmp_ = (
+            {}
+        )  # PROBE_CMP=1: decode logits + decode index keys after every rep (reps differ in PROBE_ENV_REPS settings) must be identical
         for rep in range(REPS):
+            for spec_ in filter(
+                None, os.environ.get("PROBE_ENV_REPS", "").split(";")
+            ):  # "VAR=a,b,c" -> rep i sets VAR to the i-th value
+                var_, vals_ = spec_.split("=", 1)
+                os.environ[var_] = vals_.split(",")[rep % len(vals_.split(","))]
+                log(f"PROBE rep {rep}: {var_}={os.environ[var_]}")
             if os.environ.get("PROBE_RELEASE") == "1":
                 for b_ in range(B):
                     m.release_user(b_)
@@ -171,6 +180,9 @@ def test_chunk_probe(mesh_device):
                     want_logits=False,
                 )
                 st_ = c_
+                log(
+                    f"PROBE call [{st_ - 0}) timing: { {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.timing.items()} }"
+                )
             items = [(b, toks[b], st_, E) for b in USERS]
             res = m.prefill_interleaved(
                 items,
@@ -179,6 +191,9 @@ def test_chunk_probe(mesh_device):
                 want_logits=(bool(os.environ.get("PROBE_SAVE")) or SAME) and os.environ.get("PROBE_NOLOGITS") != "1",
             )
             wall = time.perf_counter() - t0
+            log(
+                f"PROBE last call timing: { {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.timing.items()} }"
+            )
             n = len(rec)
             td = [r[2] for r in rec]
             pos = sorted({0, n // 4, n // 2, 3 * n // 4, n - 1})
@@ -188,6 +203,42 @@ def test_chunk_probe(mesh_device):
                 + " ".join(f"s0={rec[i][0]}:{td[i] * 1e3:.0f}ms" for i in pos)
                 + f" first={[int(res[b][0]) for b in USERS]}"
             )
+            if os.environ.get("PROBE_CMP") == "1":
+                tok_ = torch.tensor([int(res[b][0]) for b in range(B)], dtype=torch.long)
+                lgs_ = []
+                for k_ in range(
+                    int(os.environ.get("PROBE_DECODE", "2"))
+                ):  # (the first decode step runs the pending key hand-off)
+                    out_ = m.decode_forward(
+                        tok_, torch.full((B,), E + k_, dtype=torch.long), enable_trace=False, reload_inputs=True
+                    )
+                    lgs_.append(m.read_logits().float().clone())
+                    tok_ = out_.clone().long()
+                from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as _PC
+
+                keys_ = {}
+                for L_, d_ in list(m.index_owner.items())[:3]:
+                    rr_ = m.attns[L_].ratio
+                    keys_[L_] = (
+                        _PC.read_shard(d_.k_cache, 0).reshape(m.U, d_.k_cache.shape[2], -1)[0, : E // rr_].clone()
+                    )
+                cmp_[rep] = (
+                    [int(res[b][0]) for b in USERS],
+                    lgs_,
+                    keys_,
+                    (res[USERS[0]][1].float().clone() if res[USERS[0]][1] is not None else None),
+                )
+        if cmp_:
+            ref_ = cmp_[0]
+            for rep, c_ in cmp_.items():
+                eq_first = c_[0] == ref_[0]
+                eq_dec = all(bool((a == b).all()) for a, b in zip(c_[1], ref_[1]))
+                eq_keys = all(bool((c_[2][L_] == ref_[2][L_]).all()) for L_ in ref_[2])
+                eq_lg = c_[3] is None or bool((c_[3] == ref_[3]).all())
+                log(
+                    f"PROBE CMP E={E} rep {rep} vs rep 0: first tokens equal {eq_first}, prefill logits bit-equal {eq_lg}, decode logits bit-equal {eq_dec}, decode index keys bit-equal {eq_keys}"
+                )
+                assert eq_first and eq_dec and eq_keys and eq_lg, f"rep {rep} differs from rep 0"
         if os.environ.get(
             "PROBE_SAVE_IDS"
         ):  # translated pool rows of the last chunk (layer -> [C, 512]) of mesh device 0
