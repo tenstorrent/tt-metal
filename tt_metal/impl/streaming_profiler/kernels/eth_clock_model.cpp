@@ -46,53 +46,64 @@ FORCE_INLINE constexpr uint32_t divide_rounded(uint32_t numerator, uint32_t deno
 constexpr kernel_profiler::SyncMeta kMetaWallClock{.kind = kernel_profiler::SyncKind::WallClock};
 
 using Sample = kernel_profiler::SyncSample;
+// A sample waiting in the hold. It keeps the sample's refclk and its intercept under the line's rate, which can't
+// change while the sample waits.
+struct Held {
+    uint32_t refclk;
+    uint32_t intercept;
+};
 
 struct Model {
-    // The line the samples are on, through `at` with slope wall_per_refclk_eighths, which is 0 when there is no line.
-    // mean is the average residual of the line's `count` samples so far.
+    // The line the samples are on: wall clock = wall_per_refclk_eighths * refclk + intercept, modulo 2^32. There is no
+    // line while wall_per_refclk_eighths is 0. mean is the average residual of the line's `count` samples so far.
     struct Line {
         uint32_t wall_per_refclk_eighths = 0;
-        Sample at{};
+        uint32_t intercept = 0;
         int32_t mean = 0;
         int64_t sum = 0;
         // 64-bit because at one sample per refclk update, a 32-bit count wraps in under six minutes on one line.
         uint64_t count = 0;
-        FORCE_INLINE int32_t residual(Sample sample) const {
-            return static_cast<int32_t>(
-                (sample.wall_eighths - at.wall_eighths) - wall_per_refclk_eighths * (sample.refclk - at.refclk));
+        // The sample's wall clock minus rate times refclk. The residual is this minus the line's intercept.
+        FORCE_INLINE uint32_t intercept_of(Sample sample) const {
+            return sample.wall_eighths - wall_per_refclk_eighths * sample.refclk;
         }
-        FORCE_INLINE bool holds(int32_t sample_residual) const {
-            return static_cast<uint32_t>(sample_residual - mean + kOffLineEighths) <= 2u * kOffLineEighths;
+        FORCE_INLINE int32_t residual(Sample sample) const {
+            return static_cast<int32_t>(intercept_of(sample) - intercept);
+        }
+        // The lowest intercept within kOffLineEighths of the mean. A sample is on the line if its intercept is at most
+        // 2 * kOffLineEighths above this.
+        FORCE_INLINE uint32_t low() const { return intercept + static_cast<uint32_t>(mean - kOffLineEighths); }
+        FORCE_INLINE static bool holds(uint32_t sample_intercept, uint32_t line_low) {
+            return sample_intercept - line_low <= 2u * kOffLineEighths;
         }
     };
-    // The samples on the line since the last point. sum_residual sums their residuals minus the line's mean, which only
-    // moves when a window closes. Each term is then within about kOffLineEighths of zero, so the sum fits in 32 bits.
+    // The samples on the line since the last point. sum_intercept sums their intercepts modulo 2^32.
     struct Window {
         uint32_t first_refclk = 0;
         uint32_t sum_refclk_from_first = 0;
-        int32_t sum_residual = 0;
+        uint32_t sum_intercept = 0;
         uint32_t count = 0, size = 1;
         uint32_t last_refclk = 0;
-        // Adds a sample on `line` and returns whether the window is ready to close. The first sample's wall clock is
-        // stored in first_wall_eighths, outside the window, so a register copy of the window doesn't carry it.
-        FORCE_INLINE bool add(Sample sample, const Line& line, uint32_t& first_wall_eighths) {
+        // Adds a held sample and returns whether the window is ready to close. The first sample's intercept is stored
+        // in first_intercept, outside the window, so a register copy of the window doesn't carry it.
+        FORCE_INLINE bool add(Held held, uint32_t& first_intercept) {
             if (count == 0) {
-                first_refclk = sample.refclk;
-                first_wall_eighths = sample.wall_eighths;
+                first_refclk = held.refclk;
+                first_intercept = held.intercept;
                 sum_refclk_from_first = 0;
-                sum_residual = 0;
+                sum_intercept = 0;
             }
-            const uint32_t refclk_from_first = sample.refclk - first_refclk;
+            const uint32_t refclk_from_first = held.refclk - first_refclk;
             sum_refclk_from_first += refclk_from_first;
-            sum_residual += line.residual(sample) - line.mean;
-            last_refclk = sample.refclk;
+            sum_intercept += held.intercept;
+            last_refclk = held.refclk;
             return ++count == size || refclk_from_first >= kPointTicks;
         }
     };
     // Samples waiting to join the window. A line change empties the hold, so a held sample joins on the same line it
-    // was checked against, and its residual is computed only then.
+    // was checked against.
     struct Hold {
-        Sample samples[kHoldSamples];
+        Held samples[kHoldSamples];
         uint32_t begin = 0, count = 0;
     };
     // While there is no line, Group holds the samples since the last point and Recent holds the last kSteadyPoints
@@ -110,7 +121,7 @@ struct Model {
     Hold hold;
     Line line;
     Window window;
-    uint32_t window_first_wall_eighths = 0;
+    uint32_t window_first_intercept = 0;
     Sample off_line_candidate{};
     bool has_off_line_candidate = false;
     Group group;
@@ -124,26 +135,27 @@ struct Model {
         const uint32_t count = window.count;
         const uint32_t mean_refclk_from_first = divide_rounded(window.sum_refclk_from_first, count);
         const int32_t half_count = static_cast<int32_t>(count / 2u);
-        // The sum over the window of each sample's residual minus the first sample's residual.
-        const int32_t error_sum =
-            window.sum_residual -
-            static_cast<int32_t>(count) *
-                (line.residual(Sample{window.first_refclk, window_first_wall_eighths}) - line.mean);
+        // The sum over the window of each sample's intercept minus the first sample's intercept.
+        const int32_t error_sum = static_cast<int32_t>(window.sum_intercept - count * window_first_intercept);
         const int32_t mean_error =
             (error_sum + (error_sum < 0 ? -half_count : half_count)) / static_cast<int32_t>(count);
+        const uint32_t refclk = window.first_refclk + mean_refclk_from_first;
         emit_point(
-            window.first_refclk + mean_refclk_from_first,
-            window_first_wall_eighths + line.wall_per_refclk_eighths * mean_refclk_from_first +
-                static_cast<uint32_t>(mean_error),
+            refclk,
+            line.wall_per_refclk_eighths * refclk + window_first_intercept + static_cast<uint32_t>(mean_error),
             line.wall_per_refclk_eighths);
-        line.sum += static_cast<int64_t>(window.sum_residual) + static_cast<int64_t>(count) * line.mean;
+        // Each sample's residual minus the line's mean is within about kOffLineEighths of zero, so their sum fits in 32
+        // bits.
+        const int32_t offset_sum =
+            static_cast<int32_t>(window.sum_intercept - count * (line.intercept + static_cast<uint32_t>(line.mean)));
+        line.sum += static_cast<int64_t>(offset_sum) + static_cast<int64_t>(count) * line.mean;
         line.count += count;
         line.mean = static_cast<int32_t>(line.sum / static_cast<int64_t>(line.count));
         window.count = 0;
         window.size = std::min(window.size * 2u, kMaxWindowSamples);
     }
-    FORCE_INLINE void window_add(Sample sample) {
-        if (window.add(sample, line, window_first_wall_eighths)) {
+    FORCE_INLINE void window_add(Held held) {
+        if (window.add(held, window_first_intercept)) {
             close_window();
         }
     }
@@ -191,8 +203,10 @@ struct Model {
         const Sample oldest = recent.points[recent.head];
         const Sample& newest = recent.points[(recent.head + kSteadyPoints - 1) % kSteadyPoints];
         const uint32_t span = newest.refclk - oldest.refclk;
+        const uint32_t wall_per_refclk_eighths = divide_rounded(newest.wall_eighths - oldest.wall_eighths, span);
         Line candidate{
-            .wall_per_refclk_eighths = divide_rounded(newest.wall_eighths - oldest.wall_eighths, span), .at = oldest};
+            .wall_per_refclk_eighths = wall_per_refclk_eighths,
+            .intercept = oldest.wall_eighths - wall_per_refclk_eighths * oldest.refclk};
         int32_t residuals[kSteadyPoints];
         int32_t sum = 0;
         for (uint32_t i = 0; i < kSteadyPoints; i++) {
@@ -201,12 +215,12 @@ struct Model {
         }
         candidate.mean = sum / static_cast<int32_t>(kSteadyPoints);
         for (uint32_t i = 0; i < kSteadyPoints; i++) {
-            if (!candidate.holds(residuals[i])) {
+            if (!candidate.holds(candidate.intercept + static_cast<uint32_t>(residuals[i]), candidate.low())) {
                 return;
             }
         }
         line.wall_per_refclk_eighths = candidate.wall_per_refclk_eighths;
-        line.at = oldest;
+        line.intercept = candidate.intercept;
         line.mean = candidate.mean;
         line.sum = sum;
         line.count = kSteadyPoints;
@@ -223,14 +237,15 @@ struct Model {
             const uint32_t last_refclk = window.last_refclk;
             emit_point(
                 last_refclk,
-                line.at.wall_eighths + line.wall_per_refclk_eighths * (last_refclk - line.at.refclk) +
-                    static_cast<uint32_t>(line.mean),
+                line.wall_per_refclk_eighths * last_refclk + line.intercept + static_cast<uint32_t>(line.mean),
                 line.wall_per_refclk_eighths);
         }
+        const uint32_t wall_per_refclk_eighths = line.wall_per_refclk_eighths;
         line.wall_per_refclk_eighths = 0;
         recent.count = 0;
         for (uint32_t i = 0; i < hold.count; i++) {
-            group_add(hold.samples[(hold.begin + i) % kHoldSamples]);
+            const Held held = hold.samples[(hold.begin + i) % kHoldSamples];
+            group_add(Sample{held.refclk, wall_per_refclk_eighths * held.refclk + held.intercept});
         }
         hold.count = 0;
         group_add(off_line_candidate);
@@ -242,7 +257,8 @@ struct Model {
             group_add(sample);
             return;
         }
-        if (!line.holds(line.residual(sample))) {
+        const uint32_t sample_intercept = line.intercept_of(sample);
+        if (!line.holds(sample_intercept, line.low())) {
             if (has_off_line_candidate) {
                 end_line(sample);
                 return;
@@ -257,7 +273,7 @@ struct Model {
             hold.begin = (hold.begin + 1) % kHoldSamples;
             hold.count--;
         }
-        hold.samples[(hold.begin + hold.count) % kHoldSamples] = sample;
+        hold.samples[(hold.begin + hold.count) % kHoldSamples] = Held{sample.refclk, sample_intercept};
         hold.count++;
     }
     // Feeds the samples [cursor, end) in ring order. While on a line, with a full hold and no off-line candidate
@@ -274,37 +290,37 @@ struct Model {
             }
             // Register copies for the loop. close_window() works on the members, so the copies are written back
             // before it and reloaded after.
-            Line steady{.wall_per_refclk_eighths = line.wall_per_refclk_eighths, .at = line.at, .mean = line.mean};
+            const uint32_t wall_per_refclk_eighths = line.wall_per_refclk_eighths;
+            uint32_t low = line.low();
             Window open = window;
             uint32_t hold_begin = hold.begin;
             bool left_line = false;
-            // Each sample and its hold slot are loaded an iteration ahead so the load latency hides behind the math.
-            // The one read past the end stays inside L1, and its value is never used.
-            Sample sample = load(cursor), held = hold.samples[hold_begin];
+            // Each sample is loaded an iteration ahead so the L1 latency hides behind the rest of the iteration. The
+            // one read past the end stays inside L1, and its value is never used.
+            Sample sample = load(cursor);
             for (; cursor != end; cursor++) {
-                const Sample next_sample = load(cursor + 1);
-                const uint32_t next_hold_begin = (hold_begin + 1) % kHoldSamples;
-                const Sample next_held = hold.samples[next_hold_begin];
-                if (!steady.holds(steady.residual(sample))) {
+                const uint32_t sample_intercept = sample.wall_eighths - wall_per_refclk_eighths * sample.refclk;
+                if (!Line::holds(sample_intercept, low)) {
                     left_line = true;
                     break;
                 }
-                hold.samples[hold_begin] = sample;
-                hold_begin = next_hold_begin;
-                if (open.add(held, steady, window_first_wall_eighths)) {
+                Held& slot = hold.samples[hold_begin];
+                const Held held = slot;
+                slot = Held{sample.refclk, sample_intercept};
+                hold_begin = (hold_begin + 1) % kHoldSamples;
+                sample = load(cursor + 1);
+                if (open.add(held, window_first_intercept)) {
                     window = open;
                     close_window();
                     open.count = window.count;
                     open.size = window.size;
-                    steady.mean = line.mean;
+                    low = line.low();
                 }
-                sample = next_sample;
-                held = next_held;
             }
             window = open;
             hold.begin = hold_begin;
             if (left_line) {
-                on_sample(load(cursor));
+                on_sample(sample);
                 cursor++;
             }
         }
@@ -340,9 +356,10 @@ void kernel_main() {
     uint32_t head_stop = 0;
     while (true) {
         invalidate_l1_cache();
+        // done is read before tail, so once done is set the tail read after it is final.
         const bool done = ring->done != 0;
-        head_stop = ctrl->stop != 0u ? kernel_profiler::kSyncHeadStop : head_stop;
         const uint32_t tail = ring->tail;
+        head_stop = ctrl->stop != 0u ? kernel_profiler::kSyncHeadStop : head_stop;
         // A chunk ends at a multiple of kChunkSamples at the latest, so it never runs past the end of the ring.
         const uint32_t end = next + std::min(tail - next, kChunkSamples - next % kChunkSamples);
         const uint32_t slot = next % kRingSamples;
