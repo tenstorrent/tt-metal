@@ -86,7 +86,9 @@ std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
 
 bool are_group_status_registers_sticky() {
     // TODO: Use UMD supplied variant instead of env var
-    return !MetalContext::instance().rtoptions().get_quasar_variant().empty();
+    const char* quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+    return quasar_variant != nullptr && std::string(quasar_variant) != "quasar" &&
+           std::string(quasar_variant) != "2.0.0";
 }
 
 std::string fds_kernel_path(const std::string& kernel_name) {

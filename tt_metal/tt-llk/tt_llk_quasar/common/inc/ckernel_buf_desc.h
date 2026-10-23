@@ -6,10 +6,9 @@
 
 // Buffer descriptor (BFD) types and table access.
 
-#include <cfg_defines.h>
-
 #include <cstdint>
 
+#include "cfg_defines.h"
 #include "llk_assert.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"

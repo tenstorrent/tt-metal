@@ -7,7 +7,6 @@
 // silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
 // (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
 
-#include <filesystem>
 #include "emule_descriptor_builder.hpp"
 
 #include <optional>
@@ -269,12 +268,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_variant().empty()) {
-        const std::string dir =
-            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_variant();
-        if (std::filesystem::is_directory(dir)) {
-            quasar_arch_include = dir;
-        }
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_arch_variant().empty()) {
+        quasar_arch_include =
+            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_arch_variant();
     }
 
     EmuleProgramDescriptor pd;
