@@ -20,7 +20,7 @@ class MLPWeights:
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
@@ -39,7 +39,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
         layout=ttnn.TILE_LAYOUT,
@@ -85,6 +85,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 mesh_device,
                 tp,
                 cache("gate_up", ".swiglu"),
+                dtype=tpc.exact_weight_dtype(args, ttnn.bfloat4_b),
             )
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
@@ -98,7 +99,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
                     cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=tpc.exact_weight_dtype(args, ttnn.bfloat4_b),
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
@@ -106,7 +107,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
                     cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=tpc.exact_weight_dtype(args, ttnn.bfloat4_b),
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -114,7 +115,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     dim=0,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cache_path=cache("down_proj"),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
                 ),
                 w_gate_up=wgu,
             )
@@ -127,7 +128,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=tpc.exact_weight_dtype(args, ttnn.bfloat4_b),
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -135,7 +136,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=tpc.exact_weight_dtype(args, ttnn.bfloat4_b),
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -143,7 +144,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 dim=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("down_proj"),
-                dtype=ttnn.bfloat8_b,
+                dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
             ),
             w_gate_up=wgu,
         )
@@ -413,21 +414,18 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned)
             else mc
         )
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
+        out_dtype = tpc.exact_partial_dtype(args)  # fp32 partials under the exact profile (summed in fp32)
+        partial = ttnn.linear(
+            hidden,
+            w.w2,
+            compute_kernel_config=ckc,
+            memory_config=mc_w2_out,
+            program_config=w2_pc,
+            **(dict(dtype=out_dtype) if out_dtype is not None else {}),
+        )
         ttnn.deallocate(hidden)
 
         if x.shape[-2] > ttnn.TILE_SIZE:  # prefill
-            return tpc.tp_reduce_scatter(
-                partial, self.device, self.tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            return tpc.reduce_partials(partial, self.device, self.tt_ccl, args.ccl_topology(), args=args)
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
-        out = tt_all_reduce(
-            partial,
-            self.device,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return out
+        return tpc.reduce_partials(partial, self.device, self.tt_ccl, args.ccl_topology())

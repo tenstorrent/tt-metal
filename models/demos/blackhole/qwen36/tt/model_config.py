@@ -394,6 +394,18 @@ class Qwen36ModelArgs(ModelArgs):
 
         if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
             return True
+        # Dense checkpoints whose dim does not exceed the base heuristic's 4096 (the 9B: dim 4096) hit the same
+        # double-gather on a (1,N) mesh: the TP config always DRAM-shards the GDN / attention in-projections, so
+        # layer.py fuses the norm all-gather into the AGMM in-proj (no norm post-gather); the base rule then
+        # pre-gathers in DistributedNorm and the AGMM gathers again (K mismatch). Decode keeps the base rule
+        # (gather-then-norm), as the 27B does.
+        if (
+            self.moe_num_experts <= 0
+            and self.is_multichip
+            and mode == Mode.PREFILL
+            and getattr(self, "gdn_qkvz_weight_memcfg", None) is not None
+        ):
+            return True
         return super().is_distributed_norm(mode)
 
     @property

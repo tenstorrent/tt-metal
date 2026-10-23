@@ -27,6 +27,112 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+# QWEN36_EXACT_PROFILE=1 (args.exact_profile): the TP matmuls / fused AGMM-MMRS / GDN chunk kernels take the exact
+# profile's config (HiFi2 on bf16 operands, fp32 destination accumulation, no approximations, no packer L1
+# accumulation), the same config the exact single-device path and the DiT use. Default off = COMPUTE_HIFI2 as shipped.
+COMPUTE_EXACT = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+
+
+def exact_compute_cfg(args):
+    """``COMPUTE_EXACT`` under the exact profile, else the shipped ``COMPUTE_HIFI2``. ``QWEN36_TP_EXACT_COMPUTE=0``
+    keeps the shipped config under the exact profile (bisection knob: bf16 weights with the shipped compute config)."""
+    import os
+
+    exact = args is not None and bool(getattr(args, "exact_profile", False))
+    if exact and os.environ.get("QWEN36_TP_EXACT_COMPUTE", "1") == "0":
+        return COMPUTE_HIFI2
+    return COMPUTE_EXACT if exact else COMPUTE_HIFI2
+
+
+def exact_partial_dtype(args):
+    """Output dtype of a ROW-PARALLEL projection (attention wo, GDN out, MLP down) under the exact profile: fp32, so
+    the per-device partial sums are reduced across the mesh in fp32 and rounded to bf16 ONCE after the sum (one chip
+    accumulates the whole K in fp32 and rounds once). Shipped profile: ``None`` (bf16 partials, bf16 reduce-scatter;
+    measured on the 9B at TP=8: ~1.3 % relative error after one layer, 8 % after 32, 3-8 logit swings in decode)."""
+    return ttnn.float32 if args is not None and bool(getattr(args, "exact_profile", False)) else None
+
+
+_REDUCE_LOGGED = set()
+
+
+def reduce_partials(partial, mesh, tt_ccl, topology, memory_config=ttnn.DRAM_MEMORY_CONFIG, args=None):
+    """Row-parallel partial sums -> this device's hidden block (bf16, hidden-fractured), replacing the direct
+    ``tt_all_reduce`` call. Exact profile (fp32 partial; ``QWEN36_TP_EXACT_REDUCE`` unset or 1): all-gather the fp32
+    partials along dim 0, add them in fp32 in device order, keep this device's hidden block (``mesh_partition``), round
+    to bf16 once. The ring reduce-scatter rounds its running sum to bf16 at every hop, which the 9B's cancelling
+    partials turn into a 4 % error on 7 of the 8 blocks (2026-10-21 sublayer probe). Shipped profile: the bf16
+    reduce-scatter as before: with ``args`` (the prefill call sites) through ``tp_reduce_scatter`` (2D-mesh aware,
+    explicit TP link count, ``prefill_rs_bf8`` / ``prefill_rs_hparams``); without it (decode) the direct
+    ``tt_all_reduce``. Either keeps the partial's dtype through the reduce-scatter on a 1xN mesh."""
+    import os
+
+    from models.tt_transformers.tt.ccl import tt_all_reduce
+
+    shape = tuple(int(d) for d in mesh.shape)
+    n = shape[1] if shape[0] == 1 else shape[0]
+    # Default OFF (2026-10-21): measured no change in the TP-vs-one-chip drift (the drift is the one-chip GDN kernel's
+    # own error, 4.6 % vs an fp32 HF reference, against 0.9 % for the TP path) and +60 ms per decode token.
+    exact = partial.dtype == ttnn.float32 and os.environ.get("QWEN36_TP_EXACT_REDUCE", "0") == "1" and n > 1
+    key = (exact, str(partial.dtype))
+    if key not in _REDUCE_LOGGED:
+        _REDUCE_LOGGED.add(key)
+        print(f"RECORD qwen36 reduce_partials: dtype {partial.dtype} exact_reduce {exact} mesh {shape}", flush=True)
+    if not exact:
+        if args is not None:
+            out = tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=memory_config)
+        else:
+            out = tt_all_reduce(
+                partial, mesh, tt_ccl, cluster_axis=0, dim=3, topology=topology, memory_config=memory_config, dtype=partial.dtype
+            )
+        return reduce_to_residual(out)
+    x = partial if len(partial.shape) == 4 else ttnn.reshape(partial, (1, 1, partial.shape[-2], partial.shape[-1]))
+    if x.is_sharded():
+        x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+    gathered = ttnn.experimental.all_gather_async(
+        x,
+        persistent_output_buffer=None,
+        dim=0,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=1,
+        topology=topology,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )  # [n, 1, T, H] fp32, identical on every device
+    T, H = int(x.shape[-2]), int(x.shape[-1])
+    acc = ttnn.slice(gathered, [0, 0, 0, 0], [1, 1, T, H])
+    for i in range(1, n):
+        part = ttnn.slice(gathered, [i, 0, 0, 0], [i + 1, 1, T, H])
+        nxt = ttnn.add(acc, part)
+        ttnn.deallocate(part)
+        ttnn.deallocate(acc)
+        acc = nxt
+    ttnn.deallocate(gathered)
+    block = ttnn.mesh_partition(acc, dim=3, cluster_axis=1 if shape[0] == 1 else 0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(acc)
+    out = ttnn.typecast(block, ttnn.bfloat16, memory_config=memory_config)
+    ttnn.deallocate(block)
+    return out
+
+
+def reduce_to_residual(out):
+    """The reduced row-parallel output back to the bf16 residual stream (no-op for a bf16 partial)."""
+    return ttnn.typecast(out, ttnn.bfloat16) if out.dtype == ttnn.float32 else out
+
+
+def exact_weight_dtype(args, default):
+    """The TP weight loaders' dtype: ``args.weight_dtype`` (bf16) under the exact profile, else the shipped
+    block-float ``default`` (bfp8 / bfp4) of that tensor."""
+    if args is not None and bool(getattr(args, "exact_profile", False)):
+        return args.weight_dtype
+    return default
 
 
 # Grid helpers
@@ -268,7 +374,7 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     )
 
 
-def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
+def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG, out_dtype=None):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
     activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
     x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
@@ -278,6 +384,7 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
         compute_kernel_config=compute_cfg,
         program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
+        **(dict(dtype=out_dtype) if out_dtype is not None else {}),
     )
     if x_il is not x:
         ttnn.deallocate(x_il)
@@ -709,6 +816,12 @@ def all_gather_swiglu_prefill(
     bf8_tmp, gather_buf = None, None
     if act_bf8:
         x4, gather_buf, bf8_tmp = _agmm_bf8_inputs(x4, tt_ccl, None)
+    if weight.dtype == ttnn.bfloat16 and "K_block" not in (config_override or {}):
+        # bf16 [gate|up] weight (the exact profile): the in1 circular buffers are twice the shipped bfp4's, and the
+        # (8, 8, 16) blocking's CBs (in0 / in1 double-buffered, fp32 intermediate, halved SwiGLU output) reach the
+        # whole 1.5 MB of L1 and clash with the L1 buffers above them (job 142062: "static circular buffer region ends
+        # at 1553536"). K_block 4 keeps the same M / N blocking at 1.18 MB. An explicit K_block override wins.
+        config_override = dict(config_override or {}, K_block=min(agmm_k_block_size(K_local), 4))
     cfg, num_links, workers = _agmm_launch_config(K_local, grid, 8, 16, config_override)
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
@@ -947,6 +1060,7 @@ def sharded_decode_matmul(
     prefill_progcfg_fn,
     prefill_k,
     decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    out_dtype=None,
 ):
     """DRAM-WIDTH_SHARDED weight matmul; branches on M (decode vs prefill).
 
@@ -965,13 +1079,19 @@ def sharded_decode_matmul(
             compute_kernel_config=compute_cfg,
             program_config=decode_progcfg,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            **(dict(dtype=out_dtype) if out_dtype is not None else {}),
         )
         if not already_sharded:
             ttnn.deallocate(x_sh)
         return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=pc,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **(dict(dtype=out_dtype) if out_dtype is not None else {}),
     )
 
 

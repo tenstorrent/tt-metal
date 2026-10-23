@@ -754,6 +754,32 @@ class Qwen36Model:
             out.append(nxt)
         return out
 
+    def _scatter_vision_tokens_host(self, x, token_ids, vision_tokens):
+        """Host splice of the vision tokens into the embedding on a hidden-fractured mesh (see _scatter_vision_tokens)."""
+        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+        orig_shape = tuple(x.shape)
+        x_host = ttnn.to_torch(x, mesh_composer=comp)
+        v_host = ttnn.to_torch(vision_tokens, mesh_composer=comp)
+        hidden_full = int(x_host.shape[-1])
+        flat = x_host.reshape(-1, hidden_full)
+        flat_ids = token_ids.reshape(-1)
+        pos = torch.nonzero(flat_ids == self._vision_placeholder_token_id(), as_tuple=False).reshape(-1)
+        v_rows = v_host.reshape(-1, hidden_full)
+        assert int(pos.numel()) == int(v_rows.shape[0]), (int(pos.numel()), tuple(v_rows.shape))
+        flat = flat.clone()
+        flat[pos[: int(flat.shape[0])]] = v_rows[: int(pos.numel())].to(flat.dtype)
+        full = flat.reshape(*orig_shape[:-1], hidden_full)
+        out = ttnn.from_torch(
+            full,
+            dtype=x.dtype,
+            layout=x.layout,
+            device=self.device,
+            memory_config=x.memory_config(),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape),
+        )
+        ttnn.deallocate(x)
+        return out
+
     def _scatter_vision_tokens(self, x, token_ids, vision_tokens):
         """Splice vision-model embeddings into the text token embeddings, on device.
 
@@ -767,6 +793,12 @@ class Qwen36Model:
         """
         if vision_tokens is None:
             return x
+        if self.num_devices > 1 and os.environ.get("QWEN36_TP_HOST_VISION_SPLICE", "1") == "1":
+            # The on-device scatter/where path writes the WRONG rows on a hidden-fractured mesh (2026-10-21, 9B at
+            # TP=8 on a (1,8) mesh: the scattered image rows matched none of the vision tokens, max |d| 26.6, while
+            # the single-device path is exact). Until the sharded scatter is fixed, splice on the host: gather the
+            # hidden-fractured embedding and tokens, overwrite the image-placeholder rows, re-shard the same way.
+            return self._scatter_vision_tokens_host(x, token_ids, vision_tokens)
 
         orig_shape = tuple(x.shape)
         hidden = orig_shape[-1]
@@ -3735,6 +3767,11 @@ class Qwen36Model:
         B, T = token_ids.shape
         assert B == 1, "TP prefill is single-sequence (B=1); batched serving prefills one user at a time"
         vlen = valid_len or T
+        # A new sequence: zero the GDN recurrent / conv state and the attention caches, as the single-device
+        # prefill_paged does (reset_state) and as the vLLM path does per request (_reset_gdn_state_for_new_sequence).
+        # Without it the previous request's conv tail / recurrent state leaks into this prefill: identical requests
+        # in one process gave different logits from the first position on (2026-10-21, the 9B at TP=8).
+        self._reset_gdn_state_for_new_sequence()
         # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text).
         self._build_request_rope(token_ids[:, :vlen], vision_tokens)
         pt_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
@@ -4221,17 +4258,33 @@ class Qwen36Model:
         return rows[:required_rows].view(B, S, self.args.vocab_size)
 
     def _save_deltanet_states(self):
-        """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""
+        """Snapshot GDN state (guard across decode-trace capture's double forward).
+
+        Single device: host copies of ``recurrent_state`` / ``fused_conv_state`` (as before). TP (``TPGatedDeltaNet``:
+        ``rec_state`` + the ``conv_states`` list, sharded per device): DEVICE clones, restored with ``ttnn.copy`` so
+        the trace-baked buffer addresses are preserved and nothing crosses the host (2026-10-21)."""
         saved = []
         for layer in self.layers:
             if not layer.is_full_attention:
                 dn = layer.attention
-                saved.append(
-                    {
-                        "recurrent": ttnn.to_torch(dn.recurrent_state),
-                        "conv": ttnn.to_torch(dn.fused_conv_state),
-                    }
-                )
+                if hasattr(dn, "rec_state"):  # TP class
+                    if dn.conv_states is None or dn.rec_state is None:
+                        dn.reset_state()
+                    saved.append(
+                        {
+                            "tp": True,
+                            "recurrent": ttnn.clone(dn.rec_state, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                            "conv": [ttnn.clone(c, memory_config=ttnn.DRAM_MEMORY_CONFIG) for c in dn.conv_states],
+                        }
+                    )
+                else:
+                    saved.append(
+                        {
+                            "tp": False,
+                            "recurrent": ttnn.to_torch(dn.recurrent_state),
+                            "conv": ttnn.to_torch(dn.fused_conv_state),
+                        }
+                    )
         return saved
 
     def _restore_deltanet_states(self, saved_states, device):
@@ -4241,14 +4294,21 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 dn = layer.attention
                 saved = saved_states[idx]
-                restored = ttnn.from_torch(
-                    saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored, dn.recurrent_state)
-                ttnn.deallocate(restored)
-                restored_conv = ttnn.from_torch(
-                    saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                )
-                ttnn.copy(restored_conv, dn.fused_conv_state)
-                ttnn.deallocate(restored_conv)
+                if saved.get("tp"):
+                    ttnn.copy(saved["recurrent"], dn.rec_state)
+                    ttnn.deallocate(saved["recurrent"])
+                    for src, dst in zip(saved["conv"], dn.conv_states):
+                        ttnn.copy(src, dst)
+                        ttnn.deallocate(src)
+                else:
+                    restored = ttnn.from_torch(
+                        saved["recurrent"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    )
+                    ttnn.copy(restored, dn.recurrent_state)
+                    ttnn.deallocate(restored)
+                    restored_conv = ttnn.from_torch(
+                        saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    )
+                    ttnn.copy(restored_conv, dn.fused_conv_state)
+                    ttnn.deallocate(restored_conv)
                 idx += 1
