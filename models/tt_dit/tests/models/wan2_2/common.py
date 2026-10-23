@@ -15,8 +15,7 @@ import ttnn
 # logs of the 2026-10-18..22 nightlies plus one branch dispatch: lower is 0.7x the fastest and upper
 # 1.3x the slowest observation across hosts, sc4 quads and ranks (encoder, being tiny and noisy:
 # 0.5x / 2x). The spread is real: bh_sc1 hosts differ by ~40% on denoising, and the two bh_sc4
-# quads by ~25%. test_performance_wan.py gates on both bounds; test_pipeline_wan.py gates its cold
-# single run on a multiple of the total upper limit.
+# quads by ~25%. Only test_performance_wan.py gates on them, on both bounds.
 #
 # PENDING: the BH galaxy (4x8 BH, 4x32) bands were measured on the standard bh_sc1 / bh_sc4 pools;
 # their CI legs now run on the high-power pools and get re-derived from those runs. The BH 4x8 vae
