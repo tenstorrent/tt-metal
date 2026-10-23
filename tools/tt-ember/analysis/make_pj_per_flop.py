@@ -10,6 +10,9 @@ FLOP count is fixed by the shape, since split mode gives every grid the same tot
 
     pJ/FLOP = energy_j_vi / (2 * M * N * K * iterations) * 1e12
 
+with energy_j_vi scaled from the trimmed window to the whole run first in the default
+--mode updated (see common.whole_run_value); --mode legacy uses it as is.
+
 So any run that has already been captured -- including ones from months ago -- can be converted
 without touching the hardware.
 
@@ -40,19 +43,25 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import PJ_PER_J, add_mode_argument, find_case_csv, save_figure, whole_run_value  # noqa: E402
+from common import (  # noqa: E402
+    DEFAULT_DPI,
+    PJ_PER_J,
+    add_mode_argument,
+    find_case_csv,
+    matmul_flops,
+    save_figure,
+    whole_run_value,
+)
+import power_cases as pc  # noqa: E402
 
-# Only cases that actually execute the matmuls. POWER_CASE 2 and 3 skip matmul_tiles, so no
-# FLOPs are performed and energy-per-FLOP is undefined for them; case 4 runs them on stale data.
-DEFAULT_CASES = [
-    ("regular", "Regular (POWER_CASE=0)"),
-    ("writer_amp", "Writer amp, 100% write amplification (POWER_CASE=1)"),
-]
+DEFAULT_CASES = pc.PJ_PER_FLOP_CASES
 
 
 def pj_per_flop(path: Path, flops: float, legacy: bool) -> dict:
     out = {}
-    for r in csv.DictReader(open(path)):
+    with path.open(newline="") as f:
+        rows = list(csv.DictReader(f))
+    for r in rows:
         energy_j = whole_run_value(r, "energy_j_vi", legacy)
         if "grid" in r and math.isfinite(energy_j):
             out[r["grid"]] = energy_j / flops * PJ_PER_J
@@ -126,11 +135,11 @@ def main():
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
     add_mode_argument(ap)
-    ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop.png"))
     args = ap.parse_args()
 
-    flops = 2 * args.seq * args.hidden * args.k * args.iters
+    flops = matmul_flops(args.seq, args.hidden, args.k, args.iters)
     subtitle = (
         f"M={args.seq} N={args.hidden} K={args.k} x{args.iters} iterations, "
         f"total energy including idle floor / {flops:.3g} FLOPs"

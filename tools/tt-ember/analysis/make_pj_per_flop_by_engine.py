@@ -18,6 +18,10 @@ Charge -> energy -> pJ/FLOP the same way as make_pj_per_flop.py:
     energy_J  = charge_as * avg_vcore_v
     pJ/FLOP   = energy_J / (2 * M * N * K * iterations) * 1e12
 
+with the charges scaled from the trimmed window to the whole run first in the default
+--mode updated (see common.whole_run_value); --mode legacy uses them as is. An ablation can come
+out negative (peak charge rests on one sample); the axis then extends below zero.
+
 The writer row uses `regular` (write amplification 0%) on purpose, to reproduce the published
 Fig. 1, which was made before POWER_CASE=5 (`writer_idle`) existed. It isolates the cost of the
 write-amplified path, not the writer's total contribution (the writer still performs its one
@@ -40,7 +44,6 @@ Examples
         --seq 1024 --hidden 2048 --k 2048 --iters 160
 """
 import argparse
-import csv
 import sys
 from pathlib import Path
 
@@ -52,7 +55,17 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import PJ_PER_J, add_mode_argument, find_case_csv, save_figure, whole_run_value  # noqa: E402
+from common import (  # noqa: E402
+    DEFAULT_DPI,
+    PJ_PER_J,
+    add_mode_argument,
+    find_case_csv,
+    matmul_flops,
+    rows_by_grid,
+    save_figure,
+    whole_run_value,
+)
+import power_cases as pc  # noqa: E402
 
 ENGINES = [
     ("reader", "Reader (writer_amp - reader_idle2)"),
@@ -60,14 +73,7 @@ ENGINES = [
     ("compute", "Compute (writer_amp - compute_idle)"),
 ]
 
-REQUIRED_CASES = ["regular", "writer_amp", "compute_idle", "reader_idle2"]
-
-
-def load_rows(path: Path) -> dict:
-    rows = {}
-    for r in csv.DictReader(open(path)):
-        rows[r["grid"]] = r
-    return rows
+REQUIRED_CASES = pc.PJ_PER_FLOP_BY_ENGINE_CASES
 
 
 def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> tuple[dict[str, dict[str, float]], list[str]]:
@@ -76,7 +82,7 @@ def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> tuple[dict
         p = find_case_csv(root, name)
         if p is None:
             raise SystemExit(f"no CSV for case '{name}' under {root}")
-        cases[name] = load_rows(p)
+        cases[name] = rows_by_grid(p)
 
     grids = [g for g in cases["writer_amp"] if all(g in cases[c] for c in REQUIRED_CASES)]
 
@@ -98,16 +104,7 @@ def per_engine_pj_per_flop(root: Path, flops: float, legacy: bool) -> tuple[dict
     return per_engine, grids
 
 
-def grid_order(grids_by_dataset):
-    seen = []
-    for grids in grids_by_dataset:
-        for g in grids:
-            if g not in seen:
-                seen.append(g)
-    return seen
-
-
-def chart(datasets, ylim, out_path, subtitle, dpi=150):
+def chart(datasets, ylim, out_path, subtitle, dpi=DEFAULT_DPI):
     n = len(datasets)
     fig, axes = plt.subplots(n, 1, figsize=(14, 6 * n), squeeze=False)
     for ax, (label, per_engine, grids) in zip(axes[:, 0], datasets):
@@ -121,7 +118,8 @@ def chart(datasets, ylim, out_path, subtitle, dpi=150):
         ax.set_xlabel("Grid size (core combination)")
         ax.set_ylabel("Energy per FLOP [pJ], peak-current basis")
         ax.set_title(f"Per-engine energy per FLOP per grid - {label}\n{subtitle}")
-        ax.set_ylim(0, ylim)
+        ax.set_ylim(*ylim)
+        ax.axhline(0, color="black", linewidth=0.8)
         ax.legend()
         ax.grid(axis="y", alpha=0.3)
     save_figure(fig, out_path, dpi)
@@ -144,11 +142,11 @@ def main():
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
     add_mode_argument(ap)
-    ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_by_engine.png"))
     args = ap.parse_args()
 
-    flops = 2 * args.seq * args.hidden * args.k * args.iters
+    flops = matmul_flops(args.seq, args.hidden, args.k, args.iters)
     subtitle = (
         f"M={args.seq} N={args.hidden} K={args.k} x{args.iters} iterations, "
         f"dynamic peak charge x V_core / {flops:.3g} FLOPs"
@@ -167,7 +165,8 @@ def main():
             best = min((per_engine[name][g], g) for g in grids if g in per_engine[name])
             print(f"  {name:<8} {min(vals):6.2f} - {max(vals):6.2f} pJ/FLOP   best {best[0]:.2f} at {best[1]}")
 
-    ylim = max(v for _, pe, gs in datasets for name in pe for g, v in pe[name].items() if g in gs) * 1.10
+    shown = [v for _, pe, gs in datasets for name in pe for g, v in pe[name].items() if g in gs]
+    ylim = (min(0.0, min(shown)) * 1.10, max(0.0, max(shown)) * 1.10 or 1.0)
     chart(datasets, ylim, args.out, subtitle, args.dpi)
 
 

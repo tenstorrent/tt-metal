@@ -23,7 +23,11 @@ import time
 import tt_umd
 
 FORCE_AICLK = 0x33  # blackhole::ArcMessageType::FORCE_AICLK
-AICLK_GO_BUSY = 0x52
+AICLK_GO_BUSY = 0x52  # blackhole::ArcMessageType::AICLK_GO_BUSY
+ARC_MSG_TIMEOUT_MS = 5000
+# Time for the clock to settle after a message, and the --watch poll interval.
+SETTLE_S = 0.5
+POLL_S = 0.1
 
 
 def open_device(device_id: int):
@@ -76,29 +80,38 @@ def main():
     args = ap.parse_args()
 
     dev = open_device(args.device_id)
-    print(f"arch: {dev.get_arch()}")
+    arch = dev.get_arch()
+    print(f"arch: {arch}")
+    # FORCE_AICLK is a Blackhole ARC message; on another chip the id means something else.
+    if "blackhole" not in str(arch).lower():
+        print(f"ERROR: device {args.device_id} is {arch}, not Blackhole", file=sys.stderr)
+        return 2
     print("before:", read_limits(dev))
 
     if args.busy:
-        rc = dev.arc_msg(AICLK_GO_BUSY, True, [], 5000)
+        rc = dev.arc_msg(AICLK_GO_BUSY, True, [], ARC_MSG_TIMEOUT_MS)  # wait for the reply; no arguments
         print(f"AICLK_GO_BUSY -> {rc}")
-        time.sleep(0.5)
+        time.sleep(SETTLE_S)
         print("after busy:", read_limits(dev))
 
     if args.mhz is not None:
-        rc = dev.arc_msg(FORCE_AICLK, True, [args.mhz], 5000)
+        rc = dev.arc_msg(FORCE_AICLK, True, [args.mhz], ARC_MSG_TIMEOUT_MS)  # wait for the reply
         print(f"FORCE_AICLK({args.mhz}) -> exit_code={rc[0]} ret={rc[1:]}")
-        if rc[0] != 0:
-            print("WARNING: non-zero exit code; the force may not have been applied", file=sys.stderr)
-        time.sleep(0.5)
+        time.sleep(SETTLE_S)
         print("after force:", read_limits(dev))
+        if rc[0] != 0:
+            print("ERROR: FORCE_AICLK returned a non-zero exit code", file=sys.stderr)
+            return 1
+        if args.mhz != 0 and read_aiclk(dev) != args.mhz:
+            print(f"ERROR: AICLK reads {read_aiclk(dev)} MHz, not the {args.mhz} MHz requested", file=sys.stderr)
+            return 1
 
     if args.watch > 0:
         t0 = time.time()
         seen = []
         while time.time() - t0 < args.watch:
             seen.append(read_aiclk(dev))
-            time.sleep(0.1)
+            time.sleep(POLL_S)
         print(
             f"watched {len(seen)} samples over {args.watch:.1f}s: "
             f"min={min(seen)} max={max(seen)} mode={max(set(seen), key=seen.count)}"

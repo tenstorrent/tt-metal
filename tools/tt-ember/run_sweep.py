@@ -71,7 +71,9 @@ from common import (  # noqa: E402
     check_long_matmul_device,
     environ_with,
     exit_reason,
+    TILE,
     long_matmul_args,
+    matmul_flops,
     reset_hardware,
     run_settings,
     run_status,
@@ -82,7 +84,6 @@ from common import (  # noqa: E402
 AICLK_SETTLE_S = 5
 # long_matmul's kDestTileBudget: a block's M*N output tiles are held in DEST at once.
 DEST_BLOCK_TILES = 8
-TILE = 32
 
 WORKLOADS = ("long_matmul", "ttnn_ops")
 MODES = ("updated", "legacy")
@@ -107,6 +108,7 @@ class RunSpec:
     app_args: List[str]
     env: Dict[str, str] = field(default_factory=dict)
     block: Tuple[int, int] = (1, 1)
+    case: str = ""
 
 
 @dataclass
@@ -150,6 +152,12 @@ def _positive(path: Path, key: str, value: float) -> float:
     return value
 
 
+def _non_negative(path: Path, key: str, value: float) -> float:
+    if not value >= 0:
+        raise SystemExit(f"{path}: {key} must not be negative, got {value}")
+    return value
+
+
 def load_sweep(path: Path) -> Sweep:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -178,6 +186,7 @@ def load_sweep(path: Path) -> Sweep:
     runs: List[RunSpec] = []
     ops: List[str] = []
     cases: List[Tuple[str, str]] = []
+    blocks: List[Tuple[int, ...]] = [(1, 1)]
 
     if workload == "long_matmul":
         try:
@@ -209,7 +218,7 @@ def load_sweep(path: Path) -> Sweep:
                     env["LONG_MATMUL_BLOCK_M"] = str(bm) if blocked else ""
                     env["LONG_MATMUL_BLOCK_N"] = str(bn) if blocked else ""
                     suffix = f"_b{bm}x{bn}" if blocked else ""
-                    runs.append(RunSpec(f"{op}/{case_name}{suffix}", app_args, env, (bm, bn)))
+                    runs.append(RunSpec(f"{op}/{case_name}{suffix}", app_args, env, (bm, bn), case_name))
     else:
         try:
             subdir = subdir_name(str(runs_cfg.get("subdir", "decoder_block")))
@@ -230,6 +239,10 @@ def load_sweep(path: Path) -> Sweep:
         if name not in ANALYSES:
             raise SystemExit(f"{path}: unknown analysis {name!r}, expected one of {sorted(ANALYSES)}")
         _reject_unknown(path, f"the {name} options", opts, ANALYSIS_OPTIONS[name])
+    if workload == "long_matmul" and (1, 1) not in blocks:
+        per_case = sorted({name for name, _ in analyses} & PER_CASE_ANALYSES)
+        if per_case:
+            raise SystemExit(f"{path}: {per_case} read only the 1x1 runs, so blocks needs [1, 1]")
 
     return Sweep(
         name=str(raw.get("name", path.stem)),
@@ -239,7 +252,7 @@ def load_sweep(path: Path) -> Sweep:
         telemetry_freq_hz=int(
             _positive(path, "telemetry_freq_hz", raw.get("telemetry_freq_hz", DEFAULT_TELEMETRY_FREQ_HZ))
         ),
-        trim_ms=float(raw.get("trim_ms", POWER_CASES_TRIM_MS)),
+        trim_ms=float(_non_negative(path, "trim_ms", raw.get("trim_ms", POWER_CASES_TRIM_MS))),
         slot_ms=int(_positive(path, "slot_ms", raw.get("slot_ms", DEFAULT_SLOT_MS))),
         aiclk_mhz=aiclk_mhz,
         runs=runs,
@@ -272,7 +285,11 @@ class Context:
         if self.sweep.workload != "long_matmul":
             return None
         m, n, k, iterations, fixed_blocks_per_core = long_matmul_args(self.sweep.app_args)
-        return None if fixed_blocks_per_core else 2.0 * m * n * k * iterations
+        return None if fixed_blocks_per_core else matmul_flops(m, n, k, iterations)
+
+    def fixed_mode(self) -> bool:
+        """long_matmul with fixed_blocks_per_core: total work grows with the core count."""
+        return self.sweep.workload == "long_matmul" and long_matmul_args(self.sweep.app_args)[4] != 0
 
     def grid_order(self) -> List[str]:
         return self.runs.grid_order([(op, case) for op in self.sweep.ops for case, _ in self.sweep.cases])
@@ -334,6 +351,18 @@ def pin_aiclk(mhz: int, device_id: int, activate: Path, log: Log, dry_run: bool)
     return 0
 
 
+def release_aiclk(device_id: int, activate: Path, log: Log) -> None:
+    """Release the FORCE_AICLK override (set_aiclk.py 0), so the board returns to firmware-managed
+    clocking. A failure is logged; tt-smi -r also clears the force."""
+    setter = HERE / "aiclk" / "set_aiclk.py"
+    script = 'source "$1" && exec python "$2" 0 --device-id "$3"'
+    cmd = ["bash", "-c", script, "bash", str(activate), str(setter), str(device_id)]
+    log(f"[AICLK] release: {shell_join(cmd)}")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        log(f"[AICLK] WARNING: release failed ({res.returncode}); run tt-smi -r to clear the force\n{res.stderr}")
+
+
 # --- runs ----------------------------------------------------------------------------------------
 
 
@@ -375,6 +404,27 @@ def run_sweep(args: argparse.Namespace, sweep: Sweep, output_root: Path, log: Lo
         )
         return 1
 
+    # A resume keeps the record of what measured the earlier runs and adds a section for this one.
+    resumed = not args.force and any(status == "done" for status in statuses)
+    pin_state = {"pinned": False}
+    try:
+        return _run_pending(args, sweep, output_root, log, statuses, resumed, pin_state)
+    finally:
+        # The force outlives the sweep (until the next reset), so the next workload on this host
+        # would run at the pinned clock without knowing it.
+        if pin_state["pinned"] and not args.dry_run:
+            release_aiclk(args.device_id, args.tt_venv_activate, log)
+
+
+def _run_pending(
+    args: argparse.Namespace,
+    sweep: Sweep,
+    output_root: Path,
+    log: Log,
+    statuses: List[str],
+    resumed: bool,
+    pin_state: Dict[str, bool],
+) -> int:
     provenance_written = False
     for i, (spec, status) in enumerate(zip(sweep.runs, statuses), start=1):
         head = f"[RUN {i}/{len(sweep.runs)}] {spec.subdir}"
@@ -385,7 +435,7 @@ def run_sweep(args: argparse.Namespace, sweep: Sweep, output_root: Path, log: Lo
         log(head)
         # PROVENANCE.md describes the measurement, so only a sweep that measures writes it.
         if not args.dry_run and not provenance_written:
-            write_provenance(args, sweep, output_root)
+            write_provenance(args, sweep, output_root, resumed)
             provenance_written = True
         log(f"[RESET] {args.tt_smi} -r")
         rc = reset_hardware(args.tt_smi, args.dry_run)
@@ -393,6 +443,7 @@ def run_sweep(args: argparse.Namespace, sweep: Sweep, output_root: Path, log: Lo
             log(f"[RESET] ERROR: {args.tt_smi} -r failed with return code {rc}")
             return rc
         if sweep.aiclk_mhz is not None:
+            pin_state["pinned"] = True
             rc = pin_aiclk(sweep.aiclk_mhz, args.device_id, args.tt_venv_activate, log, args.dry_run)
             if rc != 0:
                 return rc
@@ -576,14 +627,16 @@ def an_cross_op_corrected(ctx: Context, opts: dict) -> int:
     return _script(ctx, "crossop_corrected_flops.py", argv)
 
 
-# The cases each per-op script reads under <op>/, and whether it needs all of them (else any).
-PJ_PER_FLOP_CASES = ["regular", "writer_amp"]
-PJ_PER_FLOP_BY_ENGINE_CASES = ["regular", "writer_amp", "compute_idle", "reader_idle2"]
+# The cases each per-op script reads under <op>/ (power_cases holds the lists the scripts use).
+PJ_PER_FLOP_CASES = [case for case, _label in pc.PJ_PER_FLOP_CASES]
+PJ_PER_FLOP_BY_ENGINE_CASES = pc.PJ_PER_FLOP_BY_ENGINE_CASES
 
 
 def _per_op_script(
-    ctx: Context, opts: dict, step: str, script: str, cases: List[str], needs_all: bool, png: str
+    ctx: Context, opts: dict, step: str, script: str, cases: List[str], png: str, needs_all: bool
 ) -> int:
+    """Run a per-op script for every op whose runs it reads are complete: all of cases if
+    needs_all, else at least one."""
     mnk = _mnk_iters(ctx, step)
     if mnk is None:
         return 0
@@ -605,7 +658,9 @@ def _per_op_script(
 
 
 def an_pj_per_flop(ctx: Context, opts: dict) -> int:
-    return _per_op_script(ctx, opts, "pj_per_flop", "make_pj_per_flop.py", PJ_PER_FLOP_CASES, False, "pj_per_flop.png")
+    return _per_op_script(
+        ctx, opts, "pj_per_flop", "make_pj_per_flop.py", PJ_PER_FLOP_CASES, "pj_per_flop.png", needs_all=False
+    )
 
 
 def an_pj_per_flop_by_engine(ctx: Context, opts: dict) -> int:
@@ -617,8 +672,8 @@ def an_pj_per_flop_by_engine(ctx: Context, opts: dict) -> int:
         "pj_per_flop_by_engine",
         "make_pj_per_flop_by_engine.py",
         PJ_PER_FLOP_BY_ENGINE_CASES,
-        True,
         "pj_per_flop_by_engine.png",
+        needs_all=True,
     )
 
 
@@ -629,10 +684,16 @@ def an_naive_vs_blocked(ctx: Context, opts: dict) -> int:
     sweep = ctx.sweep
     op = sweep.ops[0] if sweep.ops else "matmul"
     case = str(opts.get("case", "regular"))
-    blocked_run = next((r for r in sweep.runs if r.block != (1, 1)), None)
-    block = blocked_run.block if blocked_run else (2, 4)
     naive = str(opts.get("naive", f"{op}/{case}"))
-    blocked = str(opts.get("blocked", f"{op}/{case}_b{block[0]}x{block[1]}"))
+    blocked = str(
+        opts.get(
+            "blocked",
+            next((r.subdir for r in sweep.runs if r.block != (1, 1) and r.case == case), f"{op}/{case}_b2x4"),
+        )
+    )
+    # The labels come from the run that is plotted as blocked, whatever chose it.
+    blocked_spec = next((r for r in sweep.runs if r.subdir == blocked), None)
+    block, case = (blocked_spec.block, blocked_spec.case) if blocked_spec else ((2, 4), case)
     if not ctx.args.dry_run:
         for rel in (naive, blocked):
             if not ctx.runs.complete_run(rel):
@@ -667,7 +728,7 @@ def an_compare_runs(ctx: Context, opts: dict) -> int:
             filters = opts["filter"] if isinstance(opts["filter"], list) else [opts["filter"]]
             cmd += ["--filter", *[str(f) for f in filters]]
         # The overcompute charts assume total work grows with the core count (fixed mode).
-        if opts.get("no_overcompute", ctx.flops() is not None):
+        if opts.get("no_overcompute", not ctx.fixed_mode()):
             cmd += ["--no-overcompute"]
         rc = run_cmd(cmd, ctx.log, ctx.args.dry_run)
         if rc != 0:
@@ -702,6 +763,17 @@ ANALYSES = {
     "compare_runs": an_compare_runs,
     "op_breakdown": an_op_breakdown,
 }
+# The steps that read <op>/<case> runs, which are the 1x1 ones (blocked runs land in
+# <op>/<case>_b<M>x<N>, which only naive_vs_blocked and compare_runs read).
+PER_CASE_ANALYSES = {
+    "compare_cases",
+    "energy_by_engine",
+    "energy_per_flop_by_engine",
+    "cross_op",
+    "cross_op_corrected",
+    "pj_per_flop",
+    "pj_per_flop_by_engine",
+}
 # The options each analysis step accepts.
 ANALYSIS_OPTIONS = {
     "compare_cases": set(),
@@ -729,8 +801,24 @@ def _git(root: Path, *argv: str) -> str:
         return "unknown"
 
 
-def write_provenance(args: argparse.Namespace, sweep: Sweep, output_root: Path) -> None:
+def write_provenance(args: argparse.Namespace, sweep: Sweep, output_root: Path, resumed: bool = False) -> None:
+    """Record what measured the runs. A resume (some runs already done) keeps the existing record
+    and adds a dated section, since the earlier runs were measured as recorded there."""
     output_root.mkdir(parents=True, exist_ok=True)
+    provenance = output_root / "PROVENANCE.md"
+    if resumed and provenance.exists():
+        lines = [
+            "",
+            f"## Resumed {dt.datetime.now().isoformat(timespec='seconds')}",
+            "",
+            f"- host: {platform.node()}",
+            f"- command: {shell_join(sys.argv)}",
+            f"- tt-metal: {_git(args.tt_metal_root, 'rev-parse', 'HEAD')} ({_git(args.tt_metal_root, 'describe', '--always', '--dirty')})",
+            "",
+        ]
+        with provenance.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        return
     config_copy = output_root / "sweep.yaml"
     # Re-running from the recorded config passes that very file as --config.
     if args.config.resolve() != config_copy.resolve():
@@ -761,7 +849,7 @@ def write_provenance(args: argparse.Namespace, sweep: Sweep, output_root: Path) 
         "```",
         "",
     ]
-    (output_root / "PROVENANCE.md").write_text("\n".join(lines), encoding="utf-8")
+    provenance.write_text("\n".join(lines), encoding="utf-8")
 
 
 # --- main ----------------------------------------------------------------------------------------
@@ -821,6 +909,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             ap.error("ttnn_ops_workload.py always runs on device 0")
 
     output_root = args.output_root.expanduser().resolve()
+    if args.analyses_only and not output_root.is_dir():
+        ap.error(f"--analyses-only: {output_root} does not exist")
     log = Log(None if args.dry_run else output_root / "sweep.log")
 
     log(f"[SWEEP] {sweep.name}: workload={sweep.workload} mode={sweep.mode} app_args={shell_join(sweep.app_args)}")
@@ -839,6 +929,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         legacy=sweep.mode == "legacy",
     )
     ctx = Context(args, sweep, output_root, log, runs)
+    if args.analyses_only and not args.dry_run and not any(runs.complete_run(spec.subdir) for spec in sweep.runs):
+        log(
+            f"ERROR: --analyses-only: no run of this sweep is complete under {output_root} "
+            f"(check --output-root, --app-exe and the config against the {RUN_COMPLETE_FILE} files)"
+        )
+        return 1
     for name, opts in sweep.analyses:
         log(f"[ANALYSIS] {name} {opts if opts else ''}")
         rc = ANALYSES[name](ctx, opts)
