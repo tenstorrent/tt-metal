@@ -4207,7 +4207,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _mask(self, t1, t2):
         # mask: data (t1) is zeroed wherever the mask (t2) is zero, else passed
-        # through. Matches calculate_mask (v_if(is_fp16_zero(mask)) data = 0).
+        # through. Matches llk::sfpu::Mask (v_if(mask == 0) data = 0).
         return t1 if float(t2) != 0.0 else t1 * 0
 
     def _atan2(self, t1, t2):

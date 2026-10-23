@@ -70,7 +70,6 @@ enum class SfpuType {
     i0,
     i1,
     silu,
-    mask,
     negative,
     quant_int32,
     requant_int32,

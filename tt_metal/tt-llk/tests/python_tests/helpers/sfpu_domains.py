@@ -2237,7 +2237,7 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
-        # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
+        # Compare-against-zero on an operand that may be a NaN: llk::sfpu::Mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
         MathOperation.SfpuMask,

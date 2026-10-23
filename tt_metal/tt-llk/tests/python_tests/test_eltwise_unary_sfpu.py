@@ -547,7 +547,7 @@ def test_eltwise_unary_sfpu_edges(
 # because a 16-bit output narrows NaN to inf and could not show a regression.
 #
 # Wormhole and Blackhole only, and no Quasar expectation is recorded here: this test cannot run
-# there at all. The driver it builds pulls in llk_sfpu/ckernel_sfpu_mask.h, which has no Quasar
+# there at all. The driver it builds pulls in sfpu/macro/mask.h, which has no Quasar
 # copy, and nothing collects it either -- it sits outside python_tests/quasar/, carries no
 # `quasar` marker, and is nightly, each of which the Quasar and ttsim runners exclude.
 #

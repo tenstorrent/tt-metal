@@ -70,7 +70,6 @@
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
-#include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
@@ -116,9 +115,9 @@
 #include "sfpu/ckernel_sfpu_sub_int.h"
 #include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
+#include "sfpu/macro/mask.h"
 
-// Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
-// calculate_mask_binary) used by the dispatch below.
+// Test-only SFPU loop wrappers (calculate_sqrt_custom, calculate_expm1_cw) used by the dispatch below.
 #include "sfpu_test_helpers.h"
 
 namespace ckernel::sfpu
@@ -2096,18 +2095,9 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MASK)
     {
-        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1.
-        // Driven through the test-only adapter since calculate_mask uses fixed dst
-        // offsets rather than the forwarded indices.
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_mask_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
+        // float mask: out = (mask == 0) ? 0 : data, with data at in0 and mask at in1. Mask walks the whole
+        // tile itself, so vector_mode does not apply.
+        llk::sfpu::Mask::execute<ckernel::DEFAULT_TENSOR_SHAPE, llk::sfpu::MaskFill::Zero, DataFormat::Float16_b>(dst_index_out, dst_index_in0, dst_index_in1);
     }
     else if constexpr (BINOP == BinaryOp::ATAN2)
     {
