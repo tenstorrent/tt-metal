@@ -103,5 +103,5 @@ Results from an older build are not evidence that a newly rebased native runtime
 passes. The results record distinguishes historical and current-source runs.
 
 The contribution includes no HTTP monitor, SSH launcher, remote locking utility,
-background experiment scheduler or nested environment/lock file. CI uses the
-current repository pipeline and direct fixture-based tests.
+background experiment scheduler or nested environment/lock file. Tests use the
+repository device fixtures directly; no scheduled model CI job is registered.

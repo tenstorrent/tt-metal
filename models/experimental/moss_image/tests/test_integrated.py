@@ -25,7 +25,7 @@ def test_text_to_image(moss_assets, mesh_device, tmp_path, record_property):
 
     checkpoint, capture = moss_assets
     verify_weights(checkpoint, capture, None)
-    # CI's quick functional case still traverses the entire model. Full 1024px,
+    # The quick functional case still traverses the entire model. Full 1024px,
     # 50-step runs are explicitly requested rather than silently substituted.
     full = os.environ.get("MOSS_IMAGE_FULL_E2E") == "1"
     resolution, steps = (1024, 50) if full else (256, 2)

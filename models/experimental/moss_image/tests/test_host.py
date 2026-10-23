@@ -149,3 +149,59 @@ def test_invalid_generation_options_fail_on_host(overrides):
     options.update(overrides)
     with pytest.raises((ValueError, TypeError)):  # allow-pytest.raises: pure host validation, no native fixtures
         validate_generation_options(**options)
+
+
+@pytest.mark.parametrize("ci", [None, "true"])
+def test_missing_cuda_reference_skips(tmp_path, monkeypatch, ci):
+    from types import SimpleNamespace
+
+    from models.experimental.moss_image.tests.conftest import moss_assets
+
+    monkeypatch.setenv("MOSS_IMAGE_ASSET_ROOT", str(tmp_path))
+    if ci is None:
+        monkeypatch.delenv("CI", raising=False)
+    else:
+        monkeypatch.setenv("CI", ci)
+    with pytest.raises(
+        pytest.skip.Exception, match="Missing pinned MOSS CUDA reference"
+    ):  # allow-pytest.raises: host-only fixture validation
+        # Exercise the real fixture without requesting a hardware fixture.
+        moss_assets.__wrapped__(SimpleNamespace(param="Base"))
+
+
+def test_available_cuda_reference_loads(tmp_path):
+    from models.experimental.moss_image.tests.conftest import _load_assets
+
+    directory = tmp_path / "cuda-Base-1024-50"
+    directory.mkdir()
+    path, _ = fake_capture(directory)
+    checkpoint = tmp_path / "checkpoints" / "Base"
+    checkpoint.mkdir(parents=True)
+    actual_checkpoint, capture = _load_assets(
+        tmp_path, "Base", {"capture": directory.name, "manifest_sha256": digest(path)}
+    )
+    assert actual_checkpoint == checkpoint
+    assert torch.equal(capture.load("tensor"), torch.ones(2, 2))
+
+
+def test_missing_checkpoint_skips(tmp_path):
+    from models.experimental.moss_image.tests.conftest import _load_assets
+
+    path, _ = fake_capture(tmp_path)
+    with pytest.raises(
+        pytest.skip.Exception, match="Missing MOSS Base checkpoint"
+    ):  # allow-pytest.raises: host-only fixture validation
+        _load_assets(tmp_path, "Base", {"capture": ".", "manifest_sha256": digest(path)})
+
+
+@pytest.mark.parametrize("checkpoint_available", [False, True])
+def test_corrupt_available_reference_fails(tmp_path, checkpoint_available):
+    from models.experimental.moss_image.tests.conftest import _load_assets
+
+    path, _ = fake_capture(tmp_path)
+    pin = {"capture": ".", "manifest_sha256": digest(path)}
+    path.write_bytes(b"corrupt manifest")
+    if checkpoint_available:
+        (tmp_path / "checkpoints" / "Base").mkdir(parents=True)
+    with pytest.raises(ValueError, match="manifest digest"):  # allow-pytest.raises: host asset validation
+        _load_assets(tmp_path, "Base", pin)
