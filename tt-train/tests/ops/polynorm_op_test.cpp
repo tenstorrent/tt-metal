@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <tt-metalium/bfloat16.hpp>
 #include <tuple>
@@ -234,11 +235,10 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> run_backward
     const auto dL_dout_tensor = ttml::core::from_xtensor(dL_dout, device);
     const auto weight_tensor = ttml::core::from_xtensor(weight, device);
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> outputs;
-    outputs = ttml::metal::polynorm3_bw(input_tensor, dL_dout_tensor, weight_tensor, epsilon);
-    auto grad_x = ttml::core::to_xtensor(std::get<0>(outputs));
-    auto grad_w = ttml::core::to_xtensor(std::get<1>(outputs));
-    auto grad_b = ttml::core::to_xtensor(std::get<2>(outputs));
+    const auto outputs = ttml::metal::polynorm3_bw(input_tensor, dL_dout_tensor, weight_tensor, epsilon);
+    auto grad_x = ttml::core::to_xtensor(std::get<0>(outputs).value());
+    auto grad_w = ttml::core::to_xtensor(std::get<1>(outputs).value());
+    auto grad_b = ttml::core::to_xtensor(std::get<2>(outputs).value());
     return {std::move(grad_x), std::move(grad_w), std::move(grad_b)};
 }
 void expect_allclose_with_metrics(
@@ -682,8 +682,8 @@ BackwardLaunch run_backward(
         launch.preallocated_dL_dx,
         launch.preallocated_packed_partials);
     expect_cache(entries_before, expectation, label);
-    launch.dL_dx = outputs.at(0);
-    launch.packed_partials = outputs.at(1);
+    launch.dL_dx = outputs.at(0).value();
+    launch.packed_partials = outputs.at(1).value();
 
     launch.dL_dx_result = core::to_xtensor(launch.dL_dx);
     launch.packed_partials_result = core::to_xtensor(launch.packed_partials);
@@ -848,3 +848,129 @@ TEST_F(PolyNormOpTest, PolyNormBw_PreallocatedOutputsPresenceFlips_CacheHits_Two
         expect_untouched(launches[i], labels[i]);
     }
 }
+
+// ============================================================================
+// Section 3: Skipping grads in the fused PolyNorm3 backward kernel
+// ============================================================================
+// polynorm3_bw takes a flag for each of dx, dw and db. dw and db share the packed partials, so the kernel has two
+// modes: without dx it skips Pass 2, and without dw and db it skips the packed partials. Rows cover each mode on both
+// row-reduction paths (Wt <= block_size uses matmul, wider rows use reduce_tile).
+// ============================================================================
+
+namespace {
+
+struct PolyNormBwSkipCase {
+    std::string name;
+    std::vector<uint32_t> shape;
+    bool compute_grad_input = true;
+    bool compute_grad_weight = true;
+    bool compute_grad_bias = true;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const PolyNormBwSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+struct PolyNormBwInputs {
+    ttnn::Tensor input;
+    ttnn::Tensor dL_dout;
+    ttnn::Tensor weight;
+};
+
+PolyNormBwInputs make_polynorm_bw_inputs(const std::vector<uint32_t>& shape, uint32_t seed) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::vector<uint32_t> weight_shape{1U, 1U, 1U, 3U};
+    return {
+        core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device),
+        core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U), device),
+        core::from_xtensor(test_utils::make_uniform_xarray<float>(weight_shape, 0.5F, 1.5F, seed + 2U), device)};
+}
+
+}  // namespace
+
+class PolyNormBwSkipTest : public ::testing::TestWithParam<PolyNormBwSkipCase> {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// Each requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
+// arithmetic either way. The flags are compile-time, so the first skipping run must compile its own program; a second
+// run with other live inputs must hit that program and read and write the new buffers.
+TEST_P(PolyNormBwSkipTest, RequestedGradsMatchFullBackward) {
+    using namespace ttml;
+    const PolyNormBwSkipCase& c = GetParam();
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    constexpr float epsilon = 1e-5F;
+
+    // Both sets stay alive, so the second cannot land at the first's addresses.
+    const PolyNormBwInputs first = make_polynorm_bw_inputs(c.shape, 1U);
+    const PolyNormBwInputs second = make_polynorm_bw_inputs(c.shape, 11U);
+
+    const auto run = [](const PolyNormBwInputs& in, bool input, bool weight, bool bias) {
+        const auto [dx, dw, db] = metal::polynorm3_bw(in.input, in.dL_dout, in.weight, epsilon, input, weight, bias);
+        return std::vector<std::optional<ttnn::Tensor>>{dx, dw, db};
+    };
+    const std::array<bool, 3> requested{c.compute_grad_input, c.compute_grad_weight, c.compute_grad_bias};
+    // The full backward also compiles the wrapper's reduction, slices and concat, so the skipping runs below only add
+    // their own program.
+    const auto to_host = [](const std::vector<std::optional<ttnn::Tensor>>& grads) {
+        std::vector<xt::xarray<float>> host;
+        for (const auto& grad : grads) {
+            host.push_back(core::to_xtensor(grad.value()));
+        }
+        return host;
+    };
+    const auto expected_first = to_host(run(first, true, true, true));
+    const auto expected_second = to_host(run(second, true, true, true));
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skip_first = run(first, c.compute_grad_input, c.compute_grad_weight, c.compute_grad_bias);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_first, entries_before + 1U)
+        << c.name << ": the skipping run must compile exactly one program of its own";
+    const auto skip_second = run(second, c.compute_grad_input, c.compute_grad_weight, c.compute_grad_bias);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << c.name << ": the second skipping run at identical shapes missed the program cache";
+
+    const std::array<const char*, 3> grad_names{"dx", "dw", "db"};
+    for (const auto& [grads, expected, label] :
+         {std::tuple{&skip_first, &expected_first, "first"}, std::tuple{&skip_second, &expected_second, "second"}}) {
+        for (size_t i = 0; i < 3U; ++i) {
+            ASSERT_EQ((*grads)[i].has_value(), requested[i]) << c.name << ": " << grad_names[i] << " presence";
+            if (requested[i]) {
+                EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor((*grads)[i].value()), (*expected)[i])))
+                    << c.name << ": " << grad_names[i] << " on the " << label
+                    << " inputs differs from the full backward";
+            }
+        }
+    }
+}
+
+// C = 128: Wt = 4 (matmul row reduction); 256 tile rows give every core more than one row on Wormhole and Blackhole.
+// C = 160: Wt = 5 (reduce_tile row reduction, with a partial last block); again more than one row per core.
+INSTANTIATE_TEST_SUITE_P(
+    PolyNormBwSkipCases,
+    PolyNormBwSkipTest,
+    ::testing::Values(
+        PolyNormBwSkipCase{
+            .name = "InputOnly_MatmulReduce",
+            .shape = {1U, 1U, 8192U, 128U},
+            .compute_grad_weight = false,
+            .compute_grad_bias = false},
+        PolyNormBwSkipCase{.name = "NoInput_MatmulReduce", .shape = {1U, 1U, 8192U, 128U}, .compute_grad_input = false},
+        PolyNormBwSkipCase{
+            .name = "InputOnly_ReduceTile",
+            .shape = {1U, 1U, 8192U, 160U},
+            .compute_grad_weight = false,
+            .compute_grad_bias = false},
+        PolyNormBwSkipCase{.name = "NoInput_ReduceTile", .shape = {1U, 1U, 8192U, 160U}, .compute_grad_input = false}),
+    [](const ::testing::TestParamInfo<PolyNormBwSkipCase>& info) { return info.param.name; });
