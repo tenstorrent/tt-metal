@@ -106,7 +106,8 @@ inline std::string get_core_descriptor_file(
             }
         case tt::ARCH::QUASAR:
             // QSR3.A2 packages three 8x4 Quasar dies into one chip, stacked into an 8x12 worker grid.
-            if (soc_desc.get_grid_size(CoreType::TENSIX) == tt_xy_pair(8, 12)) {
+            const bool is_qsr3a2 = soc_desc.get_grid_size(CoreType::TENSIX) == tt_xy_pair{8, 12};
+            if (is_qsr3a2) {
                 return core_desc_dir + (quasar_tensix_dispatch_fd ? "quasar_qsr3a2_arch_tensix_dispatch.yaml"
                                                                   : "quasar_qsr3a2_arch.yaml");
             }
