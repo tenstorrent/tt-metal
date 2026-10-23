@@ -151,10 +151,17 @@ ttnn::Tensor all_gather(
     auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config, cluster_axis);
     if (use_composite) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
-        // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
-        // path and are ignored here for now.
         return composite_common::composite_all_gather(
-            input_tensor, dim, std::nullopt, std::nullopt, memory_config, subdevice_id, cluster_axis);
+            input_tensor,
+            dim,
+            std::nullopt,
+            std::nullopt,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            /*use_l1_small_for_semaphores=*/false,
+            persistent_output_tensor,
+            sub_core_grid);
     }
 
     return ttnn::prim::all_gather(
