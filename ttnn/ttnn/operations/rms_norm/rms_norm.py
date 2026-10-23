@@ -88,13 +88,13 @@ GAMMA_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }
@@ -107,6 +107,11 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Precision convention: a maxed-precision input with 16-bit DEST accumulation is refused natively.
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # bfloat8_b input on a non-tile-aligned shape: mirrors the author-scoped INVALID entries of
+    # eval/golden_tests/rms_norm/feature_spec.py (block-float quantization of a padded / masked tile), so a caller
+    # that bypasses the harness's INVALID skip (e.g. test_translated.py) is refused natively, not run untested.
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 

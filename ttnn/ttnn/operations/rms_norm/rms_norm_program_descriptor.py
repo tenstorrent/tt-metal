@@ -25,7 +25,6 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
-F32_TILE_BYTES = 4096
 SCALER_TILE_BYTES = 2048  # bf16 scaler tile (reduce LLK scaler format)
 
 # Selector constants (op_design.md §Selection function; perf lamps L2 / L3).
@@ -78,6 +77,11 @@ class Geometry:
     gamma_is_rm: bool
     gamma_tile_bytes: int
     gamma_elem_bytes: int
+    gamma_is_block_float: bool  # bfloat8_b TILE gamma: the page is shared exponents + mantissas, read whole
+    # DEST-produced intermediates (cb_sumsq, cb_rowsum_*, cb_inv_rms*, cb_x_gamma) follow DEST width: Float32 pages
+    # under fp32_dest_acc_en=True, Float16_b pages under False (a 16-bit DEST value has no extra bits to keep).
+    interm_dtype: object
+    interm_tile_bytes: int
 
 
 @dataclass(frozen=True)
@@ -110,7 +114,7 @@ def _round_up(v, m):
 
 
 # CB page-format roles, resolved to a concrete dtype in _build_cbs.
-_FMT_IN, _FMT_OUT, _FMT_GAMMA, _FMT_SCALER, _FMT_F32 = "in", "out", "gamma", "scaler", "f32"
+_FMT_IN, _FMT_OUT, _FMT_GAMMA, _FMT_SCALER, _FMT_INTERM = "in", "out", "gamma", "scaler", "interm"
 
 
 def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
@@ -132,14 +136,14 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
     if geo.has_gamma:
         specs.append((CB_GAMMA_TILES, s, geo.gamma_tile_bytes, _FMT_GAMMA))
     specs.append((CB_REDUCE_SCALER, 2, SCALER_TILE_BYTES, _FMT_SCALER))
-    specs.append((CB_SUMSQ, 2 * b, F32_TILE_BYTES, _FMT_F32))
+    specs.append((CB_SUMSQ, 2 * b, geo.interm_tile_bytes, _FMT_INTERM))
     if gw >= 2:
-        specs.append((CB_ROWSUM_PARTIAL, b, F32_TILE_BYTES, _FMT_F32))
-        specs.append((CB_ROWSUM_GATHER, gw * b, F32_TILE_BYTES, _FMT_F32))
-        specs.append((CB_INV_RMS_ROOT, b, F32_TILE_BYTES, _FMT_F32))
-    specs.append((CB_INV_RMS, b, F32_TILE_BYTES, _FMT_F32))
+        specs.append((CB_ROWSUM_PARTIAL, b, geo.interm_tile_bytes, _FMT_INTERM))
+        specs.append((CB_ROWSUM_GATHER, gw * b, geo.interm_tile_bytes, _FMT_INTERM))
+        specs.append((CB_INV_RMS_ROOT, b, geo.interm_tile_bytes, _FMT_INTERM))
+    specs.append((CB_INV_RMS, b, geo.interm_tile_bytes, _FMT_INTERM))
     if geo.has_gamma:
-        specs.append((CB_X_GAMMA, L * b * c, F32_TILE_BYTES, _FMT_F32))
+        specs.append((CB_X_GAMMA, L * b * c, geo.interm_tile_bytes, _FMT_INTERM))
     specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
     if geo.is_rm:
         specs.append((CB_OUT_RM_STICKS, stream_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
@@ -195,7 +199,18 @@ def _select_blocking(geo: Geometry, num_cores_available: int, l1_budget_bytes: i
     raise RuntimeError("rms_norm: W too wide for the grid")  # M3
 
 
-def _geometry(input_tensor, output_tensor, gamma) -> Geometry:
+_BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _elem_bytes(tensor):
+    """Bytes per element, consumed only by the ROW_MAJOR stick paths and the TILE-gamma face-row reads.
+
+    A block-float tensor (TILE-only, shared exponents) has no per-element size and never takes those paths, so 0.
+    """
+    return 0 if tensor.dtype in _BLOCK_FLOAT_DTYPES else tensor.element_size()
+
+
+def _geometry(input_tensor, output_tensor, gamma, fp32_dest_acc_en) -> Geometry:
     shape = list(input_tensor.shape)
     W = shape[-1]
     H = shape[-2]
@@ -211,6 +226,7 @@ def _geometry(input_tensor, output_tensor, gamma) -> Geometry:
         rows_sticks = 0
         rows_tiles = lead * (-(-H // TILE))
     has_gamma = gamma is not None
+    interm_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
     return Geometry(
         tensor_w_elems=W,
         tensor_w_tiles=w_tiles,
@@ -220,12 +236,15 @@ def _geometry(input_tensor, output_tensor, gamma) -> Geometry:
         is_rm=is_rm,
         in_tile_bytes=ttnn.tile_size(input_tensor.dtype),
         out_tile_bytes=ttnn.tile_size(output_tensor.dtype),
-        in_elem_bytes=input_tensor.element_size(),
-        out_elem_bytes=output_tensor.element_size(),
+        in_elem_bytes=_elem_bytes(input_tensor),
+        out_elem_bytes=_elem_bytes(output_tensor),
         has_gamma=has_gamma,
         gamma_is_rm=has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT,
         gamma_tile_bytes=ttnn.tile_size(gamma.dtype) if has_gamma else 0,
-        gamma_elem_bytes=gamma.element_size() if has_gamma else 0,
+        gamma_elem_bytes=_elem_bytes(gamma) if has_gamma else 0,
+        gamma_is_block_float=has_gamma and gamma.dtype in _BLOCK_FLOAT_DTYPES,
+        interm_dtype=interm_dtype,
+        interm_tile_bytes=ttnn.tile_size(interm_dtype),
     )
 
 
@@ -264,7 +283,7 @@ def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, in_dtype, out_dtype, ga
         _FMT_OUT: out_dtype,
         _FMT_GAMMA: gamma_dtype,
         _FMT_SCALER: ttnn.bfloat16,
-        _FMT_F32: ttnn.float32,
+        _FMT_INTERM: geo.interm_dtype,
     }
     specs = _cb_specs(
         geo,
@@ -285,7 +304,7 @@ def _f32_bits(x):
 
 def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, compute_kernel_config):
     device = input_tensor.device()
-    geo = _geometry(input_tensor, output_tensor, gamma)
+    geo = _geometry(input_tensor, output_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
     grid = device.compute_with_storage_grid_size()
     num_cores_available = grid.x * grid.y
     plan = _select_blocking(geo, num_cores_available, _l1_budget_bytes(device))
@@ -329,7 +348,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # ---------------- writer ----------------
-    gamma_face_row_read_bytes = _round_up(16 * geo.gamma_elem_bytes, ttnn.get_dram_alignment()) if geo.has_gamma else 0
+    # TILE gamma: row 0 of faces 0 / 1 by byte offset (16 elements per face row) — or, for a bfloat8_b page whose
+    # shared exponents precede the mantissas, the whole page (the Row broadcast still consumes only row 0).
+    face_row_path = geo.has_gamma and not geo.gamma_is_rm and not geo.gamma_is_block_float
+    gamma_face_row_read_bytes = _round_up(16 * geo.gamma_elem_bytes, ttnn.get_dram_alignment()) if face_row_path else 0
     writer_ct = [
         CB_GAMMA_RM_STICK,
         CB_GAMMA_TILES,
@@ -354,6 +376,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         geo.tensor_rows_sticks,
         SEM_GATHER_ARRIVALS,
         gamma_face_row_read_bytes,
+        int(geo.gamma_is_block_float),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(

@@ -9,6 +9,8 @@
 //                      RM gamma:   one DRAM read of the slice into cb_gamma_rm_stick, then per tile two local
 //                                  16-element face-row copies (face 0 row 0, face 1 row 0); one barrier.
 //                      TILE gamma: two DRAM reads per tile (row 0 of faces 0 and 1); one barrier.
+//                      bfloat8_b TILE gamma: one whole-page read per tile (the shared exponents precede the
+//                                  mantissas, so face-row byte offsets do not apply); one barrier.
 //   combine_block  — R2 only, once per block: partial -> root's cb_rowsum_gather (unicast + semaphore inc);
 //                    root waits all partials, hands them to its compute, then multicasts the finalized
 //                    inverse-RMS (cb_inv_rms_root) into every member's cb_inv_rms (loopback includes the root).
@@ -49,7 +51,8 @@ void kernel_main() {
     constexpr uint32_t tensor_rows_sticks = get_compile_time_arg_val(20);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(21);
     constexpr uint32_t gamma_face_row_read_bytes = get_compile_time_arg_val(22);
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr bool gamma_is_block_float = get_compile_time_arg_val(23) != 0;
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("inv_mcast_ct_offset"),
@@ -97,6 +100,10 @@ void kernel_main() {
                 const uint32_t dst = gamma_base + j * gamma_tile_bytes;
                 noc_async_read(get_noc_addr(src), dst, face_row_bytes);
                 noc_async_read(get_noc_addr(src + face_row_bytes), dst + face1_offset, face_row_bytes);
+            }
+        } else if constexpr (gamma_is_block_float) {
+            for (uint32_t j = 0; j < slice_w_tiles; ++j) {
+                noc_async_read_page(slice_start_tile + j, gamma_accessor, gamma_base + j * gamma_tile_bytes);
             }
         } else {
             for (uint32_t j = 0; j < slice_w_tiles; ++j) {

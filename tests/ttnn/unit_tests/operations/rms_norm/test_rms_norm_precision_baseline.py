@@ -12,6 +12,10 @@ Shapes span both regimes of op_design.md §Regimes:
   R1 row_local (w_group_size == 1)            — (1,1,32,64), (1,1,128,512), (1,1,2048,1000) [W non-aligned, H tall]
   R2 w_split_root_combine (w_group_size >= 2) — (1,1,32,16384)
 
+Refinement 1 rows (test_rms_norm_precision_baseline_numeric_formats): bf16 + fp32_dest_acc_en=False (16-bit DEST,
+Float16_b intermediates) and bfloat8_b input at both DEST widths (TILE only; bf8b x W-non-aligned is an EXCLUSION, so
+the 2048x1000 shape is skipped for bf8b). The reference is computed from the device-visible (quantized) input / gamma.
+
 Run with `-s` to see the table rows (prefixed `PRECISION_BASELINE`).
 """
 
@@ -23,14 +27,20 @@ from models.common.utility_functions import comp_allclose
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.rms_norm import rms_norm
 
-TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
-MANTISSA_BITS = {ttnn.float32: 23, ttnn.bfloat16: 7}
-PCC_FLOOR = {ttnn.float32: 0.9999, ttnn.bfloat16: 0.999}
+TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16, ttnn.bfloat8_b: torch.bfloat16}
+MANTISSA_BITS = {ttnn.float32: 23, ttnn.bfloat16: 7, ttnn.bfloat8_b: 7}
+PCC_FLOOR = {ttnn.float32: 0.9999, ttnn.bfloat16: 0.999, ttnn.bfloat8_b: 0.99}
 # Max |median(actual/expected) - 1|. Measured Phase 0 bias (verification_report.md §Precision Baseline): fp32 ~-0.14 %,
 # bf16 ~-0.08 % — the FPU operand registers hold at most TF32 and TRUNCATE fp32 operands (x, gamma, x*gamma, inv-RMS),
 # reproduced by a CPU TF32-truncation emulation (median 0.99897). A structural scale bug (padding in the mean, wrong W,
 # a wrong scaler) moves the median by >= 1 %, so 0.5 % separates the two.
-RATIO_MEDIAN_TOL = {ttnn.float32: 5e-3, ttnn.bfloat16: 5e-3}
+RATIO_MEDIAN_TOL = {ttnn.float32: 5e-3, ttnn.bfloat16: 5e-3, ttnn.bfloat8_b: 1e-2}
+# 16-bit DEST (fp32_dest_acc_en=False): the per-lane x^2 accumulation, S/W, +eps and rsqrt each land in a 16-bit DEST /
+# Float16_b CB, so the per-row inverse RMS carries a 16-bit rounding bias. Measured (Refinement 1): bf16 median
+# 0.9988 .. 1.0038, bf8b 1.0045 .. 1.0083 (bf8b's own output quantization adds ~0.28 %). A CPU emulation brackets it:
+# round-to-nearest at every stage 1.0000 .. 1.0005, truncation at every stage 1.0008 .. 1.0196. A structural scale bug
+# also moves the fp32-DEST rows (identical code path, Float32 CBs), which keep the 5e-3 guard above.
+RATIO_MEDIAN_TOL_16BIT_DEST = {ttnn.bfloat16: 1e-2, ttnn.bfloat8_b: 1.5e-2}
 
 SHAPES = [
     pytest.param((1, 1, 32, 64), id="small_32x64_R1"),
@@ -63,16 +73,47 @@ def _ratio_spread(actual, expected):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
 @pytest.mark.parametrize("shape", SHAPES)
 def test_rms_norm_precision_baseline(device, shape, dtype, layout):
+    _measure(device, shape, dtype, layout, gamma_dtype=dtype, compute_kernel_config=None)
+
+
+@pytest.mark.parametrize(
+    "dtype, layout, fp32_acc",
+    [
+        pytest.param(ttnn.bfloat16, ttnn.TILE_LAYOUT, False, id="bf16-TILE-bf16_acc"),
+        pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, False, id="bf16-RM-bf16_acc"),
+        pytest.param(ttnn.bfloat8_b, ttnn.TILE_LAYOUT, True, id="bf8b-TILE-fp32_acc"),
+        pytest.param(ttnn.bfloat8_b, ttnn.TILE_LAYOUT, False, id="bf8b-TILE-bf16_acc"),
+    ],
+)
+@pytest.mark.parametrize("shape", SHAPES)
+def test_rms_norm_precision_baseline_numeric_formats(device, shape, dtype, layout, fp32_acc):
+    if dtype == ttnn.bfloat8_b and shape[-1] % 32 != 0:
+        pytest.skip("EXCLUSION: bfloat8_b x w_non_aligned")
+    config = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_acc)
+    # bf8b has no ROW_MAJOR form, so the RM gamma stays bf16 under a bf8b input.
+    gamma_dtype = ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype
+    _measure(device, shape, dtype, layout, gamma_dtype=gamma_dtype, compute_kernel_config=config)
+
+
+def _measure(device, shape, dtype, layout, *, gamma_dtype, compute_kernel_config):
     torch.manual_seed(1234)
     W = shape[-1]
     torch_x = torch.randn(shape, dtype=torch.float32).to(TORCH_DTYPE[dtype])
-    torch_gamma = torch.randn((1, 1, 1, W), dtype=torch.float32).to(TORCH_DTYPE[dtype])
+    torch_gamma = torch.randn((1, 1, 1, W), dtype=torch.float32).to(TORCH_DTYPE[gamma_dtype])
 
     tt_x = ttnn.from_torch(torch_x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_gamma = ttnn.from_torch(
-        torch_gamma, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_gamma,
+        dtype=gamma_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    actual = ttnn.to_torch(rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6))
+    if dtype == ttnn.bfloat8_b:
+        torch_x = ttnn.to_torch(tt_x)  # the block-quantized values the device actually reads
+    kwargs = {} if compute_kernel_config is None else {"compute_kernel_config": compute_kernel_config}
+    actual = ttnn.to_torch(rms_norm(tt_x, gamma=tt_gamma, epsilon=1e-6, **kwargs))
+    fp32_acc = True if compute_kernel_config is None else bool(compute_kernel_config.fp32_dest_acc_en)
 
     xf = torch_x.to(torch.float32)
     expected_f32 = xf * torch.rsqrt(xf.pow(2).mean(dim=-1, keepdim=True) + 1e-6) * torch_gamma.to(torch.float32)
@@ -90,7 +131,7 @@ def test_rms_norm_precision_baseline(device, shape, dtype, layout):
     _, allclose_msg = comp_allclose(actual.to(torch.float32), expected_f32)
 
     print(
-        f"\nPRECISION_BASELINE shape={shape} dtype={dtype} layout={layout} pcc={pcc_msg} "
+        f"\nPRECISION_BASELINE shape={shape} dtype={dtype} layout={layout} fp32_acc={fp32_acc} pcc={pcc_msg} "
         f"max_abs={max_abs:.6g} mean_abs={mean_abs:.6g} rel_rms={rel_rms:.6g} "
         f"ulp_p50={ulp_p50:.3g} ulp_p99={ulp_p99:.3g} ulp_max={ulp_max:.3g} "
         f"ratio_median={r_med:.6f} ratio_p5={r_p5:.6f} ratio_p95={r_p95:.6f} | {allclose_msg}"
@@ -99,4 +140,5 @@ def test_rms_norm_precision_baseline(device, shape, dtype, layout):
     assert pcc_passed
     assert torch.isfinite(actual).all()
     # Scale-bug guard: a uniform scale error would move the ratio median away from 1.
-    assert abs(r_med - 1.0) < RATIO_MEDIAN_TOL[dtype], f"ratio median {r_med} != 1: suspected scale bug"
+    ratio_tol = RATIO_MEDIAN_TOL[dtype] if fp32_acc else RATIO_MEDIAN_TOL_16BIT_DEST[dtype]
+    assert abs(r_med - 1.0) < ratio_tol, f"ratio median {r_med} != 1: suspected scale bug"
