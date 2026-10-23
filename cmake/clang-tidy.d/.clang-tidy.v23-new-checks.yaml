@@ -14,6 +14,23 @@
 # plain diff misses it, but clang-tidy 23 treats the deprecated name itself
 # as an error under --warnings-as-errors=*, regardless of findings — it must
 # be off too or every TU fails.
+#
+# Also disabled below: same-name checks whose *detection logic* changed
+# between v20 and v23 (invisible to a --list-checks name diff, confirmed via
+# a/b testing both binaries against real repo code, not just by name):
+#   bugprone-fold-init-type: v23 widened the std::accumulate matcher to the
+#     4-arg overload with a transparent functor, without checking the
+#     functor's template arg type — flags narrowing that v20 never saw.
+#   bugprone-optional-value-conversion: v23 (LLVM 21) widened to also match
+#     std::make_optional() arguments, not just direct construction.
+#   cppcoreguidelines-missing-std-forward: v23 rewrote its forwarding
+#     detection and now false-positives on C++20 lambdas with an explicit
+#     template parameter list even when the pack genuinely is forwarded —
+#     open upstream regression, llvm/llvm-project#228393.
+#   modernize-type-traits: v23 (LLVM 21) widened to flag ::type access on a
+#     dependent trait specialization inside decltype, not just direct uses.
+#   readability-else-after-return: v23 widened the matcher to also catch
+#     if/else directly under an unbraced switch case label.
 Checks: >
   -bugprone-assignment-in-selection-statement,
   -bugprone-capturing-this-in-member-variable,
@@ -23,9 +40,11 @@ Checks: >
   -bugprone-derived-method-shadowing-base-method,
   -bugprone-exception-copy-constructor-throws,
   -bugprone-float-loop-counter,
+  -bugprone-fold-init-type,
   -bugprone-invalid-enum-default-initialization,
   -bugprone-misleading-setter-of-reference,
   -bugprone-missing-end-comparison,
+  -bugprone-optional-value-conversion,
   -bugprone-random-generator-seed,
   -bugprone-raw-memory-call-on-non-trivial-type,
   -bugprone-signed-bitwise,
@@ -38,6 +57,7 @@ Checks: >
   -bugprone-unsafe-to-allow-exceptions,
   -cert-exp45-c,
   -cppcoreguidelines-explicit-constructor,
+  -cppcoreguidelines-missing-std-forward,
   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -cppcoreguidelines-use-enum-class,
   -google-runtime-float,
@@ -50,6 +70,7 @@ Checks: >
   -modernize-avoid-c-style-cast,
   -modernize-avoid-setjmp-longjmp,
   -modernize-avoid-variadic-functions,
+  -modernize-type-traits,
   -modernize-use-scoped-lock,
   -modernize-use-std-bit,
   -modernize-use-string-view,
@@ -60,6 +81,7 @@ Checks: >
   -performance-use-std-move,
   -portability-avoid-pragma-once,
   -readability-ambiguous-smartptr-reset-call,
+  -readability-else-after-return,
   -readability-inconsistent-ifelse-braces,
   -readability-redundant-lambda-parameter-list,
   -readability-redundant-nested-if,
