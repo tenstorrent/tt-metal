@@ -168,7 +168,8 @@ three wide.
   exact pre-checks (area, lattice, colour) before the search. No SAT for now.
 - **Resolver:** keep its DFS; add the colour pre-check for fully used meshes between fixed cable
   slots.
-- **Blaze:** its planner rejects carves that exist; see the tt-blaze PR that adds tests for this.
+- **Blaze:** its planner rejects carves that exist; tt-blaze
+  [#5775](https://github.com/tenstorrent/tt-blaze/pull/5775) adds CPU tests for this (xfail today).
 - **STRICT-first:** line-connected blitz and prefill MGDs need their loopback marked as host-only,
   so RELAXED edges may be needed in the first version.
 
