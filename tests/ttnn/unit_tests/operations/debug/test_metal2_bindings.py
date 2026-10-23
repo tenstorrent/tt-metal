@@ -171,7 +171,8 @@ def _plain(value):
 def test_namespace_is_experimental_only():
     assert ttnn.experimental.metal2.ProgramSpec is ttnn._ttnn.program_spec.ProgramSpec
     bound = {n for n in dir(ttnn._ttnn.program_spec) if not n.startswith("_")}
-    assert set(m2.__all__) == bound | {"KernelBuildOptLevel"}
+    # KernelBuildOptLevel comes from fabric_mux, compute_program_spec_hash from operations.generic.
+    assert set(m2.__all__) == bound | {"KernelBuildOptLevel", "compute_program_spec_hash"}
     # The host API is experimental; nothing leaks into the public ttnn namespace.
     leaked = set(m2.__all__) & set(dir(ttnn))
     assert not leaked, f"{sorted(leaked)} must live under ttnn.experimental.metal2 only"

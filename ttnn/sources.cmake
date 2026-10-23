@@ -97,6 +97,10 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
+    # Keep this at the end: TTNNCPP_SRCS order drives the unity-build batching,
+    # and inserting higher up reshuffles the blobs, which collides same-named
+    # anonymous-namespace helpers in unrelated files.
+    cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
 )
 
 ####################################################################################################
