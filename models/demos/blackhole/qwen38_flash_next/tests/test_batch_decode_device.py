@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""P1a device test: the plain lane body at B = 2, 4, 8 users against the same prompts decoded alone (B=1).
+"""P1b device test: the residue-free plain lane body at B = 2, 4, 8, 16, 32 users against the same prompts decoded alone
+(B=1).
 
-Each lane holds a War and Peace needle prompt of its own length (all multiples of 4, so every lane shares the position
-residue 0).  The B=1 reference is the adapter's greedy prefill plus 32 decode steps; the lanes are admitted from the
+Each lane holds a War and Peace needle prompt of its own length (300 + 181 * lane: mixed residues mod 4, one trace for
+every lane).  The B=1 reference is the adapter's greedy prefill plus 32 decode steps; the lanes are admitted from the
 same B=1 prefill and replay 32 batched steps.  The first 8 tokens of every lane must equal the reference and the pass
 key must appear in the lane output; the full 32-token equality is logged (near ties may differ).
 
@@ -37,7 +38,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTE
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 
 ALLOCATED_CONTEXT = 8192
-PROMPT_LENGTHS = [512, 1024, 1536, 2048, 3072, 4096, 5120, 6144]
 STEPS = 32
 EXACT_PREFIX = 8
 
@@ -80,9 +80,11 @@ def reference_decode(vm, prompt_ids: list[int]) -> tuple[list[int], float]:
 @pytest.mark.parametrize(
     "lanes",
     [
-        pytest.param(2, id="batch_2", marks=pytest.mark.timeout(3600)),
-        pytest.param(4, id="batch_4", marks=pytest.mark.timeout(3600)),
-        pytest.param(8, id="batch_8", marks=pytest.mark.timeout(3600)),
+        pytest.param(2, id="batch_2", marks=pytest.mark.timeout(5400)),
+        pytest.param(4, id="batch_4", marks=pytest.mark.timeout(5400)),
+        pytest.param(8, id="batch_8", marks=pytest.mark.timeout(5400)),
+        pytest.param(16, id="batch_16", marks=pytest.mark.timeout(5400)),
+        pytest.param(32, id="batch_32", marks=pytest.mark.timeout(5400)),
     ],
 )
 def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_property):
@@ -97,7 +99,7 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
     context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
-    lengths = PROMPT_LENGTHS[:lanes]
+    lengths = [300 + 181 * i for i in range(lanes)]
     prompts = [
         build_prompt_ids(
             tokenizer,
@@ -108,7 +110,7 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
         )[0]
         for length in lengths
     ]
-    assert all(len(p) % 4 == 0 for p in prompts)
+    assert len({len(p) % 4 for p in prompts}) > 1 or lanes < 2  # mixed residues
 
     mesh_device.enable_program_cache()
     started = time.perf_counter()
@@ -184,7 +186,7 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
     report_path.write_text(
         json.dumps(
             {
-                "schema": "qwen38-plain-lanes-p1a/v1",
+                "schema": "qwen38-plain-lanes-p1b/v1",
                 "lanes": lanes,
                 "steps": STEPS,
                 "model_ready_s": model_ready_s,

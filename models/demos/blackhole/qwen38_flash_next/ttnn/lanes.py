@@ -317,6 +317,17 @@ class Qwen38LaneHostPool:
 # ---------------------------------------------------------------- the pager
 
 
+def rotate_ring_image(image: torch.Tensor, position: int, ring: int = 4) -> torch.Tensor:
+    """``image`` ``[1, ring * layers, 1, W]`` (entry ``ring * layer + slot``) with every layer's ``ring`` entries
+    rotated so ``out[j] = in[(position + j) % ring]``."""
+
+    entries = image.shape[1]
+    if entries % ring:
+        raise ValueError(f"ring image holds {entries} entries, not a multiple of {ring}")
+    order = [layer * ring + (position + j) % ring for layer in range(entries // ring) for j in range(ring)]
+    return image[:, order].contiguous()
+
+
 @dataclass(frozen=True)
 class Qwen38LaneMoveTiming:
     """Wall milliseconds of one page move by leg: the pack / unpack trace replay, the small transfers of the pack
@@ -657,6 +668,31 @@ class Qwen38TTNNLanePager:
             (small_done - trace_done) / 1e6,
             (done - small_done) / 1e6,
             (done - started) / 1e6,
+        )
+
+    def rotate_ring_canonical(self, slot: Qwen38LaneHostSlot, position: int) -> None:
+        """Rotate the GDN ring slots of the host image ``slot`` from the generic ring order into the canonical order
+        of a fixed-phase (residue-free) lane state, for every GDN layer: ``canonical[j] = generic[(p + j) % 4]``,
+        ``p = position % 4``.  The generic B=1 state after a prefill of ``position`` tokens has ring phase ``p``: its
+        next token lands in slot ``p`` and the older three are slots ``p+1, p+2, p+3`` (oldest first); the fixed-phase
+        window is (1, 2, 3, 0) with the token landing in slot 0, so slot ``j`` takes generic slot ``(p + j) % 4``.
+        Call between ``evict`` and ``readmit``; the ``conv`` pack is ``[1,144,1,2560]`` with entry
+        ``4 * layer + slot`` (layer-major), and only that family holds ring phase (the recurrent, KV, QSA and PLE
+        images do not depend on it).  A host-side torch roundtrip of 144 rows of one lane; the slot's tensor is
+        replaced by an equal-shape one."""
+
+        if "conv" not in slot.tensors:
+            raise ValueError("the host slot holds no GDN ring slots")
+        family = next(f for f in self.layout.families() if f.name == "conv")
+        ring = gdn_module.CONV_KERNEL_SIZE
+        host_tensor = slot.tensors["conv"][0]
+        composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=family.shard_dim)
+        image = ttnn.to_torch(host_tensor, mesh_composer=composer)
+        rotated = rotate_ring_image(image, position, ring)
+        slot.tensors["conv"] = (
+            ttnn.from_torch(
+                rotated, dtype=family.dtype, layout=family.layout, mesh_mapper=family.mapper(self.mesh_device)
+            ),
         )
 
     def warm_moves(self, slot: Qwen38LaneHostSlot) -> list[tuple[Qwen38LaneMoveTiming, Qwen38LaneMoveTiming]]:

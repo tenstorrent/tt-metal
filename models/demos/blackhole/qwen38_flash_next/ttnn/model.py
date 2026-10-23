@@ -3189,9 +3189,14 @@ class Qwen38TTNNTextModel:
             raise ValueError("the lane PLE rows must be live and prepared without host n-gram contexts")
         return lanes
 
-    def allocate_lane_state(self, lanes: int, *, indexer_form: str = "wide") -> Qwen38TTNNTextModelLaneState:
+    def allocate_lane_state(
+        self, lanes: int, *, indexer_form: str = "wide", residue_free: bool = False
+    ) -> Qwen38TTNNTextModelLaneState:
         """Allocate the position row, every layer's lane state, the lane constants and the host-written inputs of
-        B lanes (before any capture).  The first call also builds the model-lifetime generic constants."""
+        B lanes (before any capture).  The first call also builds the model-lifetime generic constants.
+        ``residue_free``: the plain lane body for lanes at any positions: a residue-free position row and fixed-phase
+        GDN lane states (a per-lane conv shift register, one trace for every step); a lane's GDN ring slots must be
+        rotated into the canonical order when it is admitted (``Qwen38TTNNLanePager.rotate_ring_canonical``)."""
 
         self._require_healthy()
         lanes = require_lane_count(lanes, label="text-model lanes")
@@ -3204,7 +3209,9 @@ class Qwen38TTNNTextModel:
             self.qsa_position_constants = qsa_module.Qwen38TTNNQSAPositionConstants.build(
                 self.mesh_device, self.mesh_contract, qsa.allocated_compressed_blocks
             )
-        position = Qwen38TTNNDevicePositionRow.allocate(self.mesh_device, self.mesh_contract, [0] * lanes, lanes=lanes)
+        position = Qwen38TTNNDevicePositionRow.allocate(
+            self.mesh_device, self.mesh_contract, [0] * lanes, lanes=lanes, residue_free=residue_free
+        )
         allocated: list[Qwen38TTNNDecoderLayerLaneState] = []
         chunk_constants = None
         lane_constants = None
@@ -3224,6 +3231,8 @@ class Qwen38TTNNTextModel:
             )
             for layer in self.layers:
                 allocated.append(layer.allocate_lane_state(lanes))
+                if residue_free and isinstance(allocated[-1].attention, gdn_module.Qwen38TTNNGDNState):
+                    allocated[-1].attention.fixed_phase = True
             token_row = self.model_io.embedding.upload_token_row(0)
             if lanes < CHUNK_ROWS:
                 embedding_rows = ttnn.from_torch(
@@ -3529,7 +3538,7 @@ class Qwen38TTNNTextModel:
         self,
         state: Qwen38TTNNTextModelLaneState,
         *,
-        residue: int,
+        residue: int | None = None,
         guard: Callable[[str], AbstractContextManager[Any]],
         epilogue: Callable[[Qwen38TTNNGenericDecodeOutput], Any],
         phase_observer: Callable[[str], None] | None = None,
@@ -3537,14 +3546,23 @@ class Qwen38TTNNTextModel:
         clock_ns: Callable[[], int] = time.monotonic_ns,
     ) -> Qwen38TTNNGenericDecodeCapture:
         """Capture one residue class of the lane body as one single-body trace (:meth:`capture_decode_generic`'s
-        discipline: ``corruptible_allocation_scope``, the caller's ``guard`` and ``epilogue``).  The position
-        row's residue and every GDN lane state's ring phase must be ``residue`` (the residue rule made concrete);
+        discipline: ``corruptible_allocation_scope``, the caller's ``guard`` and ``epilogue``).  On a residue-free
+        lane state (``residue=None``, key residue 0) one trace serves every step and the residue and phase checks
+        are skipped; otherwise the
+        position row's residue and every GDN lane state's ring phase must be ``residue`` (the residue rule made concrete);
         capture records without executing, so the host bookkeeping advances as if the body ran while the device
         state is unchanged.  A body failure poisons this owner and leaves the capture open; the process must exit."""
 
         if phase_observer is not None and not callable(phase_observer):
             raise TypeError("capture phase observer must be callable")
         self._validate_lane_state(state)
+        residue_free = getattr(state.position, "residue_free", False)
+        if residue_free != (residue is None):
+            raise ValueError(
+                f"lane capture residue {residue!r}: a residue-free lane state takes residue=None and the others a residue"
+            )
+        if residue_free:
+            residue = 0
         if not isinstance(residue, int) or not 0 <= residue < gdn_module.CONV_KERNEL_SIZE:
             raise ValueError(f"lane trace residue must be an int in [0,{gdn_module.CONV_KERNEL_SIZE}), got {residue!r}")
         phases = {
@@ -3552,7 +3570,7 @@ class Qwen38TTNNTextModel:
             for index, layer_state in enumerate(state.layers)
             if isinstance(layer_state.attention, gdn_module.Qwen38TTNNGDNState)
         }
-        if state.position.residue != residue or set(phases.values()) != {residue}:
+        if not residue_free and (state.position.residue != residue or set(phases.values()) != {residue}):
             raise RuntimeError(
                 f"lane capture residue {residue}: the position row's residue is {state.position.residue} and the GDN "
                 f"ring phases are {sorted(set(phases.values()))}; all must equal the residue"

@@ -185,6 +185,60 @@ def test_gdn_lanes_equal_b_one_row_chains_over_twelve_steps_with_an_aligned_admi
             gdn.forward_decode(step4._hidden_sharded(hidden[:1, :1]), lane_state)
 
 
+@pytest.mark.parametrize("lanes", (2, 4, 8))
+def test_fixed_phase_lanes_equal_b_one_row_chains_at_different_start_residues(fake, gdn, lanes: int) -> None:
+    """The residue-free lane body: a per-lane conv shift register (window (1,2,3,0), shift 1<-2, 2<-3, 3<-0 after each
+    step) over lanes whose B=1 chains start at different ring phases; lane u's ring is the chain's rotated into the
+    canonical order ``canonical[j] = generic[(p + j) % 4]`` (``lanes.rotate_ring_image``)."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import rotate_ring_image
+
+    torch.manual_seed(300 + lanes)
+    steps = 10
+    hidden = torch.randn(steps, lanes, 2560).to(torch.bfloat16)
+    lane_state = gdn.allocate_lane_state(lanes)
+    lane_state.fixed_phase = True
+    assert lane_state.conv_window() == (lane_state.conv[1], lane_state.conv[2], lane_state.conv[3], lane_state.conv[0])
+    chains = [gdn.allocate_state() for _ in range(lanes)]
+    starts = [(3 * u + 1) % 4 for u in range(lanes)]
+    assert len(set(starts)) > 1
+    for lane, chain in enumerate(chains):
+        chain.conv_phase = starts[lane]
+        for shard in range(len(chain.recurrent.locals)):
+            noise = (0.05 * torch.randn(chain.recurrent.locals[shard].shape)).to(torch.float32)
+            chain.recurrent.locals[shard].copy_(noise)
+            lane_state.recurrent.locals[shard][lane : lane + 1].copy_(noise)
+        for slot in chain.conv:
+            for shard in range(len(slot.locals)):
+                slot.locals[shard].copy_(torch.randn(slot.locals[shard].shape).to(torch.bfloat16))
+        for shard in range(len(chain.conv[0].locals)):
+            generic = torch.cat([slot.locals[shard] for slot in chain.conv], dim=1).reshape(1, 4, 1, -1)
+            canonical = rotate_ring_image(generic, starts[lane])
+            for j in range(4):
+                lane_state.conv[j].locals[shard][:, :, lane : lane + 1] = canonical[:, j : j + 1].reshape(1, 1, 1, -1)
+    for step in range(steps):
+        result = gdn.forward_decode_lanes(step4._hidden_sharded(hidden[step : step + 1]), lane_state)
+        assert lane_state.conv_phase == 0  # fixed: the phase never moves
+        output_lanes = step4._cat(result.hidden_sharded, 3)
+        for lane, chain in enumerate(chains):
+            reference = gdn.forward_decode(step4._hidden_sharded(hidden[step : step + 1, lane : lane + 1]), chain)
+            assert chain.conv_phase == (starts[lane] + step + 1) % 4
+            assert _equal(output_lanes[:, :, lane : lane + 1], step4._cat(reference.hidden_sharded, 3)), (step, lane)
+            lane_image, chain_image = _lane_image(lane_state, lane), _one_row_image(chain)
+            assert _equal(lane_image["recurrent"], chain_image["recurrent"]), (step, lane)
+            for j in (1, 2, 3):  # slot 0 holds the newest token too (the next step overwrites it)
+                generic = chain_image[f"conv[{(chain.conv_phase + j) % 4}]"]
+                assert _equal(lane_image[f"conv[{j}]"], generic), (step, lane, j)
+
+
+def test_residue_free_position_row_takes_any_residues_and_the_default_row_refuses_them(expect_error) -> None:
+    row = Qwen38TTNNDevicePositionRow
+    assert row._lane_positions([5, 6, 7], lanes=3, residue_free=True) == [5, 6, 7] + [0] * 29
+    with expect_error(ValueError, match="residue"):
+        row._lane_positions([5, 6, 7], lanes=3)
+    assert row._lane_positions([4, 8], lanes=2) == [4, 8] + [0] * 30
+
+
 def test_misaligned_admission_differs_and_the_position_row_refuses_it(fake, gdn, monkeypatch, expect_error) -> None:
     torch.manual_seed(7)
     hidden = torch.randn(STEPS, 2, 2560).to(torch.bfloat16)

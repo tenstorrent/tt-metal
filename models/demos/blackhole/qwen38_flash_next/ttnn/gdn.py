@@ -619,6 +619,10 @@ class Qwen38TTNNGDNState:
     # Lanes of the batched layout: recurrent [B,12,128,128], conv slots [1,1,B,2560] (lane u = batch index u /
     # row u).  The 1-row decode body (forward_decode) admits batch 1 only; the batched step is a separate path.
     batch_size: int = 1
+    # Fixed-phase lanes (the residue-free plain lane body): slot 0 always receives the new token and the window is
+    # (1, 2, 3, 0), so one trace serves lanes at any positions; ``shift_conv_window`` then moves the register
+    # 1 <- 2, 2 <- 3, 3 <- 0 in place after each step.  Off: the ring phase above (the MTP lanes, the B=1 state).
+    fixed_phase: bool = False
 
     @classmethod
     def allocate(
@@ -628,6 +632,7 @@ class Qwen38TTNNGDNState:
         *,
         layer_index: int,
         batch_size: int = 1,
+        fixed_phase: bool = False,
     ) -> "Qwen38TTNNGDNState":
         mesh_contract.validate_mesh(mesh_device)
         batch_size = require_lane_count(batch_size, label="GDN state batch size")
@@ -669,6 +674,7 @@ class Qwen38TTNNGDNState:
                 zero_conv=allocate_conv("GDN zero conv source"),
                 mesh_contract=mesh_contract,
                 batch_size=batch_size,
+                fixed_phase=fixed_phase,
             )
             result.validate()
             return result
@@ -702,10 +708,27 @@ class Qwen38TTNNGDNState:
     def conv_window(self) -> tuple[Any, Any, Any, Any]:
         """FIR operands for the next token, oldest first; the last slot receives that token."""
 
+        if self.fixed_phase:
+            return (self.conv[1], self.conv[2], self.conv[3], self.conv[0])
         return tuple(self.conv[(self.conv_phase + 1 + index) % CONV_KERNEL_SIZE] for index in range(CONV_KERNEL_SIZE))
 
     def advance_conv_window(self) -> None:
+        if self.fixed_phase:
+            return
         self.conv_phase = (self.conv_phase + 1) % CONV_KERNEL_SIZE
+
+    def shift_conv_window(self) -> None:
+        """Fixed-phase mode only: after the step read the window and landed the token in ``conv[0]``, shift the
+        register in place (``conv[1] <- conv[2]``, ``conv[2] <- conv[3]``, ``conv[3] <- conv[0]``, in that order so
+        no source is overwritten first); every address stays fixed, so the copies are trace safe.  A no-op on the
+        ring-phase state."""
+
+        if not self.fixed_phase:
+            return
+        conv = self.conv
+        _copy_inplace(conv[2], conv[1], label="GDN conv shift 1<-2")
+        _copy_inplace(conv[3], conv[2], label="GDN conv shift 2<-3")
+        _copy_inplace(conv[0], conv[3], label="GDN conv shift 3<-0")
 
     def reset_inplace(self) -> None:
         """Zero all state without changing any address (trace safe)."""
@@ -2485,6 +2508,7 @@ class Qwen38TTNNGDN:
         z, a, b = self._project_lanes(full_hidden, window[-1], lanes)
         state.advance_conv_window()
         conv = self._causal_conv_lanes(window, lanes)
+        state.shift_conv_window()
         q, k, v, beta, log_decay, beta_producers = self._make_recurrent_inputs_lanes(conv, a, b, lanes)
         recurrent_output = self._recurrent_decode_lanes(q, k, v, beta, log_decay, beta_producers, state, lanes)
         output = self._gate_and_project_lanes(recurrent_output, z, full_hidden, lanes)
@@ -2504,6 +2528,7 @@ class Qwen38TTNNGDN:
         projected = self._project_lanes_unsplit(full_hidden, lanes)
         gated = fused.gdn_step.gdn_step(self, projected, window, state)
         state.advance_conv_window()
+        state.shift_conv_window()
         output = self._out_project_lanes(gated, full_hidden, lanes)
         return Qwen38TTNNGDNResult(output, state)
 

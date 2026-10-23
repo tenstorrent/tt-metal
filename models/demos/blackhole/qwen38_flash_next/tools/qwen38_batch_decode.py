@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""P1a bring-up driver: batched greedy decode of the PLAIN lane body, one token per lane, on the 1x4 Blackhole mesh.
+"""P1b driver: batched greedy decode of the PLAIN lane body, one token per lane, on the 1x4 Blackhole mesh.
 
 ``Qwen38PlainLaneDecoder`` sits beside an open vLLM adapter (``Qwen38ForCausalLM``, one resident slot).  It allocates a
 B-lane state on the adapter's model, builds the lane pagers and the one-slot host pool and warms every program
 eagerly (``prepare``, the chain's warm hook: the lane tensors must exist before the chain captures its traces), then
-captures the four residue variants of the lane body (``capture`` after the chain opened) and checks the trace
-allocation tracker.
-A prompt is prefilled on the adapter's B=1 chain, evicted into the host slot and re-admitted into a lane
-(``admit``); ``step`` replays the lane trace of the shared residue once and returns one new greedy token per lane.
+captures the ONE residue-free lane body (``capture`` after the chain opened) and checks the trace allocation tracker.
+A prompt is prefilled on the adapter's B=1 chain, evicted into the host slot, its GDN ring slots rotated into the
+canonical fixed-phase order and re-admitted into a lane (``admit``); ``step`` replays the one lane trace and returns
+one new greedy token per lane.
 
-Residue-aligned admissions only: every lane shares one position residue (position mod 4), so the prompts of one batch
-must have lengths of the same residue (the test uses multiples of 4).  Not a scheduler, no MTP, no mid-batch admission.
+Residue-free: the lanes sit at any positions (the GDN lane state keeps a per-lane conv shift register, see
+``Qwen38TTNNGDNState.fixed_phase``).  Not a scheduler, no MTP, no mid-batch admission.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import Qwen38LaneHostPool, Qwen38TTNNLanePager
 
-RESIDUES = 4
 WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into lane state that a reset clears
 
 
@@ -89,7 +88,7 @@ class Qwen38PlainLaneDecoder:
 
     def prepare(self, chain: Any) -> None:
         """The chain's warm hook (after its warm pass, before its own captures, misses allowed): the lane state, the
-        pagers and host slot, the warm admissions and the eager body passes at every residue.  The lane tensors must
+        pagers and host slot, the warm admissions and one eager body pass.  The lane tensors must
         exist before the chain's traces are captured, or the trace allocation tracker refuses those traces."""
 
         self.chain = chain
@@ -97,7 +96,7 @@ class Qwen38PlainLaneDecoder:
         self.model = model = chain.built_target.model
         lanes = self.lanes
         started = time.perf_counter()
-        self.ls = ls = model.allocate_lane_state(lanes, indexer_form="wide")
+        self.ls = ls = model.allocate_lane_state(lanes, indexer_form="wide", residue_free=True)
         gl = model.generic_lane_layout(chain.state)
         ll = model.lane_layout(ls)
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
@@ -109,7 +108,7 @@ class Qwen38PlainLaneDecoder:
         ttnn.synchronize_device(mesh)
         self.timing["allocate_s"] = time.perf_counter() - started
 
-        # Eager warm: every lane admitted once (compiles the admission programs), then one body pass per residue.
+        # Eager warm: every lane admitted once (compiles the admission programs), then one body pass.
         started = time.perf_counter()
         zeros = [0] * lanes
         model.reset_lane_state_inplace(ls, zeros)
@@ -118,31 +117,28 @@ class Qwen38PlainLaneDecoder:
         model.reset_lane_state_inplace(ls, zeros)
         contexts: Sequence[Any] = [None] * lanes
         tokens = [WARM_TOKEN_ID] * lanes
-        for residue in range(RESIDUES):
-            if ls.position.residue != residue:
-                raise RuntimeError(f"warm pass {residue}: the position row's residue is {ls.position.residue}")
-            contexts = model.write_lane_ple_rows(ls, tokens, contexts)
-            model.write_lane_tokens(ls, tokens)
-            output = model.forward_decode_lanes(ls)
-            candidates, token_row = model.resolve_lane_tokens(output, ls)
-            ttnn.synchronize_device(mesh)
-            output.release_tensors()
-            for tensor in (
-                token_row,
-                candidates.local_indices,
-                candidates.local_values,
-                candidates.packed,
-                candidates.shard_row,
-            ):
-                if isinstance(tensor, ttnn.Tensor):
-                    ttnn.deallocate(tensor)
+        contexts = model.write_lane_ple_rows(ls, tokens, contexts)
+        model.write_lane_tokens(ls, tokens)
+        output = model.forward_decode_lanes(ls)
+        candidates, token_row = model.resolve_lane_tokens(output, ls)
+        ttnn.synchronize_device(mesh)
+        output.release_tensors()
+        for tensor in (
+            token_row,
+            candidates.local_indices,
+            candidates.local_values,
+            candidates.packed,
+            candidates.shard_row,
+        ):
+            if isinstance(tensor, ttnn.Tensor):
+                ttnn.deallocate(tensor)
         model.reset_lane_state_inplace(ls, zeros)
         ttnn.synchronize_device(mesh)
         self.timing["warm_s"] = time.perf_counter() - started
 
     def capture(self, vm: Any) -> None:
-        """After the chain opened (its traces captured, the miss guard closed): the four residue captures of the lane
-        body from reset positions, the tracker over every trace, the lane mirrors back at position 0."""
+        """After the chain opened (its traces captured, the miss guard closed): the one capture of the lane body from
+        reset positions, the tracker over every trace, the lane mirrors back at position 0."""
 
         self.vm = vm
         chain, mesh, model, ls = self.chain, self.mesh, self.model, self.ls
@@ -154,12 +150,9 @@ class Qwen38PlainLaneDecoder:
         ttnn.synchronize_device(mesh)
         guard = lambda label: resident_decode.forbid_trace_body_host_io_and_sync(phase=f"lanes {label}")  # noqa: E731
         epilogue = lambda out: model.resolve_lane_tokens(out, ls)  # noqa: E731
-        for residue in range(RESIDUES):
-            cap = model.capture_decode_lanes(
-                ls, residue=residue, guard=guard, epilogue=epilogue, phase_observer=None, cq_id=0
-            )
-            self.captures.append(cap)
-            self.trace_ids.append(next(iter(cap.trace_ids.values())))
+        cap = model.capture_decode_lanes(ls, guard=guard, epilogue=epilogue, phase_observer=None, cq_id=0)
+        self.captures.append(cap)
+        self.trace_ids.append(next(iter(cap.trace_ids.values())))
         ttnn.synchronize_device(mesh)
         for tensor in (
             ls.token_row,
@@ -176,7 +169,7 @@ class Qwen38PlainLaneDecoder:
         logger.info(f"program cache entries after the lane captures {entries} (chain {chain.program_cache_entries})")
         if entries != chain.program_cache_entries:
             raise RuntimeError(f"lane captures compiled programs: {entries} vs {chain.program_cache_entries}")
-        model.reset_lane_state_inplace(ls, [0] * self.lanes)  # the mirrors advanced 4 during capture
+        model.reset_lane_state_inplace(ls, [0] * self.lanes)  # the mirrors advanced during capture
         ttnn.synchronize_device(mesh)
         self.timing["capture_s"] = time.perf_counter() - started
         logger.info(f"plain lane decoder ready: {self.lanes} lanes, timing {self.timing}")
@@ -205,6 +198,7 @@ class Qwen38PlainLaneDecoder:
             raise RuntimeError(f"adapter committed {len(vm.slot.committed)} tokens, expected {length}")
         slot = self.pool.slots[0]
         self.pager_g.evict(0, slot)
+        self.pager_g.rotate_ring_canonical(slot, length)
         slot.position = length
         model.admit_lane(ls, lane, length, rope_shift=0)
         self.pager_l.readmit(slot, lane, position_row=None)
@@ -220,10 +214,9 @@ class Qwen38PlainLaneDecoder:
         """One lane-body replay consuming ``tokens`` (one per lane); returns the lanes' next greedy tokens."""
 
         model, ls, mesh = self.model, self.ls, self.mesh
-        residue = ls.position.residue
         self.contexts = list(model.write_lane_ple_rows(ls, tokens, self.contexts))
         model.write_lane_tokens(ls, tokens)
-        ttnn._ttnn_execute_trace(mesh, self.trace_ids[residue], cq_id=0, blocking=True)
+        ttnn._ttnn_execute_trace(mesh, self.trace_ids[0], cq_id=0, blocking=True)
         ls.position.advance_replayed()
         row = ttnn.to_torch(ttnn.get_device_tensors(ls.token_row)[0]).reshape(-1)[: self.lanes]
         return [int(v) for v in row.to(torch.float32).round().to(torch.int64).tolist()]

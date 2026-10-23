@@ -698,6 +698,10 @@ class Qwen38TTNNDevicePositionRow:
     # None: a row built without one (a text-only stand-in): the rotary rows are the plain rows.
     shift_row: Any = None
     shifts: list[int] = field(default_factory=lambda: [0] * MAX_LANES)
+    # Residue-free row: lanes may sit at any positions (the plain lane body then keeps a per-lane GDN conv shift
+    # register instead of a ring phase, see ``Qwen38TTNNGDNState.fixed_phase``); no residue check anywhere, idle
+    # lanes hold 0, and :attr:`residue` is not available.  Off by default (the MTP lanes and the residue rule).
+    residue_free: bool = False
 
     @staticmethod
     def _lane_shifts(shifts, positions: list[int], *, lanes: int) -> list[int]:
@@ -711,8 +715,9 @@ class Qwen38TTNNDevicePositionRow:
         return values + [0] * (MAX_LANES - lanes)
 
     @staticmethod
-    def _lane_positions(positions, *, lanes: int) -> list[int]:
-        """The 32 lane values (active lanes as given, idle lanes at the shared residue), residue checked."""
+    def _lane_positions(positions, *, lanes: int, residue_free: bool = False) -> list[int]:
+        """The 32 lane values (active lanes as given, idle lanes at the shared residue), residue checked; with
+        ``residue_free`` no residue check and idle lanes at 0."""
 
         values = [
             _exact_integer(value, label=f"lane {index} position", error_type=ValueError)
@@ -723,6 +728,8 @@ class Qwen38TTNNDevicePositionRow:
         for lane, value in enumerate(values):
             if not 0 <= value < UINT32_LIMIT:
                 raise ValueError(f"lane {lane} position must be in [0,{UINT32_LIMIT}), got {value}")
+        if residue_free:
+            return values + [0] * (MAX_LANES - lanes)
         residue = values[0] % GDN_RESIDUE_CLASSES
         for lane, value in enumerate(values):
             if value % GDN_RESIDUE_CLASSES != residue:
@@ -738,11 +745,18 @@ class Qwen38TTNNDevicePositionRow:
 
     @classmethod
     def allocate(
-        cls, mesh_device, mesh_contract: Qwen38MeshContract, positions, *, lanes: int, shifts=None
+        cls,
+        mesh_device,
+        mesh_contract: Qwen38MeshContract,
+        positions,
+        *,
+        lanes: int,
+        shifts=None,
+        residue_free: bool = False,
     ) -> Qwen38TTNNDevicePositionRow:
         mesh_contract.validate_mesh(mesh_device)
         lanes = require_lane_count(lanes, label="position row lanes")
-        values = cls._lane_positions(positions, lanes=lanes)
+        values = cls._lane_positions(positions, lanes=lanes, residue_free=residue_free)
         shift_values = cls._lane_shifts(shifts, values, lanes=lanes)
         uploaded: list[Any] = []
         try:
@@ -770,16 +784,28 @@ class Qwen38TTNNDevicePositionRow:
             for tensor in uploaded:
                 ttnn.deallocate(tensor)
             raise
-        return cls(uploaded[0], uploaded[1], lanes, values, mesh_device, mesh_contract, uploaded[2], shift_values)
+        return cls(
+            uploaded[0],
+            uploaded[1],
+            lanes,
+            values,
+            mesh_device,
+            mesh_contract,
+            uploaded[2],
+            shift_values,
+            residue_free,
+        )
 
     @property
     def residue(self) -> int:
+        if self.residue_free:
+            raise RuntimeError("a residue-free position row has no shared residue")
         return self.positions[0] % GDN_RESIDUE_CLASSES
 
     def validate(self) -> None:
         if len(self.positions) != MAX_LANES or len(self.shifts) != MAX_LANES:
             raise RuntimeError(f"position row mirror holds {len(self.positions)} lanes, expected {MAX_LANES}")
-        self._lane_positions(self.positions[: self.lanes], lanes=self.lanes)
+        self._lane_positions(self.positions[: self.lanes], lanes=self.lanes, residue_free=self.residue_free)
         self._lane_shifts(self.shifts[: self.lanes], self.positions, lanes=self.lanes)
         _require_uint32_row(self.row, POSITION_INDEX_ROW_SHAPE, self.mesh_contract, label="device position row")
         if self.shift_row is not None:
@@ -809,7 +835,7 @@ class Qwen38TTNNDevicePositionRow:
         """Rewrite every active lane (a new batch); the lanes must share one residue.  ``shifts`` are the lanes'
         rotary shifts (None: text, all 0)."""
 
-        self.positions = self._lane_positions(positions, lanes=self.lanes)
+        self.positions = self._lane_positions(positions, lanes=self.lanes, residue_free=self.residue_free)
         self.shifts = self._lane_shifts(shifts, self.positions, lanes=self.lanes)
         self._write_mirror()
 
@@ -823,7 +849,7 @@ class Qwen38TTNNDevicePositionRow:
         value = _exact_integer(position, label="admitted position", error_type=ValueError)
         if not 0 <= value < UINT32_LIMIT:
             raise ValueError(f"admitted position must be in [0,{UINT32_LIMIT}), got {value}")
-        wait = admission_wait_steps(self.residue, value)
+        wait = 0 if self.residue_free else admission_wait_steps(self.residue, value)
         if wait:
             raise ValueError(
                 f"lane {lane} admission at position {value} has residue {value % GDN_RESIDUE_CLASSES}, expected the "
