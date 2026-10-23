@@ -1281,7 +1281,8 @@ class TtMiMoModel:
         return output
 
     def capture_spec_traces(self):
-        """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
+        """The verify step and the MTP draft programs (TtMiMoMTP.capture_trace: the single draft, the pair draft, the
+        backfill), after the decode trace (persistent buffers already exist)."""
         self.capture_verify_trace()
         self.mtp.capture_trace()
 

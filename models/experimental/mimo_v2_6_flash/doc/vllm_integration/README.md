@@ -479,8 +479,8 @@ plugin capping a lane of two at one draft each (`k_by_rows`) and trimming carrie
   recomputation of layer 0 over each request's whole sequence, speculative greedy of two requests equal to plain
   greedy); `tests/test_spec_pair_adapter_host.py` (the adapter on fake lanes through 1 -> 2 -> 1 -> 3 -> 2 requests,
   synchronous and chained: the oracle's tokens step for step, each population's drafts from the request's own ring,
-  the relayed backfill); the kernels compiled on the host against the mirrors (`kcheck`: every mode on random pair
-  cases and whole chained pair flows).
+  the relayed backfill). `tests/test_spec_inputs_tp8.py` `test_spec_chain_pair_tp8` (one Galaxy row): the pair
+  chain, drafts and relay steps bit for bit against their mirrors, eager and traced.
 - **Open.** On hardware: the pair trace's size in the trace region, acceptance of layer 0's draft per pair, and the
   throughput at concurrency 8 (two requests per lane).
 
