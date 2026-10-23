@@ -134,8 +134,8 @@ class WanPipelineConfig:
 
     # DBCache (cache-dit style) step skipping, applied to every call unless the call passes its own
     # `cache_config` (``None`` disables caching for that call). `WanPipelineConfig.default` fills
-    # this with `WanDBCacheConfig.default()`; pass ``cache_config=None`` there to build an uncached
-    # pipeline.
+    # this with `WanDBCacheConfig.default()` (the I2V recipe) for ``model_type="i2v"`` and leaves T2V
+    # uncached; pass ``cache_config`` there explicitly to override either way.
     cache_config: WanDBCacheConfig | None = None
 
     @classmethod
@@ -168,9 +168,12 @@ class WanPipelineConfig:
         preset = preset_dict.get(tuple(mesh_shape), {})
 
         if cache_config is _UNSET:
-            # DBCache's residual-diff readback is single-host only (`ExpertCacheRunner.read_sums`), so a
-            # multi-host mesh stays uncached unless the caller passes a cache_config explicitly.
-            cache_config = None if ttnn.using_distributed_env() else WanDBCacheConfig.default()
+            # The default recipe is validated on I2V only (T2V drifts past the A/B gate with it: PCC 0.90 at
+            # 480p and 0.71 at 720p, see `WanDBCacheConfig.default`), and the residual-diff readback is
+            # single-host only (`ExpertCacheRunner.read_sums`). T2V and multi-host meshes stay uncached
+            # unless the caller passes a cache_config explicitly.
+            i2v_single_host = model_type == "i2v" and not ttnn.using_distributed_env()
+            cache_config = WanDBCacheConfig.default() if i2v_single_host else None
 
         if dit_parallel_config is None or vae_parallel_config is None or encoder_parallel_config is None:
             sp_axis = preset["sp_axis"]

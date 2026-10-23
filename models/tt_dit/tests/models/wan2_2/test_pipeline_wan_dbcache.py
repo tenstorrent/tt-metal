@@ -226,8 +226,12 @@ def test_wan_dbcache_ab(
         "baseline": None,
         # Same head/body/tail path as dbcache but never allowed to cache.
         "split_nocache": DBCacheConfig(residual_diff_threshold=0.0, max_warmup_steps=0),
-        # The shipped default preset (asserted on below); also what a call with no cache_config gets.
-        "dbcache": WanDBCacheConfig.default(**shared),
+        # The T2V quality setting (gated below). T2V is uncached by default: the shipped preset is the
+        # I2V recipe, which drifts on T2V (PCC 0.90 at 480p, 0.71 at 720p) -> `dbcache_recipe`, ungated.
+        "dbcache": WanDBCacheConfig.default(
+            **{"residual_diff_threshold": 0.06, "taylorseer_order": 0, "warmup_interval": 1, **shared}
+        ),
+        "dbcache_recipe": WanDBCacheConfig.default(**shared),
         # Matrix: plain residual reuse vs. TaylorSeer forecasting orders, and cache-dit's 0.08 threshold.
         "dbcache_ts0": WanDBCacheConfig.default(**shared, taylorseer_order=0),
         "dbcache_ts1": WanDBCacheConfig.default(**shared, taylorseer_order=1),
