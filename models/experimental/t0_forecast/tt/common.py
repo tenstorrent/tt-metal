@@ -38,6 +38,7 @@ class TtT0Precision:
     hifi4: bool = False  # every matmul at HiFi4 (sweep variant)
     fp32_acc: bool = True  # fp32 dest accumulation in matmuls
     hifi4_roles: frozenset = frozenset()  # matmul roles at HiFi4: embed, qkv, wv, wo, ff1, ff2, decoder
+    fp32_residual: bool = False  # keep the residual stream in fp32 (norms emit bf16 for the matmuls)
 
     @classmethod
     def accuracy(cls) -> "TtT0Precision":
@@ -142,15 +143,21 @@ def linear(x, weight, precision: TtT0Precision, *, role: str, bias=None, activat
 
 
 def rms_norm(x, gain, eps: float, precision: TtT0Precision):
+    """RMSNorm with a learned gain; always returns bf16 (an fp32 residual stream is normed into bf16)."""
     import ttnn
 
-    return ttnn.rms_norm(
+    out = ttnn.rms_norm(
         x,
         epsilon=eps,
         weight=gain,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=precision.norm_kernel_config(),
     )
+    if out.dtype != ttnn.bfloat16:
+        narrow = ttnn.typecast(out, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out)
+        out = narrow
+    return out
 
 
 def add(a, b):

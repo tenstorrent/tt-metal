@@ -117,15 +117,15 @@ class TtT0:
         return replace(prepared, batch_shape=batch_shape, prediction_length=horizon)
 
     def _constant(self, key: tuple, make):
-        import ttnn
-
+        """A device tensor that depends only on ``key``, built once. Past ``_MAX_CONSTANTS`` entries the least
+        recently used one leaves the cache but is not deallocated: device inputs that hold it keep it alive, and
+        it is freed with its last reference (``test_rope_cache_eviction``)."""
         if key in self._constants:
             self._constants.move_to_end(key)
             return self._constants[key]
         value = self._constants[key] = make()
         if len(self._constants) > _MAX_CONSTANTS:
-            _, evicted = self._constants.popitem(last=False)
-            ttnn.deallocate(evicted)
+            self._constants.popitem(last=False)
         return value
 
     def _rope(self, prepared: host.T0HostInputs, padded_seq: int):
@@ -209,6 +209,10 @@ class TtT0:
             y = ttnn.add(x, inputs.type_delta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(x)
             x = y
+        if self.precision.fp32_residual:
+            wide = ttnn.typecast(x, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x)
+            x = wide
         return x
 
     def readout(self, x, inputs: TtT0DeviceInputs):
@@ -239,13 +243,24 @@ class TtT0:
     def head(self, x):
         """Read-out hidden states ``(1, 1, R * n, d)`` -> fp32 ``(1, 1, R * n, ps * Q)`` quantiles in asinh space;
         consumes ``x``. The decoder emits fp32 and the monotone head stays in fp32."""
+        return self.monotone(self.decode(x))
+
+    def decode(self, x):
+        """``out_norm`` then the decoder: the raw head values before softplus, fp32 ``(1, 1, R * n, ps * Q)``;
+        consumes ``x``."""
         import ttnn
 
-        p = self.precision
-        xn = rms_norm(x, self._out_norm, 1e-8, p)
+        xn = rms_norm(x, self._out_norm, 1e-8, self.precision)
         ttnn.deallocate(x)
         raw = self._decoder(xn)
         ttnn.deallocate(xn)
+        return raw
+
+    def monotone(self, raw):
+        """``q = [raw_0, softplus(raw_1..)] @ kron(I, U)`` per step, in fp32; consumes ``raw``."""
+        import ttnn
+
+        p = self.precision
         soft = ttnn.softplus(raw, beta=1.0, threshold=20.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         keep = ttnn.mul(ttnn.subtract(raw, soft), self._first, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(raw)
