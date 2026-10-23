@@ -79,15 +79,14 @@ enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
 using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
 
 class MeshBuffer;
-struct MeshCoreCoord;
 
 }  // namespace tt::tt_metal::distributed
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
-using SRAMTensorViewAddress = std::pair<distributed::MeshCoreCoord, DeviceAddr>;
+struct PerNodeMeshDeviceMemorySpan;
 distributed::MeshBuffer create_sram_buffer_view(
-    distributed::MeshDevice&, const TensorSpec&, const std::vector<SRAMTensorViewAddress>&);
+    distributed::MeshDevice&, const TensorSpec&, const PerNodeMeshDeviceMemorySpan&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -207,7 +206,7 @@ private:
     MeshBufferState state_;
 
     friend MeshBuffer experimental::per_core_allocation::create_sram_buffer_view(
-        MeshDevice&, const TensorSpec&, const std::vector<experimental::per_core_allocation::SRAMTensorViewAddress>&);
+        MeshDevice&, const TensorSpec&, const experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
