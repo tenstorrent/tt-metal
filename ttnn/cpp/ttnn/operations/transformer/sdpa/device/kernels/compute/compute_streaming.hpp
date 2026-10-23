@@ -390,7 +390,12 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
+// kPackDoneMax: PACK_DONE's counter capacity. A SEMPOST at the maximum is lost (t6_semaphore_post does not stall
+// on it), so it must cover the most tokens a path ever has outstanding: 2 for the streaming paths, 15 (the 4-bit
+// field's limit) for the Sol resident step, whose interleaved exp / P@V stages post one token per S5 batch.
+template <uint32_t kPackDoneMax = 2>
 ALWI void init_sdpa_streaming_semaphores() {
+    static_assert(kPackDoneMax >= 1 && kPackDoneMax <= 15, "SEMINIT's max value is a 4-bit field");
     // reduce_trigger runs the QK row-max reduce as a split MOP gated by a PACK->UNPACK handshake on
     // two T6 tokens (firmware inits neither). FPU_SFPU, posted after pack + mask + push, gates run()#2
     // (and run()#1 on the non-overlap path). UNPACK_MATH_DONE (the first-half token) is borrowed (unused elsewhere
@@ -399,8 +404,8 @@ ALWI void init_sdpa_streaming_semaphores() {
     PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
     PACK((t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, 1)));
     // PACK_DONE carries pack->unpack "in-place row committed" tokens. The pipelined in-place V drain
-    // keeps up to two outstanding (column blocks kt and kt+1); every other user posts and takes one.
-    PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, 2)));
+    // keeps up to two outstanding (column blocks kt and kt+1); every other streaming user posts and takes one.
+    PACK((t6_semaphore_init(semaphore::PACK_DONE, 0, kPackDoneMax)));
 }
 
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
@@ -3787,6 +3792,79 @@ static __attribute__((noinline, noclone)) void sol_res_run_groups(
 #endif
 }
 
+// P@V of one member of the compact step (S6): pv_w-wide sub-blocks of its Sq_chunk_t x vDHt output, one DEST batch
+// each, K dimension = the member's kept width (its run table; row stride w in the compact scratch), packed to the
+// slot's rows of cb_prev_out and L1-accumulated for an initialized slot. The matmul MOP is (re)issued when the
+// stride in effect differs, the pack MOP when the width in effect differs (pk_w is shared with the S5 packs).
+// Outlined: it is reached from the S5 flush sites of the interleaved S5/S6 loop.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t pv_w,
+    uint32_t kMaxRuns,
+    uint32_t cb_qkt_im,
+    uint32_t cb_v_in,
+    uint32_t cb_prev_out>
+static __attribute__((noinline, noclone)) void sol_res_pv_member(
+    const uint32_t slot,
+    const bool acc,
+    const uint32_t w,
+    const uint32_t off_g,
+    const uint8_t* run_cols,
+    const uint8_t* run_ws,
+    const uint32_t n_runs,
+    uint32_t& pv_stride,
+    uint32_t& pk_w) {
+    if (pv_stride != w) {
+        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, pv_w, Sq_chunk_t, w);
+        pv_stride = w;
+    }
+    const bool blocked = should_use_blocked_pack_width(pv_w);
+    const uint32_t want = blocked ? pv_w : 1u;
+    const uint32_t out_row0 = slot * Sq_chunk_t;
+    for (uint32_t v0 = 0; v0 < vDHt; v0 += pv_w) {
+        tile_regs_acquire();
+        uint32_t col = 0;
+        for (uint32_t s = 0; s < n_runs; ++s) {
+            const uint32_t rw = run_ws[s];
+            if constexpr (!kAblatePV) {
+                for (uint32_t t = 0; t < rw; ++t) {
+                    sdpa_matmul_block_no_mop(
+                        cb_qkt_im,
+                        cb_v_in,
+                        off_g + col + t,
+                        (static_cast<uint32_t>(run_cols[s]) + t) * vDHt + v0,
+                        0,
+                        false,
+                        pv_w,
+                        Sq_chunk_t,
+                        w);
+                }
+            }
+            col += rw;
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        if (want != pk_w) {
+            configure_pack_width(cb_prev_out, want);
+            pk_w = want;
+        }
+        PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            const uint32_t idx = (out_row0 + r) * vDHt + v0;
+            if (blocked) {
+                sdpa_pack_tile_ooo(r * pv_w, cb_prev_out, idx);
+            } else {
+                for (uint32_t c = 0; c < pv_w; ++c) {
+                    sdpa_pack_tile_ooo(r * pv_w + c, cb_prev_out, idx + c);
+                }
+            }
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        tile_regs_release();
+    }
+}
+
 // ---- M9 (Tier 2) compact per-piece step ----
 /**
  * The M5 step with three changes to how the work is issued (the M6 profile: ~1 us per score tile against the dense
@@ -3804,9 +3882,11 @@ static __attribute__((noinline, noclone)) void sol_res_run_groups(
  *     member and blocked output packs.
  * Members with equal widths should be adjacent in the group (the caller sorts by width): the row-max reduce, the
  * subtract and the two P@V setups are configured per width and re-issued only when it changes.
+ *  4. (M10) The exp stage and the P@V are interleaved per member (see S5 + S6 below): the P@V of the members
+ *     finished in one S5 batch runs under the exp and packs of the next, with one PACK_DONE token per S5 batch.
  * Everything else (the lazy running max of M7 in S2-S4, the row sum as P x e0, the pooled bias, the state
- * contract, the PACK_DONE tokens) is the M5-M7 step's. run_cols / run_ws / n_runs are per member; a pooled entry
- * is one run of its active width from column 0 with apply_col_bias.
+ * contract) is the M5-M7 step's. run_cols / run_ws / n_runs are per member; a pooled entry is one run of its
+ * active width from column 0 with apply_col_bias.
  */
 template <
     uint32_t Sq_chunk_t,
@@ -4197,16 +4277,65 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         }
     }  // S2-S4
 
-    // ---- S5: in-place exp of the scores, per member over its W_g columns in units of <= max_cols_per_acq. ----
+    // ---- S5 + S6, interleaved per member (M10). S5: in-place exp of the scores, per member over its W_g columns
+    //      in units of <= max_cols_per_acq (the broadcast subtract on MATH, the exp and the packs on PACK). S6: P@V
+    //      per member (sol_res_pv_member). The two stages load complementary threads (S5 is pack-thread bound, S6
+    //      math/unpack bound), so instead of draining S5 for every member before the first P@V, the P@V of the
+    //      members whose last S5 unit was packed in batch k is issued right after S5 batch k+1: with the half-sync
+    //      DEST, MATH runs those matmuls while PACK is still on the exp and packs of batch k+1, and PACK's output
+    //      packs of the P@V overlap the subtracts of the next S5 batch. Ordering: a P@V reads its member's exp'd
+    //      scores from L1, so PACK posts one PACK_DONE token after every S5 batch that holds some member's last
+    //      unit, and UNPACK takes one before the first P@V of that batch's members (posts and takes are both in
+    //      batch order, one per completion batch). A member's P@V follows its completion batch by one S5 batch, so
+    //      only a few tokens are ever outstanding; PACK_DONE's capacity in resident mode is 15
+    //      (init_sdpa_streaming_semaphores<15>), so a post never saturates the counter. The MOPs are re-issued on
+    //      every stage switch (the broadcast subtract and the matmul share the unpacker/math configuration), as is
+    //      the unpacker's srcA format when V is block float (a compile-time no-op otherwise). ----
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    CircularBuffer(cb_col_identity).wait_front(1);
     {
         uint8_t unit_g[kDst];
         uint8_t unit_c0[kDst];
         uint8_t unit_cw[kDst];
+        uint8_t cbatch[kMaxMembers];  // S5 batch holding member g's last unit (0xFF: not yet)
+        for (uint32_t g = 0; g < n_slots; ++g) {
+            cbatch[g] = 0xFF;
+        }
         uint32_t uu = 0;
         uint32_t uu_tiles = 0;
-        uint32_t init_cw = 0;
-        uint32_t pk_w = 0;
+        uint32_t batch_idx = 0;        // S5 batches flushed so far (the open batch has this index)
+        bool batch_completes = false;  // the open S5 batch holds some member's last unit
+        uint32_t init_cw = 0;          // broadcast-subtract MOP width in effect (0: a matmul MOP is)
+        uint32_t pv_stride = 0;        // P@V MOP row stride in effect (0: the subtract MOP is)
+        bool mm_fmt = false;           // unpacker srcA format: V (true) or the intermediate (false)
+        bool v_waited = false;
+        uint32_t pk_w = 0;     // pack MOP width in effect (0: unknown), shared by the S5 and P@V packs
+        uint32_t s6_next = 0;  // next member whose P@V is pending
+        const auto issue_pv = [&](uint32_t g) {
+            if (!v_waited) {
+                CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+                v_waited = true;
+            }
+            if (g == 0 || cbatch[g] != cbatch[g - 1]) {
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            }
+            if (!mm_fmt) {
+                sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_qkt_im, cb_qkt_im>();
+                mm_fmt = true;
+            }
+            init_cw = 0;
+            sol_res_pv_member<Sq_chunk_t, vDHt, pv_w, kMaxRuns, cb_qkt_im, cb_v_in, cb_prev_out>(
+                slots[g],
+                slot_init(g),
+                W[g],
+                off[g],
+                run_cols + g * kMaxRuns,
+                run_ws + g * kMaxRuns,
+                n_runs[g],
+                pv_stride,
+                pk_w);
+        };
         const auto flush = [&]() {
             tile_regs_commit();
             tile_regs_wait();
@@ -4223,9 +4352,19 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
             }
             PACK((llk_pack_relu_config(ReluConfig::none())));
+            if (batch_completes) {
+                PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            }
             tile_regs_release();
             uu = 0;
             uu_tiles = 0;
+            batch_completes = false;
+            ++batch_idx;
+            // P@V of the members completed at least one S5 batch ago.
+            while (s6_next < n_slots && static_cast<uint32_t>(cbatch[s6_next]) + 1u < batch_idx) {
+                issue_pv(s6_next);
+                ++s6_next;
+            }
         };
         for (uint32_t g = 0; g < n_slots; ++g) {
             const uint32_t w = W[g];
@@ -4235,12 +4374,18 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     flush();
                 }
                 if (cw != init_cw) {
-                    // The bcast-subtract MOP is configured for a column width: flush the open batch before changing it.
+                    // The bcast-subtract MOP is configured for a column width: flush the open batch before changing it
+                    // (a flush may also have issued P@V matmuls, which leave init_cw at 0).
                     if (uu > 0) {
                         flush();
                     }
+                    if (mm_fmt) {
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                        mm_fmt = false;
+                    }
                     sub_bcast_cols_init_short_custom(cb_qkt_im, cb_max_in, cw);
                     init_cw = cw;
+                    pv_stride = 0;
                 }
                 if (uu == 0) {
                     tile_regs_acquire();
@@ -4256,70 +4401,21 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 uu_tiles += Sq_chunk_t * cw;
                 c0 += cw;
             }
+            cbatch[g] = static_cast<uint8_t>(batch_idx);
+            batch_completes = true;
         }
         if (uu > 0) {
             flush();
         }
-    }
-    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-
-    // ---- S6: P@V per member (pv_w-wide sub-blocks, one DEST batch each; L1-accumulate for initialized slots),
-    //      then the row sums P@e0 in batches of stat_slots_per_acq members. The P@V and row-sum matmuls take the
-    //      member's row stride W_g, re-issued when it changes. ----
-    CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
-    CircularBuffer(cb_col_identity).wait_front(1);
-    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_qkt_im, cb_qkt_im>();
-    {
-        const bool blocked6 = configure_row_pack_width(cb_prev_out, pv_w);
-        uint32_t pv_stride = 0;
-        for (uint32_t g = 0; g < n_slots; ++g) {
-            if (W[g] != pv_stride) {
-                sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, pv_w, Sq_chunk_t, W[g]);
-                pv_stride = W[g];
-            }
-            const bool acc = slot_init(g);
-            const uint32_t out_row0 = slots[g] * Sq_chunk_t;
-            for (uint32_t v0 = 0; v0 < vDHt; v0 += pv_w) {
-                tile_regs_acquire();
-                uint32_t col = 0;
-                for (uint32_t s = 0; s < n_runs[g]; ++s) {
-                    const uint32_t rw = run_wd(g, s);
-                    if constexpr (!kAblatePV) {
-                        for (uint32_t t = 0; t < rw; ++t) {
-                            sdpa_matmul_block_no_mop(
-                                cb_qkt_im,
-                                cb_v_in,
-                                sidx(g, 0, col + t),
-                                (run_col(g, s) + t) * vDHt + v0,
-                                0,
-                                false,
-                                pv_w,
-                                Sq_chunk_t,
-                                W[g]);
-                        }
-                    }
-                    col += rw;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                PACK((llk_pack_reconfig_l1_acc(acc ? 1 : 0)));
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = (out_row0 + r) * vDHt + v0;
-                    if (blocked6) {
-                        sdpa_pack_tile_ooo(r * pv_w, cb_prev_out, idx);
-                    } else {
-                        for (uint32_t c = 0; c < pv_w; ++c) {
-                            sdpa_pack_tile_ooo(r * pv_w + c, cb_prev_out, idx + c);
-                        }
-                    }
-                }
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                tile_regs_release();
-            }
+        while (s6_next < n_slots) {
+            issue_pv(s6_next);
+            ++s6_next;
         }
     }
+
+    // ---- S6b: the row sums P@e0 in batches of stat_slots_per_acq members (the matmul takes the member's row
+    //      stride W_g, re-issued when it changes). Every S5 token has been taken by now, so all exp'd scores are in
+    //      L1. ----
     sdpa_maybe_reconfig_data_format<cb_v_in, cb_col_identity, cb_qkt_im, cb_qkt_im>();
     configure_single_tile_pack(cb_sum_in);
     {
@@ -4449,7 +4545,8 @@ void sdpa_ring_resident(
     const bool is_last_ring_iter,
     const bool is_first_active_iter,
     const MaskCtx& lw_mask) {
-    init_sdpa_streaming_semaphores();
+    // PACK_DONE capacity 15: the compact step's interleaved S5/S6 posts one token per S5 batch (see the step).
+    init_sdpa_streaming_semaphores<15>();
     static_assert(sol_resident_slots >= 1 && sol_resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
     // float) and otherwise assumes every state, scratch and scale CB carries the intermediate format.

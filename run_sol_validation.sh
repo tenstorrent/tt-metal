@@ -539,6 +539,26 @@ if want prod; then
     done
 fi
 
+# M10 (perf branch sosborne/sol-attn-perf, 2026-10-23): the compact step's exp stage and P@V interleaved per member
+# (P@V of the members finished in S5 batch k under the exp/packs of batch k+1; one PACK_DONE token per S5 batch,
+# PACK_DONE capacity 15 in resident mode). Correctness set + 5 s parity, then the traced timings (dense for the
+# same-session baseline, resident tau 1/2/3), then a profile. Rebuild first (compute kernel changed). Expected:
+# 11/11 at PCC >= 0.999; trace_tau1.0 ~4.6-4.75 ms (from 4.97; dense ~7.4).
+if want m10; then
+    run m10_check 1500 pytest "$T" -s -k "4x8 and (resident_matches_compact or resident_dense_equivalence)"
+    run m10_parity 900 pytest "$T" -s -k "4x8 and resident_call_parity and r4736"
+    run m10_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    for tau in 1.0 2.0 3.0; do
+        run "m10_trace_tau${tau}" 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident \
+            SOL_BENCH_PREFIX=off SOL_TAU=$tau pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    done
+    run m10_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
+        SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m10_logs" 2>/dev/null
+fi
+
 # M9 timing only (the m9 correctness set passed 11/11 on the first build; the 5 s runs hit the kernel config
 # buffer limit and were re-run after outlining the step's pack and grouping helpers).
 if want m9t; then
