@@ -1,0 +1,134 @@
+{
+  "files": {
+    "single_2048_h64": {
+      "path": "/home/andy/bringup/goldens/timesfm3/single_2048_h64.pt",
+      "sha256": "0289dd71c02ce12f56f53e104b61c65bbef504caedfe6398ac9b546a8d92332f",
+      "bytes": 48406015,
+      "generator": "doc recipe: 10 + 0.01 t + 3 sin(2 pi t / 24) + N(0, 1), default_rng(0)",
+      "cpu_s": null,
+      "seconds": 1.1
+    },
+    "modules": {
+      "path": "/home/andy/bringup/goldens/timesfm3/modules.pt",
+      "sha256": "3eb010dd59604bd82a63a473e61f4829d1503d2f7c1c664dcbd2057dd3340855",
+      "bytes": 86837516,
+      "generator": "random states N(0,1) x U(0.5,4) per row, leading-pad masks per case, default_rng(1)",
+      "cpu_s": null,
+      "seconds": 1.2
+    },
+    "full16_2048_h64": {
+      "path": "/home/andy/bringup/goldens/timesfm3/full16_2048_h64.pt",
+      "sha256": "f10831684fb949f36598a0ea8ad8730e29acc3ffe014fe79278c369b62c8991c",
+      "bytes": 33193080,
+      "generator": "synthetic(default_rng(2), 16, 2048); #3 len 1500, #7 len 700, #11 40 leading + 10 interior NaN, #13 len 64",
+      "cpu_s": 2.8113234927877784,
+      "seconds": 5.5
+    },
+    "full16_2048_h128": {
+      "path": "/home/andy/bringup/goldens/timesfm3/full16_2048_h128.pt",
+      "sha256": "76db5986812e2d2867243efdce3e2087d744f2a3e562969bb19b5b88e0ed73ce",
+      "bytes": 34340447,
+      "generator": "as full16_2048_h64, horizon 128",
+      "cpu_s": 2.8877113610506058,
+      "seconds": 5.8
+    },
+    "mv4x8_2048_h64": {
+      "path": "/home/andy/bringup/goldens/timesfm3/mv4x8_2048_h64.pt",
+      "sha256": "8a4fc4188968757684fc64780cb65b9c78d6c8ba8ef866fd418af3519101d7fc",
+      "bytes": 66343393,
+      "generator": "synthetic_multivariate(default_rng(3), 4, 8, 2048); item 2 len 1200, item 3 variate 5 30 NaN",
+      "cpu_s": 6.932207579724491,
+      "seconds": 13.5
+    },
+    "gift64_h48": {
+      "path": "/home/andy/bringup/goldens/timesfm3/gift64_h48.pt",
+      "sha256": "32408642f2399e8f207e56a81c13ab001083fcfd44ebb21bfe769f2de8c69430",
+      "bytes": 2955189,
+      "generator": "gift_contexts(): default_rng(5), 32 nonnegative + 32 signed, lengths U[256, 2048]",
+      "cpu_s": 45.96888069668785,
+      "seconds": 95.0
+    },
+    "bench_paper": {
+      "path": "/home/andy/bringup/goldens/timesfm3/bench_paper.pt",
+      "sha256": "8379ce0371c712eb95b98e775f220abf32a3f617395d599ac3b2d4b9b5a60632",
+      "bytes": 13371909,
+      "generator": "realistic(default_rng(20), 1024, 2048): REALISTIC_MIX of walk+seasonal at SNR ~1, intermittent, level shifts, smooth trends",
+      "cpu_s": 549.2215914386325,
+      "seconds": 550.0
+    },
+    "bench_long_context": {
+      "path": "/home/andy/bringup/goldens/timesfm3/bench_long_context.pt",
+      "sha256": "4cea17c2afe9856f2dccf48758a11573adf3e9241342923f1a3f35dcbf2c95d1",
+      "bytes": 5565003,
+      "generator": "realistic(default_rng(21), 32, 15360)",
+      "cpu_s": 153.17821357492357,
+      "seconds": 153.3
+    },
+    "bench_multivariate": {
+      "path": "/home/andy/bringup/goldens/timesfm3/bench_multivariate.pt",
+      "sha256": "e2fb53fe207cb9125d956a21f3b67ac38299c37727b6e5f4a5485fe3cc829728",
+      "bytes": 13371979,
+      "generator": "realistic_multivariate(default_rng(22), 128, 8, 2048)",
+      "cpu_s": 579.8068968178704,
+      "seconds": 580.4
+    },
+    "host_fp64": {
+      "path": "/home/andy/bringup/goldens/timesfm3/host_fp64.pt",
+      "sha256": "098358200d3b952ba6fea352e6f46cc85810ec3f12f7ffb07f730502e4cfa297",
+      "bytes": 6712291,
+      "generator": "the full-model goldens' decode inputs through the fp64 reference (model.double())",
+      "cpu_s": null,
+      "seconds": 49.5
+    }
+  },
+  "repo": "https://github.com/google-research/timesfm",
+  "commit": "e51928e27119cb17bebc005be2696b75e0a9e688",
+  "package": "timesfm 3.0.2 (timesfm3.torch)",
+  "hf_repo": "google/timesfm-3.0-pytorch",
+  "hf_revision": "43046b85ec22d584a13f8098c2ed39c889e129c2",
+  "safetensors": {
+    "path": "/home/andy/.cache/huggingface/hub/models--google--timesfm-3.0-pytorch/snapshots/43046b85ec22d584a13f8098c2ed39c889e129c2/model.safetensors",
+    "sha256": "a7592b0a8432baee54483254e5647856911ce69e09d09a9bb65904b2d98f17da",
+    "bytes": 1322898824
+  },
+  "python": "3.12.12",
+  "torch": "2.14.1+cpu",
+  "numpy": "2.5.4",
+  "threads": 8,
+  "cpu_affinity": 16,
+  "pip_freeze": [
+    "anyio==4.15.1",
+    "click==8.5.0",
+    "filelock==3.32.3",
+    "fsspec==2026.7.0",
+    "h11==0.16.0",
+    "hf-xet==1.7.0",
+    "httpcore2==2.16.0",
+    "httpx2==2.16.0",
+    "huggingface-hub==2.3.0",
+    "idna==3.20",
+    "jinja2==3.1.6",
+    "markupsafe==3.0.3",
+    "mpmath==1.3.0",
+    "networkx==3.6.1",
+    "numpy==2.5.4",
+    "packaging==26.3",
+    "pyyaml==6.0.3",
+    "safetensors==0.8.0",
+    "setuptools==78.1.0",
+    "sympy==1.14.0",
+    "timesfm @ git+https://github.com/google-research/timesfm@e51928e27119cb17bebc005be2696b75e0a9e688",
+    "torch==2.14.1+cpu",
+    "tqdm==4.70.1",
+    "truststore==0.10.5",
+    "typing-extensions==4.16.0"
+  ],
+  "venv": "/home/andy/bringup/venvs/timesfm3",
+  "input_generator": {
+    "script": "models/experimental/timesfm3_forecast/tests/golden/make_goldens.py",
+    "sha256": "c209549c6182fac76452969298ef338ebe2737e6c3cda5d2d529d6b79d2fffab",
+    "functions": "synthetic, synthetic_multivariate, realistic (REALISTIC_MIX), realistic_multivariate, nonnegative_series, full16_contexts, mv4_contexts, gift_contexts"
+  },
+  "settings": "predict_batch defaults (no symmetric averaging, no z-norm, detrend on, CPM refine on, stitching on, sorted) except gift64_h48 (use_symmetric_averaging, make_positive); one forecaster batch per full-model golden (per_core_batch_size = number of queries)",
+  "updated": "2026-10-23 16:08:52"
+}

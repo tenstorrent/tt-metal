@@ -1,0 +1,737 @@
+{
+  "reference": "https://github.com/google-research/timesfm@e51928e27119cb17bebc005be2696b75e0a9e688",
+  "checkpoint": "google/timesfm-3.0-pytorch@43046b85ec22d584a13f8098c2ed39c889e129c2",
+  "torch": "2.14.1+cpu",
+  "metric": "max|a-b| / max|b|",
+  "checks": [
+    {
+      "check": "fp64 tokenizer",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 head",
+      "rel": 3.393055760545107e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 uni seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 1.567133661159363e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 uni var attention (V=1 shortcut)",
+      "rel": 1.7769183627290458e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 uni ffn",
+      "rel": 4.722939515941928e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 uni full layer",
+      "rel": 1.8104601477777392e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv8 seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 1.5487045350851024e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv8 var attention (general V=8)",
+      "rel": 1.0699971871162522e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv8 ffn",
+      "rel": 4.1317636061719373e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv8 full layer",
+      "rel": 5.440155414793051e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv32 seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 1.440788879716655e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv32 var attention (general V=32)",
+      "rel": 1.6297144999367834e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv32 ffn",
+      "rel": 4.136558491878699e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer0 mv32 full layer",
+      "rel": 2.930062265080745e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 uni seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 2.073646498286551e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 uni var attention (V=1 shortcut)",
+      "rel": 3.5025386903806516e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 uni ffn",
+      "rel": 6.02836419698836e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 uni full layer",
+      "rel": 2.656247974297996e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv8 seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 2.6306022373397924e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv8 var attention (general V=8)",
+      "rel": 1.6194130853305661e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv8 ffn",
+      "rel": 5.558562241673809e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv8 full layer",
+      "rel": 1.0261961061551647e-14,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv32 seq attention (RoPE, padded QK-norm, folded scale, masks)",
+      "rel": 2.928292238096459e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv32 var attention (general V=32)",
+      "rel": 2.1996814157048816e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv32 ffn",
+      "rel": 6.767930809103582e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 layer19 mv32 full layer",
+      "rel": 6.5564329713190955e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 padded QK-norm eps x 80/96 at eps 0.1",
+      "rel": 1.018254237480485e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 padded QK-norm eps x 96/80 (contract text) at eps 0.1",
+      "rel": 0.00023842428643734367,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": true
+    },
+    {
+      "check": "fp64 padded QK-norm eps x unscaled at eps 0.1",
+      "rel": 0.00010839443121373003,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": true
+    },
+    {
+      "check": "fp64 running count",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 running mean (level 1e4)",
+      "rel": 5.456522325912014e-16,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 running std (level 1e4, std 3)",
+      "rel": 5.3741021233568934e-14,
+      "bound": 1e-09,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host single 2048->64: decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host single 2048->64: token features vs fp64 reference",
+      "rel": 6.013858169877825e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.75e-07; fp32 vs fp64 reference: 8.55e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host single 2048->64: running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 1.5384765666553277e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 5.54e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host single 2048->64: running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 1.2644939884845759e-08,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 1.61e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host single 2048->64: postprocess of the reference head == final quantiles",
+      "rel": 9.243973995205722e-08,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->64 (left-padded, NaN): decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->64 (left-padded, NaN): token features vs fp64 reference",
+      "rel": 2.328844758188634e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 4.56e-06; fp32 vs fp64 reference: 4.20e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->64 (left-padded, NaN): running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 8.193364909756405e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 9.85e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->64 (left-padded, NaN): running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 2.395243638313724e-09,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 4.84e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->64 (left-padded, NaN): postprocess of the reference head == final quantiles",
+      "rel": 2.6547072982831077e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->128 (CPM refine, stitching): decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->128 (CPM refine, stitching): token features vs fp64 reference",
+      "rel": 2.328844758188634e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 4.56e-06; fp32 vs fp64 reference: 4.20e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->128 (CPM refine, stitching): running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 8.193364909756405e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 9.85e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->128 (CPM refine, stitching): running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 2.395243638313724e-09,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 4.84e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host 16 x 2048->128 (CPM refine, stitching): postprocess of the reference head == final quantiles",
+      "rel": 4.140010967684648e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 4 items x 8 variates: decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 4 items x 8 variates: token features vs fp64 reference",
+      "rel": 1.3842237870042807e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.87e-05; fp32 vs fp64 reference: 3.74e-05)",
+      "expect_above": false
+    },
+    {
+      "check": "host 4 items x 8 variates: running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 5.207034216594674e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 1.41e-04)",
+      "expect_above": false
+    },
+    {
+      "check": "host 4 items x 8 variates: running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 2.652775019399738e-09,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 2.46e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host 4 items x 8 variates: postprocess of the reference head == final quantiles",
+      "rel": 1.5226765072834245e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host gift 16 (symmetric, make_positive) ->48: decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host gift 16 (symmetric, make_positive) ->48: token features vs fp64 reference",
+      "rel": 1.8766479142933164e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.22e-06; fp32 vs fp64 reference: 2.51e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host gift 16 (symmetric, make_positive) ->48: running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 6.110354254072274e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 9.71e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host gift 16 (symmetric, make_positive) ->48: running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 1.4578230483474268e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.60e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host gift 16 (symmetric, make_positive) ->48: postprocess of the reference head == final quantiles",
+      "rel": 2.8826891017242673e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 2 x 15360->1024 (long context): decode inputs (target, mask) == predict_batch's",
+      "rel": 0.0,
+      "bound": 0.0,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "host 2 x 15360->1024 (long context): token features vs fp64 reference",
+      "rel": 1.4948286938559669e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 4.90e-06; fp32 vs fp64 reference: 4.66e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "host 2 x 15360->1024 (long context): running mean (cumsum) vs fp64 reference (Chan), relative to the row scale",
+      "rel": 4.957894957860012e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 2.51e-05)",
+      "expect_above": false
+    },
+    {
+      "check": "host 2 x 15360->1024 (long context): running std (cumsum) vs fp64 reference (Chan)",
+      "rel": 4.601401878397955e-08,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 7.54e-07)",
+      "expect_above": false
+    },
+    {
+      "check": "host 2 x 15360->1024 (long context): postprocess of the reference head == final quantiles",
+      "rel": 1.402188304609849e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network single 2048->64: transformer output (all tokens)",
+      "rel": 6.77662411706007e-15,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network single 2048->64: head output (valid tokens)",
+      "rel": 7.166789672171982e-15,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 16 x 2048->64 (left-padded, NaN): transformer output (all tokens)",
+      "rel": 7.367578019674102e-16,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 16 x 2048->64 (left-padded, NaN): head output (valid tokens)",
+      "rel": 3.782315190315713e-15,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 16 x 2048->128 (CPM refine, stitching): transformer output (all tokens)",
+      "rel": 7.367578019674102e-16,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 16 x 2048->128 (CPM refine, stitching): head output (valid tokens)",
+      "rel": 3.782315190315713e-15,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 4 items x 8 variates: transformer output (all tokens)",
+      "rel": 4.911718679782735e-16,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 network 4 items x 8 variates: head output (valid tokens)",
+      "rel": 2.8241155008953298e-15,
+      "bound": 1e-10,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e single 2048->64: head output at read-outs vs fp64 reference",
+      "rel": 1.2626378756368392e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 9.27e-07; fp32 vs fp64 reference: 1.07e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e single 2048->64: final quantiles",
+      "rel": 1.1870576932188373e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 16 x 2048->64 (left-padded, NaN): head output at read-outs vs fp64 reference",
+      "rel": 2.6981792087350127e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.25e-06; fp32 vs fp64 reference: 2.83e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 16 x 2048->64 (left-padded, NaN): final quantiles",
+      "rel": 3.088215561846009e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 16 x 2048->128 (CPM refine, stitching): head output at read-outs vs fp64 reference",
+      "rel": 2.7605088032785992e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 2.97e-06; fp32 vs fp64 reference: 2.82e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 16 x 2048->128 (CPM refine, stitching): final quantiles",
+      "rel": 3.1871405271343564e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 4 items x 8 variates: head output at read-outs vs fp64 reference",
+      "rel": 2.692059937779191e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 5.59e-05; fp32 vs fp64 reference: 5.37e-05)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 4 items x 8 variates: final quantiles",
+      "rel": 6.626494234790987e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e gift 16 (symmetric, make_positive) ->48: head output at read-outs vs fp64 reference",
+      "rel": 2.6042078789511807e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 3.28e-06; fp32 vs fp64 reference: 2.60e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e gift 16 (symmetric, make_positive) ->48: final quantiles",
+      "rel": 2.2105176484426448e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 2 x 15360->1024 (long context): head output at read-outs vs fp64 reference",
+      "rel": 1.9043549393629806e-06,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "(vs fp32 reference: 5.37e-06; fp32 vs fp64 reference: 5.12e-06)",
+      "expect_above": false
+    },
+    {
+      "check": "fp32 e2e 2 x 15360->1024 (long context): final quantiles",
+      "rel": 1.4603426497706675e-07,
+      "bound": 1e-05,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->64 (left-padded, NaN): drop the 2 tokens after the last read-out (66 -> 64)",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->64 (left-padded, NaN): last layer cut to the 1 read-out queries",
+      "rel": 2.0757103097952455e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->64 (left-padded, NaN): finite mask fill (-1e9) leaves the read-outs unchanged (all tokens finite: True)",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->128 (CPM refine, stitching): drop the 2 tokens after the last read-out (68 -> 66)",
+      "rel": 5.8948651095080154e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->128 (CPM refine, stitching): last layer cut to the 3 read-out queries",
+      "rel": 2.6852054591353238e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 16 x 2048->128 (CPM refine, stitching): finite mask fill (-1e9) leaves the read-outs unchanged (all tokens finite: True)",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 4 items x 8 variates: drop the 2 tokens after the last read-out (66 -> 64)",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 4 items x 8 variates: last layer cut to the 1 read-out queries",
+      "rel": 1.8557417780681717e-15,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    },
+    {
+      "check": "fp64 4 items x 8 variates: finite mask fill (-1e9) leaves the read-outs unchanged (all tokens finite: True)",
+      "rel": 0.0,
+      "bound": 1e-12,
+      "pass": true,
+      "note": "",
+      "expect_above": false
+    }
+  ],
+  "failed": 0
+}
