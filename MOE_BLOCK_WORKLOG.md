@@ -1102,3 +1102,29 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   steps for the reciprocal): the fin after the last arrival 19.2 -> 18.1 / 17.5 us, picks unchanged - <= 1.7 us, inside
   the projection's run-to-run spread (chain 161-163). What is left after the last arrival: the fin ~19 us (sigmoid ~11)
   and the top-K ~21 (floor 14 for both).
+
+### The fused K3 tail, step A: norm + latent up + the shared expert's add in one program (tt/tail_engine.py)
+- Today's tail at chunk 1280 (LoudBox, slowest chip): latent all-gather 83 us, rms norm + latent up 163 (2 programs),
+  add 17 = ~263 us, 4 programs. Step A replaces the last three with one program reading the gathered z from DRAM (the
+  all-gather stays for now - step B lands it in the engine's L1).
+- Folds: the norm weight g into W' = diag(g) W_up (upload); 1 / rms per row applied to the matmul's fp32 sums
+  (out = diag(s) (z @ W') + se): the matmul never waits for whole rows, only s does. s from partials along Hr: each core
+  squares its K share (SFPU, fp32) and sums it along the row at HiFi4 ((z * z) @ ones); a row's partials combined on
+  every core, rsqrt on the SFPU.
+- Layout (12 x 10 grid here, the last column left for step B's ports): GX x GY = 11 x 10; a core row owns a chunk's row
+  tile (r = cy % 5) and half the output columns (h = cy // 5; column_split of 28 over 11: 3 or 2 a core); W' resident
+  (each half column reads its slice once, K ranges multicast down it, NOC0); z through a 3-slot ring a core with FREE
+  credits (a core frees a chunk once its output is packed), each core's K share read into a per-chunk landing region and
+  row-multicast (NOC1). All program semaphores (every producer on the chip).
+- Bring-up fixes: (1) CB straddle - 2-wide slices pushed into 3-page FIFOs (ACC; SQ's short last group): chunk 1 was
+  garbage; every FIFO now sized to a multiple of each core's block and checked at build with se_engine3's _ring_pages.
+  (2) the packer's L1-accumulate flag left on from the partial's pack into the next group's squares (prefix sums: sum of
+  squares 1.3-5.5x). (3) HiFi2 truncation biased the squares' sums 0.8% low: SFPU squares + HiFi4 row sums (0.01%).
+  (4) NoC stalls, most of the time: up to ~20 concurrent row multicasts a row plus cross-row ones (a column hop then the
+  row) took 20-70 us each - every multicast now row-local, a row's shares one at a time in column order (the chunk's
+  arrival count as the token: ~1 us a share), the 4 KB partials as unicasts. 421 -> 344 -> 186 -> 133-145 us.
+- Correct: PCC vs fp32 torch 0.99992-0.99997 (8 chips), 300-call soak (fresh inputs, scales 1..300) min 0.999915.
+- Where the 133 us goes (chip 0): W' from DRAM 3-47 us (1088-B pages, ~150 GB/s: chunk 0 waits for it); then a chunk
+  every ~17-18 us = squares 3.4 + matmul 8.4 (the 3-wide cores at HiFi2 peak) + s 2.8 + out 2 in series on the compute,
+  plus the partials' wait. Next: (a) squares accumulated in DEST, one 11-tile matmul for the combine; (b) W' in large
+  per-core runs, chunk 0's matmul per K range as it lands; (c) step B, the gather straight into L1.
