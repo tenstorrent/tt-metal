@@ -20,20 +20,14 @@ def clean(monkeypatch):
     monkeypatch.setattr(PS, "kv_len_tensor_available", lambda: True)
 
 
-def test_default_on_pins_export_limit():
+def test_default_on():
     import os
 
     on, why = PS.resolve_server_default(512, 1048576)
     assert on and os.environ["DSV41_PF_SINGLE"] == "1"
-    assert os.environ["DSV41_KEY_EXPORT_FILL_MAX"] == "2097152"
-
-
-def test_explicit_limit_is_kept(monkeypatch):
-    import os
-
-    monkeypatch.setenv("DSV41_KEY_EXPORT_FILL_MAX", "4194304")
-    assert PS.resolve_server_default(512, 1048576)[0]
-    assert os.environ["DSV41_KEY_EXPORT_FILL_MAX"] == "4194304"
+    assert (
+        "DSV41_KEY_EXPORT_FILL_MAX" not in os.environ
+    )  # (the model's default max(524288, slab rows) keeps the export in place)
 
 
 @pytest.mark.parametrize(
