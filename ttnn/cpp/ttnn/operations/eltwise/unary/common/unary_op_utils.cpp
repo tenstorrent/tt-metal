@@ -1263,7 +1263,7 @@ std::map<std::string, std::string> get_block_defines(
             op_chain[i].get_params()));
         if (op_chain[i].type() == UnaryOpType::TYPECAST) {
             if (const auto target_dtype = typecast_target_dtype(op_chain[i])) {
-                op_dtype = *target_dtype;
+                op_dtype = target_dtype;
             }
         }
     }
