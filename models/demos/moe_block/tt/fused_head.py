@@ -147,7 +147,6 @@ class HeadSE3:
                 continue
         else:
             raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows ({last_err})")
-        assert self.eng.NCH == 1 or router is None, "HeadSE3: the router chain is one chunk's (chunked: to do)"
         holes = list(l1_hole or [])
         if holes:  # (the arena placed: what this head keeps from here on lands in the hole, above it)
             ttnn.deallocate(holes.pop(0))
@@ -155,9 +154,23 @@ class HeadSE3:
         if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
         # (the mover column: ports at the top; with the router chain the watcher sits right below them and the router
-        # cores take the rest as one rectangle - their W_r goes out by a column multicast)
+        # cores take the rest as one rectangle - their W_r goes out by a column multicast. The router cores own a row
+        # tile each of every owner's rows - all of the call's, not a chunk's (their zones and the ports' sub-blocks
+        # are a call's: no reuse to credit, and the chain is as short as at one chunk): more than the column's free
+        # cells - the row under the engine (GY < grid rows), their W_r by a row multicast)
         nrt = rows // 32 // G
-        watcher = ttnn.CoreCoord(GX, grid.y - nrt - 1) if router is not None else None
+        self.rcores = None
+        if router is not None:
+            if nrt + 2 * num_links + 1 <= grid.y:
+                self.rcores = [ttnn.CoreCoord(GX, cy) for cy in range(grid.y - nrt, grid.y)]
+                watcher = ttnn.CoreCoord(GX, grid.y - nrt - 1)
+            else:
+                if not (GY < grid.y and nrt <= GX):
+                    raise ValueError(f"HeadSE3: no cells for {nrt} router cores (a free core row: GY {GY} < {grid.y})")
+                self.rcores = [ttnn.CoreCoord(c, GY) for c in range(nrt)]
+                watcher = ttnn.CoreCoord(GX, grid.y - 1)
+        else:
+            watcher = None
         self.xg = XGather3(
             mesh_device,
             self.eng,
@@ -225,7 +238,7 @@ class HeadSE3:
             used = {(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()}
             wset = {(self.xg.watcher_core(k).x, self.xg.watcher_core(k).y) for k in self.xg.chips}
             used |= wset
-            free = [ttnn.CoreCoord(GX, cy) for cy in range(grid.y - nrt, grid.y)]
+            free = self.rcores
             assert not {(c.x, c.y) for c in free} & used, "the router cores' rectangle overlaps the movers"
             assert self.rs_mode == "fused"
             ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)

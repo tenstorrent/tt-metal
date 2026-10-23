@@ -1331,3 +1331,26 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Router chain: still one chunk (asserted). Its zones (K3 3 x 28 fp32 tiles a router core) cannot double in L1 and
   its sends are multi-hop - next: a credit from the owner's router core back to each source's (through the ports'
   logits stream), which also frees the source port's sub-block buffer.
+
+### Chunked fused head, stage 2: router, routing exchange + planner, dispatch prep - the full head at NCH 2
+- Router: not chunked. Its cores own a row tile each of all the call's owner rows (RB = rows / 32 / TP, 8 at 1024),
+  as at one chunk - zones and port sub-blocks are a call's, nothing reused, no credits, and the chain is as short as
+  at 640 (each core one row tile). More than the mover column's free cells: the row under the engine (GY 8 < 10
+  rows) - W_r by a row multicast there (Mcast1D PerRow). On the engine (GLM) the logits phase covers every chunk's
+  rows at the start (SE_MTR = MT x NCH rows: ETC x MTR <= 8 DEST tiles). Costs cells: the planner only picks a
+  layout whose router cores fit (the column, or a free row). Instead of the per-chunk router with credits: same
+  result, fewer protocol pieces. K3 at 896 experts (Galaxy) needs the ports' logits sub-blocks for 4 router cores a
+  link: 3 x 4 x 28 fp32 tiles = 1.34 MB - check on the mock Galaxy (next).
+- Hang 1 (K3 1024 full head, first call): the routing planner's instances - 2 x 8 router cores = 16 (A 16, EPC 56)
+  - looped on garbage counts. Cause: RASend writes the call's parity / the source into a packet header's words 14 /
+  15; words 0 .. M - 1 are the slices' counts - M 15 / 16 overwrote them (A/B: M 12 passes, 15 hangs). M <= 14 now
+  (asserted). Pre-existing: at 640 M was <= 10.
+- Hang 2 (K3 1024 full head, soak, after 4-100 back-to-back calls; triage: one chip's NOC1 stuck in write barriers,
+  the rest waiting on its routing packets; once triage itself died - NOC1 wedged). A/B, one variable each: no prep
+  400 pass; prep with 16-B W reads (NOWL) 400 pass; GLM with the W ring forced 600 pass; watcher row 4 vs 9, router
+  row 8 vs 9, planner M 12: all hang; W reads gated behind the core's own prep writes: hangs. Every chunk's prep units
+  in the last chunk's prep op (as at one chunk: after the last pass, all W read): 1000 + 1000 calls pass. Root cause
+  not pinned (the chunk-0 prep op waiting on latent arrivals with chunk 1's W re-reads under it); kept as the design.
+- Parts test 1024 rows, full head (RS, router, latent, routing exchange + planner, prep), eager a call: GLM 431.4 us,
+  K3 886.7 us; plan / route words / dispatch rows bit-exact vs the host model; routing picks GLM 99.66%, K3 99.76%.
+  Soaks 1000 calls each, fresh inputs.

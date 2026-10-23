@@ -375,9 +375,11 @@ class RoutingStream:
         self.S, self.K, self.EPC, self.A, self.L = S, K, EPC, A, L
         self.luts, self.nps, self.rows_cap = luts, nps, rows_cap
         # planner instances: every router core's BRISC, then NCRISCs while there are experts (an instance needs one)
-        self.M = min(2 * len(router.cores), EPC, A, 16)
+        # (at most 14: a packet header's words 14 / 15 carry the call's parity and the source (RASend) - words 0 .. M - 1
+        # are the slices' counts; 15 or 16 instances (K3 at 1024 rows: 8 router cores) overwrote them - a hang)
+        self.M = min(2 * len(router.cores), EPC, A, 14)
         M = self.M
-        assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 16)
+        assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 14)
         sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
         assert sz["fits"], sz["why"]
         self.plan_l1 = sz["plan_l1"]

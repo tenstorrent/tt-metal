@@ -902,12 +902,14 @@ class RouterStream:
         if self.on_engine:
             return
         lo, hi = self.cores[0], self.cores[-1]
-        assert lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores), "the router cores must be one column rectangle"
+        col = lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores)
+        row = lo.y == hi.y and hi.x - lo.x + 1 == len(self.cores)
+        assert col or row, "the router cores must be one column or one row rectangle"
         rect = ttnn.CoreRangeSet([ttnn.CoreRange(lo, hi)])
         mc = ttnn.Mcast1D(
             self.mesh,
             rect,
-            ttnn.Mcast1DShape.PerColumn,
+            ttnn.Mcast1DShape.PerColumn if col else ttnn.Mcast1DShape.PerRow,
             ttnn.Mcast1DRotatingSenderConfig(),
             ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
         )
@@ -992,6 +994,10 @@ class RouterStream:
                 + [b0 + off["best"], b0 + off["route"], int(route.buffer_address()) if route is not None else 0, 32 * j]
                 + (self._ra_args(coord, j) if self.ra is not None else [])
             )
+        for j, core in enumerate(self.cores):  # (a kernel's runtime args a core: tt-metal's 341 - more are dropped)
+            for nm, rt in (("NCRISC", n_rt), ("compute", c_rt), ("BRISC", b_rt)):
+                n = len(list(rt[core.x][core.y]))
+                assert n <= 341, f"router core {j}: {n} {nm} runtime args > 341"
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         ct = [self.KT, ET, G, self.KBR, K]
         comp = ttnn.ComputeConfigDescriptor()

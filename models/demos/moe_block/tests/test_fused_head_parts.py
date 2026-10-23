@@ -57,7 +57,8 @@ LATENT = {"k3": 3584}  # (K3's latent width Hr)
 def _routing_specs():
     from models.demos.moe_block.tt.fused_head import RoutingSpec
 
-    return {"glm": RoutingSpec(A=12), "k3": RoutingSpec(A=16)}  # (the combine's accumulators: the close-out's)
+    prep = not os.environ.get("HSE3_NOPREP")  # (test-only: the routing without dispatch prep)
+    return {"glm": RoutingSpec(A=12, prep=prep), "k3": RoutingSpec(A=16, prep=prep)}  # (the combine's accumulators)
 
 
 class _LazyR(dict):

@@ -94,13 +94,13 @@ void kernel_main() {
         // then sets the round on the row's RX-ready word (from my own source word RXS: the NCRISC re-arms the ready word)
         DeviceZoneScopedN("SE-RTRX");
         const auto rxg = TensorAccessor(brx_args, rtr_x, 2048);
-        constexpr uint32_t XS = SE_KC * MT * 2048;
+        constexpr uint32_t XS = SE_KC * SE_MTR * 2048;  // (SE_MTR: my MT rows of every chunk - row rr of chunk rr / MT)
         volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + RXS_ID);
         for (uint32_t rd = 0; rd < SE_KTO / SE_KC; ++rd) {
             const uint32_t xa = rtr_xa + rd * XS;
-            for (uint32_t r = 0; r < MT; ++r)
+            for (uint32_t r = 0; r < SE_MTR; ++r)
                 for (uint32_t k = 0; k < SE_KC; ++k)
-                    noc_async_read(rxg.get_noc_addr((cy * MT + r) * SE_KTO + rd * SE_KC + k), xa + (k * MT + r) * 2048, 2048);
+                    noc_async_read(rxg.get_noc_addr(GROW(r / MT, cy * MT + r % MT) * SE_KTO + rd * SE_KC + k), xa + (k * SE_MTR + r) * 2048, 2048);
             noc_async_read_barrier();
             noc_async_write_multicast_loopback_src(xa, get_noc_multicast_addr(lx, ry, rx, ry, xa), XS, GX);
             noc_async_writes_flushed();
@@ -273,7 +273,7 @@ void kernel_main() {
     const uint32_t n0d = get_arg_val<uint32_t>(a++);
 #ifdef SE_RTR
     const uint32_t R0 = a;  // (the router logits' args)
-    a += 12 + 3 * MT;
+    a += 12 + 3 * SE_MTR;
 #endif
     const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
     const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
@@ -312,7 +312,7 @@ void kernel_main() {
         constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
         static_assert(NRD <= 2, "two buffers, no slot reused");
         for (uint32_t rd = 0; rd < NRD; ++rd) {
-            cb_reserve_back(SE_RX, SE_KC * MT);
+            cb_reserve_back(SE_RX, SE_KC * SE_MTR);
             cb_reserve_back(SE_RW, SE_ETC * SE_KC);
             if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
                 const uint32_t wa = rwa + rd * WS;
@@ -326,7 +326,7 @@ void kernel_main() {
                 noc_semaphore_set_multicast_loopback_src((SE_EW + RWR_ID), get_noc_multicast_addr(cxv, by, cxv, ty, (SE_EW + RWR_ID)), GY);
             }
             while (*ew(RXR_ID) < rd + 1) invalidate_l1_cache();
-            cb_push_back(SE_RX, SE_KC * MT);
+            cb_push_back(SE_RX, SE_KC * SE_MTR);
             while (hw && *ew(RWR_ID) < rd + 1) invalidate_l1_cache();
             cb_push_back(SE_RW, SE_ETC * SE_KC);
         }
@@ -336,23 +336,23 @@ void kernel_main() {
     }
     {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
         DeviceZoneScopedN("SE-RTROUT");
-        cb_wait_front(SE_RO, SE_ETC * MT);
+        cb_wait_front(SE_RO, SE_ETC * SE_MTR);
         // (row tile r of mine: my own owner's block into its router core's HOLD, another owner's straight into the
         // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
         const uint32_t ro = get_read_ptr(SE_RO);
-        for (uint32_t r = 0; r < MT; ++r) {
+        for (uint32_t r = 0; r < SE_MTR; ++r) {
             const uint32_t dw = get_arg_val<uint32_t>(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
             const uint32_t base = get_arg_val<uint32_t>(R0 + 11 + 3 * r), ctr = get_arg_val<uint32_t>(R0 + 12 + 3 * r);
             for (uint32_t e = 0; e < etc; ++e)
-                noc_async_write(ro + (e * MT + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
+                noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
             noc_async_write_barrier();  // (landed before the count)
             if (etc) noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
         }
-        cb_pop_front(SE_RO, SE_ETC * MT);
+        cb_pop_front(SE_RO, SE_ETC * SE_MTR);
 #ifdef SE_RTR_GATE
         {  // (my partials are written: router core 0 counts every engine core's, then opens the W gate)
-            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + 3 * MT);
-            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + 3 * MT)), 1);
+            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + 3 * SE_MTR);
+            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + 3 * SE_MTR)), 1);
         }
 #endif
     }
@@ -721,24 +721,24 @@ void kernel_main() {
         {  // (a K chunk's ETC x MT partials in DEST, then fp32 into RO with the packer's L1 accumulation)
             reconfig_data_format(SE_RX, SE_RW);
             pack_reconfig_data_format(SE_RO);
-            rmm_init(SE_RW, SE_RX, MT, SE_KC);
-            cb_reserve_back(SE_RO, etc * MT);
+            rmm_init(SE_RW, SE_RX, SE_MTR, SE_KC);
+            cb_reserve_back(SE_RO, etc * SE_MTR);
             for (uint32_t rd = 0; rd < SE_KTO / SE_KC; ++rd) {
-                cb_wait_front(SE_RX, SE_KC * MT);
+                cb_wait_front(SE_RX, SE_KC * SE_MTR);
                 cb_wait_front(SE_RW, etc * SE_KC);
                 PACK((llk_pack_reconfig_l1_acc(rd > 0 ? 1 : 0)));
                 tile_regs_acquire();
                 for (uint32_t e = 0; e < etc; ++e)
-                    for (uint32_t k = 0; k < SE_KC; ++k) rmm(SE_RW, SE_RX, e * SE_KC + k, k * MT, e * MT, MT, SE_KC);
+                    for (uint32_t k = 0; k < SE_KC; ++k) rmm(SE_RW, SE_RX, e * SE_KC + k, k * SE_MTR, e * SE_MTR, SE_MTR, SE_KC);
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t t = 0; t < etc * MT; ++t) pack_tile<true>(t, SE_RO, t);
+                for (uint32_t t = 0; t < etc * SE_MTR; ++t) pack_tile<true>(t, SE_RO, t);
                 tile_regs_release();
-                cb_pop_front(SE_RX, SE_KC * MT);
+                cb_pop_front(SE_RX, SE_KC * SE_MTR);
                 cb_pop_front(SE_RW, etc * SE_KC);
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
-            cb_push_back(SE_RO, etc * MT);
+            cb_push_back(SE_RO, etc * SE_MTR);
             reconfig_data_format(WIN, XIN);  // (back to gate / up's formats)
         }
     }
@@ -894,22 +894,27 @@ void kernel_main() {
                 // tiles of one row tile, contiguous in L1 at PU + off) at a time; the NCRISC writes PO's rows into
                 // the dispatch buffer. After the last pass: under the reduce-scatter's waits for arrivals.
                 DeviceZoneScopedN("SE-PREP");
-                const uint32_t nu = get_arg_val<uint32_t>(idx);
+#ifdef SE_PREP_LAST
+                // (with chunks: every chunk's units in the last chunk's op - no prep writes under the W re-reads)
+                const uint32_t nu = m + 1 == NCH ? get_arg_val<uint32_t>(idx) : 0, u0 = 0, u1 = NCH * nu;
+#else
+                const uint32_t nu = get_arg_val<uint32_t>(idx), u0 = m * nu, u1 = (m + 1) * nu;
+#endif
                 uint32_t pu0 = 0;
                 UNPACK((pu0 = get_local_cb_interface(SE_PU).fifo_rd_ptr));
-                bool lrdy = false;
+                uint32_t lrdy = 0;  // (chunks' latent arrivals waited for)
                 if (nu) {
                     reconfig_data_format_srca(SE_PU);  // (the last pass left srcA at the weights' format)
                     pack_reconfig_data_format(SE_PO);
                     pack_untilize_init<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, SE_PO);
                 }
-                for (uint32_t u = m * nu; u < (m + 1) * nu; ++u) {  // (chunk m's units)
+                for (uint32_t u = u0; u < u1; ++u) {  // (chunk u / nu's units)
                     const uint32_t off = get_arg_val<uint32_t>(idx + 1 + 2 * u), fl = get_arg_val<uint32_t>(idx + 2 + 2 * u);
                     const uint32_t n = fl & 0xFFFF;
 #ifdef SE_LRDY
-                    if ((fl >> 16) && !lrdy) {  // (a unit of the latent's arrivals: once they all landed)
-                        cb_wait_front(SE_LRDY, m + 1);
-                        lrdy = true;
+                    if ((fl >> 16) && lrdy < u / nu + 1) {  // (a unit of the latent's arrivals: once they all landed)
+                        lrdy = u / nu + 1;
+                        cb_wait_front(SE_LRDY, lrdy);
                     }
 #endif
                     cb_reserve_back(SE_PO, SE_PREP_FULL);
@@ -1246,12 +1251,15 @@ class SeEngine3:
             self.rtr = router
             if router is not None:
                 self.ETC = -(-router["ET"] // GX)
+                assert (
+                    self.ETC * MT * self.NCH <= 8
+                ), "the router logits on the engine: ETC x rows of every chunk in DEST"
                 KTO = router["KTO"]
                 self.KC = KTO // 2 if KTO % 2 == 0 else KTO  # (K chunk: x / W_r^T rounds - two, a buffer each)
                 rsz = [
-                    ("rx", 2 * self.KC * MT * 2048),
+                    ("rx", 2 * self.KC * MT * self.NCH * 2048),
                     ("rw", 2 * self.ETC * self.KC * 2048),
-                    ("ro", self.ETC * MT * 4096),
+                    ("ro", self.ETC * MT * self.NCH * 4096),
                 ]
                 need = sum(al(v) for _, v in rsz)
                 t0 = off[rsr[0][0]] if rsr else o
@@ -1497,9 +1505,9 @@ class SeEngine3:
                 cb(PREP_CB["lrdy"], "lrdy", 64, ttnn.bfloat16, 16)
         if rtr is not None:
             KTO = self.rtr["KTO"]
-            cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)
+            cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * self.NCH * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)
             cb(RTR_CB["rw"], "rw", 2 * self.ETC * self.KC * 2048, ttnn.bfloat16, 2048)
-            cb(RTR_CB["ro"], "ro", self.ETC * MT * 4096, ttnn.float32, 4096)
+            cb(RTR_CB["ro"], "ro", self.ETC * MT * self.NCH * 4096, ttnn.float32, 4096)
         cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096, self.acc_blocks)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -1610,6 +1618,8 @@ class SeEngine3:
             nd += "#define GROW(m, lr) ((m) * CR + (lr))\n"
         if self.WRING:
             nd += f"#define SE_WRING {self.WRING}\n"
+        if self.NCH > 1:  # (dispatch prep: every chunk's units in the last chunk's prep op - see the worklog)
+            nd += "#define SE_PREP_LAST\n"
         if self.rs is not None:
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
             nd += f"#define SE_P {self.rs.P}\n#define SE_ZSF {self.rs.slots['fwd']}\n#define SE_ZSB {self.rs.slots['bwd']}\n"
@@ -1625,6 +1635,7 @@ class SeEngine3:
             nct_len += len(ttnn.TensorAccessorArgs(prep["xbuf"]).get_compile_time_args()) if prep is not None else 0
             nd += "#define SE_RTR\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RTR_CB.items())
             nd += f"#define SE_KTO {self.rtr['KTO']}\n#define SE_ETC {self.ETC}\n#define SE_ET {self.rtr['ET']}\n"
+            nd += f"#define SE_MTR {MT * self.NCH}\n"  # (the logits: my rows of every chunk, at the start)
             nd += f"#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
             if rtr.get("gate"):
                 nd += f"#define SE_RTR_GATE\n#define RGATE_ID {RGATE}\n"
@@ -1795,7 +1806,11 @@ class SeEngine3:
             [int(rtr["x"].buffer_address()), int(rtr["w"].buffer_address()), nv, e0]
             + [self.base + self.off["rx"], self.base + self.off["rw"]]
             + [virt(GX - 1, cy).x, virt(0, cy).x, virt(0, cy).y, int(nv > 0)]
-            + [w for r in range(self.MT) for w in rtr["dests"][cy * self.MT + r]]
+            + [
+                w
+                for rr in range(self.MT * self.NCH)
+                for w in rtr["dests"][self.grow(rr // self.MT, cy * self.MT + rr % self.MT)]
+            ]
             + list(rtr["gate_ctr"])
         )
 
