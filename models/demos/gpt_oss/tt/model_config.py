@@ -130,10 +130,13 @@ class ModelArgs:
             self.batched_prefill_groups = {
                 int(k): int(v) for k, v in (item.split(":") for item in groups_env.split(",") if item.strip())
             }
-        # QuietBox 2 (vLLM serves up to 128K-token prompts): warm every prefill bucket up to 32K (filter_warmup_seq_lens
-        # stops below 64K), so no request waits on a bucket's first program build (13-16 s at 4K, measured).
-        if determine_device_name(self.mesh_device) == "P150x4":
-            self.capped_warmup_seq_len = 1 << (min(32 * 1024, self.max_seq_len).bit_length() - 1)
+        # QuietBox 2 (vLLM serves up to 128K-token prompts): warm every prefill bucket up to max_seq_len, so that no
+        # program is built for the first time after the decode trace is captured -- its kernel binaries would be
+        # allocated where a trace replay can overwrite them (TT_METAL_TRACE_ALLOC_TRACKING=1) -- and no request waits
+        # on a bucket's first build (13-16 s at 4K, measured).
+        self.warm_every_bucket = determine_device_name(self.mesh_device) == "P150x4"
+        if self.warm_every_bucket:
+            self.capped_warmup_seq_len = 1 << (self.max_seq_len.bit_length() - 1)
         else:
             self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
@@ -183,7 +186,7 @@ class ModelArgs:
                 to_warmup_seq_lens.remove(6144)
 
         for seq_len in to_warmup_seq_lens:
-            if seq_len >= 64 * 1024:
+            if seq_len >= 64 * 1024 and not self.warm_every_bucket:
                 to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                 break
         return to_warmup_seq_lens
@@ -232,6 +235,8 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
+                # QuietBox 2: 1.3-2.2 ms less TTFT up to 1024 tokens (vLLM server, 41-59 ms); none from 2048 up
+                "P150x4": [128, 256, 512, 1024],
             },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
