@@ -183,12 +183,14 @@ def run_yolo26_trace_2cq_perf(
     inference_time_avg = profiler.get("run") / num_measurement_iterations
     expected_compile_time, expected_inference_time = get_expected_perf(batch_size, input_size)
 
-    fps = batch_size / inference_time_avg
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    total_batch_size = batch_size * num_devices
+    fps = total_batch_size / inference_time_avg
     logger.info(f"\n{'='*60}")
     logger.info(f"YOLO26 Trace 2CQ Performance Results")
     logger.info(f"{'='*60}")
     logger.info(f"Variant: {variant}")
-    logger.info(f"Batch size: {batch_size}")
+    logger.info(f"Batch size: {batch_size} per device x {num_devices} devices")
     logger.info(f"Input size: {input_size}x{input_size}")
     logger.info(f"Warmup iterations: {num_warmup_iterations}")
     logger.info(f"Measurement iterations: {num_measurement_iterations}")
@@ -199,8 +201,8 @@ def run_yolo26_trace_2cq_perf(
 
     # Prepare performance report
     prep_perf_report(
-        model_name=f"ttnn_yolo26_{variant}_trace_2cq_batch_{batch_size}",
-        batch_size=batch_size,
+        model_name=f"ttnn_yolo26_{variant}_trace_2cq_batch_{batch_size}_dp_{num_devices}",
+        batch_size=total_batch_size,
         inference_and_compile_time=0,
         inference_time=inference_time_avg,
         expected_compile_time=expected_compile_time,
@@ -244,6 +246,31 @@ def test_yolo26_trace_2cq_perf(device, batch_size, input_size, variant):
     )
 
     # Basic sanity check - should achieve at least 10 FPS
+    assert fps > 10.0, f"Performance too low: {fps:.1f} FPS (expected > 10 FPS)"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": YOLO26_L1_SMALL_SIZE, "trace_region_size": 8000000, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [4], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("input_size", [640])
+@pytest.mark.parametrize("variant", ["yolo26n", "yolo26s"])
+def test_yolo26_trace_2cq_perf_dp(mesh_device, batch_size, input_size, variant):
+    """
+    Data-parallel trace 2CQ performance: weights replicated, batch_size images per device.
+    """
+    inference_time_avg, fps = run_yolo26_trace_2cq_perf(
+        mesh_device,
+        batch_size,
+        input_size,
+        variant,
+        num_warmup_iterations=10,
+        num_measurement_iterations=50,
+    )
+
     assert fps > 10.0, f"Performance too low: {fps:.1f} FPS (expected > 10 FPS)"
 
 

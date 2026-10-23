@@ -40,6 +40,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0018 | E2E bound by input upload (9.63 ms of 11.6 ms); move padding + normalization to device | 2026-10-22 | FIXED: raw uint8 image as [B, 1, H, W·3], typecast/reshape on device, 1/255 folded into stem. E2E n 6.16 ms / 162.3 FPS, s 7.00 ms / 142.9 FPS |
 | YOLO26-0019 | Items observed this session but not yet recorded (L1_SMALL OOM, tilize warning spam, API additions) | 2026-10-22 | RECORDED (appended): see entry; OOM worked around, warning not addressed |
 | YOLO26-0020 | Which findings are ttnn / tt-metal behaviour rather than model bugs? | 2026-10-22 | OPEN: summary table in entry; nothing reported upstream yet |
+| YOLO26-0021 | dp=4 on the QB2 (1×4 mesh): does it scale, and what is the 10-run e2e FPS? | 2026-10-23 | DONE: n 643.7 FPS, s 566.9 FPS (10-run mean, trace+2CQ e2e) = 3.97× single chip; intermittent hang at trace capture logged, not root-caused |
 
 ## Entries
 
@@ -354,3 +355,32 @@ ttnn / tt-metal / environment behaviour we worked around (candidates for upstrea
 | 0019 | `ttnn::tilize` legacy-factory warning on every call | none | Yes: downgrade to debug or emit once |
 | 0003 | (environment) `pip` on PATH points at `~/.tenstorrent-venv`; tt-metal venv is uv-managed | `uv pip` | No (local setup) |
 | 0016 | (Ultralytics) `predict` default `end2end=False` uses one2many + NMS for YOLO26 | reference with `Detect.end2end = True` | No (by design) |
+
+### YOLO26-0021 — dp=4 across the QB2 (appended 2026-10-23)
+
+- Code (uncommitted at time of writing):
+  - `YOLO26TestInfra.setup_uint8_input` uses `ttnn.ShardTensorToMesh(device, dim=0)` when `num_devices > 1`, so each
+    chip receives one image of the [4, 1, H, W·3] uint8 batch. Weights replicate through conv2d unchanged.
+  - `test_yolo26_trace_2cq.py`: new `test_yolo26_trace_2cq_perf_dp` (`mesh_device` = 4, indirect); FPS =
+    batch_size × num_devices / time; model name tagged `_dp_{num_devices}`.
+- Correctness (prototype `dp4_proto.py`, 4 distinct images: bus, zidane, and their mirrors): MEASURED per-chip PCC
+  vs Ultralytics one2one ≥ 0.9976 cls for both variants.
+- Perf, METHOD: `pytest ...::test_yolo26_trace_2cq_perf_dp -q`, 10 separate processes, both variants per process,
+  trace + 2CQ e2e (upload on CQ1, trace on CQ0, outputs read back), batch 1 per chip × 4 chips, 640×640.
+  `TT_VISIBLE_DEVICES` / `TT_MESH_GRAPH_DESC_PATH` unset. MEASURED:
+
+| Variant | ms per batch of 4 (range) | FPS, 10 runs (min / mean / max) | Single-chip 10-run mean | Scaling |
+|---|---|---|---|---|
+| yolo26n | 6.21–6.22 | 642.6 / 643.7 / 644.3 | 162.28 FPS (6.16 ms) | 3.97× |
+| yolo26s | 7.05–7.06 | 566.4 / 566.9 / 567.4 | 142.88 FPS (7.00 ms) | 3.97× |
+
+  Per-run FPS n: 643.8, 643.7, 643.5, 644.3, 643.5, 643.9, 643.7, 642.6, 644.2, 643.6;
+  s: 567.2, 566.4, 566.9, 567.2, 567.0, 567.4, 566.8, 566.6, 566.9, 567.0.
+  INFERRED: the ~0.05 ms per-batch overhead over single chip is mesh dispatch / 4-way read-back; no inter-chip traffic.
+- Defect, MEASURED: in the first 10-run loop, runs 1–5 passed, then run 6 hung inside `capture_trace_2cq` (yolo26n,
+  first variant) until the 900 s timeout, although run 5's log ends with a clean cluster close. Runs 7–10 hung at the
+  same point (state carried over). After `tt-smi -r`, runs 6–10 were redone with a reset before each run and all
+  passed with the numbers above. Not reproduced since; root cause unknown (INFERRED candidates: device or dispatch state
+  left over across mesh open/close, not the model code, since the identical code passed 10/10 after resets).
+  Status OPEN: if it recurs, capture `tt-triage` / watcher output before resetting.
+- Next: commit the dp changes; consider larger per-chip batch to amortize dispatch.

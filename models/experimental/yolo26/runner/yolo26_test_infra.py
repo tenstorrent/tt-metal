@@ -97,7 +97,9 @@ class YOLO26TestInfra:
         n, c, h, w = torch_input_tensor.shape
         x = (torch_input_tensor * 255).round().clamp(0, 255).to(torch.uint8)
         x = x.permute(0, 2, 3, 1).reshape(n, 1, h, w * c)
-        return ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Data parallel on a mesh: shard the batch, batch_size images per device
+        mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=0) if self.num_devices > 1 else None
+        return ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         """
