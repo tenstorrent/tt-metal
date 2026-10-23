@@ -905,3 +905,15 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   passes), the end links at link rate (~152 us = 3u on the line), ~18 after (the last arrivals and fins): ring-
   projected 27 + 73.5 + 18 ~ 119. The W DRAM stream runs at ~390 GB/s (skeleton: 40 MB in ~102 us) - not slow; its
   ~60 us in the full run is NOC1 sharing with the W multicasts.
+
+### The router cores' joint rows over four RISCs
+- After the top-K, the rows (ids + normalized weights, soft float: ~1000 cycles a token) ran on the BRISC and the
+  NCRISC, 16 tokens each: ~12 us. Now 8 tokens each on the BRISC, NCRISC and the compute's MATH and PACK threads
+  (PACK after its push of the BEST page; MATH waits a 16 B word PACK sets - "msync", zeroed by MATH at its start: the
+  arena is unzeroed scratch). Rows ~12 -> ~6 us.
+- GLM chain 166 -> 159-162 us (Galaxy-projected from the mesh's last launch; SE path 165 binds: 165); K3 chain 377 ->
+  366 (SE 388-395 binds). Picks / plans / route words per call as before.
+- One hang (call 0 of the first run after the change, before the msync zeroing): not reproduced in 10 runs since (4
+  before the zeroing, 6 after); the unzeroed word was the one hazard found (MATH could start on a stale 1).
+- The fin's sigmoid (11.3 of 16 us): approximate (fast_and_approx) breaks picks (59%); exp_21f + 2 Newton steps keeps
+  picks (99.14-99.53% a call) for 16.0 -> 13.2 us - not taken (precision for ~3 us).

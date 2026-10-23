@@ -139,7 +139,7 @@ void kernel_main() {
         set_l1_data_cache<true>();
         invalidate_l1_cache();
         rows_::make<K, ET>(get_arg_val<uint32_t>(t2 + 1), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 2),
-                           get_arg_val<uint32_t>(t2 + 3), 16, 32);
+                           get_arg_val<uint32_t>(t2 + 3), 8, 16);
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
@@ -195,6 +195,8 @@ inline void rt_key() {
 // args: nops, ops (kind | entry << 8: 1 hand, 2 fin), per entry: arrivals to add (the fin: G - 1, from the zone's
 // slots 0 ..; a hand-off: 0); then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a token is a column.
 void kernel_main() {
+    // (the PACK -> MATH word: zero before anything - L1 scratch, PACK sets it only after the top-K)
+    MATH((*reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 0));
     compute_kernel_hw_startup<SrcOrder::Reverse>(WR, XR, HOLD);
     pack_reconfig_data_format(HOLD);
 #ifdef RT_ENG
@@ -333,10 +335,23 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(words) = 1;
             *reinterpret_cast<volatile uint32_t*>(words + 64) = 1;
         }));
-        PACK(({  // (no compute-thread share of the joint rows: the data movers do them)
-            *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
-            *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
-        }));
+        {  // the joint rows' last two shares (tokens 16 .. 23 the MATH thread, 24 .. 31 the PACK thread; soft float):
+           // the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
+            const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
+            const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), bia = get_arg_val<uint32_t>(t1 + 4);
+            PACK(({
+                *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
+                rows_::make<K, ET>(bvc, bia, olc, scl, 24, 32);
+                *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
+            }));
+            MATH(({
+                volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
+                while (*ms == 0) {
+                }
+                rows_::make<K, ET>(bvc, bia, olc, scl, 16, 24);
+                *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
+            }));
+        }
 #ifdef RT_ROUTE
         // dispatch prep: the route words of my 32 owned tokens from the joint rows (BRISC's word 80: all shares
         // written), into L1 for the BRISC's write (word 96); off the routing chain (the UNPACK thread is idle here)
@@ -466,7 +481,7 @@ void kernel_main() {
     const uint32_t o_l1 = get_arg_val<uint32_t>(t0 + 3);
     const uint32_t words = get_arg_val<uint32_t>(t0 + 4);
     // the top K of every token column, sorted descending in rows 0 .. K - 1 of the best page;
-    // tokens 0 .. 10 here, 11 .. 21 the NCRISC, 22 .. 31 the compute's UNPACK thread (done words 16 / 32 / 48)
+    // tokens 0 .. 7 here, 8 .. 15 the NCRISC, 16 .. 23 the compute's MATH thread, 24 .. 31 its PACK (done words 16 / 32 / 48)
     const uint32_t bv = get_arg_val<uint32_t>(t0 + 5);
     cb_wait_front(BIAS, ET);
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
@@ -477,7 +492,7 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
         invalidate_l1_cache();
-        rows_::make<K, ET>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 16);
+        rows_::make<K, ET>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
         set_l1_data_cache<false>();
         }
         for (uint32_t i = 1; i < 4; ++i) {
@@ -636,6 +651,7 @@ class RouterStream:
                 ("words", 128),
                 ("route", 32 * 4 * 2),
                 ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
+                ("msync", 16),  # (the compute's PACK -> MATH: the BEST page is in L1 - their shares of the rows)
             ]:
                 off[k], o = o, al(o + v)
             return off, o
@@ -918,6 +934,7 @@ class RouterStream:
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
+        eng += f"#define RT_MSYNC {self.base + self.off['msync']}u\n"
         if self.on_engine and self.gate is not None:  # (the engine's W-stream gate: se_engine3 gate_target)
             g = self.gate
             eng += f"#define RT_GATE {g['addr']}u\n#define RT_GATE_N {g['n']}u\n#define RT_GATE_SRC {self.base + self.off['gate']}u\n"
