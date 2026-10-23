@@ -3824,7 +3824,6 @@ class ModelArgs:
         return ttnn.CoreGrid(x=cols, y=rows)
 
     def get_xattn_kv_prefill_mem_config(self, seq_len):
-        # max(1, ...): with KV replication (n_kv_heads < num_devices) the divide is 0.
         M = max(1, self.n_kv_heads // self.num_devices) * seq_len
         rows, cols = self.find_grid(M // ttnn.TILE_SIZE)
         return ttnn.create_sharded_memory_config(
