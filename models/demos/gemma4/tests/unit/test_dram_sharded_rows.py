@@ -9,7 +9,6 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.gemma4.tt import dram_sharded
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
@@ -38,7 +37,7 @@ def test_row_view_matches_pad_slice(mesh_device, device_params, K, N, M, monkeyp
     lin = DramShardedLinear(w, mesh_device, None, k=K, n=N, dtype=ttnn.bfloat8_b, cache_file_name=None)
 
     def run(view: bool):
-        monkeypatch.setattr(dram_sharded, "_ROW_VIEW", view)
+        monkeypatch.setenv("GEMMA4_DRAM_SHARD_ROW_VIEW", "1" if view else "0")
         tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         out = lin(tx)  # compile pass
         ttnn.synchronize_device(mesh_device)
@@ -78,10 +77,10 @@ def test_decode_1d_matches_dram_sharded(mesh_device, device_params, K, N, M, mon
     torch.manual_seed(0)
     w = (torch.randn(1, 1, K, N) * 0.02).to(torch.bfloat16)
     x = (torch.randn(1, 1, M, K) * 2).to(torch.bfloat16)
-    monkeypatch.setattr(dram_sharded, "_ROW_VIEW", True)
+    monkeypatch.setenv("GEMMA4_DRAM_SHARD_ROW_VIEW", "1")
     outs, opss = {}, {}
     for mode in ("sharded", "1d"):
-        monkeypatch.setattr(dram_sharded, "_DECODE_1D", mode == "1d")
+        monkeypatch.setenv("GEMMA4_DRAM_SHARD_DECODE_1D", "1" if mode == "1d" else "0")
         lin = DramShardedLinear(w, mesh_device, None, k=K, n=N, dtype=ttnn.bfloat8_b, cache_file_name=None)
         tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         lin(tx)  # compile

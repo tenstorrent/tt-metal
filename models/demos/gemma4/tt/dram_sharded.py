@@ -19,6 +19,7 @@ import os
 import ttnn
 from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 TILE_SIZE = 32
 # P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
@@ -37,13 +38,12 @@ _L1_HEADROOM_BYTES = 64_000
 _DECODE_IN0_BLOCK_W_MAX = max(1, int(os.environ.get("GEMMA4_DECODE_IN0_BLOCK_W_MAX", "8")))
 # GEMMA4_DRAM_SHARD_ROW_VIEW=1: decode rows below one tile (batch < 32) take the matmul through metadata reshapes
 # of the row tile instead of a Pad program before and a Slice program after (see DramShardedLinear.__call__).
-_ROW_VIEW = os.environ.get("GEMMA4_DRAM_SHARD_ROW_VIEW", "0") == "1"
 # GEMMA4_DRAM_SHARD_DECODE_1D=1: decode through the 1D-multicast matmul (tt/decode_matmul.py, every worker core one
 # N tile, K streamed in GEMMA4_DECODE_MM_IN0_BLOCK_W blocks) on an interleaved on-device copy of the width-sharded
 # weight, instead of the DRAM-sharded kernel (whose core grid must divide both K and N tiles: 8 cores for the
 # dense 31B / 12B wqkv and o_proj) with its activation reshard before and after: 3 programs -> 1 per matmul. The
 # copy is made at load from the warm ``.ws`` cache (no second cache file); prefill keeps its 2D config.
-_DECODE_1D = os.environ.get("GEMMA4_DRAM_SHARD_DECODE_1D", "0") == "1"
+# Both are decode fusion flags (tt/mesh_orientation.py): the env var when set, else the build profile's default.
 
 
 def _roundup(a, b):
@@ -343,7 +343,7 @@ class DramShardedLinear:
         self._act_memcfg = activation_memcfg(k, n)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
         self._decode_1d = None
-        if _DECODE_1D:
+        if decode_flag("GEMMA4_DRAM_SHARD_DECODE_1D") == "1":
             from models.demos.gemma4.tt.decode_matmul import decode_1d_progcfg, decode_compute_kernel_config
 
             sharded = self.weight
@@ -393,7 +393,7 @@ class DramShardedLinear:
             # a Slice program after the matmul (2 of the 5 programs per decode matmul at batch 1).
             row_view = (
                 pad > 0
-                and _ROW_VIEW
+                and decode_flag("GEMMA4_DRAM_SHARD_ROW_VIEW") == "1"
                 and x_work.layout == ttnn.TILE_LAYOUT
                 and int(x_work.padded_shape[-2]) == TILE_SIZE
                 and len(x_work.shape) == 4

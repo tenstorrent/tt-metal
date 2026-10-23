@@ -145,6 +145,7 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         gen = torch.Generator().manual_seed(1234)
         tokens = torch.randint(1000, 200000, (batch_size, PREFILL_LEN), generator=gen)
         tokens[:, 0] = prompt[0]  # keep the BOS token
+    t_pf = time.perf_counter()
     out = generator.prefill_forward_text(
         tokens,
         page_table=page_table,
@@ -154,6 +155,11 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         enable_trace=False,
     )
     tok = torch.argmax(out.reshape(batch_size, -1).float(), dim=-1, keepdim=True)
+    # The harness's own (untraced, first-call) prefill wall: the TTFT of this run, reported next to its decode.
+    logger.info(
+        f"TTFT_WALL batch={batch_size} prefill_len={PREFILL_LEN} eager first call: "
+        f"{(time.perf_counter() - t_pf) * 1e3:.1f} ms (all {batch_size} users)"
+    )
     current_pos = torch.full((batch_size,), PREFILL_LEN, dtype=torch.int32)
 
     greedy = None
