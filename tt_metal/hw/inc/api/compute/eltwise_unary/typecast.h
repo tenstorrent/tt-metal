@@ -87,8 +87,12 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  * | OUT_DTYPE      | Desired output data format                                                 | uint32_t | Must be valid tt::DataFormat                          | True     |
  */
 // clang-format on
+template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
+ALWI void typecast_tile_init();
+
 template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void typecast_tile(uint32_t idst) {
+    typecast_tile_init<IN_DTYPE, OUT_DTYPE>();
     constexpr DataFormat in_format = static_cast<DataFormat>(IN_DTYPE);
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
