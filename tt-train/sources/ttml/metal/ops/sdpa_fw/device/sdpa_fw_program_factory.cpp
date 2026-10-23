@@ -66,20 +66,9 @@ const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 
 const std::string kHasGateDefKey = "HAS_GATE";
 
-// Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
-// iteration of the compute kernel.
-//
-// Constraints:
-//   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
-//      and so the reader never reads past the end of the sequence).
-//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
-//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
-//   3. Larger chunks amortize softmax / correction overhead more, but consume L1
-//      proportionally for cb_key, cb_value, and cb_attention_weights.
-//
-// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
-// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
-// DST cycles.
+// Default K/V tiles per inner-loop step when k_chunk_size is 0: the largest of {4, 2, 1} that divides
+// Ht. Larger steps amortize the per-step softmax work but cost L1 (K, V and the score block all scale
+// with it); 4 is a safe default for every shape, k_chunk_size opens up more.
 uint32_t pick_sk_chunk_t(uint32_t Ht) {
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
