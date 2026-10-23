@@ -192,9 +192,9 @@ class RMSNorm(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 output_memory_config=distributed_out_mc,
             )
-        elif mode == Mode.PREFILL and not in_sharded and self._short_prefill_block_config(x) is not None:
+        elif mode == Mode.PREFILL and not in_sharded and (block_config := self._short_prefill_block_config(x)):
             # The interleaved norm splits by tile rows only, so a short prompt runs on <= 4 cores.
-            block_mem_config, block_program_config = self._short_prefill_block_config(x)
+            block_mem_config, block_program_config = block_config
             x_block = ttnn.to_memory_config(x, block_mem_config)
             y_block = ttnn.rms_norm(
                 x_block,
@@ -232,8 +232,10 @@ class RMSNorm(LightweightModule):
             return None
         grid = x.device().compute_with_storage_grid_size()
         rows, width_tiles = seq // ttnn.TILE_SIZE, dim // ttnn.TILE_SIZE
+        if width_tiles < 16:
+            return None
         cols = max(c for c in range(1, min(8, grid.x) + 1) if width_tiles % c == 0)
-        if rows * cols <= rows:
+        if cols <= 1:
             return None
         block_w = width_tiles // cols
         mem_config = ttnn.create_sharded_memory_config(
