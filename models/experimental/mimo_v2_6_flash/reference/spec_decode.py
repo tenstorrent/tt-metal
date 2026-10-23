@@ -41,9 +41,13 @@ that draft's rows so that a draft planned again from the same commit (the adapte
 plan after the device chained a draft from a different commit) finds the same ones: re-planning is idempotent.
 """
 
+import os
 from dataclasses import dataclass, field
 
-SPEC_SLOTS = 4  # decode slots of a verify pass
+# Decode slots of a verify pass: 4, or 8 (MIMO_SPEC_SLOTS=8: DFlash's block of 7 drafts; the verify then runs the
+# request in 8 decode slots, so the lane decodes 8 users). Fixed per process: every layout below derives from it.
+SPEC_SLOTS = int(os.environ.get("MIMO_SPEC_SLOTS", "4"))
+assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
 MAX_DRAFTS = SPEC_SLOTS - 1  # drafts per verify: the last committed token and its drafts fill one pass
 
 

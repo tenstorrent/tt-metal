@@ -493,7 +493,8 @@ class MiMoV2ForCausalLM:
             # argmax_ids for all-greedy steps; fused_sample (acceptance on device) when a sampled request shares
             # the step and the device sampler serves every request's sampling; logits otherwise (the plugin's host
             # accept walk then samples losslessly, ``_verify``).
-            accept_modes=("argmax_ids", "logits", "fused_sample"),
+            # fused_sample needs the device verify sampler, which serves 4 slots (MIMO_SPEC_SLOTS=4).
+            accept_modes=("argmax_ids", "logits", "fused_sample") if SPEC_SLOTS == 4 else ("argmax_ids", "logits"),
             drafter_state="internal",
             supports_narrow_decode=True,
         )

@@ -158,6 +158,7 @@ class TtMiMoMTP:
         i). ``ckpt`` may be None when ``cache_dir`` already holds their tensors (a later replica). ``backfill``: keep
         the target-hidden history and the backfill program (with the decode RoPE tables)."""
         layers = (layers,) if isinstance(layers, int) else tuple(layers)
+        assert SPEC_SLOTS == 4, "the MTP drafter verifies 4 slots (MIMO_SPEC_SLOTS=4)"
         assert len(layers) == 1 or layers == tuple(range(MAX_DRAFTS)), f"MTP layers {layers}: one, or one per draft"
         self.model, self.cfg, self.plan = model, model.cfg, model.plan
         self.layers = [TtMtpLayer(model, ckpt, cache_dir, i, weight_dtype) for i in layers]

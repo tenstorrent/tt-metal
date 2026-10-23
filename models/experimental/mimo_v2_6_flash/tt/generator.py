@@ -78,6 +78,7 @@ class MiMoGalaxyGenerator:
                 max_seq_len=max_seq_len,
                 max_batch=max_batch,
                 block_size=block_size,
+                decode_users=users_per_replica,
                 **model_kwargs,
             )
             if mtp_layers is not None:

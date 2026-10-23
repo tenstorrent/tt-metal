@@ -7,8 +7,9 @@
 // Input: logits [1, 1, 32, V] bf16 or fp32 TILE, DRAM interleaved (one page per 32x32 tile column). Users sit in
 // rows 0..users-1 (< 16): their values are the first users*16 elements of face 0 (columns 0-15) and of face 1
 // (columns 16-31) of every tile.
-// Output: row `core` of a [32, 32] uint32 TILE tensor (L1 interleaved, one page): columns 4u, 4u+1 = (key, local
-// index) of user u's maximum, where key orders like the value (sign-adjusted bits). Ties keep the lowest index.
+// Output: row `core` of a [32, 32] uint32 TILE tensor (L1 interleaved, one page): columns 2u, 2u+1 = (key, local
+// index) of user u's maximum (u < 8: one face row), where key orders like the value (sign-adjusted bits). Ties keep
+// the lowest index.
 
 #include <cstdint>
 
@@ -51,7 +52,7 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
     constexpr uint32_t max_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(3);  // 2: bf16, 4: fp32
-    static_assert(users >= 1 && users <= 4, "users in rows 0-3 (4 entries of 4 uint32 per partial row)");
+    static_assert(users >= 1 && users <= 8, "users in rows 0-7 (8 entries of 2 uint32 per partial row)");
     static_assert(elem_bytes == 2 || elem_bytes == 4, "bf16 or fp32 logits");
     constexpr uint32_t tile_bytes = 1024 * elem_bytes;
     constexpr uint32_t face_bytes = 256 * elem_bytes;
@@ -85,16 +86,12 @@ void kernel_main() {
                 scan_row<uint32_t>(base + row_bytes, col0 + 16, best_key, best_idx);
             }
         }
-        out[u * 4 + 0] = best_key;
-        out[u * 4 + 1] = best_idx;
-        out[u * 4 + 2] = 0;
-        out[u * 4 + 3] = 0;
+        out[u * 2 + 0] = best_key;
+        out[u * 2 + 1] = best_idx;
     }
-    for (uint32_t u = users; u < 4; ++u) {
-        out[u * 4 + 0] = 0;
-        out[u * 4 + 1] = 0;
-        out[u * 4 + 2] = 0;
-        out[u * 4 + 3] = 0;
+    for (uint32_t u = users; u < 8; ++u) {
+        out[u * 2 + 0] = 0;
+        out[u * 2 + 1] = 0;
     }
 
     // Row `core` of the uint32 partials tile: face 0 (rows 0-15) or face 2 (rows 16-31), columns 0-15.

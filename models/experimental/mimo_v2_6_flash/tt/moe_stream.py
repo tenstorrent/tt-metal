@@ -469,16 +469,25 @@ class DownStream:
             dst_full_sync_en=False,
         )
 
+    _ACTIVATIONS = {}  # (device ids, pairs, page bytes) -> the activation buffer every layer of a (sub)mesh shares
+
     def activation_buffer(self, plan):
-        """Zeroed row-major [1, 1, pairs, kt * 4 * 32] bf16 in L1: page p = pair p's kt [4, 32] tiny tiles."""
-        return ttnn.from_torch(
-            torch.zeros(1, 1, self.num_pairs, self.act_page_bytes // 2),
-            device=plan.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            mesh_mapper=plan.replicate(),
-        )
+        """Zeroed row-major [1, 1, pairs, kt * rows * 32] bf16 in L1: page p = pair (or distinct expert) p's kt
+        [rows, 32] tiny tiles. One buffer for every MoE layer of the (sub)mesh: a layer's down stream reads it before
+        the next layer's gate|up stream rewrites it, and the pair stream writes the same rows of it in every layer (its
+        other rows stay zero). Persistent L1, so one copy instead of one per layer (47 x 4 KB per bank with 8 rows)."""
+        key = (tuple(plan.mesh_device.get_device_ids()), self.num_pairs, self.act_page_bytes)
+        cached = self._ACTIVATIONS.get(key)
+        if cached is None or not cached.is_allocated():  # a mesh opened again in the same process
+            self._ACTIVATIONS[key] = ttnn.from_torch(
+                torch.zeros(1, 1, self.num_pairs, self.act_page_bytes // 2),
+                device=plan.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=plan.replicate(),
+            )
+        return self._ACTIVATIONS[key]
 
     def compact_output(self, plan):
         """Persistent [1, 1, 32, hidden / 8] bf16 DRAM tiles; every call rewrites all of it."""
@@ -969,13 +978,10 @@ class FabricRowGather:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(self.core_ranges, [rows, TILE], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        self.gather = ttnn.from_torch(
-            torch.zeros(len(self.cores) * rows, TILE),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=plan.replicate(),
-            memory_config=mc,
+        # Allocated in place (no host copy, no staging buffer that would leave a hole above it in L1): every chip
+        # writes a slot before the reduce reads it.
+        self.gather = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([len(self.cores) * rows, TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mc
         )
         self.sems = [ttnn.create_global_semaphore(device, self.core_ranges, 0) for _ in range(self.PHASES)]
         self.transports = [ttnn.CoreCoord(*c) for c in self.TRANSPORT_CORES]

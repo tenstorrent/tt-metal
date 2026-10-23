@@ -36,7 +36,7 @@ from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
-from .moe_stream import user_rows, zero_output
+from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
 from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_table
 from .dflash import TtDFlash
@@ -128,11 +128,15 @@ class TtMiMoModel:
         kv_dtype=ttnn.bfloat8_b,
         logits_dtype=None,
         num_links=2,
+        decode_users=None,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
-        16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16)."""
+        16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16).
+        ``decode_users``: the decode users the caller will set up (setup_kv_cache / setup_vllm_kv_cache), known now so
+        that the fused reductions' fabric gather buffer is made before anything else takes L1 (``_set_decode_users``).
+        """
         assert max_prefill_chunk % block_size == 0
         self.mesh_device = mesh_device
         self.cfg = cfg
@@ -148,6 +152,12 @@ class TtMiMoModel:
         self.prefill_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // block_size), 8)
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
+        if decode_users is not None and decode_users <= 8 and self._fabric_gather_enabled():
+            # The first L1 allocation: the gather buffer then sits at the top of L1 (see _set_decode_users).
+            fabric_row_gather(
+                plan,
+                ReduceExpand(plan, cfg.hidden_size, plan.tp, None, rows=user_rows(decode_users)),
+            )
 
         head_dim = cfg.head_dim
         rope_dim = int(head_dim * cfg.partial_rotary_factor)
@@ -259,6 +269,19 @@ class TtMiMoModel:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
             layer.attn.set_decode_rows(rows)
+        # The fused reductions' fabric gather buffer (persistent L1, 64 KB per reduce core, 128 KB with 8 user rows),
+        # made now if __init__ did not (``decode_users``): made at the first decode step it lands below the buffers that
+        # step leaves, where a later prefill program's static circular buffers reach (the prefill SDPA's end at
+        # 1179008, 3 KB under it with 4 users); made after the weights it may still land under a hole they left.
+        red = next(
+            (layer.mlp.reduce_expand for layer in self.layers if layer.is_moe and layer.mlp.gate_up_stream), None
+        )
+        if self._fabric_gather_enabled() and red is not None:
+            gather = fabric_row_gather(self.plan, red)
+            assert gather.tiles_per_core == red.tiles_per_core, "the gather buffer was made for other decode users"
+
+    def _fabric_gather_enabled(self):
+        return os.environ.get("MIMO_FABRIC_GATHER", "1") == "1" and tuple(self.mesh_device.shape) == (1, self.plan.tp)
 
     def setup_kv_cache(self, num_users):
         """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
@@ -342,8 +365,11 @@ class TtMiMoModel:
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        if self.mtp is not None or self.dflash is not None:
+        # The device sampler serves up to 4 users (its candidate pages); more decode users sample on the host.
+        self.sampler = None
+        if self.decode_users <= 4:
+            self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        if (self.mtp is not None or self.dflash is not None) and self.sampler is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
             # inputs and output, like the samplers' buffers, before any capture.
             self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)

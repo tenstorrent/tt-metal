@@ -96,7 +96,19 @@ CHAIN_WORDS = CHAIN_RELAY + 1
 CHAIN_HSLOTS = CHAIN_WORDS
 NO_SLOT = 0xFFFFFFFF
 ACCEPT_WORDS = GROUPS * OUT_WORDS
-ACCEPT_AT, ARGMAX_AT, POSITIONS_AT, STATUS_AT, DRAFTS_AT, RESULT_WORDS = 0, 32, 40, 48, 64, 80
+
+
+def _align16(words):
+    return (words + 15) // 16 * 16
+
+
+# The result page's sections (0, 32, 40, 48, 64, 80 with 4 slots; 0, 128, 136, 144, 160, 176 with 8).
+ACCEPT_AT = 0
+ARGMAX_AT = _align16(ACCEPT_WORDS)
+POSITIONS_AT = ARGMAX_AT + 8 * ((SPEC_SLOTS + 7) // 8)
+STATUS_AT = _align16(POSITIONS_AT + SPEC_SLOTS)
+DRAFTS_AT = _align16(STATUS_AT + 4)
+RESULT_WORDS = _align16(DRAFTS_AT + 1 + MAX_DRAFTS)
 HEADER_WORDS = DRAFTS_AT  # the chain step's sections; the drafts step writes the rest
 CTRL_DRAFTS = 4  # a control page group's first draft word (reference.sample_verify.group_words)
 assert ACCEPT_AT + ACCEPT_WORDS <= ARGMAX_AT and ARGMAX_AT + SPEC_SLOTS <= POSITIONS_AT

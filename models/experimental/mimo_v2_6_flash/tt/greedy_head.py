@@ -28,7 +28,7 @@ def _is_dram(t):
 
 class GreedyHead:
     def __init__(self, plan, vocab_local, users, max_batch):
-        assert vocab_local % TILE == 0 and 1 <= users <= 4 and max_batch * 4 <= 1024
+        assert vocab_local % TILE == 0 and 1 <= users <= 8 and max_batch * 4 <= 1024
         self.plan, self.vocab_local, self.users, self.max_batch = plan, vocab_local, users, max_batch
         device = plan.mesh_device
         grid = device.compute_with_storage_grid_size()

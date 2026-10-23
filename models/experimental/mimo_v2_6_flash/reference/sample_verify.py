@@ -48,8 +48,8 @@ import struct
 from .spec_decode import MAX_DRAFTS, SPEC_SLOTS
 
 PARAM_WORDS = 8
-GROUP_WORDS = 16
-OUT_WORDS = 8
+GROUP_WORDS = 16 if MAX_DRAFTS <= 5 else 32  # a control group: 6 + 2 * MAX_DRAFTS words
+OUT_WORDS = 8 if MAX_DRAFTS <= 5 else 16  # an output group: 3 + MAX_DRAFTS words
 GROUPS = SPEC_SLOTS  # a pass holds at most one request per slot
 NO_GROUP = 0xFFFFFFFF
 NO_TOKEN = 0xFFFFFFFF  # the plugin's PLACEHOLDER_TOKEN_ID (-1) as uint32
