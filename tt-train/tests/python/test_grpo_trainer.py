@@ -46,7 +46,7 @@ from datasets import Dataset
 from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import repeat_interleave
+from ttml.common.utils import build_mesh, repeat_interleave
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import (
@@ -1072,3 +1072,90 @@ def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_
     source.update_weights(None, 0)
     with expect_error(RuntimeError, "generated with weight_version -1, expected 0"):
         next(iter(source))
+
+
+QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"
+QWEN3_TRANSFORMER_CONFIG = TransformerConfig(
+    {"transformer_config": {"model_type": "qwen3", "max_sequence_length": 256, "runner_type": "memory_efficient"}}
+)
+
+
+class _ReplayedRollouts(RolloutBatchSource):
+    def __init__(self, batches):
+        self.batches = batches
+
+    def __iter__(self):
+        return iter(self.batches)
+
+    def update_weights(self, model, step):
+        pass
+
+
+class _FirstBlockGrads(TrainerCallback):
+    def __init__(self):
+        self.grads = {}
+
+    def on_before_optimizer_step(self, trainer):
+        for name, param in trainer.model.parameters().items():
+            if "/blocks/0/" in name:
+                grad = param.get_grad_tensor()
+                self.grads[name] = np.asarray(ttml.Sharding.from_tensor(grad).gather(grad), dtype=np.float32)
+
+
+def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient_accumulation_steps, scored=None):
+    """One GRPO step of Qwen3-0.6B on a fresh mesh; generates the scored batch unless ``scored`` is given."""
+    recorder = _FirstBlockGrads()
+    mesh = build_mesh(device_config)
+    with fresh_device_mesh(mesh.shape, mesh.axis_names, what="GRPO device-count invariance"):
+        tokenizer = AutoTokenizer.from_pretrained(QWEN3_MODEL_ID)
+        countries = ["France", "Portugal", "Japan", "Peru"]
+        dataset = Dataset.from_dict(
+            {"prompt": [_to_capitals_chat_prompt(tokenizer, f"The capital of {c} is") for c in countries]}
+        )
+        config = GRPOConfig(
+            **{
+                **_HOST_GRPO_CONFIG,
+                "prompts_to_train": 4,
+                "max_completion_length": 8,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
+                "disable_default_monitor": True,
+            }
+        )
+        trainer = GRPOTrainer(
+            transformer_config=QWEN3_TRANSFORMER_CONFIG,
+            device_config=device_config,
+            model_source=QWEN3_MODEL_ID,
+            dataset_func=lambda: dataset,
+            config=config,
+            reward_func=lambda completions, **_: [float(i % 2) for i in range(len(completions))],
+            optimizer_dict={"type": "AdamW", "lr": 1e-5},
+            callbacks=[recorder],
+        )
+        scored = scored or list(trainer.rollout_batch_source)
+        trainer.rollout_batch_source = _ReplayedRollouts(scored)
+        trainer.train()
+        del trainer
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+    return recorder.grads, scored
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
+def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelism):
+    """Gradients don't depend on the device count.
+
+    One step on the same 8 completions: 1 device runs two micro-batches of 4, and a
+    [1, 2] mesh runs one micro-batch with 4 completions per device. The first block's
+    gradients must match within 2%; bf16 sums them in a different order, while a wrong
+    loss normalization would be off by about 2x.
+    """
+    one_device = DeviceConfig({"device_config": {"mesh_shape": [1, 1]}})
+    two_devices = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
+
+    expected, scored = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2)
+    actual, _ = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1, scored)
+
+    assert expected and actual.keys() == expected.keys()
+    for name, grad in expected.items():
+        error = np.linalg.norm(actual[name] - grad) / np.linalg.norm(grad)
+        assert error < 2e-2, f"{name}: relative gradient error {error:.3g}"
