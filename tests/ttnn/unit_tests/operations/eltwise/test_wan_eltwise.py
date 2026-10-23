@@ -127,7 +127,7 @@ OPS = {
     "addcmul": (_addcmul(lambda s: s), 0.9999, ("bf16",)),
     "addcmul_rowbcast": (_addcmul(_row), 0.9999, ("bf16",)),
     "addcmul_rowbcast_value": (_addcmul(_row, value=0.5), 0.9999, ("bf16",)),
-    "lerp_tensor_weight": (_lerp_tensor_weight, 0.9999, ("bf16", "fp32")),
+    "lerp_tensor_weight": (_lerp_tensor_weight, 0.9999, ("fp32",)),
     "lerp_scalar_weight": (_lerp_scalar_weight, 0.9999, ("bf16",)),
 }
 
