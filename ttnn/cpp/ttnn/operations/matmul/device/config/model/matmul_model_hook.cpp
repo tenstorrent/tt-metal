@@ -527,7 +527,7 @@ std::optional<MatmulProgramConfig> choose(
     pick.description += fmt::format(
         " (selected in {} us)",
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
-    return use(cached ? pick_cache().replace(key, std::move(pick)) : pick_cache().insert(key, std::move(pick)));
+    return use(cached ? pick_cache().replace(key, std::move(pick)) : pick_cache().insert(key, pick));
 }
 
 }  // namespace
