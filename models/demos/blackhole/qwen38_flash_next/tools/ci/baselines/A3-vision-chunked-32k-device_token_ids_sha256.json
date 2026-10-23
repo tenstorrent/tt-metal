@@ -1,0 +1,17 @@
+{
+ "expected": {
+  "demo": "52c2fdcda32084cbeaf46f8508ebf00a00c3bcffac3e6e5007eda7e4ab5d07dd",
+  "grid24x40": "a64961c25d9ada6faee04b478de41b86b32dc6dab8f51dc6b24526acf76a56cb",
+  "grid32": "e530e2493494d657e4a0978465d65a732208fbcb5ebafe7ebdc60c78b87500e1",
+  "grid64": "841a9277e4c73cbcdf445972102f38e3bf7af3ff977e7b9f8f1195f1ce18e94e"
+ },
+ "pin": "A3/vision-chunked-32k/device_token_ids_sha256",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-29",
+  "evidence": "the vision prefill gate (a dev tool, --device-features) on one 1x4 p150 line, 2026-09-29: the device tower's features spliced into the prompt embeddings, three-axis rotary rows, the decode shift; 32 greedy tokens per fixture against the CPU reference's greedy stream (transformers 5.16.1 Qwen4ExpForConditionalGeneration bf16); the same streams with the 128-row chunk form, and with the CPU reference's features on grid32/demo; the text control at the A3 chunked-32k index before and after the images; every value measured on this run",
+  "head": "93792424627f9800672b74078f3f7dc84c90731d",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

@@ -1,0 +1,26 @@
+{
+ "expected": {
+  "chat": "34686e9146e7ec4ce2b89a22cd86d8649f184bbddbda94690ae5183bdf7cda16",
+  "code": "0234032be259edb09c5a14223164516548a972e013dc66d2e6452ee9c14d5c08",
+  "document": "7d56a9706729c6a82c15bbfcc4ad9aa488acad2f86a109d94436bd684e53f6f0",
+  "fact": "9afd57cc03036e8beac9b7fc53121826c939780b810095f3b88e2c987be9c521",
+  "json": "a5b4defa72fae270391869377862fe60b95d893a6c2cfd24ea265bb59de6d16f",
+  "list": "5a3a0e334566126f19c51c649e4bda0536aedcc28a0f5be55bddc0a5de06f70a",
+  "math": "19f55ccb4bb2174423d32141df95c365aa6306b246a65f26b4e5b255b64a7ea2",
+  "multilingual": "c60fa8f457608453dbf2c5c51d3bc64338c7b6f22115867272ed1786f59422b2",
+  "prose": "e1416bf3c3d4a28bd4b42b93aba1451558cb0a7dbfd5c7cf7f3fb66023a37d4e",
+  "refactor": "8fad29b699a43b385a99541cf4aac4a775415f0919ef8c154a5054629d0dbc92",
+  "sky": "de86bbc09c482272bf2da4c31c3f13cc593e5590ed85a8dacbd72d6cc80205fc",
+  "story": "d1897b72f57de336477b57a6d5f13fcb611f44bcee99a57236ba4022572a7b97",
+  "summary": "d9d024681580637c7df49daeb494605434d11459d87314dae53566a7527cbba6"
+ },
+ "pin": "A3/slab2048-32k/device_token_ids_sha256",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-25",
+  "evidence": "chat server startup replay with --prefill-slab 2048 (the slab's routed experts in one moe_compute call per layer, QWEN38_MOE_SLAB_ONE_CALL / QWEN38_MOE_SLAB_RINGS unset), three idle runs on a 1x4 p150 line, 2026-09-25; the twelve records are 37-434 prompt tokens (prefill_slabs 0 on every record: the slab is exercised by the corpus long part and the long-prompt probes, which were identical to the 16 x 128-row form and across the runs), so this table equals the same head's chunked table; chat 2 against the 2026-09-06 chunked-32k table's 43 is the head's numerics class (BF8 dense weights, compact expert layout), not the slab; runs quality-20260925T182216Z, quality-20260925T191226Z, quality-20260925T191728Z; the slab record 'document' (2228 prompt tokens, one slab) added 2026-09-27 from the same head's plain --prefill-slab 2048 replay (hold rb-serve1, head e60ad5151037), the twelve values unchanged",
+  "head": "e399fe2a99d3f890aec774016ec8a74deb95eb8e",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

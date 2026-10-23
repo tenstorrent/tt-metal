@@ -1,0 +1,26 @@
+{
+ "expected": {
+  "chat": "1bbbf060a22e2aa1b9613a7b48b18680b6f2c02f4b06636859d563b50dd43690",
+  "code": "159de7287947ac44a7f8fe4d4405341775aaf5b0c73b974dce3e826dbc2d42ff",
+  "fact": "9afd57cc03036e8beac9b7fc53121826c939780b810095f3b88e2c987be9c521",
+  "json": "a5b4defa72fae270391869377862fe60b95d893a6c2cfd24ea265bb59de6d16f",
+  "list": "8253ba344696e880fc2ea18fe604e6c46e92c4401b748abc239c436cd27f0d44",
+  "math": "96290ed7ae52dd7c2c04922955aa1820d9a969045b3909188572a1754c199550",
+  "multilingual": "3069debfd813bbea34363c10d2edf1d1df1515072d207b8b47577bc91ece231a",
+  "prose": "19538e64128d3b8c2f47fc3580ee0ddf792b59ba6b0ef12989181b30df69a547",
+  "refactor": "8a812a8ea01b3d7da9da5788d0d03034082562b5c5e7208ab7efc74ac301ee3d",
+  "sky": "de86bbc09c482272bf2da4c31c3f13cc593e5590ed85a8dacbd72d6cc80205fc",
+  "story": "efaf8f20e25c7c28bc558ffaff42caf2a05be421c80a16552c67a64ec780bab4",
+  "summary": "d9d024681580637c7df49daeb494605434d11459d87314dae53566a7527cbba6"
+ },
+ "pin": "A3/chunked-32k/device_token_ids_sha256",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-27",
+  "evidence": "chat server startup replay, chunked prefill, one 1x4 p150 line, 2026-09-27: gr_recip_last (the gated-residual read's front with the rsqrt applied after the down projection, COMPONENT class) by default beside the MoE rows form on two rings; against the 2026-09-25 table chat 2 -> 56 and code 32 -> none (later), math 61 -> 56 (the near-tie NUMERICS records at 0.36 logits), the other nine indices unchanged; eight streams differ past their divergence",
+  "head": "1aae82bbe33f7dcb7b61be56623972edbe51a921",
+  "run": "acceptance-default.json",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

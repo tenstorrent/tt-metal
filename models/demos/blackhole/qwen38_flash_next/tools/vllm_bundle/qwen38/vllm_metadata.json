@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen4ExpForConditionalGeneration",
+  "main_class": "models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm:Qwen38ForCausalLM"
+}

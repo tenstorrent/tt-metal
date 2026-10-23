@@ -1,0 +1,7 @@
+{
+  "test_gdn_tp": 0.99,
+  "test_layer_tp": 0.98,
+  "test_layer_tp_injection": 0.95,
+  "test_moe_tp": 0.98,
+  "test_qsa_tp": 0.99
+}
