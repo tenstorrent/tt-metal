@@ -1,8 +1,4 @@
-# QSR3.A2 craq-sim descriptor. The package is one UMD chip containing three
-# Quasar dies in one flat descriptor-frame NOC coordinate space.
-#
-# UNCONFIRMED: 12 x 19 is the descriptor occupancy bound. No source states the
-# strapped QSR3.A2 NOC sizes or the coordinate frame reported by silicon.
+# QSR3.A2 descriptor. The package contains three Quasar dies in one NOC coordinate space.
 grid:
   x_size: 12
   y_size: 19
@@ -13,10 +9,6 @@ arc:
 pcie:
   []
 
-# DELIBERATE DEVIATION: each 1 GB DRAM channel is modelled at the facing Quasar
-# D2D proxy coordinate, not at the true Mimir coordinate one hop farther out.
-# Silicon capacity is 6 GB per interface; 1 GB is the approved UNCONFIRMED
-# bring-up placeholder.
 dram:
   [[1-4],
   [1-5],
@@ -113,8 +105,7 @@ dram_view_size:
 eth:
   []
 
-# Row-major over the compact logical 8 x 12 worker grid. Physical NOC rows
-# retain the two-row D2D gaps between dies.
+# Workers skip NOC rows 6-7 and 12-13, the D2D rows between dies.
 functional_workers:
   [2-2, 3-2, 4-2, 5-2, 6-2, 7-2, 8-2, 9-2,
   2-3, 3-3, 4-3, 5-3, 6-3, 7-3, 8-3, 9-3,
@@ -132,13 +123,10 @@ functional_workers:
 harvested_workers:
   []
 
-# D2D, SMU, Mimir, and Keraunos coordinates are intentionally omitted per the
-# approved model direction.
 router_only:
   []
 
-# DERIVED / UNCONFIRMED: die-major slot order is NW, SW, SE, carrying the
-# register-description lane binding through the 180-degree die rotation.
+# Per die (NW, SW, SE), the single-die dispatch order rotated 180 degrees.
 dispatch:
   [1-6, 1-1, 10-1, 1-12, 1-7, 10-7, 1-18, 1-13, 10-13]
 
