@@ -262,7 +262,7 @@
       timeout: 5
       tier: 1
       release_ready: false
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
   sp_config: sc1
