@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -80,6 +81,11 @@ constexpr uint32_t in1_output_start_slot(bool has_fused_ternary, bool fsdp_fused
 
 constexpr uint32_t in1_fsdp_sem_forward_slot(bool has_fused_ternary) {
     return in1_fsdp_sem_backward_slot(has_fused_ternary) + 1u;
+}
+
+// A gate of one folded tile row is broadcast from tile row 0; validate_rows admits no other [..., 1, N] gate.
+uint32_t broadcast_ternary_b_flag(const ttnn::Tensor& ternary_b) {
+    return ttnn::operations::common::folded_rows(ternary_b) == tt::constants::TILE_HEIGHT ? 1u : 0u;
 }
 
 }  // namespace
@@ -318,7 +324,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M. M comes from
     // the input, not the gather buffer, so the buffer may be taller than this call's rows.
     uint32_t K = in0_tensor_shape[-1];
-    uint32_t M = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+    uint32_t M = ttnn::operations::common::folded_rows(input_tensor);
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -1292,8 +1298,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         if (use_fused_ternary) {
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in0_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            in0_common_args.push_back(broadcast_ternary_b_flag(fused_ternary_input_b.value()));
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in0_common_args.push_back(allocated_buffer(mm_output_tensor, "matmul output"));
@@ -1313,8 +1318,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         if (use_fused_ternary) {
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in1_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            in1_common_args.push_back(broadcast_ternary_b_flag(fused_ternary_input_b.value()));
         }
         if (fsdp_fused) {
             // local_weight_addr: the FSDP-sharded weight (injector reads its own K-slice from this).
@@ -1338,10 +1342,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::KernelDescriptor::RTArgList compute_common_args;
         compute_common_args.push_back(M_tiles);  // smuggled-rta-ok: runtime length, override
         if (use_fused_ternary) {
-            uint32_t ternary_b_M_tiles =
-                fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             compute_common_args.push_back(std::bit_cast<uint32_t>(fused_ternary_scalar.value()));
-            compute_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            compute_common_args.push_back(broadcast_ternary_b_flag(fused_ternary_input_b.value()));
         }
         desc.kernels[kComputeKernelIdx].emplace_common_runtime_args(compute_common_args);
     }
@@ -1794,9 +1796,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
-    const uint32_t M = act_tensor.physical_volume() / act_tensor.padded_shape()[-1];
-    const bool transpose_core_grid =
-        resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1]);
+    const uint32_t M = operations::common::folded_rows(act_tensor);
+    const bool transpose_core_grid = resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1]);
 
     // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
     // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.
@@ -1888,8 +1889,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t barrier_sem =
         operation_attributes.barrier_semaphore.has_value() ? operation_attributes.barrier_semaphore->address() : 0u;
     const auto& act_tensor = tensor_args.input_tensor;
-    const uint32_t M_tiles =
-        act_tensor.physical_volume() / act_tensor.padded_shape()[-1] / tt::constants::TILE_HEIGHT;
+    const uint32_t M_tiles = operations::common::folded_rows(act_tensor) / tt::constants::TILE_HEIGHT;
 
     auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx);
     auto& in0_receiver_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx);
@@ -1920,8 +1920,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     if (has_fused_ternary) {
         const uint32_t ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
         const uint32_t ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
-        const uint32_t broadcast_ternary_b =
-            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT == 1 ? 1u : 0u;
+        const uint32_t broadcast_ternary_b = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
         auto write_ternary = [&](auto& common, uint32_t ternary_a_slot) {
             common[ternary_a_slot] = ternary_a_addr;
             common[ternary_a_slot + 1] = ternary_b_addr;
@@ -1974,10 +1973,8 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     compute_common[kComputeLenSlot] = M_tiles;
     // Same gate as create: the scalar slots exist only when the scalar is set.
     if (has_fused_ternary) {
-        compute_common[kComputeScalarSlot] =
-            std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
-        compute_common[kComputeBroadcastSlot] =
-            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT == 1 ? 1u : 0u;
+        compute_common[kComputeScalarSlot] = std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
+        compute_common[kComputeBroadcastSlot] = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
     }
 }
 

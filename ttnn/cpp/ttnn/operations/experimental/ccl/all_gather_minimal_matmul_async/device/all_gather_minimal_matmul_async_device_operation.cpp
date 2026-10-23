@@ -26,17 +26,14 @@ namespace {
 // framework's canonical-key guard.
 constexpr uint64_t kAgmmProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runtime-M v1
 
-// Rows (M) of the activation, upper dims folded in; the kernels take this count as a runtime word.
-uint32_t activation_rows(const Tensor& act_tensor) {
-    return act_tensor.physical_volume() / act_tensor.padded_shape()[-1];
-}
+using operations::common::folded_rows;
 
 // The checks that depend on M: cheap enough to run on every program-cache hit, and the only ones that
-// must, since the hash no longer carries the row count of the input, the gather buffer or the ternaries.
+// must, since the hash carries no row count for the input, the gather buffer or the ternaries.
 void validate_rows(
     const AllGatherMinimalMatmulAsyncParams& attributes, const AllGatherMinimalMatmulAsyncInputs& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
-    const uint32_t M = activation_rows(act_tensor);
+    const uint32_t M = folded_rows(act_tensor);
     const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
     TT_FATAL(
         M > 0 && M % TILE_HEIGHT == 0,
@@ -45,7 +42,7 @@ void validate_rows(
         TILE_HEIGHT);
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& ag = tensor_args.persistent_output_buffer.value();
-        const uint32_t ag_rows = ag.physical_volume() / ag.padded_shape()[-1];
+        const uint32_t ag_rows = folded_rows(ag);
         TT_FATAL(
             ag.padded_shape()[-1] == K && ag_rows >= M,
             "all_gather_minimal_matmul_async persistent_output_buffer must be [>= M={}, K={}], got [{}, {}]",
@@ -56,14 +53,34 @@ void validate_rows(
     }
     if (attributes.fused_ternary_scalar.has_value() && tensor_args.fused_ternary_input_a.has_value() &&
         tensor_args.fused_ternary_input_b.has_value()) {
-        const auto& a_logical = tensor_args.fused_ternary_input_a->logical_shape();
-        const auto& b_logical = tensor_args.fused_ternary_input_b->logical_shape();
-        TT_FATAL(a_logical[-2] == M, "fused_ternary_input_a rows must equal M={}, got {}", M, a_logical[-2]);
+        // Logical rows as on the unfused op; folded rows because the kernels read the flat tile grid.
+        const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
+        const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
+        const uint32_t M_logical = act_tensor.logical_shape()[-2];
+        const uint32_t a_rows = folded_rows(ternary_a);
+        const uint32_t b_rows = folded_rows(ternary_b);
         TT_FATAL(
-            b_logical[-2] == 1 || b_logical[-2] == M,
-            "fused_ternary_input_b rows must be 1 or M={}, got {}",
+            ternary_a.logical_shape()[-2] == M_logical && a_rows == M,
+            "fused_ternary_input_a must hold the activation's rows (M={}, {} folded), got shape {} ({} folded)",
+            M_logical,
             M,
-            b_logical[-2]);
+            ternary_a.logical_shape(),
+            a_rows);
+        if (ternary_b.logical_shape()[-2] == 1) {
+            // A [..., 1, N] gate is broadcast from tile row 0, so it cannot carry one gate per batch.
+            TT_FATAL(
+                b_rows == TILE_HEIGHT,
+                "fused_ternary_input_b broadcasts over the rows only when every upper dim is 1, got shape {}",
+                ternary_b.logical_shape());
+        } else {
+            TT_FATAL(
+                ternary_b.logical_shape()[-2] == M_logical && b_rows == M,
+                "fused_ternary_input_b must be one row or the activation's rows (M={}, {} folded), got {} ({} folded)",
+                M_logical,
+                M,
+                ternary_b.logical_shape(),
+                b_rows);
+        }
     }
 }
 
@@ -85,7 +102,7 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
-    const uint32_t M = activation_rows(act_tensor);
+    const uint32_t M = folded_rows(act_tensor);
     const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
     const uint32_t N = weight_tensor.padded_shape()[-1];
     const auto rows_free = [](const std::optional<Tensor>& tensor) -> ttsl::hash::hash_t {
@@ -371,22 +388,17 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         const auto& ternary_a_logical = ternary_a.logical_shape();
         const auto& ternary_b_logical = ternary_b.logical_shape();
 
-        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
+        // Widths only: validate_rows checks the rows here and on every hit.
         TT_FATAL(
-            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
-            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
-            M,
-            N,
-            ternary_a_logical[-2],
-            ternary_a_logical[-1]);
+            ternary_a_logical[-1] == N,
+            "fused_ternary_input_a width ({}) must match the output width N ({})",
+            ternary_a_logical[-1],
+            N);
         TT_FATAL(
-            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
-            N,
-            M,
-            N,
-            ternary_b_logical[-2],
-            ternary_b_logical[-1]);
+            ternary_b_logical[-1] == N,
+            "fused_ternary_input_b width ({}) must match the output width N ({})",
+            ternary_b_logical[-1],
+            N);
     }
 
     // Config constraints

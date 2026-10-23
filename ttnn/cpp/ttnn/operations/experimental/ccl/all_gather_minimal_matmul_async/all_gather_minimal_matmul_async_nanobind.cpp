@@ -63,10 +63,10 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             - Shape: [..., M, N] - must match matmul output shape.
 
         addcmul_input_tensor2 : ttnn.Tensor
-            Gate/multiplier tensor for addcmul (broadcast like bias).
+            Gate/multiplier tensor for addcmul: one row broadcast over all M rows, or a full gate.
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
-            - Shape: [..., 1, N] - broadcast row across all M rows.
+            - Shape: [1, ..., 1, N] (every upper dim 1) - broadcast; or [..., M, N] - one gate row per output row.
 
         fused_activation : Optional[ttnn.operations.eltwise.unary.common.UnaryWithParam], default: None
             Optional fused unary activation applied per output tile during packing. See ttnn unary utilities
@@ -174,7 +174,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         - weight_tensor: [..., K, N]
         - bias_tensor (optional): [..., N] (row-broadcast)
         - addcmul_input_tensor1: [..., M, N] (full output shape)
-        - addcmul_input_tensor2: [..., 1, N] (broadcast like bias)
+        - addcmul_input_tensor2: [1, ..., 1, N] (every upper dim 1, broadcast over the rows) or [..., M, N] (full)
         - output: [..., M, N] normally; [..., M, N/2] when fuse_swiglu=True
         Note: All leading dims (dims < -2) are required to be 1 (no batching). Tensors are read/written in tile units;
         if logical sizes are not tile-aligned, padding is handled internally (reads fill zeros; writes skip outside

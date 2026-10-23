@@ -54,7 +54,7 @@ struct AllGatherMinimalMatmulAsyncParams {
     bool fuse_swiglu = false;
 
     // Core-grid orientation: nullopt keeps the legacy `force_transpose || M > N` rule, a value pins it
-    // so the program (and its cache entry) no longer depends on M.
+    // so the program (and its cache entry) does not depend on M.
     std::optional<bool> transpose_core_grid;
 
     AllGatherMinimalMatmulAsyncParams(

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 import torch
 from loguru import logger
@@ -9,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -129,20 +132,22 @@ def run_test_linear_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
-    K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
-    N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
+    M = torch_input.shape[-2]
+    K = torch_input.shape[-1]
+    N = weight_input.shape[-1]
     if fuse_swiglu:
         # weight is the packed [gate|up] of width 2*out_N; the fused op emits out_N.
         N = N // 2
     per_device_M = M // device.shape[sp_axis]
+    # The fused op folds the activation's upper dims into its rows; the gather buffer must hold them all.
+    folded_batch = math.prod(torch_input.shape[:-2])
     if persistent_output_buffers is not None:
         use_persistent_buffers = True
     elif use_persistent_buffers:
         # A buffer taller than the live rows (ag_buffer_rows) is NaN-filled: the op must never read past M.
         persistent_output_buffers = make_ag_buffers(
             device,
-            ag_buffer_rows or per_device_M,
+            (ag_buffer_rows or per_device_M) * folded_batch,
             K,
             input_dtype,
             num_iters,
@@ -160,16 +165,9 @@ def run_test_linear_impl(
         assert activation is None, f"Unsupported activation: {activation}"
 
     if fuse_addcmul:
-        if sp_axis == 1:
-            if use_non_fused:
-                shard_dims = [None, tp_axis + 2]
-            else:
-                shard_dims = [None, tp_axis]
-        else:
-            if use_non_fused:
-                shard_dims = [sp_axis + 2, None]
-            else:
-                shard_dims = [sp_axis, None]
+        # The residual's rows follow the activation's SP split, whatever the tensor rank.
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = torch_addcmul_a.dim() - 2
         tt_addcmul_a = to_device_tensor(
             torch_addcmul_a,
             input_dtype,
@@ -364,8 +362,8 @@ def run_test_linear_impl(
         else:
             # Fused AGMM output: M on non-cluster axis, N on cluster axis
             concat_dims = [0, 0]
-            concat_dims[1 - cluster_axis] = 0  # M gathered on non-cluster axis
-            concat_dims[cluster_axis] = 1  # N on cluster axis
+            concat_dims[1 - cluster_axis] = torch_input.dim() - 2  # M gathered on non-cluster axis
+            concat_dims[cluster_axis] = torch_input.dim() - 1  # N on cluster axis
 
         check_result = []
         for c in range(chunks):
@@ -373,6 +371,11 @@ def run_test_linear_impl(
             tt_output_chunk = ttnn.to_torch(
                 tt_output_chunk,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
+            )
+            # Logical rows, not tile-padded ones: M need not be a multiple of 32.
+            assert tt_output_chunk.shape[:-1] == torch_output[c].shape[:-1], (
+                tt_output_chunk.shape,
+                torch_output[c].shape,
             )
             check_result_chunk = []
 
@@ -383,20 +386,8 @@ def run_test_linear_impl(
                     chunk_width = chunk_sizes[c] if chunk_sizes else (N // chunks)
                     n_slice = slice(j * chunk_width, (j + 1) * chunk_width)
 
-                    if use_non_fused:
-                        idx = (slice(None), slice(None), m_slice, n_slice)
-                    else:
-                        idx = (m_slice, n_slice)
-
-                    tt_device_output = tt_output_chunk[idx]
-
                     check_result_chunk.append(
-                        assert_quality(
-                            torch_output[c][:, :, i * per_device_M : (i + 1) * per_device_M, :]
-                            if use_non_fused
-                            else torch_output[c][i * per_device_M : (i + 1) * per_device_M, :],
-                            tt_device_output,
-                        )
+                        assert_quality(torch_output[c][..., m_slice, :], tt_output_chunk[..., m_slice, n_slice])
                     )
             check_result.append(check_result_chunk)
         check_result_list.append(check_result)
@@ -461,6 +452,8 @@ def run_test_linear(
     persistent_output_buffers=None,
     ag_buffer_rows=None,
     host_tilize=False,
+    batch=None,
+    per_batch_gate=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -469,10 +462,12 @@ def run_test_linear(
     weight_N = 2 * N if fuse_swiglu else N
 
     if use_non_fused:
+        assert batch is None, "batch applies to the fused op only"
         torch_input = torch.randn((1, 1, M, K), dtype=torch_dtype)
         weight_input = torch.randn((1, 1, K, weight_N), dtype=torch_dtype)
     else:
-        torch_input = torch.randn((M, K), dtype=torch_dtype)
+        # `batch` hands the fused op a [batch, 1, M, K] activation; it folds the upper dims into its rows.
+        torch_input = torch.randn((M, K) if batch is None else (batch, 1, M, K), dtype=torch_dtype)
         weight_input = torch.randn((K, weight_N), dtype=torch_dtype)
     bias_input = None
     if use_bias:
@@ -482,18 +477,14 @@ def run_test_linear(
             bias_input = torch.randn((1, weight_N), dtype=torch_dtype)
 
     if fuse_addcmul:
-        if use_non_fused:
-            torch_addcmul_a = torch.randn(1, 1, M, N, dtype=torch.bfloat16)  # base value (full shape)
-            if broadcast_gate:
-                torch_addcmul_b = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
-            else:
-                torch_addcmul_b = torch.randn(1, 1, M, N, dtype=torch.bfloat16)  # gate (full, no broadcast)
+        lead = tuple(torch_input.shape[:-2])
+        torch_addcmul_a = torch.randn(*lead, M, N, dtype=torch.bfloat16)  # base value (full shape)
+        if not broadcast_gate:
+            torch_addcmul_b = torch.randn(*lead, M, N, dtype=torch.bfloat16)  # gate (full, no broadcast)
+        elif per_batch_gate:
+            torch_addcmul_b = torch.randn(*lead, 1, N, dtype=torch.bfloat16)  # one gate per batch: refused
         else:
-            torch_addcmul_a = torch.randn(M, N, dtype=torch.bfloat16)  # base value (full shape)
-            if broadcast_gate:
-                torch_addcmul_b = torch.randn(1, N, dtype=torch.bfloat16)  # gate (broadcast like bias)
-            else:
-                torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate (full, no broadcast)
+            torch_addcmul_b = torch.randn(*((1,) * len(lead)), 1, N, dtype=torch.bfloat16)  # gate (broadcast)
     else:
         torch_addcmul_a = None
         torch_addcmul_b = None
@@ -507,8 +498,8 @@ def run_test_linear(
     else:
         # Fused AGMM gathers K (last dim) across cluster_axis
         shard_dims = [0, 0]
-        shard_dims[cluster_axis] = 1  # K on cluster_axis
-        shard_dims[1 - cluster_axis] = 0  # M on the other axis
+        shard_dims[cluster_axis] = torch_input.dim() - 1  # K on cluster_axis
+        shard_dims[1 - cluster_axis] = torch_input.dim() - 2  # M on the other axis
     tt_input = to_device_tensor(
         torch_input,
         dtype,
@@ -1392,6 +1383,149 @@ def test_linear_addcmul_gate(
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
             assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+# The addcmul layer of test_linear_addcmul_gate, for the folded-rows cases below.
+ADDCMUL_LAYER = dict(
+    K=5120,
+    N=1280,
+    M_block_size=8,
+    K_block_size=8,
+    N_block_size=8,
+    subblock_h=2,
+    subblock_w=1,
+    use_bias=True,
+    fuse_addcmul=True,
+    addcmul_scalar=1.0,
+    use_non_fused=False,
+    host_tilize=True,
+)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "batch, M, broadcast_gate",
+    [(2, 3072, True), (2, 3072, False), (None, 3000, True)],
+    ids=["batched_broadcast_gate", "batched_full_gate", "unaligned_rows"],
+)
+def test_linear_addcmul_folded_rows(
+    mesh_device,
+    topology,
+    num_links,
+    num_workers_per_link,
+    sp_axis,
+    tp_axis,
+    core_grid_x,
+    core_grid_y,
+    cluster_axis,
+    batch,
+    M,
+    broadcast_gate,
+):
+    """Fused addcmul with the activation's upper dims folded into its rows ([2, 1, M, K]) and with M not a
+    multiple of 32: the first call misses, the second must hit, and both match torch.addcmul on the logical rows."""
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    results = []
+
+    def run(_):
+        results.append(
+            run_test_linear(
+                submesh,
+                M=M,
+                topology=topology,
+                core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+                num_workers_per_link=num_workers_per_link,
+                num_links=num_links,
+                broadcast_gate=broadcast_gate,
+                batch=batch,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                cluster_axis=cluster_axis,
+                **ADDCMUL_LAYER,
+            )
+        )
+
+    assert_program_cache_flat(submesh, run, ["miss", "hit"])
+    for check_result in results:
+        for device_result in check_result[0][0]:
+            assert device_result["pcc"] > 0.999_500, device_result
+            assert device_result["relative_rmse"] < 0.02, device_result
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_linear_addcmul_per_batch_gate_refused(
+    mesh_device,
+    topology,
+    num_links,
+    num_workers_per_link,
+    sp_axis,
+    tp_axis,
+    core_grid_x,
+    core_grid_y,
+    cluster_axis,
+):
+    """A [2, 1, 1, N] gate would be broadcast from its first batch only, so the op refuses it up front."""
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    with pytest.raises(RuntimeError, match="fused_ternary_input_b broadcasts over the rows"):
+        run_test_linear(
+            submesh,
+            M=3072,
+            topology=topology,
+            core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+            num_workers_per_link=num_workers_per_link,
+            num_links=num_links,
+            broadcast_gate=True,
+            batch=2,
+            per_batch_gate=True,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            cluster_axis=cluster_axis,
+            **ADDCMUL_LAYER,
+        )
 
 
 @pytest.mark.parametrize(
