@@ -738,11 +738,13 @@ void append_to_descriptor(
             // Per-expert weight bases, role-major, at the END of the list: every earlier offset the
             // kernels derive from HGROUPS/KGROUPS stays where it was, so only one new constexpr
             // offset per kernel tracks this table.
-            for (const auto& w_gate : tensor_arguments.w_gates) {
-                reader_args.push_back(w_gate.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                reader_args.push_back(w_down.buffer());
+            if (!operation_arguments.weights_from_table) {
+                for (const auto& w_gate : tensor_arguments.w_gates) {
+                    reader_args.push_back(w_gate.buffer());
+                }
+                for (const auto& w_down : tensor_arguments.w_downs) {
+                    reader_args.push_back(w_down.buffer());
+                }
             }
             // Per-expert bias bases, role-major, after the weight table for the same reason it sits
             // last: one new constexpr offset in the reader and nothing above it moves.
@@ -784,11 +786,13 @@ void append_to_descriptor(
             for (uint32_t arg = 0; arg < 4; ++arg) {
                 writer_args.push_back(h_mcast_noc1_args[arg]);
             }
-            for (const auto& w_up : tensor_arguments.w_ups) {
-                writer_args.push_back(w_up.buffer());
-            }
-            for (const auto& w_down : tensor_arguments.w_downs) {
-                writer_args.push_back(w_down.buffer());
+            if (!operation_arguments.weights_from_table) {
+                for (const auto& w_up : tensor_arguments.w_ups) {
+                    writer_args.push_back(w_up.buffer());
+                }
+                for (const auto& w_down : tensor_arguments.w_downs) {
+                    writer_args.push_back(w_down.buffer());
+                }
             }
             writer_descriptor.emplace_runtime_args(core, writer_args);
 
@@ -1279,7 +1283,8 @@ void append_to_descriptor(
     uint32_t& next_semaphore_id,
     const UnifiedRoutedExpertFfnParams& op,
     const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
+    Tensor& tensor_return_value,
+    bool weights_from_table) {
     // All local experts share one shape/dtype (validated), so the program is
     // built once against expert 0's weights; the kernels loop over experts and
     // vary only the per-expert base address.
@@ -2496,13 +2501,14 @@ void append_to_descriptor(
         // Per-expert weight base addresses, appended after start_addr in three
         // contiguous blocks of experts_per_chip each: gate[0..N), up[0..N),
         // down[0..N).
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        // Left out when the union kernel reads them from its weight table instead.
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.gate_projs[e].buffer());
         }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.up_projs[e].buffer());
         }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             reader_args.push_back(t.down_projs[e].buffer());
         }
         // FUSE_BIAS: per-expert bias base addresses in three further blocks
@@ -2539,13 +2545,14 @@ void append_to_descriptor(
             up_go_sem_id,                          // 6
             up_done_sem_id,                        // 7
         });
-        // Per-expert `up` base addresses (UP_SPLIT)
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        // Per-expert `up` base addresses (UP_SPLIT). Both blocks are left out when the union kernel
+        // reads them from its weight table instead.
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             writer_args.push_back(t.up_projs[e].buffer());
         }
         // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
         // then the two dedicated go/done sem ids.
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        for (uint32_t e = 0; e < experts_per_chip && !weights_from_table; ++e) {
             writer_args.push_back(t.down_projs[e].buffer());
         }
         writer_args.push_back(down_go_sem_id);
@@ -3092,6 +3099,34 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
     // Each half validates what it will actually be handed, including its own band, so a merged
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
+    if (t.weight_table.has_value()) {
+        // The kernels read the table as one page from bank 0 at its base, rounded up to the DRAM
+        // alignment, so anything but exactly that layout reads the wrong words.
+        const auto& table = *t.weight_table;
+        const uint32_t entries = 3 * op.experts_per_chip;
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t read_bytes =
+            (entries * static_cast<uint32_t>(sizeof(uint32_t)) + dram_alignment - 1) / dram_alignment * dram_alignment;
+        TT_FATAL(
+            table.storage_type() == StorageType::DEVICE && table.buffer() != nullptr && table.device() == t.x.device(),
+            "hybrid_routed_expert_moe: weight_address_table must be on dispatched_buffer's device");
+        TT_FATAL(
+            table.dtype() == DataType::UINT32 && table.layout() == Layout::ROW_MAJOR &&
+                table.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                table.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "hybrid_routed_expert_moe: weight_address_table must be UINT32 ROW_MAJOR DRAM-interleaved, got {} {} {}",
+            table.dtype(),
+            table.layout(),
+            table.memory_config());
+        TT_FATAL(
+            table.logical_volume() == entries && table.buffer()->num_pages() == 1 &&
+                table.buffer()->aligned_page_size() >= read_bytes,
+            "hybrid_routed_expert_moe: weight_address_table must be one page of 3 * experts_per_chip = {} entries "
+            "(gate, up, down), got shape {} in {} pages",
+            entries,
+            table.logical_shape(),
+            table.buffer()->num_pages());
+    }
     if (op.hybrid_token_threshold > 0) {
         fused::validate(fused_attributes(op, t), fused_inputs(t));
 
@@ -3132,11 +3167,14 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // run in sequence, the unified pass then a grid-wide barrier then the fused pass. Each half therefore sees the
     // whole grid, exactly as it does when the two ops are dispatched back to back.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
+    // Only a merged program reads the weight bases from the table: the unified half alone fits the
+    // kernel-config ring with them in its runtime args, and it is built exactly as the op alone is.
+    const bool weights_from_table = run_fused_pass && t.weight_table.has_value();
 
     tt::tt_metal::ProgramDescriptor unified_descriptor;
     uint32_t next_semaphore_id = 0;
     unified::append_to_descriptor(
-        unified_descriptor, next_semaphore_id, unified_attributes(op), unified_inputs(t), output);
+        unified_descriptor, next_semaphore_id, unified_attributes(op), unified_inputs(t), output, weights_from_table);
 
     // No expert reaches the fused half, so it is not carried at all -- not merged, not compiled
     // into the binaries, not present in the defines. Folding it in anyway would be wrong, not
@@ -3152,12 +3190,12 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // join each pair's argument lists behind the right base.
     tt::tt_metal::ProgramDescriptor fused_descriptor;
     TT_FATAL(l1_arena != nullptr, "the fused pass runs, so both halves' circular buffers need an L1 arena to share");
-    fused::append_to_descriptor(
-        fused_descriptor,
-        fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank())),
-        fused_inputs(t),
-        output);
+    auto fused_args = fused_attributes(op, t, static_cast<uint32_t>(l1_arena->aligned_size_per_bank()));
+    fused_args.weights_from_table = weights_from_table;
+    fused::append_to_descriptor(fused_descriptor, fused_args, fused_inputs(t), output);
 
+    const WeightTablePlan table{
+        .buffer = weights_from_table ? t.weight_table->buffer() : nullptr, .experts_per_chip = op.experts_per_chip};
     MergeReport report;
     auto merged = merge_halves(
         std::move(fused_descriptor),
@@ -3166,6 +3204,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
         /*run_fused_pass=*/true,
         l1_arena,
         barrier_plan(t.x.device()),
+        table,
         report);
 
     // The merge's own numbers, on a program-cache miss only. Every one of them is a silent-failure

@@ -197,6 +197,7 @@ def run_hybrid_routed_expert(
         hybrid_token_threshold=threshold,
         compute_kernel_config=tt_expert.compute_kernel_config,
         activation=activation,
+        weight_address_table=tt_expert.weight_address_table,
     )
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
     tt_output_active = tt_output_torch[:active_tokens]
@@ -394,6 +395,7 @@ def test_hybrid_routed_expert_multi_expert(device, x_row_major: bool):
             hybrid_token_threshold=_THRESHOLD,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
         )
         got = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
 
@@ -420,12 +422,12 @@ _MODEL_EXPERTS_PER_CHIP = 32
 def test_hybrid_routed_expert_config_fits_default_ring(device):
     """The union program's kernel config has to fit the ring a device gets by default.
 
-    Sized at a model's expert count, not the one expert every case above uses, because the two are
-    not the same program: the reader carries three per-expert weight addresses in its runtime args
-    and the writer a fourth, so the config grows about 2 KB between one expert and a real
-    32-expert layer, against a ring that does not move. It clears by a few hundred bytes, so any
-    growth in either half's kernel text breaks it -- and without this that break lands in a
-    32-device model test rather than here.
+    Sized at a model's expert count, not the one expert every case above uses, and driven as the
+    module drives it -- weight bases from its weight_address_table -- because the two are not the
+    same program: without the table every expert adds nine runtime-arg words per core, about 1.1 KB
+    at a real 32-expert layer, against a ring that does not move. With it the program clears by a
+    few hundred bytes, so any growth in either half's kernel text breaks it -- and without this that
+    break lands in a 32-device model test rather than here.
 
     One weight tensor is shared by all 32 experts on purpose: this grades the program's size, not
     its output, and 32 distinct copies of the real shape cost gigabytes of host memory.
@@ -477,6 +479,7 @@ def test_hybrid_routed_expert_config_fits_default_ring(device):
             hybrid_token_threshold=_THRESHOLD,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
         )
     except RuntimeError as exc:
         if "kernel config buffer" not in str(exc):

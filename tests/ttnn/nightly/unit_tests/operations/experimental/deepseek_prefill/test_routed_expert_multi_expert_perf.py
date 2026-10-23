@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     TtRoutedExpert,
     _fused_compute_config,
+    routed_expert_weight_address_table,
     routed_expert_weight_memory_config,
 )
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
@@ -261,6 +262,8 @@ def _build(device, emb_dim: int, hidden_dim: int, counts: list[int], threshold: 
         )
         return output
 
+    weight_table = routed_expert_weight_address_table(device, gates, ups, downs)
+
     def hybrid():
         return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
             tt_input,
@@ -274,6 +277,7 @@ def _build(device, emb_dim: int, hidden_dim: int, counts: list[int], threshold: 
             hybrid_token_threshold=threshold,
             compute_kernel_config=compute_config,
             activation=activation,
+            weight_address_table=weight_table,
         )
 
     def checked(forward, op: str):

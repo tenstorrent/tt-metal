@@ -62,7 +62,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& fwd_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& final_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt,
-    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt);
+    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
+    const std::optional<ttnn::Tensor>& weight_address_table = std::nullopt);
 
 // Combine's DRAM forwarding buffer for the overlap, sized for these arguments (318.6 MB per device at GLM-5.3's
 // shape). Create it once per mesh, before the first overlapped forward, and pass it as `forwarding_buffer` on every
