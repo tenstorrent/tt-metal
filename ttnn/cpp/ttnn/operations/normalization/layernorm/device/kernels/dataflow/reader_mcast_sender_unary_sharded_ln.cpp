@@ -84,16 +84,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_y; ++i) {
         remote_noc_y[i] = get_vararg(num_x + i);
     }
-    df::L1Ptr in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
-    df::L1Ptr in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
+    auto* in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
+    auto* in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
-    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
     MulticastEndpoint mcast_ep;
 

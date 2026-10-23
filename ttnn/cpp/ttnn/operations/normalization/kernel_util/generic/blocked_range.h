@@ -53,9 +53,9 @@ public:
         class LocalRange {
         public:
             LocalRange(SizeT size) : size_(size) {}
-            Iterator begin() const { return Iterator(SizeT(0)); }
-            Iterator end() const { return Iterator(size_); }
-            SizeT size() const { return size_; }
+            [[nodiscard]] Iterator begin() const { return Iterator(SizeT(0)); }
+            [[nodiscard]] Iterator end() const { return Iterator(size_); }
+            [[nodiscard]] SizeT size() const { return size_; }
 
         private:
             SizeT size_;
@@ -63,23 +63,23 @@ public:
 
         Block(SizeT start, SizeT end, SizeT block_size) : start_(start), end_(end), block_size_(block_size) {}
 
-        SizeT size() const { return end_ - start_; }
-        bool is_full() const { return size() == block_size_; }
-        bool is_partial() const { return size() < block_size_; }
-        bool is_first() const { return start_ == 0; }
-        SizeT start() const { return start_; }
-        SizeT last() const { return end_; }
-        SizeT remainder() const { return block_size_ - size(); }
-        SizeT full_block_size() const { return block_size_; }
+        [[nodiscard]] SizeT size() const { return end_ - start_; }
+        [[nodiscard]] bool is_full() const { return size() == block_size_; }
+        [[nodiscard]] bool is_partial() const { return size() < block_size_; }
+        [[nodiscard]] bool is_first() const { return start_ == 0; }
+        [[nodiscard]] SizeT start() const { return start_; }
+        [[nodiscard]] SizeT last() const { return end_; }
+        [[nodiscard]] SizeT remainder() const { return block_size_ - size(); }
+        [[nodiscard]] SizeT full_block_size() const { return block_size_; }
 
-        GlobalRange global() const { return GlobalRange{start_, end_}; }
-        LocalRange local() const { return LocalRange{size()}; }
+        [[nodiscard]] GlobalRange global() const { return GlobalRange{start_, end_}; }
+        [[nodiscard]] LocalRange local() const { return LocalRange{size()}; }
 
-        SizeT to_global(SizeT local) const { return start_ + local; }
+        [[nodiscard]] SizeT to_global(SizeT local) const { return start_ + local; }
 
         // Default iteration is global
-        Iterator begin() const { return Iterator(start_); }
-        Iterator end() const { return Iterator(end_); }
+        [[nodiscard]] Iterator begin() const { return Iterator(start_); }
+        [[nodiscard]] Iterator end() const { return Iterator(end_); }
 
     private:
         SizeT start_;
@@ -108,16 +108,16 @@ public:
 
     BlockedRange(SizeT total, SizeT block_size) : total_(total), block_size_(block_size) {}
 
-    Iterator begin() const { return Iterator(0, block_size_, total_); }
-    Iterator end() const { return Iterator(total_, block_size_, total_); }
-    SizeT num_blocks() const { return (total_ + block_size_ - 1) / block_size_; }
-    SizeT block_size() const { return block_size_; }
-    Block front() const { return Block(0, std::min(block_size_, total_), block_size_); }
-    Block back() const {
+    [[nodiscard]] Iterator begin() const { return Iterator(0, block_size_, total_); }
+    [[nodiscard]] Iterator end() const { return Iterator(total_, block_size_, total_); }
+    [[nodiscard]] SizeT num_blocks() const { return (total_ + block_size_ - 1) / block_size_; }
+    [[nodiscard]] SizeT block_size() const { return block_size_; }
+    [[nodiscard]] Block front() const { return Block(0, std::min(block_size_, total_), block_size_); }
+    [[nodiscard]] Block back() const {
         SizeT last_start = (num_blocks() - 1) * block_size_;
         return Block(last_start, total_, block_size_);
     }
-    SizeT total_with_remainder() const { return total_ + back().remainder(); }
+    [[nodiscard]] SizeT total_with_remainder() const { return total_ + back().remainder(); }
 
 private:
     SizeT total_;

@@ -36,7 +36,7 @@ constexpr uint16_t BF16_ONE = 0x3F80u;
 // Pack two bf16 values into a uint32_t for wide L1 stores. NCRISC is 32-bit
 // RISC-V so a single 32-bit store replaces two 16-bit stores. L1 is little-
 // endian: the low 16 bits land at the lower byte address (the even column).
-inline constexpr uint32_t pack_bf16_pair(uint16_t even, uint16_t odd) { return (uint32_t(odd) << 16) | uint32_t(even); }
+constexpr uint32_t pack_bf16_pair(uint16_t even, uint16_t odd) { return (uint32_t(odd) << 16) | uint32_t(even); }
 
 // Write face 0 row 0 + face 1 row 0 of one mask tile.
 //
@@ -65,17 +65,19 @@ inline void synthesize_mask_tile_row0_bf16(
 
     // Column c=2*i lands in the low half of pair i, c=2*i+1 in the high half.
     for (uint32_t i = 0; i < PAIRS_PER_FACE; ++i) {
-        uint32_t c_even = 2 * i;
-        uint32_t c_odd = c_even + 1;
-        uint16_t v_even = (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;
-        uint16_t v_odd = (c_odd >= start_col_in_tile && c_odd < end_col_in_tile) ? value_inside : value_outside;
+        const uint32_t c_even = 2 * i;
+        const uint32_t c_odd = c_even + 1;
+        const uint16_t v_even =
+            (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;
+        const uint16_t v_odd = (c_odd >= start_col_in_tile && c_odd < end_col_in_tile) ? value_inside : value_outside;
         face0[i] = pack_bf16_pair(v_even, v_odd);
     }
     for (uint32_t i = 0; i < PAIRS_PER_FACE; ++i) {
-        uint32_t c_even = 2 * i + FACE_W;
-        uint32_t c_odd = c_even + 1;
-        uint16_t v_even = (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;
-        uint16_t v_odd = (c_odd >= start_col_in_tile && c_odd < end_col_in_tile) ? value_inside : value_outside;
+        const uint32_t c_even = (2 * i) + FACE_W;
+        const uint32_t c_odd = c_even + 1;
+        const uint16_t v_even =
+            (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;
+        const uint16_t v_odd = (c_odd >= start_col_in_tile && c_odd < end_col_in_tile) ? value_inside : value_outside;
         face1[i] = pack_bf16_pair(v_even, v_odd);
     }
 }
@@ -102,14 +104,14 @@ inline void fill_mask_tile_row0_bf16(uint32_t l1_tile_base, uint16_t value) {
 //
 // Invariant: row_offset is always in [0, tile_width).
 inline uint32_t advance_row_offset(uint32_t row_offset, uint32_t group_size_mod_tile_w, uint32_t tile_w) {
-    uint32_t sum = row_offset + group_size_mod_tile_w;
+    const uint32_t sum = row_offset + group_size_mod_tile_w;
     if (sum == tile_w) {
         return 0;
-    } else if (sum > tile_w) {
-        return sum - tile_w;
-    } else {
-        return sum;
     }
+    if (sum > tile_w) {
+        return sum - tile_w;
+    }
+    return sum;
 }
 
 // Synthesize all block_w mask tiles for a single group into a contiguous L1
@@ -130,11 +132,11 @@ inline void synthesize_group_mask_tiles_bf16(
     uint32_t tile_w,
     uint16_t value_inside,
     uint16_t value_outside) {
-    uint32_t end_stride = start_stride + group_size;
+    const uint32_t end_stride = start_stride + group_size;
     uint32_t l1_addr = l1_mask_base;
     for (uint32_t t = 0; t < block_w; ++t) {
-        uint32_t tile_lo = t * tile_w;
-        uint32_t tile_hi = tile_lo + tile_w;
+        const uint32_t tile_lo = t * tile_w;
+        const uint32_t tile_hi = tile_lo + tile_w;
         // At most one tile per group straddles the [start_stride, end_stride)
         // boundary. Every other tile is either fully-outside (all `value_outside`)
         // or fully-inside (all `value_inside`) — for those, skip the per-column
@@ -148,8 +150,8 @@ inline void synthesize_group_mask_tiles_bf16(
         } else {
             // Boundary tile — a subset of columns is `value_inside`, rest are
             // `value_outside`. Run the per-column classifier.
-            uint32_t s = (start_stride > tile_lo) ? (start_stride - tile_lo) : 0;
-            uint32_t e = (end_stride < tile_hi) ? (end_stride - tile_lo) : tile_w;
+            const uint32_t s = (start_stride > tile_lo) ? (start_stride - tile_lo) : 0;
+            const uint32_t e = (end_stride < tile_hi) ? (end_stride - tile_lo) : tile_w;
             synthesize_mask_tile_row0_bf16(l1_addr, s, e, value_inside, value_outside);
         }
         l1_addr += tile_size_bytes;
@@ -197,7 +199,7 @@ inline void synthesize_mask_tile_full_bf16(
 
         uint32_t packed[PAIRS_PER_ROW];
         for (uint32_t i = 0; i < PAIRS_PER_ROW; ++i) {
-            const uint32_t c_even = col_base + 2 * i;
+            const uint32_t c_even = col_base + (2 * i);
             const uint32_t c_odd = c_even + 1;
             const uint16_t v_even =
                 (c_even >= start_col_in_tile && c_even < end_col_in_tile) ? value_inside : value_outside;

@@ -440,7 +440,7 @@ void kernel_main() {
     // Compute E[x] and Var[x] using stable two-pass statistics
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_x_welford_id);
-    dfb_ex_partial.reserve_back(num_block_ht_result_tiles);
+    dfb_ex_partial.reserve_back(static_cast<uint16_t>(num_block_ht_result_tiles));
     // Reconfigure the transpose op for the statistics intake buffer. When the alias is active,
     // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford_id);
@@ -516,7 +516,7 @@ void kernel_main() {
         tile_regs_release();
         index_h_offset += block_wt;
     }
-    dfb_ex_partial.push_back(num_block_ht_result_tiles);
+    dfb_ex_partial.push_back(static_cast<uint16_t>(num_block_ht_result_tiles));
 
     // ---------------------------------------------------------------------------
     // Combine Welford local partials with external partials
@@ -532,8 +532,7 @@ void kernel_main() {
                 dfb_ex_external,
                 dfb_ex,
                 num_blocks_combine,
-                [is_second_stage_reader, num_blocks_first_stage, own_row, boundary_width_index, block_w, last_block_w](
-                    uint32_t b) {
+                [is_second_stage_reader, own_row, boundary_width_index](uint32_t b) {
                     return get_next_set_size(
                         b,
                         is_second_stage_reader,
@@ -563,8 +562,8 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Receive the global reduce result and transpose back to columns
     // ---------------------------------------------------------------------------
-    dfb_ex_global.wait_front(num_block_ht_result_tiles);
-    dfb_transpose.reserve_back(num_block_ht_result_tiles);
+    dfb_ex_global.wait_front(static_cast<uint16_t>(num_block_ht_result_tiles));
+    dfb_transpose.reserve_back(static_cast<uint16_t>(num_block_ht_result_tiles));
     transpose_init(dfb_ex_global_id);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
@@ -581,10 +580,10 @@ void kernel_main() {
         tile_regs_release();
         processed_tiles += tiles_to_load;
     }
-    dfb_transpose.push_back(num_block_ht_result_tiles);
-    dfb_ex_global.pop_front(num_block_ht_result_tiles);
+    dfb_transpose.push_back(static_cast<uint16_t>(num_block_ht_result_tiles));
+    dfb_ex_global.pop_front(static_cast<uint16_t>(num_block_ht_result_tiles));
 
-    dfb_transpose.wait_front(num_block_ht_result_tiles);
+    dfb_transpose.wait_front(static_cast<uint16_t>(num_block_ht_result_tiles));
 
     if constexpr (welford_fp32_alias) {
         // Keep centring and scaling in FP32 DEST. Spilling x - mean to xmm
