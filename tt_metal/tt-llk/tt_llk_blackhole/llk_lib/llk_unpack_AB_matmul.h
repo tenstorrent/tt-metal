@@ -697,3 +697,111 @@ inline void _llk_unpack_AB_matmul_(
         }
     }
 }
+
+/**
+ * @brief @ref _llk_unpack_AB_matmul_ for num_k consecutive k steps in one call.
+ *
+ * Step k unpacks the rt_dim x ct_dim block of @ref _llk_unpack_AB_matmul_ with operand A advanced by k tiles and operand B by
+ * k * in1_k_stride tiles; the row invariants are computed once for all steps. Poll path without kernel broadcast only.
+ *
+ * @param num_k: The k steps to unpack.
+ * @param in1_k_stride: The tiles between the operand B tiles of consecutive k steps.
+ * @note Same init and uninit as @ref _llk_unpack_AB_matmul_.
+ */
+template <std::uint32_t dest_max_tiles = 16>
+inline void _llk_unpack_AB_matmul_k_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const bool unpA_partial_face,
+    const bool unpB_partial_face,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t num_k,
+    const std::uint32_t in1_k_stride)
+{
+    volatile std::uint32_t *cfg = get_cfg_pointer();
+
+    const bool reuse_a        = ct_dim >= rt_dim;
+    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+    LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
+    constexpr std::uint32_t context_1_zmask = (dest_max_tiles > 8) ? 0xffff : 0xff;
+
+    if (!reuse_a)
+    {
+        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+    }
+
+    const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;
+    const std::uint32_t step_b = reuse_a ? 0 : tile_size_b;
+    const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
+    const std::uint32_t mop_1  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, context_1_zmask);
+
+    for (std::uint32_t k = 0; k < num_k; k++)
+    {
+        std::uint32_t address_a = base_address_a + tile_size_a * (tile_index_a + k);
+        std::uint32_t address_b = base_address_b + tile_size_b * (tile_index_b + k * in1_k_stride);
+
+        for (std::uint32_t t = 0; t < t_dim; t++)
+        {
+            // Wait for free context
+            wait_for_next_context(2);
+
+            _llk_unpack_configure_addresses_(address_b, address_a, cfg);
+
+            semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+
+            // Stall unpacker until pending CFG writes from Trisc have completed
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+            if (reuse_a)
+            {
+                if (unpB_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+            }
+            else
+            {
+                if (unpA_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+            }
+
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+
+            // T6::SEMGET for context release
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+            // Switch unpacker config context
+            switch_config_context(unp_cfg_context);
+
+            address_a += step_a;
+            address_b += step_b;
+        }
+    }
+}
