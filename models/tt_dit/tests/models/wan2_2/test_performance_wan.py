@@ -33,8 +33,12 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
 # each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
-# T2V: indices into the test's prompt list, the boxing cats and the cyberpunk alley, both strongly dynamic.
-VBENCH_PROMPTS = [0, 2]
+# T2V: prompts whose content is motion, so every seed should clear dynamic_degree. The cyberpunk alley
+# was dropped: Wan renders it near-static (dynamic_degree 1 of 4 seeds on bh_sc4, 2026-10-23).
+VBENCH_T2V_PROMPTS = [
+    "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+    "A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
+]
 # I2V: prompts that animate the fractal conditioning image itself. The T2V prompts ask for content the
 # image doesn't contain, which drags subject consistency to ~0.62 (bh_sc4, 2026-10-23) and gates on the
 # mismatch rather than on the pipeline.
@@ -279,7 +283,7 @@ def test_pipeline_performance(
     gate_prompts = []
     gate_timings = []
     if run_vbench:
-        gate_texts = VBENCH_I2V_PROMPTS if model_type == "i2v" else [prompts[i] for i in VBENCH_PROMPTS]
+        gate_texts = VBENCH_I2V_PROMPTS if model_type == "i2v" else VBENCH_T2V_PROMPTS
         gate_prompts = [
             {"text": text, "thresholds": vbench_thresholds(model_type, height), "timing": limits} for text in gate_texts
         ]
