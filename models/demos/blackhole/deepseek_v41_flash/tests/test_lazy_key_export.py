@@ -101,3 +101,18 @@ def test_every_reader_of_the_slab_flushes_first(path, cls, name):
 def test_prefill_records_instead_of_exporting():
     src = _fn("dsv41_model.py", "Model", "_prefill_interleaved_one")
     assert "lazy_kx" in src and "_kx_pending" in src
+
+
+def test_window_sync_rules():
+    pytest.importorskip("ttnn")
+    from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import window_needs_sync as w
+
+    C = 512
+    assert w([(0, 0, 4096)], C, False)  # asynchronous windows off: always wait
+    assert not w([(0, 512, 4096), (1, 0, 8192)], C, True)  # nobody ends here, no snapshot policy
+    assert w([(0, 3584, 4096)], C, True)  # the window of a user's last token (end 4096 = 3584 + 512)
+    assert w([(0, 3700, 4000)], C, True)  # padded last window
+    wants = lambda B: B in (1024, 2048)  # noqa: E731
+    assert w([(0, 512, 4096)], C, True, wants)  # window [512, 1024) ends on a wanted boundary
+    assert not w([(0, 1024, 4096)], C, True, wants)  # [1024, 1536) -> 1536: not wanted
+    assert not w([(0, 512, 4096)], C, True, wants, vis={0: object()})  # image prompts are never snapshotted

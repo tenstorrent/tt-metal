@@ -1023,11 +1023,17 @@ class DSV41PrefillModel:
             self.begin_chunk(s0, C)
         return ops
 
-    def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None):
+    def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None, sync=True):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
         ``active`` bool [B]; ``vis`` (DSV41_VISION=1): (image mask [B, C] bool, embedding override [B, C, dim] bf16) or None. Returns (host seconds, device seconds).
+        ``sync=False`` (the demo's asynchronous loop, ``run_traced_chunks``): the copies of the window and its trace are only ENQUEUED (CQ 0 is in order: the copies land after the previous replay,
+        the next window's copies and trace can be enqueued behind this one), no device synchronisation and no post hook; the host runs at most one replay ahead (the event of the replay before the previous
+        one is awaited GIL-free before this window's copies are enqueued). The caller synchronises at the windows whose result it reads (``sync=True``: a user's last token, a snapshot boundary, the end of the call).
         """
         t0 = time.perf_counter()
+        hist = self.__dict__.setdefault("_ev_hist", [])
+        if len(hist) >= 2:
+            ttnn.event_synchronize(hist[-2])
         if ops is not None:  # recorded ahead (``record_window``): only the device copies are left
             replay(ops)
         else:
@@ -1042,13 +1048,20 @@ class DSV41PrefillModel:
 
         check_trace_allocations(self.md, self.dyn_trace, "prefill chunk")
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+        hist.append(ttnn.record_event(self.md, 0))
+        del hist[:-2]
         if (
             overlap is not None
         ):  # host work of the NEXT window (Engram hash + rows gather / dequant) runs while the device replays this one
             to0 = time.perf_counter()
             overlap()
             self.timing["host_overlapped"] = self.timing.get("host_overlapped", 0.0) + time.perf_counter() - to0
+        if not sync:
+            self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
+            self.timing["async_windows"] = self.timing.get("async_windows", 0) + 1
+            return t1 - t0, 0.0
         ttnn.synchronize_device(self.md)
+        hist.clear()
         t2 = time.perf_counter()
         for hk in self.post_replay_hooks:
             hk(s0, C)

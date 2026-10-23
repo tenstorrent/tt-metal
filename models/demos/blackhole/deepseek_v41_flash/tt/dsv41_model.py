@@ -69,6 +69,21 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import T
 GATE_CUTOFFS = json.loads((Path(__file__).resolve().parents[1] / "configs" / "gate_cutoffs.json").read_text())
 
 
+def window_needs_sync(users, C, async_win, apc_wants=None, vis=None):
+    """Does the host have to wait for the device after the replay of a window of the interleaved prefill? ``users``: [(user, window start, end of its chunk)] of the users in the window.
+    Yes when the window holds a user's last token of the call (the ragged head output is read), when a prefix snapshot the cache wants ends at the window (its device reads must precede the
+    next replay), or when asynchronous windows are off; otherwise the window is only enqueued (``DSV41_PF_ASYNC_SERVER``).
+    """
+    if not async_win:
+        return True
+    for b, s0, e in users:
+        if e <= s0 + C:
+            return True
+        if apc_wants is not None and s0 + C <= e and not (vis and b in vis) and apc_wants(s0 + C):
+            return True
+    return False
+
+
 def key_export_fill_max(slab_rows):
     """Largest prefix [0, j0 + P) (rows) of the decode index-key slab that ``_export_user_keys`` writes in place (fill_cache); ``DSV41_KEY_EXPORT_FILL_MAX`` overrides. Default: the larger of 524,288 and
     the slab's rows, so every piece of every build is written in place (the slice_write fallback re-allocates the slab the captured decode traces read by address).
@@ -1528,6 +1543,7 @@ class Model:
         )  # (an unmasked trace overwrites the carried state of every user: no deferral)
         if not lazy_kx:
             self.flush_key_exports(why="eager mode")
+        async_win = lazy_kx and os.environ.get("DSV41_PF_ASYNC_SERVER", "1") == "1"
         for b, t, st, e in items:
             if st == 0:
                 self.drop_key_exports([b])  # (a new prompt of the user: the keys of the previous one are never read)
@@ -1664,8 +1680,18 @@ class Model:
                             ahead[kn] = nbw + (ops,)
                             return
 
+                    # a window whose result nothing reads is only enqueued (DSV41_PF_ASYNC_SERVER=1, default): the next window's copies + trace queue behind it, the host work of the window after
+                    # that runs meanwhile. Synchronised: a window that holds the last token of a user of the call (head read-back), a snapshot boundary the prefix cache wants (its device reads must
+                    # precede the next replay), an eager key export, an unmasked trace
+                    sync_k = window_needs_sync(
+                        [(it[0], s0_of(it, k), it[3]) for it in part],
+                        C,
+                        async_win,
+                        None if apc is None else apc.wants,
+                        vis,
+                    )
                     th, td = pm.replay_window(
-                        tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops
+                        tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops, sync=sync_k
                     )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
@@ -1704,6 +1730,11 @@ class Model:
                     if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
                         for b in [b for b in resume if b not in {p[0] for p in part}]:
                             resume.pop(b)
+        if pm.__dict__.get(
+            "_ev_hist"
+        ):  # (a trailing enqueued window: nothing reads its result, but the call must not return with the device still busy)
+            ttnn.synchronize_device(self.md)
+            pm._ev_hist.clear()
         for b, _, _, _ in items:
             res[b] = self._res[b]
             self.tap_n[b] = ends[b]

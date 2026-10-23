@@ -60,6 +60,10 @@ def test_chunk_probe(mesh_device):
     )
     assert m.Up == 1 and m.U == 1, (m.Up, m.U)
     pm = m.prefill_model
+    if os.environ.get(
+        "PROBE_APC_GB"
+    ):  # prefix snapshots as the server (DSV41_APC): the snapshot cost is part of the call timing
+        m.enable_apc(int(float(os.environ["PROBE_APC_GB"]) * 2**30))
     rec = []
     orig_rw = pm.replay_window
 
@@ -148,6 +152,7 @@ def test_chunk_probe(mesh_device):
             int(x) for x in os.environ.get("PROBE_USERS", ",".join(str(b) for b in range(B))).split(",")
         ]  # users in the call (the others stay idle: a lone request of the server)
         items = [(b, toks[b], 0, E) for b in USERS]
+        cmp_snaps = {}
         cmp_ = (
             {}
         )  # PROBE_CMP=1: decode logits + decode index keys after every rep (reps differ in PROBE_ENV_REPS settings) must be identical
@@ -158,6 +163,8 @@ def test_chunk_probe(mesh_device):
                 var_, vals_ = spec_.split("=", 1)
                 os.environ[var_] = vals_.split(",")[rep % len(vals_.split(","))]
                 log(f"PROBE rep {rep}: {var_}={os.environ[var_]}")
+            if os.environ.get("PROBE_APC_GB"):
+                m.reset_prefix_cache()  # (every rep is a cold prompt)
             if os.environ.get("PROBE_RELEASE") == "1":
                 for b_ in range(B):
                     m.release_user(b_)
@@ -222,6 +229,11 @@ def test_chunk_probe(mesh_device):
                     keys_[L_] = (
                         _PC.read_shard(d_.k_cache, 0).reshape(m.U, d_.k_cache.shape[2], -1)[0, : E // rr_].clone()
                     )
+                cmp_snaps[rep] = (
+                    {k_[2:]: (v_.carried, v_.pool) for k_, v_ in m.apc.store.snaps.items()}
+                    if getattr(m, "apc", None) is not None
+                    else {}
+                )
                 cmp_[rep] = (
                     [int(res[b][0]) for b in USERS],
                     lgs_,
@@ -235,6 +247,14 @@ def test_chunk_probe(mesh_device):
                 eq_dec = all(bool((a == b).all()) for a, b in zip(c_[1], ref_[1]))
                 eq_keys = all(bool((c_[2][L_] == ref_[2][L_]).all()) for L_ in ref_[2])
                 eq_lg = c_[3] is None or bool((c_[3] == ref_[3]).all())
+                sn_, sr_ = cmp_snaps[rep], cmp_snaps[0]
+                eq_snap = sn_.keys() == sr_.keys() and all(
+                    all(all(torch.equal(x, y) for x, y in zip(sn_[k_][0][n_], sr_[k_][0][n_])) for n_ in sr_[k_][0])
+                    and all(torch.equal(sn_[k_][1][n_], sr_[k_][1][n_]) for n_ in sr_[k_][1])
+                    for k_ in sr_
+                )
+                log(f"PROBE CMP E={E} rep {rep} vs rep 0: {len(sn_)} prefix snapshots, bit-equal {eq_snap}")
+                assert eq_snap, f"prefix snapshots of rep {rep} differ from rep 0"
                 log(
                     f"PROBE CMP E={E} rep {rep} vs rep 0: first tokens equal {eq_first}, prefill logits bit-equal {eq_lg}, decode logits bit-equal {eq_dec}, decode index keys bit-equal {eq_keys}"
                 )
@@ -333,4 +353,14 @@ def test_chunk_probe(mesh_device):
                 torch.stack([res[b][1] for b in USERS]).float(),
                 f"{os.environ['PROBE_SAVE']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}",
             )
+    if os.environ.get(
+        "PROBE_RAW"
+    ):  # calibration: n replays of the chunk trace back to back, no host work in between (the pure device time per replay at the last position)
+        n_raw = int(os.environ["PROBE_RAW"])
+        ttnn.synchronize_device(md)
+        t_ = time.perf_counter()
+        for _ in range(n_raw):
+            ttnn.execute_trace(md, pm.dyn_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        log(f"PROBE RAW {n_raw} back-to-back replays: {(time.perf_counter() - t_) / n_raw * 1e3:.1f} ms each")
     log("PROBE DONE")
