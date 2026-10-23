@@ -1489,6 +1489,21 @@ def test_non_string_skip_list_entry_is_a_gate_error(repo: Repo):
     assert "is not a string; quote test ids that end in ':'" in stderr
 
 
+def test_repository_skip_list_loads_as_strings():
+    # The checked-in file, not a fixture: an LLK entry ending in ':' once loaded as a yaml mapping,
+    # which the loaders only noticed once the quasar section was wired to the ttnn sim legs.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gate_mod_skips", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    skips = mod.load_ttsim_skips(str(SCRIPT.parents[3] / "tests/pipeline_reorg/ttsim-skip-list.yaml"))
+    assert {"wormhole_b0", "blackhole", "quasar"} <= set(skips)
+    for arch, ids in skips.items():
+        assert ids, f"{arch} section is empty"
+        assert all(isinstance(test_id, str) and test_id for test_id in ids), arch
+
+
 def test_missing_skip_list_is_not_fatal(repo: Repo):
     rows = sim_repo(repo)
     (repo.root / "tests/pipeline_reorg/ttsim-skip-list.yaml").unlink()
