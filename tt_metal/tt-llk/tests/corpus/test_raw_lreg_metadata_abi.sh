@@ -72,7 +72,11 @@ fi
 # A compiler without either builtin must fail the required-metadata mode,
 # rather than silently compiling the helper as a no-op.
 if command -v c++ >/dev/null 2>&1; then
-    if c++ -std=c++17 -DTT_LLK_REQUIRE_RAW_LREG_METADATA \
+    # An uninstalled target backend is selected through these environment
+    # variables. Keep it out of the independent host-compiler refusal check.
+    if env -u COMPILER_PATH -u GCC_EXEC_PREFIX -u CPLUS_INCLUDE_PATH \
+        -u C_INCLUDE_PATH -u CPATH -u LIBRARY_PATH \
+        c++ -std=c++17 -DTT_LLK_REQUIRE_RAW_LREG_METADATA \
         -fsyntax-only "$source_file" > "$output/host-required.log" 2>&1; then
         echo "required raw-LREG metadata unexpectedly accepted by host C++" >&2
         exit 1
