@@ -1,0 +1,64 @@
+{
+  "_comment": "Operator inputs for goal 12 (agentic evals). Read by the agentic-serving skill; see its references/ci-compute.md for the compute contract.",
+  "evals": [
+    "r1_gpqa_diamond",
+    "swe_bench_verified",
+    "terminal_bench_2"
+  ],
+  "stage_budget_hours": 24,
+  "suite_budget_hours": 8,
+  "compute": {
+    "kind": "github_actions",
+    "repo": "tenstorrent/tt-agentic-bringup-qb2",
+    "workflow": "manual-tt-shield-dispatch.yml",
+    "max_parallel": 6,
+    "_max_parallel_note": "Six machines are available on this runner label. This is a ceiling you may fill when the plan needs it, not a quota to spend.",
+    "run_timeout_hours": 14,
+    "_run_timeout_note": "CI enforces this; the stage does not. It is a planning bound: do not dispatch work whose estimate tops it, since such a run is killed and returns nothing. The local 4x Blackhole device stays available for quick checks.",
+    "runners": [
+      {
+        "runner_label": "bh-qb-ge",
+        "device_type": "p300x2",
+        "count": 6
+      }
+    ],
+    "dispatch_inputs": {
+      "workflow": "agentic",
+      "impl-of-model": "default",
+      "run-full-evals": false
+    },
+    "_dispatch_note": "Inputs are passed through to the workflow_dispatch block of manual-tt-shield-dispatch.yml. 'workflow' there selects the suite kind (release|benchmarks|evals|agentic|spec_tests); set run-full-evals true only for a scored full suite, since it disables --ci-mode.",
+    "publish": {
+      "_note": "The dispatch takes refs, not repositories, so it clones the canonical upstreams. A fork is not reachable; push the branch to the upstream repo and dispatch the resulting SHA.",
+      "tt_metal": {
+        "remote": "https://github.com/tenstorrent/tt-metal.git",
+        "branch": "mvasiljevic/qwen38-27b-bringup-exp26",
+        "base": "18b718f8cc9c9f15ecec754e28489d1dc915dd81",
+        "include": [
+          "models/autoports/qwen38_27b/"
+        ],
+        "exclude": [
+          "models/autoports/qwen38_27b/doc/",
+          "**/*.csv",
+          "**/perf-reports/",
+          "**/profiler/",
+          "**/tracy/",
+          "**/runs/"
+        ]
+      },
+      "tt_inference_server": {
+        "remote": "https://github.com/tenstorrent/tt-inference-server.git",
+        "branch": "mvasiljevic/qwen38-27b-bringup-exp26",
+        "base": "main"
+      }
+    }
+  },
+  "eval_subset_size": 10,
+  "batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "_batch_sizes_note": "Stage 10 validates a tuned config per batch; stage 11 measures all; evals run once on the largest the device holds (16 instead of 32 is fine if recorded)."
+}
