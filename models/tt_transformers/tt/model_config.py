@@ -24,6 +24,7 @@ from models.common.weight_cache import mark_weight_cache_complete as _mark_weigh
 from models.common.weight_cache import marker_path as _wc_marker_path
 from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
+    LayerNormTypes,
     Mode,
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
@@ -4448,6 +4449,16 @@ class ModelArgs:
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
+
+    def reference_norm(self):
+        model = self.reference_transformer(wrap=False)
+        layers = getattr(model, "layers", getattr(model, "model", {}).layers)
+        layer = layers[0].input_layernorm
+        class_name = type(layer).__name__.lower()
+        if "layernorm" in class_name:
+            return LayerNormTypes.LAYERNORM
+        if "rmsnorm" in class_name:
+            return LayerNormTypes.RMSNORM
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         # Always HuggingFace since we only support HF_MODEL now

@@ -51,29 +51,24 @@ def torch_layernorm_ref(x, weight, eps):
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize(
-    "norm_types",
-    (LayerNormTypes.LAYERNORM, LayerNormTypes.RMSNORM),
-)
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_layernorm_inference(
     max_seq_len,
     batch_size,
     mode,
-    norm_types,
     mesh_device,
     reset_seeds,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
-
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    if norm_types == LayerNormTypes.RMSNORM:
+    norm_type = model_args.reference_norm()
+    if norm_type == LayerNormTypes.RMSNORM:
         first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Torch reference gamma straight from the converted state dict (1D, [dim])
@@ -88,7 +83,7 @@ def test_layernorm_inference(
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
-        norm_type=norm_types,
+        norm_type=norm_type,
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
@@ -99,9 +94,9 @@ def test_layernorm_inference(
     tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
 
     input = torch.rand(1, 1, 32, model_args.dim)
-    if norm_types == LayerNormTypes.LAYERNORM:
+    if norm_type == LayerNormTypes.LAYERNORM:
         reference_output = torch_layernorm_ref(input, torch_weight, model_args.norm_eps)
-    if norm_types == LayerNormTypes.RMSNORM:
+    if norm_type == LayerNormTypes.RMSNORM:
         reference_output = torch_rmsnorm_ref(first_layer_prefix, state_dict, model_args, input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -131,8 +126,8 @@ def test_layernorm_inference(
     logger.info(f"PCC: {pcc_message}")
 
     if passing:
-        logger.info(f"{norm_types} Passed!")
+        logger.info(f"{norm_type} Passed!")
     else:
-        logger.warning(f"{norm_types} Failed!")
+        logger.warning(f"{norm_type} Failed!")
 
-    assert passing, f"{norm_types} output does not meet PCC requirement {0.99}."
+    assert passing, f"{norm_type} output does not meet PCC requirement {0.99}."

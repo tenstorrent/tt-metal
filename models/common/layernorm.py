@@ -29,7 +29,6 @@ class LayerNorm(LightweightModule):
         weight_cache_path: Optional path for caching the tilized weights.
         weight_memory_config: Configuration for the weight memory, default is DRAM_MEMORY_CONFIG.
         weight_dtype: The data type for the tensors, bfp8_b hits >0.999 PCC in the models we tested.
-        model_config: Optional configuration dictionary for the model.
         eps (float): Small value to avoid division by zero in normalization, default is 1e-05.
 
     If model_config is provided, it must specify SHARDED_NORM_INPUT_MEMCFG, SHARDED_NORM_PRGM_CFG
