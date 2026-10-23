@@ -38,26 +38,28 @@ constexpr uint32_t kMaxSegments = 4;
 // Unicast data_valid cadence: about kSignalsPerIter signals per iteration, clamped in packets. Each signal is a packet
 // of its own, so a long cadence saves link time while a short one lets the downstream relay start sooner. On BH
 // (8 devices, 2 links): at 8-26 MB a 1-packet cadence is up to 1.5x slower than 6-16; at 2 MB (9 packets per
-// iteration) 2-3 is best and 8 is up to 20% slower.
+// iteration) 2-3 is best and 8 is up to 20% slower; at 26 MB a 16-packet cap is 1.7% faster than 8 on the line at
+// n = 3 (32: no further gain).
 constexpr uint32_t kSignalsPerIter = 4;
 constexpr uint32_t kCadenceMinPackets = 2;
-constexpr uint32_t kCadenceMaxPackets = 8;
+constexpr uint32_t kCadenceMaxPackets = 16;
 
 // ---- choice model: T = F + pkts * P_A / BW ----
 // Measured on BH (8x p150b, 2 links) at P = 15168. Any other arch or payload borrows these and is logged
 // uncalibrated.
 
-// [kUc, kMc][line, ring], microseconds: the median of T - pkts * P_A / BW over 64 KB - 4 MB, i.e. fit to the
-// crossover band. Includes the init handshake, which runs on every launch (about 6 us of cross-device launch skew).
-// Ring unicast is about 4 us of setup (open, init, first send, close) plus about 7 us of start skew carried down the
-// relay chain. Too low an F pulls small sizes toward that algorithm.
-constexpr std::array<std::array<double, 2>, 2> kFixedUs = {{{11.0, 13.0}, {20.0, 17.0}}};
-// [kUc, kMc][line, ring], GB/s of full packets on the busiest link-direction: unicast at n = 3 (467-478 / 617-639
-// cycles per packet), multicast from the 8-42 MB slope. Too high a BW pulls large sizes toward that algorithm.
-constexpr std::array<std::array<double, 2>, 2> kBwGbps = {{{43.0, 32.5}, {31.0, 23.0}}};
-// Packets per link-direction from which unicast uses 3 workers instead of 2: n = 3 is 6.5% better on the ring at 121
-// and within 1% of n = 2 on the line from 4 MB. Rounded up, so an error leaves n = 2.
-constexpr uint64_t kN3MinPkts = 121;
+// Fit to bf16 tile [1, 1, R, 8192] gathered on dim 3, 64 KB - 42 MB (unicast at the n model_workers picks).
+// [kUc, kMc][line, ring], microseconds: the least T - pkts * P_A / BW over 64 KB - 4 MB, i.e. the floor of the
+// crossover band; with it every size of the fit picks the faster algorithm (a median picks multicast at 64 KB on the
+// ring, 13% slower). Includes the init handshake, which runs on every launch (about 6 us of cross-device launch
+// skew). Too low an F pulls small sizes toward that algorithm.
+constexpr std::array<std::array<double, 2>, 2> kFixedUs = {{{20.5, 15.0}, {16.0, 16.0}}};
+// [kUc, kMc][line, ring], GB/s of full packets on the busiest link-direction, from the 12-42 MB slope (unicast at
+// n = 3: 465 / 537 cycles per packet). Too high a BW pulls large sizes toward that algorithm.
+constexpr std::array<std::array<double, 2>, 2> kBwGbps = {{{44.0, 38.0}, {37.0, 26.0}}};
+// Packets per link-direction from which unicast uses 3 workers instead of 2. At 121, n = 2 is 10% faster on the line
+// and 2-3% slower on the ring; from 182 (ring) / 242 (line) n = 3 is as fast or faster (5-7% at 182 / 363).
+constexpr uint64_t kN3MinPkts = 160;
 
 [[maybe_unused]] bool calibrated(const AgFacts& f) { return f.arch == tt::ARCH::BLACKHOLE && f.payload == 15168; }
 

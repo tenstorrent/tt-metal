@@ -26,10 +26,17 @@ inline constexpr const char* kMulticastWriterKernel =
 inline constexpr uint32_t kReaderIdx = 0;
 inline constexpr uint32_t kWriterIdx = 1;
 
-// Reader on NOC0 and writer on NOC1: the two RISCs of a core must use different NOCs, and the swap measured 12%
-// slower on BH line n = 3.
-inline constexpr tt::tt_metal::NOC kReaderNoc = tt::tt_metal::NOC::NOC_0;
-inline constexpr tt::tt_metal::NOC kWriterNoc = tt::tt_metal::NOC::NOC_1;
+// The two RISCs of a core must use different NOCs. The writer takes NOC0 except on a unicast line, where the reader
+// does. Measured on BH at 26 MB: multicast writer on NOC0 1.42x faster on a ring, 1.13x on a line (it writes every
+// packet into the ethernet cores, a path that is slow on NOC1, as for the Mux V2 forwarder below); unicast writer on
+// NOC0 5% (n = 3) / 10% (n = 2) faster on a ring at 8-42 MB, but 8% / 3% slower on a line.
+struct KernelNocs {
+    tt::tt_metal::NOC reader, writer;
+};
+constexpr KernelNocs kernel_nocs(AgAlgo algo, bool ring) {
+    return (algo == AgAlgo::Unicast && !ring) ? KernelNocs{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1}
+                                              : KernelNocs{tt::tt_metal::NOC::NOC_1, tt::tt_metal::NOC::NOC_0};
+}
 // Mux V2 forwarder NOC (NOC1 measured 1.8-2.3x slower on BH).
 inline constexpr tt::tt_metal::NOC kMuxForwarderNoc = tt::tt_metal::NOC::NOC_0;
 
