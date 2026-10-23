@@ -918,7 +918,7 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The fin's sigmoid (11.3 of 16 us): approximate (fast_and_approx) breaks picks (59%); exp_21f + 2 Newton steps keeps
   picks (99.14-99.53% a call) for 16.0 -> 13.2 us - not taken (precision for ~3 us).
 
-### Soak (HSE3_SOAK=N: N more calls over a pool of 8 inputs, every 500th checked) - an open K3 hang
+### Soak (HSE3_SOAK=N: N more calls over a pool of 8 inputs, every HSE3_SOAK_CHECK-th (500) checked) - the K3 hang
 - GLM defaults: 3000 calls, no hang, checks pass.
 - K3 defaults: hangs within 150-750 calls (5 repros; router on the engine too). Triage (bh-lb-09, twice): row 0
   (devs 4-7) in the SE reduce-scatter - engines in the down loop waiting arrival thresholds / W rounds, ports' readers
@@ -932,3 +932,30 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   the next call's poll then never scans the flag (forward lost) - now subtracted.
 - A/B (3000-call budgets): without the latent: 2000 clean; without the router: 1 hang at 850 then 3000 clean (and one
   latent PCC failure); without the routing exchange: hang at ~400. The hang needs the latent; not yet explained.
+- Narrowed with hang words (SE_PROBE=HW: a persistent L1 tensor, a sparse snapshot of each engine NCRISC's W stream
+  every 1024 polls - per-poll stores hid the hang; a triage add-on reads them): every repro (dev 6 twice, dev 0) one
+  engine column's W stream stuck at round ~60-68 of chunk 0. That column's compute waits W, its XIN stays full, the
+  row x multicasts stall, the head stops. The slot's W-ready word (a set of round + 1 by the round's holder) read
+  60 on all 10 cores of the column after 9 of them had taken round 62 (needs >= 63).
+- Not a NoC ordering race: a holder sends round r only once every column core credited it, i.e. took round
+  r - NWS, so the older set had landed everywhere. A detector (a ready word going backwards: the first old / new)
+  fired on ~51 cores per device within 950 calls, all 8 devices, the same 5 of 11 columns, at round ~60: old values
+  fp32 numbers (0x3FFD63B8 ~ 1.98, 0xBF4A9EEC ~ -0.79), the same down a column, then the real set (60).
+- Cause: the ACC CB overrun. ACC is a FIFO of fp32 pass partials, MT x pw tiles a block; K3's latent-down passes
+  make the widths differ, so a block may straddle the CB's end - pack_tile / copy_tile address a block from the
+  pointer without wrapping (the push / pop wrap after), the tail lands past the end: in "words" (OUT is 0 B with the
+  fused RS), where the holder's W-ready source word sits. The packer overwrote it during the data multicast and the
+  set sent fp32 to the column: a W round taken before its data (silently wrong) or, when the real set came after a
+  later round's, the word going back (the hang). A host model of the FIFO: K3 + latent G 4 MT 2 straddles 5 times a
+  chunk by up to 2 pages; GLM never (uniform widths) - why only K3 hung. The likely source of the latent PCC
+  failures too (the overrun's reach).
+- Fix: ACC's region carries the straddle room (the largest block - 1 pages past the CB; CB size and protocol
+  unchanged); a host plan check (_ring_pages: a CB with blocks of differing sizes, or one size not dividing it,
+  must have the room) in the CB helper. Audit of every CB in the head (engine, RS, latent, router, ports, routing,
+  prep): ACC the only one that can straddle; SE_OUTF (8-tile blocks, the tail last, one fin a launch) cannot - and
+  room would not fix it (its NCRISC reader pops page by page, wrapping at the end). The remote-SET audit: the W
+  stream the only multi-holder set; the engine router's RXR / RWR one sender a word, RT_GATE one, the x / h pipes
+  the valid flag with a handshake, the rest increments.
+- The W-ready check stays under SE_PROBE=HW: a ready word going backwards or past round wr + NWS records old / new
+  and spins (a stray write halts the soak at once).
+- After the fix: K3 4000 calls with the check, no hang, never fired; K3 300 calls checked every call: PCC min 0.99987.

@@ -213,6 +213,52 @@ def _check_latent(head, xs, w_l, rows, name):
     assert min(ps) > 0.999, ps
 
 
+def _dump_layout(head):
+    """Actual L1 ranges a core type, from the built head (offsets + sizes), and the remote writers' highest target."""
+    e, al = head.eng, lambda v: (v + 63) // 64 * 64  # noqa: E731
+    off = sorted(e.off.items(), key=lambda kv: kv[1])
+    ends = {}
+    for i, (k, v) in enumerate(off):  # (a region ends where its size says, not at the next start)
+        ends[k] = None
+    sizes = dict(getattr(e, "rs_sizes", {}))
+    sizes.update(
+        xown=e.xown_t * 2048,
+        wown=e.wown_t * e.wtb,
+        xin=2 * e.MT * e.KB * 2048,
+        words=256,
+        acc=e.MT * (max(sum(c) for c in e.wg) + max(sum(e.wg, []))) * 4096,
+        hown=e.MT * e.POMAX * 2048,
+    )
+    if getattr(e, "LT", None):
+        sizes.update(lat=e.MT * e.LWMAX * 2048, latz=(e.shards - 1) * e.MT * e.LWMAX * 2048)
+    rows = [(k, e.base + v, e.base + v + sizes[k]) for k, v in off if k in sizes]
+    logger.info(
+        "LAYOUT engine (base %d, arena %d B): " % (e.base, e.arena_bytes)
+        + ", ".join(f"{k} {a}-{b}" for k, a, b in rows)
+    )
+    ovl_ok = {frozenset(p) for p in [("hold", "xin"), ("hold", "acc"), ("finb", "acc"), ("finb", "xin")]}
+    for i, (k1, a1, b1) in enumerate(rows):
+        for k2, a2, b2 in rows[i + 1 :]:
+            if a1 < b2 and a2 < b1 and frozenset((k1, k2)) not in ovl_ok:
+                logger.info(f"LAYOUT engine OVERLAP {k1} {a1}-{b1} x {k2} {a2}-{b2}")
+    if e.base + e.arena_bytes < max(b for _, _, b in rows):
+        logger.info(f"LAYOUT engine region past the arena end {e.base + e.arena_bytes}")
+    rt = head.router
+    if rt is not None:
+        roff = sorted(rt.off.items(), key=lambda kv: kv[1])
+        logger.info("LAYOUT router: " + ", ".join(f"{k} {rt.base + v}" for k, v in roff) + f" end {rt.base + rt.bytes}")
+        logger.info(f"LAYOUT ports: pbuf {rt.pbase}-{rt.pbase + rt.pbuf_sub}")
+    ra = head.routing
+    if ra is not None:
+        nf = max([len(v) for v in ra.fwd_plan()[0].values()] + [0])
+        logger.info(
+            f"LAYOUT routing: xbase {ra.xbase} fbase {ra.fbase} slots end {ra.fbase + nf * ra.PCAP} PCAP {ra.PCAP} planner regions {ra.pbases[:2]} step {ra.pl_step}"
+        )
+    logger.info(
+        f"LAYOUT arena {e.base}-{e.base + e.arena_bytes}; mbox {int(head.mbox.buffer_address()) if getattr(head, 'mbox', None) is not None else None}"
+    )
+
+
 def _router_specs():
     from models.demos.moe_block.tt.fused_head import RouterSpec
 
@@ -375,6 +421,8 @@ def test_head_se3(mesh_device, device_params):
             spec = ROUTER[name]
             w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
             head.upload_router(w_r, b_r)
+        if os.environ.get("HSE3_LAYOUT"):  # (debug: every landing region's actual L1 range; overlaps flagged)
+            _dump_layout(head)
         # (every call its own x - and so its own routing: each call checked against its own reference)
         soak = int(os.environ.get("HSE3_SOAK", "0"))  # (a soak: that many more calls over a pool of 8 inputs)
         xss = [
@@ -427,13 +475,16 @@ def test_head_se3(mesh_device, device_params):
             return min(ps)
 
         us, pss = _calls(mesh_device, lambda k: head.run(xts[k], w), check)
-        if soak:  # (each call its pool input; every 500th and the last checked against its own reference)
+        if (
+            soak
+        ):  # (each call its pool input; every HSE3_SOAK_CHECK-th (500) and the last checked against its own reference)
+            every = int(os.environ.get("HSE3_SOAK_CHECK", "500"))
             for i in range(soak):
                 y = head.run(xts[i % len(xts)], w)
                 if i % 50 == 49:  # (progress: where a hang lands)
                     ttnn.synchronize_device(mesh_device)
                     logger.info(f"HSE3 {name} soak progress: {i + 1}")
-                if i % 500 == 499 or i == soak - 1:
+                if i % every == every - 1 or i == soak - 1:
                     ttnn.synchronize_device(mesh_device)
                     check(i % len(xts), y)
                     logger.info(f"HSE3 {name} soak: {i + 1} calls")

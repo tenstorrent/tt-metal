@@ -436,8 +436,33 @@ void kernel_main() {
     constexpr uint32_t pnu = 0;
 #endif
     uint32_t pu = 0;
+#ifdef SE_HW
+    uint32_t hw_it = 0, hw_last[4] = {};
+#endif
     while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount || !lown || !lin || pu < pnu || !rout) {
         invalidate_l1_cache();
+#ifdef SE_HW
+        if ((++hw_it & 0x3FF) == 0) {  // (a snapshot every 1024 polls: per-poll stores hid the hang)
+        HWW(0, 0xE0000000u | (hw_it & 0xFFFFFF)); HWW(1, ws); HWW(2, wr); HWW(3, wc); HWW(4, af); HWW(5, ab); HWW(6, fo);
+        HWW(7, (uint32_t)lown | (uint32_t)lin << 1 | (uint32_t)rout << 2); HWW(8, pu); HWW(9, *arrf); HWW(10, *arrb);
+        HWW(11, af < naf ? get_arg_val<uint32_t>(af0 + af) : 0xFFFF); HWW(12, ab < nab ? get_arg_val<uint32_t>(ab0 + ab) : 0xFFFF);
+#ifdef SE_LAT
+        HWW(13, *lctr);
+#endif
+        HWW(14, NR); HWW(15, naf | nab << 8 | fcount << 16);
+        for (uint32_t i = 0; i < NWS && i < 4; ++i) { HWW(19 + i, *sem(WV + i)); HWW(23 + i, *sem(WFREE + i)); }
+        HWW(27, get_semaphore(WV)); HWW(28, get_semaphore(WFREE));
+        }
+        for (uint32_t i = 0; i < NWS && i < 4; ++i) {  // (a slot's W-ready word (its latest round + 1) going backwards,
+            // or past the rounds that may have landed (< wr + NWS: they need my credit) - a stray write: record, halt)
+            const uint32_t v = *sem(WV + i), lim = wr + NWS;
+            if (v < hw_last[i] || v > lim) {
+                HWW(29, (v < hw_last[i] ? 0xDEC00000u : 0xA4E00000u) | i << 16 | wr); HWW(30, hw_last[i]); HWW(31, v);
+                while (true) {}
+            }
+            hw_last[i] = v;
+        }
+#endif
 #ifdef SE_LAT
         if (!lown && cb_pages_available_at_front(SE_LAT, MT * SE_LWMAX)) {
             lwrite(get_read_ptr(SE_LAT), lp);
@@ -883,7 +908,28 @@ def _probes():
     head: GU_ALONE at the head's shapes) - the results are wrong."""
     import os
 
-    return "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
+    out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
+    # (HW: hang words - a kernel's state written into a persistent L1 tensor (fused_head sets HW_ADDR) as it waits;
+    # tools: moe_block_runs' triage add-on reads them after a hang)
+    if HW_ADDR and "HW" in os.environ.get("SE_PROBE", "").split(",") and not os.environ.get("HW_ALLOC_ONLY"):
+        out += f"#define SE_HW {HW_ADDR}u\n#define HWW(i, v) (reinterpret_cast<volatile uint32_t*>(SE_HW)[i] = (v))\n"
+    else:
+        out += "#define HWW(i, v)\n"
+    return out
+
+
+HW_ADDR = 0  # (the hang words' L1 address - SE_PROBE=HW, set by fused_head)
+
+
+def _ring_pages(pages, pushes):
+    """A FIFO CB's region (pages): pack_tile / copy_tile address a block from the CB's pointer without wrapping (the
+    push / pop wrap after), so where a block may straddle the CB's end - blocks of differing sizes, or one size not
+    dividing the CB - the region needs the largest block - 1 pages of room past the CB (else the tail overwrites the
+    next region). Room is a fix only where both ends address blocks so (compute <-> compute: ACC); a dataflow end
+    reading page by page wraps at the end - such a CB's blocks must not straddle (SE_OUTF: one fin a launch, 8-tile
+    blocks from the reset pointer, the tail last)."""
+    ps = set(int(p) for p in pushes)
+    return pages if len(ps) == 1 and pages % min(ps) == 0 else pages + max(ps) - 1
 
 
 def _split(n, parts, unit):
@@ -1010,6 +1056,8 @@ class SeEngine3:
         self.PFULL = self.LWMAX if latent else self.KB
         self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+        self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
+        self.acc_blocks = [MT * pw for pw in sum(self.wg, [])]
         off, o = {}, 0
         rsr = self._rs_regions() if rs is not None else []
         # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
@@ -1025,7 +1073,10 @@ class SeEngine3:
                 ("hown", MT * self.POMAX * 2048),
                 ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
                 ("xin", 2 * MT * self.KB * 2048),
-                ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
+                # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
+                # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
+                # round taken before it landed, a hang)
+                ("acc", _ring_pages(self.acc_pages, self.acc_blocks) * 4096),
                 ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
                 ("words", 256),
             ]
@@ -1034,6 +1085,7 @@ class SeEngine3:
             + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", 64)] if latent else []) if prep else [])
         ):
             off[k], o = o, al(o + v)
+        self.seq_ends = sorted(set(off.values()) | {o})  # (the sequential regions' bounds: the CB plan check's)
         if ovl:
             room = off["out"] - off["xin"]
             if al(ovl["hold"]) + ovl["finb"] <= room:
@@ -1211,7 +1263,15 @@ class SeEngine3:
         allc = self.crs
         cbs = []
 
-        def cb(i, key, size, dt, page):
+        def cb(i, key, size, dt, page, blocks=None):
+            if (
+                blocks is not None
+            ):  # (a FIFO whose blocks may straddle its end: its region carries the room - plan check)
+                room = min(e for e in self.seq_ends if e > off[key]) - off[key]
+                need = _ring_pages(size // page, blocks) * page
+                assert (
+                    room >= need
+                ), f"se_engine3: CB {key} needs {need} B (blocks {sorted(set(blocks))}), region {room}"
             d = ttnn.cb_descriptor_from_sharded_tensor(
                 i, self.arena, address_offset=off[key], total_size=size, core_ranges=allc
             )
@@ -1251,7 +1311,7 @@ class SeEngine3:
             cb(RTR_CB["rx"], "rx", self.KC * MT * 2048, ttnn.bfloat16, 2048)
             cb(RTR_CB["rw"], "rw", self.ETC * self.KC * 2048, ttnn.bfloat16, 2048)
             cb(RTR_CB["ro"], "ro", self.ETC * MT * 4096, ttnn.float32, 4096)
-        cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
+        cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096, self.acc_blocks)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())

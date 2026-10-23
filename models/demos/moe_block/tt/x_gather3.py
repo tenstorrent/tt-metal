@@ -105,6 +105,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
             volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (cw >> 20));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
+            HWW(16, 0xA1000000u | un << 8 | i); HWW(17, target); HWW(18, *mb); HWW(19, mbox + 16 * (cw >> 20));
             if (*mb < target && c > 0) flush();  // (never hold reads while blocked on a producer)
 #ifdef SE_PROBE_RSSTAT
             if (*mb < target) {
@@ -172,6 +173,7 @@ FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos) {
             volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (cw >> 16));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
+            HWW(21, 0xA5000000u | un << 8 | i); HWW(22, target); HWW(23, *mb);
             if (*mb < target && c > 0) flush();
             noc_semaphore_wait_min(mb, target);
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, lat + r0 * LW * 2048);
@@ -205,6 +207,7 @@ FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
     {  // (end-to-end fence: every destination chip started this call - its LATZ is free; my neighbour's ready only
        // fences the first hop)
         const uint32_t fence = get_arg_val<uint32_t>(t0a + 5), need = get_arg_val<uint32_t>(t0a + 6);
+        HWW(24, 0xD0000000u); HWW(25, need); HWW(26, *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fence));
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fence) < need) {
             invalidate_l1_cache();
             lpoll();
@@ -286,6 +289,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                HWW(24, 0xC1000000u | un << 8 | i); HWW(25, t0); HWW(26, u); HWW(27, rpos);
                 lpoll();  // (the logits / routing go between my packets: ahead of my next one)
 #ifdef SE_PROBE_RSSTAT
                 {
@@ -388,8 +392,11 @@ void kernel_main() {
     noc_async_atomic_barrier();
     const uint32_t rsa = xl0 + 2, rnu = get_arg_val<uint32_t>(rsa), rnc = get_arg_val<uint32_t>(rsa + 1 + 2 * rnu);
     uint32_t pos = 0;  // (the gather left the CB batch-aligned; the phases after it share one chunk count)
+    HWW(20, 0xB1);
     la_gather(rsa + 2 + 2 * rnu + 2 * rnc + G + 5, pos);
+    HWW(20, 0xB2);
     rs_gather(rsa, pos);
+    HWW(20, 0xB3);
 }
 """
 )
@@ -531,8 +538,11 @@ void kernel_main() {
         }
         lpoll();
         uint32_t rpos = 0;  // (as the reader's pos)
+        HWW(28, 0xE1);
         la_send(la0, conn, hdrs, lpoll, rpos);
+        HWW(28, 0xE2);
         rs_send(rs0, conn, hdrs, lpoll, rpos);
+        HWW(28, 0xE3);
         ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
         rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)

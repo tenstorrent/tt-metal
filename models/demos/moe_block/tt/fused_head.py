@@ -158,6 +158,29 @@ class HeadSE3:
         )
         if self.rs_mode == "mrs":  # (the gather's semaphores above the arena too: the arena is freed every call)
             self.eng.alloc_arena()
+        import os as _os
+
+        if "HW" in _os.environ.get("SE_PROBE", "").split(","):  # (debug: hang words - se_engine3._probes)
+            import json as _json
+
+            from models.demos.moe_block.tt import se_engine3 as _se3
+
+            gcr = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+            self.hw = ttnn.from_torch(
+                torch.zeros(grid.x * grid.y, 32, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(gcr, (1, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            _se3.HW_ADDR = int(self.hw.buffer_address())
+            _os.makedirs("generated/moe_block", exist_ok=True)  # (for a triage add-on that reads the words)
+            _json.dump({"addr": _se3.HW_ADDR}, open("generated/moe_block/hw_addr.json", "w"))
         if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
