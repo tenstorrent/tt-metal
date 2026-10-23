@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+
+#include <filesystem>
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
@@ -1776,6 +1778,104 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpCompilationFailureLeavesProgramCacheU
         [&] { ttnn::generic_op(io_tensors, program_descriptor); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Failed to generate binaries")));
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMultiply) {
+    // The Metal 2.0 overload, through the toy kernels tests/ttnn/unit_tests/operations/debug/
+    // test_generic_op_spec.py uses: out = a * b on one core, on a cache miss, then on a hit with
+    // other tensors of the same spec, then refused for tensors of another shape.
+    namespace m2 = tt::tt_metal::experimental;
+    log_info(tt::LogTest, "Running {}", __func__);
+    const ttnn::Shape shape{1, 1, 2 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH};
+    const auto on_device = [this](const ttnn::Shape& s) {
+        return ttnn::random::random(s, DataType::BFLOAT16).to_layout(Layout::TILE).to_device(this->device_);
+    };
+    Tensor a = on_device(shape);
+    Tensor b = on_device(shape);
+    Tensor out = ttnn::create_device_tensor(a.tensor_spec(), this->device_);
+    const uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
+    const uint32_t tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype()));
+    const CoreCoord core{0, 0};
+    const std::filesystem::path kernels = "tests/ttnn/unit_tests/operations/debug/kernels/toy_spec_mul";
+    const auto ring = [tile_bytes](const char* name) {
+        return m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName(name),
+            .entry_size = tile_bytes,
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::Float16_b};
+    };
+    const m2::KernelSpec::RuntimeArgSchema dm_schema{.runtime_arg_names = {"num_tiles", "start_id"}};
+    const m2::ProgramSpec spec{
+        .name = "toy_spec_mul",
+        .kernels =
+            {m2::KernelSpec{
+                 .unique_id = m2::KernelSpecName("reader"),
+                 .source = kernels / "reader.cpp",
+                 .dfb_bindings =
+                     {m2::ProducerOf(m2::DFBSpecName("in_a"), "in_a"), m2::ProducerOf(m2::DFBSpecName("in_b"), "in_b")},
+                 .tensor_bindings = {{m2::TensorParamName("a"), "a"}, {m2::TensorParamName("b"), "b"}},
+                 .runtime_arg_schema = dm_schema,
+                 .hw_config = m2::CreateReaderDataMovementConfig()},
+             m2::KernelSpec{
+                 .unique_id = m2::KernelSpecName("compute"),
+                 .source = kernels / "compute.cpp",
+                 .dfb_bindings =
+                     {m2::ConsumerOf(m2::DFBSpecName("in_a"), "in_a"),
+                      m2::ConsumerOf(m2::DFBSpecName("in_b"), "in_b"),
+                      m2::ProducerOf(m2::DFBSpecName("out"), "out")},
+                 .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+                 .hw_config = m2::ComputeHardwareConfig{}},
+             m2::KernelSpec{
+                 .unique_id = m2::KernelSpecName("writer"),
+                 .source = kernels / "writer.cpp",
+                 .dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName("out"), "out")},
+                 .tensor_bindings = {{m2::TensorParamName("out"), "out"}},
+                 .runtime_arg_schema = dm_schema,
+                 .hw_config = m2::CreateWriterDataMovementConfig()}},
+        .dataflow_buffers = {ring("in_a"), ring("in_b"), ring("out")},
+        .tensor_parameters =
+            {{.unique_id = m2::TensorParamName("a"), .spec = a.tensor_spec()},
+             {.unique_id = m2::TensorParamName("b"), .spec = b.tensor_spec()},
+             {.unique_id = m2::TensorParamName("out"), .spec = out.tensor_spec()}},
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main",
+            .kernels = {m2::KernelSpecName("reader"), m2::KernelSpecName("compute"), m2::KernelSpecName("writer")},
+            .target_nodes = core}},
+    };
+    const auto dm_args = m2::MakeRuntimeArgsForSingleNode(core, {{"num_tiles", num_tiles}, {"start_id", 0U}});
+    const m2::ProgramRunArgs run_args{
+        .kernel_run_args = {
+            {.kernel = m2::KernelSpecName("reader"), .runtime_arg_values = dm_args},
+            {.kernel = m2::KernelSpecName("compute"),
+             .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(core, {{"num_tiles", num_tiles}})},
+            {.kernel = m2::KernelSpecName("writer"), .runtime_arg_values = dm_args}}};
+    const m2::Table<m2::TensorParamName, uint32_t> tensor_args{
+        {m2::TensorParamName("a"), 0U}, {m2::TensorParamName("b"), 1U}, {m2::TensorParamName("out"), 2U}};
+
+    // Cache miss.
+    ttnn::generic_op(std::vector{a, b, out}, spec, run_args, tensor_args);
+    Tensor golden = ttnn::multiply(a, b);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(golden.cpu(), out.cpu(), 2e-2F, 1e-2F));
+    const auto entries = this->device_->num_program_cache_entries();
+
+    // Cache hit with other tensors of the same spec: this call's addresses must be bound.
+    Tensor a2 = on_device(shape);
+    Tensor b2 = on_device(shape);
+    Tensor out2 = ttnn::create_device_tensor(a2.tensor_spec(), this->device_);
+    ttnn::generic_op(std::vector{a2, b2, out2}, spec, run_args, tensor_args);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries) << "same spec and tensor specs: a cache hit";
+    Tensor golden2 = ttnn::multiply(a2, b2);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(golden2.cpu(), out2.cpu(), 2e-2F, 1e-2F));
+
+    // Tensors of another shape are refused up front instead of running the cached program.
+    const ttnn::Shape other{1, 1, 4 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH};
+    Tensor a3 = on_device(other);
+    Tensor b3 = on_device(other);
+    Tensor out3 = ttnn::create_device_tensor(a3.tensor_spec(), this->device_);
+    EXPECT_THAT(
+        [&]() { ttnn::generic_op(std::vector{a3, b3, out3}, spec, run_args, tensor_args); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("does not match TensorParameter")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries);
 }
 
 }  // namespace ttnn::operations::generic::test

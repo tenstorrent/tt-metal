@@ -4,15 +4,23 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn {
 
 // GenericOp exposes everything needed to construct and write an operation on device for the user.
 // This includes: cb attributes, data movement attributes, compute attributes, rt args, compile time args.
-// Unlike other operations, must create and pass in output tensor with the input tensors.
+// Unlike other operations, must create and pass in output tensor with the input tensors. Only the
+// output is required: a generator program (no tensor read) or a single-tensor in-place program
+// passes a one-element io_tensors.
 // See tests/ttnn/unit_tests/gtests/test_generic_op.cpp for some examples.
 // The main use case right now is an interface for PyKernel to pass dynamic kernel paths.
 
@@ -24,6 +32,24 @@ Tensor generic_op(
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
+// Metal 2.0 entry point: a ProgramSpec + ProgramRunArgs instead of a ProgramDescriptor. SPMD only:
+// the one spec is replicated to every device of the mesh (there is no per-device form like
+// MeshProgramDescriptor).
+//
+// tensor_args maps each TensorParameter name to an index into io_tensors. The op builds the real
+// TensorArgument table from it, so the pointer-identity requirement on TensorArguments is
+// satisfied by construction. Each parameter takes its own io_tensors entry: to bind one tensor to
+// several parameters, list it once per parameter (io_tensors = {a, a, out}). run_args must carry
+// every kernel's complete runtime args on every call, a cache hit included, and leave tensor_args
+// empty. Per-core allocated tensors are rejected: a ProgramSpec binds a tensor by one address.
+// The program cache keys on the spec's structure (compute_program_spec_hash) plus each bound
+// tensor's spec under its parameter's relaxations.
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args);
+
 namespace experimental {
 
 // Compiles and finalizes the program that generic_op would enqueue, without enqueueing it. Throws if the program does
@@ -34,6 +60,12 @@ void prepare_generic_op(
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+// Metal 2.0 form; see the generic_op overload above for the meaning of tensor_args.
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::ProgramSpec& spec,
+    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, uint32_t>& tensor_args);
 
 }  // namespace experimental
 

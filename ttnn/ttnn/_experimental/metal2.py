@@ -96,6 +96,11 @@ KernelRunArgs = _program_spec.KernelRunArgs
 DFBRunOverrides = _program_spec.DFBRunOverrides
 ProgramRunArgs = _program_spec.ProgramRunArgs
 
+# The program-cache key of the ttnn.generic_op spec overload: a structural hash of a ProgramSpec
+# (kernel sources, bindings, compile-time args, runtime-arg names, hardware configs, buffer
+# geometry, tensor-parameter specs, work units); runtime-arg values and addresses are excluded.
+compute_program_spec_hash = ttnn._ttnn.operations.generic.compute_program_spec_hash
+
 __all__ = [
     "KernelBuildOptLevel",
     "UnpackMode",
@@ -143,4 +148,5 @@ __all__ = [
     "KernelRunArgs",
     "DFBRunOverrides",
     "ProgramRunArgs",
+    "compute_program_spec_hash",
 ]
