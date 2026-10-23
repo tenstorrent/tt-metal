@@ -4,6 +4,7 @@
 
 #include "sdpa_fw_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <tt-metalium/bfloat16.hpp>
@@ -169,22 +170,39 @@ std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t 
 
 // Causal: Q chunk i of a sequence attends ~(i+1) K/V chunks, so pairing chunk i with chunk
 // (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
-// items above; on each core the heavy chunks come first, then the light ones, both ascending so they
-// fold into few runs.
+// items above. The order of items within a core does not change its total work, so they are sorted,
+// which folds them into the fewest runs (a fully covered sequence is one run).
 std::vector<CoreItemRuns> split_items_paired(uint32_t num_seqs, uint32_t q_num_chunks, uint32_t num_cores) {
     const uint32_t pairs_per_seq = q_num_chunks / 2U;
     const auto pair_runs = split_items_contiguous(num_seqs * pairs_per_seq, num_cores);
     std::vector<CoreItemRuns> per_core(num_cores);
+    std::vector<uint32_t> items;
     for (uint32_t core = 0; core < num_cores; ++core) {
         const auto [first_pair, num_pairs] = pair_runs[core].front();
-        for (uint32_t p = first_pair + num_pairs; p-- > first_pair;) {
-            append_item(per_core[core], (p / pairs_per_seq) * q_num_chunks + (q_num_chunks - 1U - p % pairs_per_seq));
-        }
+        items.clear();
         for (uint32_t p = first_pair; p < first_pair + num_pairs; ++p) {
-            append_item(per_core[core], (p / pairs_per_seq) * q_num_chunks + p % pairs_per_seq);
+            const uint32_t seq_base = (p / pairs_per_seq) * q_num_chunks;
+            items.push_back(seq_base + p % pairs_per_seq);
+            items.push_back(seq_base + (q_num_chunks - 1U - p % pairs_per_seq));
+        }
+        std::sort(items.begin(), items.end());
+        for (const uint32_t item : items) {
+            append_item(per_core[core], item);
         }
     }
     return per_core;
+}
+
+// Runtime args per core: the buffer addresses, num_runs, then two words per run.
+constexpr uint32_t kReaderAddressArgs = 5U;
+
+bool fits_runtime_args(const std::vector<CoreItemRuns>& per_core_runs) {
+    for (const auto& runs : per_core_runs) {
+        if (kReaderAddressArgs + 1U + 2U * runs.size() > tt::tt_metal::max_runtime_args) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -211,7 +229,6 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* intermediates_buffer,
     uint32_t num_cores_y,
     const std::vector<CoreItemRuns>& per_core_runs) {
-    constexpr uint32_t kReaderAddressArgs = 5U;
     for (uint32_t i = 0; i < per_core_runs.size(); i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
         const auto& runs = per_core_runs[i];
@@ -221,12 +238,6 @@ void assign_per_core_runtime_args(
             work_args.push_back(run.first_item);
             work_args.push_back(run.num_items);
         }
-        TT_FATAL(
-            kReaderAddressArgs + work_args.size() <= tt::tt_metal::max_runtime_args,
-            "SDPA forward: {} work runs on core {} exceed the runtime arg budget; use a larger q_chunk_size",
-            runs.size(),
-            core);
-
         std::vector<uint32_t> reader_args = {
             query_buffer->address(),
             key_buffer->address(),
@@ -317,16 +328,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     // Causal with an even chunk count and enough pairs for every core: heavy/light chunk pairs.
-    // Otherwise contiguous blocks of Q chunks.
+    // Otherwise, or if the pairs would not fit the runtime args, contiguous blocks of Q chunks.
     const uint32_t pairs_per_seq = q_num_chunks / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_paired_split = (mask_type == AttentionMaskType::Causal) && (q_num_chunks % 2 == 0) &&
-                                  (total_pairs >= num_available_cores) && (St > 0);
+    const bool try_paired_split =
+        (mask_type == AttentionMaskType::Causal) && (q_num_chunks % 2 == 0) && (total_pairs >= num_available_cores);
 
-    const uint32_t num_cores = std::min(num_available_cores, use_paired_split ? total_pairs : total_q_chunks);
+    const uint32_t num_cores = std::min(num_available_cores, total_q_chunks);
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
-    const auto per_core_runs = use_paired_split ? split_items_paired(NC, q_num_chunks, num_cores)
-                                                : split_items_contiguous(total_q_chunks, num_cores);
+    std::vector<CoreItemRuns> per_core_runs;
+    if (try_paired_split) {
+        per_core_runs = split_items_paired(NC, q_num_chunks, num_cores);
+    }
+    if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
+        per_core_runs = split_items_contiguous(total_q_chunks, num_cores);
+    }
 
     // DST is the register file the math unit computes in: 4 tiles in fp32 mode (8 in bf16).
     // Everything below is "how many tiles go through DST per pass":
