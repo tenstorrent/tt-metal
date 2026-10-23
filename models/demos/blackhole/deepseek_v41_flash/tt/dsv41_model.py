@@ -1560,6 +1560,10 @@ class Model:
         apc = getattr(self, "apc", None)
         if apc is not None and not apc.active():
             apc = None
+        apc_defer = (
+            apc is not None and async_win and apc.defer()
+        )  # (deferred snapshots need the asynchronous windows: their reads are ordered by the queue, not by a host wait)
+        t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
         t_pre = time.perf_counter() - t_start
         per_row = (
             bool(getattr(pm.dyn, "per_row", False)) and masked
@@ -1585,6 +1589,7 @@ class Model:
                 waves = [grp]
             for wave in waves:
                 if apc is not None and any(it[2] == 0 for it in wave):
+                    t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
                     new_ = self._apc_restore_wave(
                         [it for it in wave if it[2] == 0], apc, vis
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
@@ -1664,6 +1669,10 @@ class Model:
                     )
 
                     def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b):
+                        if (
+                            apc_defer
+                        ):  # (the reads of a snapshot started after the previous window precede this window's replay: finish them while it runs)
+                            t_apc_ovl[0] += apc.finish_pending()
                         if os.environ.get("DSV41_PF_OVERLAP", "1") != "1":
                             return
                         for kn in win_keys[k_s0 + 1 :]:
@@ -1687,7 +1696,7 @@ class Model:
                         [(it[0], s0_of(it, k), it[3]) for it in part],
                         C,
                         async_win,
-                        None if apc is None else apc.wants,
+                        None if apc is None or apc_defer else apc.wants,
                         vis,
                     )
                     th, td = pm.replay_window(
@@ -1725,11 +1734,16 @@ class Model:
                             b, t, st, e = it
                             if s0_of(it, k) + C <= e and not (vis and b in vis):
                                 t_apc0 = time.perf_counter()
-                                apc.maybe_snapshot(b, s0_of(it, k) + C, t)
+                                if apc_defer:
+                                    apc.begin_snapshot(b, s0_of(it, k) + C, t)
+                                else:
+                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t)
                                 t_apc += time.perf_counter() - t_apc0
                     if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
                         for b in [b for b in resume if b not in {p[0] for p in part}]:
                             resume.pop(b)
+        if apc is not None:
+            t_apc += apc.finish_pending()  # (snapshots started in the last windows of the call)
         if pm.__dict__.get(
             "_ev_hist"
         ):  # (a trailing enqueued window: nothing reads its result, but the call must not return with the device still busy)
@@ -1748,6 +1762,7 @@ class Model:
             hash_s=t_hash,
             export_s=t_exp,
             apc_snapshot_s=t_apc,
+            apc_overlapped_s=t_apc_ovl[0],
         )
         return res
 

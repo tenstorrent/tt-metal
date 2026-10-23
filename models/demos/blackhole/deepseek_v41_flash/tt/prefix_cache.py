@@ -316,6 +316,33 @@ def read_pool_latents(model, b, src, n):
     return torch.cat(out) if len(out) > 1 else out[0]
 
 
+def read_pool_latents_begin(model, b, src, n):
+    """``read_pool_latents`` without waiting: [(rows m, host tensor handle)] of the gathers (pieces of 16384 rows), enqueued on CQ 0 and freed right after their reads (see ``snapshot_begin``)."""
+    pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
+    assert pool.dtype == ttnn.bfloat16, "APC on the paged prefill needs the bf16 pool"
+    r = b // model.U
+    phys = pool.phys_rows(b, src, torch.arange(n)).long()
+    shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+    out = []
+    for a in range(0, n, 16384):
+        m = min(16384, n - a)
+        ids = torch.zeros(rows, 1, 1, m, dtype=torch.int64)
+        ids[r, 0, 0] = phys[a : a + m]
+        d_ids = ttnn.from_torch(
+            ids.to(torch.int32),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        g = ttnn.embedding(d_ids, pool.pool, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, m, 512] per device
+        out.append((m, ttnn.from_device(ttnn.get_device_tensors(g)[r * cols], blocking=False)))
+        ttnn.deallocate(g)
+        ttnn.deallocate(d_ids)
+    return out
+
+
 def _snapshot_nb():
     """``DSV41_APC_SNAP_NB`` (default 1): the carried-state reads of a snapshot are issued without blocking and waited for in groups (``SNAP_GROUP_MIB`` of device slices alive at once). A snapshot costs ~0.4 s whatever
     its size (measured 6.6 .. 55 MiB: 0.37 .. 0.47 s) because every carried tensor was a blocking slice + read round trip (~300 per snapshot); 6 snapshots of a 32k prompt = 2.8 s of the 28 s prefill call.
@@ -434,6 +461,94 @@ def _snapshot_user(model, b, s, toks, nb):
         else:
             snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
     snap.seconds = time.perf_counter() - t0
+    return snap
+
+
+class PendingSnapshot:
+    """A snapshot whose device reads are ENQUEUED (``snapshot_begin``) but whose host copies are not made yet (``snapshot_finish``)."""
+
+    def __init__(self, snap, staged, handles, pool_parts, event, t_begin):
+        self.snap, self.staged, self.handles, self.pool_parts, self.event, self.t_begin = (
+            snap,
+            staged,
+            handles,
+            pool_parts,
+            event,
+            t_begin,
+        )
+
+
+def snapshot_begin(model, b, s, toks):
+    """Deferred form of ``snapshot_user`` (``DSV41_APC_DEFER=1``): enqueue the device slices / gathers and the NON-blocking reads of user ``b``'s state at position ``s`` on CQ 0 and return a
+    ``PendingSnapshot``; the host does not wait. Everything is ordered by the command queue: the reads precede the next replay (which may modify the state), a device slice is freed right after its
+    read is enqueued (the next program that reuses the memory runs after the read), so no device memory is alive across the next replay (a trace's intermediates share the freed DRAM). The host
+    copies are made by ``snapshot_finish`` after ``event_synchronize`` (GIL-free wait for the reads only, the next replay may still be running).
+    """
+    t0 = time.perf_counter()
+    assert model.__dict__.get("pf_resume", {}).get(b) == s, f"user {b} is not resumable at {s}"
+    r, i = _slot_of(model, b)
+    cols = model.cols
+    snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone())
+    specs = carried_specs(model)
+    paged = PG.read_on()
+    for src in _sources(model):
+        if not paged and f"L{src}.kvt" not in specs:
+            raise ApcUnsupported(f"no kv table for source layer {src} (dense prefill path)")
+    handles, staged = (
+        [],
+        OrderedDict(),
+    )  # handles: (list, index) slots holding a host tensor handle until ``snapshot_finish``
+
+    def read(part, k, lst):
+        lst.append(ttnn.from_device(_dev(part, k), blocking=False))
+        handles.append((lst, len(lst) - 1))
+
+    for name, sp in specs.items():
+        if sp.tensor.dtype != ttnn.bfloat16:
+            raise ApcUnsupported(f"{name} is {sp.tensor.dtype}")
+        n = sp.count(s)
+        N, D = sp.tensor.shape[2], sp.tensor.shape[3]
+        lo = sp.row0(N, n) if sp.kind == "tail" else 0
+        end = lo + n if sp.kind == "tail" else N
+        whole = sp.tensor.shape[0] == 1 and lo == 0 and end == N
+        pieces = [[] for _ in range(1 if sp.replicated else cols)]
+        if whole:
+            for c in range(len(pieces)):
+                read(sp.tensor, r * cols + c, pieces[c])
+        else:
+            step = max(1, (SNAP_PIECE_MIB << 20) // (D * sp.tensor.element_size()))
+            for p0 in range(lo, end, step):
+                part = ttnn.slice(sp.tensor, [i, 0, p0, 0], [i + 1, 1, min(p0 + step, end), D])
+                for c in range(len(pieces)):
+                    read(part, r * cols + c, pieces[c])
+                ttnn.deallocate(part)
+        staged[name] = (pieces, sp)
+    pool_parts = {}
+    for src in _sources(model):
+        if paged:
+            pool_parts[src] = read_pool_latents_begin(model, b, src, s // P.SRC_RATIO[src])
+    event = ttnn.record_event(model.md, 0)
+    return PendingSnapshot(snap, staged, handles, pool_parts, event, time.perf_counter() - t0)
+
+
+def snapshot_finish(model, pend):
+    """Wait for the reads of ``pend`` (not for anything enqueued after them) and make the host copies -> PrefixSnapshot (bit-identical to ``snapshot_user`` at the same position)."""
+    t0 = time.perf_counter()
+    ttnn.event_synchronize(pend.event)
+    for lst, k in pend.handles:
+        lst[k] = ttnn.to_torch(lst[k]).clone()
+    snap, cols = pend.snap, model.cols
+    for name, (pieces, sp) in pend.staged.items():
+        vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
+        snap.carried[name] = vals * cols if sp.replicated else vals
+    for src in _sources(model):
+        if src in pend.pool_parts:
+            parts = [ttnn.to_torch(h).reshape(m, 512).clone() for m, h in pend.pool_parts[src]]
+            snap.pool[src] = torch.cat(parts) if len(parts) > 1 else parts[0]
+        else:
+            snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]
+    snap.seconds = pend.t_begin + time.perf_counter() - t0
+    pend.handles, pend.pool_parts, pend.staged = [], {}, OrderedDict()
     return snap
 
 
@@ -626,6 +741,7 @@ class PrefixCache:
             self.store.signature = sig
 
     def clear(self):
+        self.finish_pending()
         self.store.clear()
 
     def wants(self, B):
@@ -641,20 +757,46 @@ class PrefixCache:
             (torch.as_tensor(tokens).reshape(-1)[:n] == self.image_token_id).any()
         )
 
-    def maybe_snapshot(self, b, B, tokens):
+    def defer(self):
+        """``DSV41_APC_DEFER`` (default 1): snapshots are only STARTED at their boundary (``begin_snapshot``: device reads enqueued, no host wait) and completed by ``finish_pending`` while the device
+        replays the next window; the store insertion waits until then (a lookup / the end of the call finish every pending one first).
+        """
+        import os
+
+        return os.environ.get("DSV41_APC_DEFER", "1") == "1"
+
+    def begin_snapshot(self, b, B, tokens):
         if not self.active() or not self.wants(B):
             return
         if self._has_image(tokens, B):
             self.stats["skipped_vision"] += 1
             return
-        if self.store.has(tokens, B):
+        key = self.store.key(tokens, B)
+        pend = self.__dict__.setdefault("pending", [])
+        if key in self.store.snaps or any(k == key for _, k, _ in pend):
             return
+        t0 = time.perf_counter()
         try:
-            snap = snapshot_user(self.m, b, B, tokens)
+            p = snapshot_begin(self.m, b, B, tokens)
         except ApcUnsupported as e:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
             return
+        pend.append((p, key, (b, B, time.perf_counter() - t0)))
+
+    def finish_pending(self):
+        """Complete every started snapshot (host copies, store insertion). -> seconds spent."""
+        pend = self.__dict__.get("pending")
+        if not pend:
+            return 0.0
+        t0 = time.perf_counter()
+        self.pending = []
+        for p, key, (b, B, t_b) in pend:
+            snap = snapshot_finish(self.m, p)
+            self._store(snap, b, B, t_b, "deferred")
+        return time.perf_counter() - t0
+
+    def _store(self, snap, b, B, t_dev, how=""):
         ev0 = self.store.evictions
         stored = self.store.put(snap)
         if not stored and snap.nbytes > self.store.budget:
@@ -668,7 +810,41 @@ class PrefixCache:
         self.stats["snapshots"] += 1
         self.stats["snap_s"] += snap.seconds
         self.log(
-            f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
+            f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s {how} [enqueue {t_dev:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
+        )
+
+    def maybe_snapshot(self, b, B, tokens):
+        if not self.active() or not self.wants(B):
+            return
+        if self._has_image(tokens, B):
+            self.stats["skipped_vision"] += 1
+            return
+        t_h0 = time.perf_counter()
+        if self.store.has(tokens, B):
+            return
+        t_h1 = time.perf_counter()
+        try:
+            snap = snapshot_user(self.m, b, B, tokens)
+        except ApcUnsupported as e:
+            self.enabled = False
+            self.log(f"prefix caching disabled: {e}")
+            return
+        ev0 = self.store.evictions
+        t_p0 = time.perf_counter()
+        stored = self.store.put(snap)
+        t_p1 = time.perf_counter()
+        if not stored and snap.nbytes > self.store.budget:
+            self.log(
+                f"prefix cache: snapshot at {B} tokens REFUSED ({snap.nbytes / 2**20:.0f} MiB > host budget {self.store.budget / 2**20:.0f} MiB; DSV41_APC_GB)"
+            )
+        if self.store.evictions > ev0:
+            self.log(
+                f"prefix cache: {self.store.evictions - ev0} older snapshot(s) EVICTED to make room for {B} tokens (store {self.store.bytes / 2**20:.0f} MiB of {self.store.budget / 2**20:.0f} MiB, {self.store.evictions} evictions so far)"
+            )
+        self.stats["snapshots"] += 1
+        self.stats["snap_s"] += snap.seconds
+        self.log(
+            f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s [has {t_h1 - t_h0:.3f}, device reads + host copy {t_p0 - t_h1:.3f}, put {t_p1 - t_p0:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
         )
 
     def lookup(self, b, tokens, end):
