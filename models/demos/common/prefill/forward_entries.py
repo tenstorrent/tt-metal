@@ -143,9 +143,7 @@ def validate_forward_entries(entries, *, chunk_size: int, forward_chunks: int, n
                 raise ValueError(f"{e}: slot {e.slot} appears in two separate runs")
             if prev.end != prev.start + chunk_size:
                 raise ValueError(f"{prev}: a partial entry must end its slot's run")
-            # tt-d-gen moves a run's last chunk back to end at the cache end (tenstorrent/tt-d-gen#430).
-            clamped = e.start + chunk_size == max_seq_len and prev.start < e.start < prev.end < e.end
-            if e.start != prev.end and not clamped:
+            if e.start != prev.end:
                 raise ValueError(f"{e}: does not continue {prev}")
         seen.add(e.slot)
         prev = e
