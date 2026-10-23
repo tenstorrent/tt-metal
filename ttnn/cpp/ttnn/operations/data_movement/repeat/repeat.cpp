@@ -301,11 +301,12 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 
 using repeat::interleaved_in;
 
-// sharded_to_interleaved takes only L1 shards with L1-aligned row-major pages; to_memory_config copies any other page.
-// That copy reads a HEIGHT page as the logical row, but does not complete on a WIDTH or BLOCK page wider than its row.
-// Throw instead of moving such a tensor off its shards.
-void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
-    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || !tensor.memory_config().is_sharded() ||
+// sharded_to_interleaved takes only L1 shards with L1-aligned row-major pages; to_memory_config copies any other page
+// into interleaved memory. That copy reads a HEIGHT page as the logical row, but does not complete on a WIDTH or BLOCK
+// page wider than its row. Throw instead of moving such a tensor off its shards into interleaved memory. A sharded
+// target takes reshard or the copy between sharded layouts, as on main.
+void check_rows_can_leave_shards(const ttnn::Tensor& tensor, const MemoryConfig& target) {
+    if (target.is_sharded() || tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || !tensor.memory_config().is_sharded() ||
         tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
         !tensor.shard_spec().has_value()) {
         return;
@@ -316,10 +317,11 @@ void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
     TT_FATAL(
         row_width >= shard_width ||
             (in_l1 && !repeat::is_unaligned_row_major_shard_page(tensor.memory_config(), tensor.element_size())),
-        "repeat: this call would move {}-element rows out of {}-element row-major WIDTH or BLOCK shards {}, and that "
-        "copy does not complete. Repeat takes such rows natively only from L1 shards, along one axis other than the "
-        "last, with each repeated group of rows inside one shard, into interleaved memory or into L1 shards of the "
-        "input's layout and grid; otherwise use HEIGHT shards or L1 shards whose page is L1-aligned.",
+        "repeat: this call would move {}-element rows out of {}-element row-major WIDTH or BLOCK shards {} into "
+        "interleaved memory, and that copy does not complete. Repeat takes such rows natively only from L1 shards, "
+        "along one axis other than the last, with each repeated group of rows inside one shard, into interleaved "
+        "memory or into L1 shards of the input's layout and grid; otherwise use HEIGHT shards or L1 shards whose page "
+        "is L1-aligned.",
         row_width,
         shard_width,
         in_l1 ? "whose page is not L1-aligned" : "in DRAM");
@@ -380,7 +382,7 @@ ttnn::Tensor repeat_via_codegen(
 
     ttnn::Tensor working = tensor;
     if (plan.unshard_input) {
-        check_rows_can_leave_shards(working);
+        check_rows_can_leave_shards(working, interleaved_in(BufferType::DRAM));
         working = ttnn::to_memory_config(working, interleaved_in(BufferType::DRAM), std::nullopt);
     }
 
@@ -558,7 +560,7 @@ ttnn::Tensor repeat_native(
             }
         }
         if (all_ones_mc != working_tensor.memory_config()) {
-            check_rows_can_leave_shards(working_tensor);
+            check_rows_can_leave_shards(working_tensor, all_ones_mc);
         }
         return finalize_into_preallocated(ttnn::to_memory_config(working_tensor, all_ones_mc), optional_output_tensor);
     }
@@ -612,7 +614,7 @@ ttnn::Tensor repeat_native(
             // DRAM-sharded fallback via to_memory_config (sharded_to_interleaved is L1-only);
             // use working_tensor to keep rank padding from match_input_rank.
             const MemoryConfig l1_interleaved{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
-            check_rows_can_leave_shards(working_tensor);
+            check_rows_can_leave_shards(working_tensor, l1_interleaved);
             working_tensor = ttnn::to_memory_config(working_tensor, l1_interleaved, std::nullopt);
         }
         if (working_output_mem_config.is_sharded()) {

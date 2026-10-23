@@ -253,6 +253,33 @@ def test_repeat_unaligned_narrow_rows_off_native_throw(device, expect_error, sou
         _route(lambda: ttnn.repeat(tensor, repeats, **kwargs))
 
 
+def _bank(x):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x, 0), ttnn.CoreCoord(x, 0))})
+
+
+@pytest.mark.parametrize(
+    "shard, buffer, repeats",
+    [
+        ([4, 4], ttnn.BufferType.DRAM, [1, 1, 1]),
+        ([4, 5], ttnn.BufferType.DRAM, [1, 1, 1]),
+        ([4, 4], ttnn.BufferType.L1, [1, 1, 1]),
+        ([4, 4], ttnn.BufferType.DRAM, [1, 1, 1, 1]),
+    ],
+    ids=["dram_to_other_bank", "dram_unaligned_to_other_bank", "dram_to_l1", "dram_new_axis_to_other_bank"],
+)
+def test_repeat_narrow_rows_identity_into_shards(device, shard, buffer, repeats):
+    # An all-ones repeat of narrow rows in a DRAM shard into another sharded placement. to_memory_config reshards it
+    # (DRAM to DRAM copies whole pages) or copies it between the two sharded layouts, as main does wherever its views
+    # accept the shape; only a move into interleaved memory takes the copy that does not complete. No repeat program
+    # runs, which _route reports as composite.
+    layout, row = ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.ShardOrientation.ROW_MAJOR
+    input_memory = ttnn.MemoryConfig(layout, ttnn.BufferType.DRAM, ttnn.ShardSpec(_bank(0), shard, row))
+    output_bank = 1 if buffer == ttnn.BufferType.DRAM else 0
+    output_memory = ttnn.MemoryConfig(layout, buffer, ttnn.ShardSpec(_bank(output_bank), shard, row))
+    result = _repeat(device, [1, 4, 3], input_memory, repeats, output_memory, False, "composite")
+    assert result.memory_config() == output_memory
+
+
 _HEIGHT = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
 
