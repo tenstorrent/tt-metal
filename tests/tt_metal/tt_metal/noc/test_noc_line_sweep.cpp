@@ -36,6 +36,8 @@
 //   TT_NOC_SWEEP_NOCS            comma list of NOCs to test, e.g. "1" or "0,1"            (default "0,1")
 //   TT_NOC_SWEEP_DEVICES         comma list of chip ids to test, empty = all              (default all)
 //   TT_NOC_SWEEP_MAX_REPORT      max bad pairs logged per step                            (default 64)
+//   TT_NOC_SWEEP_VERBOSE         1 = log every step and the cores of every line; 0 = one summary line per
+//                                sweep per chip plus a progress line every few seconds   (default 0)
 //   TT_NOC_SWEEP_INJECT_XOR      checker self-test: OR this mask into the payload the host writes to every
 //                                source core while the expected data is left untouched, so every pair must be
 //                                reported bad with exactly this signature. 0 = off (default).
@@ -49,6 +51,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -104,6 +107,9 @@ struct RiscNoc {
     NOC noc;
 };
 
+// How often a progress line is logged while a sweep runs in non-verbose mode.
+constexpr auto kProgressInterval = std::chrono::seconds(10);
+
 struct SweepConfig {
     uint32_t transfer_bytes = 4096;
     uint32_t chunk_bytes = 0;
@@ -112,6 +118,7 @@ struct SweepConfig {
     std::vector<NOC> nocs = {NOC::NOC_0, NOC::NOC_1};
     std::vector<ChipId> devices;  // empty = all
     uint32_t max_report = 64;
+    bool verbose = false;
     uint32_t inject_xor = 0;  // checker self-test, see header
     uint32_t inject_flit_word = 15;
 };
@@ -153,6 +160,7 @@ SweepConfig config_from_env() {
     cfg.num_iters = std::max<uint32_t>(1, tt::parse_env<uint32_t>("TT_NOC_SWEEP_ITERS", cfg.num_iters));
     cfg.seed = tt::parse_env<uint32_t>("TT_NOC_SWEEP_SEED", cfg.seed);
     cfg.max_report = tt::parse_env<uint32_t>("TT_NOC_SWEEP_MAX_REPORT", cfg.max_report);
+    cfg.verbose = tt::parse_env<uint32_t>("TT_NOC_SWEEP_VERBOSE", 0) != 0;
     cfg.inject_xor = tt::parse_env<uint32_t>("TT_NOC_SWEEP_INJECT_XOR", cfg.inject_xor);
     cfg.inject_flit_word =
         tt::parse_env<uint32_t>("TT_NOC_SWEEP_INJECT_FLIT_WORD", cfg.inject_flit_word) % (kFlitBytes / 4);
@@ -349,6 +357,7 @@ class NocLineSweepFixture : public MeshDispatchFixture {
 protected:
     SweepConfig cfg_;
     std::vector<std::string> suite_failures_;
+    std::unordered_set<std::string> warned_caps_;  // (source line -> sink line) pairs already warned about
     uint32_t steps_run_ = 0;
     uint32_t pairs_checked_ = 0;
 
@@ -361,14 +370,15 @@ protected:
         }
         log_info(
             tt::LogTest,
-            "NOC line sweep config: transfer={}B chunk={}B iters={} seed=0x{:x} nocs={} dispatch={} inject_xor=0x{:x} "
-            "inject_flit_word={}",
+            "NOC line sweep config: transfer={}B chunk={}B iters={} seed=0x{:x} nocs={} dispatch={} verbose={} "
+            "inject_xor=0x{:x} inject_flit_word={}",
             cfg_.transfer_bytes,
             cfg_.chunk_bytes,
             cfg_.num_iters,
             cfg_.seed,
             noc_list,
             slow_dispatch_ ? "slow" : "fast",
+            cfg_.verbose ? 1 : 0,
             cfg_.inject_xor,
             cfg_.inject_flit_word);
         if (cfg_.inject_xor != 0) {
@@ -438,7 +448,7 @@ protected:
         const Line& sources = pull ? passive : active;
         const Line& sinks = pull ? active : passive;
         const uint32_t transfer = effective_transfer(sources, sinks);
-        if (transfer != cfg_.transfer_bytes) {
+        if (transfer != cfg_.transfer_bytes && warned_caps_.insert(sources.name + "->" + sinks.name).second) {
             log_warning(
                 tt::LogTest,
                 "[dev {}] {} -> {}: transfer capped to {} B so that {} slots fit in the {} unreserved region",
@@ -569,19 +579,21 @@ protected:
             }
         }
         steps_run_++;
-        log_info(
-            tt::LogTest,
-            "[dev {}] step {}: {} {} {} over noc{} (risc{}): {} pairs x {} B -> {} bad",
-            dev_id,
-            step_index,
-            active.name,
-            pull ? "<-" : "->",
-            passive.name,
-            static_cast<int>(rn.noc),
-            static_cast<int>(rn.proc),
-            sources.cores.size() * sinks.cores.size(),
-            transfer,
-            bad_pairs);
+        if (cfg_.verbose || bad_pairs != 0) {
+            log_info(
+                tt::LogTest,
+                "[dev {}] step {}: {} {} {} over noc{} (risc{}): {} pairs x {} B -> {} bad",
+                dev_id,
+                step_index,
+                active.name,
+                pull ? "<-" : "->",
+                passive.name,
+                static_cast<int>(rn.noc),
+                static_cast<int>(rn.proc),
+                sources.cores.size() * sinks.cores.size(),
+                transfer,
+                bad_pairs);
+        }
         return bad_pairs;
     }
 
@@ -615,23 +627,13 @@ protected:
                     "full coverage",
                     device->id());
             }
-            log_info(
-                tt::LogTest,
-                "[dev {}] sweep '{}': {} active lines, {} passive lines, grid {}x{}, harvesting mask 0x{:x}",
-                device->id(),
-                sweep_name,
-                active_lines.size(),
-                passive_lines.size(),
-                device->compute_with_storage_grid_size().x,
-                device->compute_with_storage_grid_size().y,
-                MetalContext::instance().get_cluster().get_harvesting_mask(device->id()));
-            for (const auto& l : active_lines) {
-                log_info(tt::LogTest, "[dev {}] active {}", device->id(), line_desc(device, l));
-            }
-            for (const auto& l : passive_lines) {
-                log_info(tt::LogTest, "[dev {}] passive {}", device->id(), line_desc(device, l));
-            }
-            uint32_t step_index = 0;
+            // Enumerate the steps first so progress can be reported as "step k/n".
+            struct Step {
+                const Line* active;
+                const Line* passive;
+                RiscNoc rn;
+            };
+            std::vector<Step> plan;
             for (const auto& active : active_lines) {
                 if (!can_run_kernel(active, slow_dispatch_, arch_)) {
                     log_warning(
@@ -647,11 +649,68 @@ protected:
                         continue;
                     }
                     for (const RiscNoc& rn : risc_noc_combos(active, cfg_.nocs)) {
-                        total_bad += run_step(mesh_device, active, passive, rn, pull, step_index++);
-                        steps++;
+                        plan.push_back({&active, &passive, rn});
                     }
                 }
             }
+            log_info(
+                tt::LogTest,
+                "[dev {}] sweep '{}': {} active x {} passive lines, {} steps, grid {}x{}, harvesting mask 0x{:x}",
+                device->id(),
+                sweep_name,
+                active_lines.size(),
+                passive_lines.size(),
+                plan.size(),
+                device->compute_with_storage_grid_size().x,
+                device->compute_with_storage_grid_size().y,
+                MetalContext::instance().get_cluster().get_harvesting_mask(device->id()));
+            if (cfg_.verbose) {
+                for (const auto& l : active_lines) {
+                    log_info(tt::LogTest, "[dev {}] active {}", device->id(), line_desc(device, l));
+                }
+                for (const auto& l : passive_lines) {
+                    log_info(tt::LogTest, "[dev {}] passive {}", device->id(), line_desc(device, l));
+                }
+            }
+
+            const auto t0 = std::chrono::steady_clock::now();
+            auto last_report = t0;
+            uint32_t dev_bad = 0;
+            const uint32_t pairs_before = pairs_checked_;
+            for (uint32_t i = 0; i < plan.size(); i++) {
+                const Step& st = plan[i];
+                dev_bad += run_step(mesh_device, *st.active, *st.passive, st.rn, pull, i);
+                const auto now = std::chrono::steady_clock::now();
+                if (!cfg_.verbose && i + 1 < plan.size() && now - last_report >= kProgressInterval) {
+                    log_info(
+                        tt::LogTest,
+                        "[dev {}] sweep '{}': step {}/{} ({} {} {} noc{}), {} bad so far, {:.1f} s elapsed",
+                        device->id(),
+                        sweep_name,
+                        i + 1,
+                        plan.size(),
+                        st.active->name,
+                        pull ? "<-" : "->",
+                        st.passive->name,
+                        static_cast<int>(st.rn.noc),
+                        dev_bad,
+                        std::chrono::duration<double>(now - t0).count());
+                    last_report = now;
+                }
+            }
+            const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            log_info(
+                tt::LogTest,
+                "[dev {}] sweep '{}': {} steps, {} pairs, {} bad, {:.1f} s ({:.1f} ms/step)",
+                device->id(),
+                sweep_name,
+                plan.size(),
+                pairs_checked_ - pairs_before,
+                dev_bad,
+                secs,
+                plan.empty() ? 0.0 : 1e3 * secs / plan.size());
+            total_bad += dev_bad;
+            steps += plan.size();
         }
         if (steps == 0) {
             GTEST_SKIP() << "sweep '" << sweep_name << "' had no runnable steps on this platform/dispatch mode";

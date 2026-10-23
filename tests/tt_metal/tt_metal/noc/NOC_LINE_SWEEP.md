@@ -72,6 +72,19 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_noc --gtest_filte
 The suite opens every chip visible to the host and sweeps them one after another. Restrict to some chips with
 `TT_NOC_SWEEP_DEVICES=0,5`.
 
+Output is deliberately compact. Each sweep logs one header line and one summary line per chip, a progress line
+every 10 s while it runs, and the bad pairs of any failing step (capped by `TT_NOC_SWEEP_MAX_REPORT`):
+
+```
+[dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines, 112 steps, grid 8x8, harvesting mask 0x204
+[dev 0] sweep 'tensix row-major push': step 57/112 (row4 -> row0 noc1), 0 bad so far, 10.0 s elapsed
+[dev 0] sweep 'tensix row-major push': 112 steps, 7168 pairs, 0 bad, 1.0 s (9.3 ms/step)
+```
+
+The progress line only appears for sweeps that run longer than 10 s. A progress line that stops advancing means
+a kernel on the active line never finished; the step named in the last progress line brackets where to look.
+`TT_NOC_SWEEP_VERBOSE=1` logs every step and the cores of every line.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `TT_NOC_SWEEP_TRANSFER_BYTES` | 4096 | bytes per (source, destination) pair, multiple of 64 |
@@ -81,6 +94,7 @@ The suite opens every chip visible to the host and sweeps them one after another
 | `TT_NOC_SWEEP_NOCS` | `0,1` | which NOCs to test |
 | `TT_NOC_SWEEP_DEVICES` | all | comma list of chip ids |
 | `TT_NOC_SWEEP_MAX_REPORT` | 64 | bad pairs logged per step and in the final summary |
+| `TT_NOC_SWEEP_VERBOSE` | 0 | 1 = log every step and the cores of every line |
 | `TT_NOC_SWEEP_INJECT_XOR` | 0 | checker self-test, see below |
 | `TT_NOC_SWEEP_INJECT_FLIT_WORD` | 15 | checker self-test, see below |
 
@@ -92,7 +106,8 @@ cores, so the column-major sweeps have about three times as many steps; estimate
 
 ## Reading a failure
 
-Every bad (source, destination) pair is logged once, and the fixture prints a summary at the end:
+Every bad (source, destination) pair is logged once, the step it belongs to is logged after its pairs, and the
+fixture prints a summary at the end:
 
 ```
 [dev 0] active-eth log(0,2) virt(...) phys(2,1) -> row0 log(3,0) virt(...) phys(4,2) over noc1 (PUSH/write, erisc kernel):
