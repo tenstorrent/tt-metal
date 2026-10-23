@@ -315,7 +315,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
                     const uint32_t t = clk();
                     conn.wait_for_empty_write_slot();
                     wslot += clk() - t;
-                    ++npk;
+                    if (npk++ == 0) DeviceTimestampedData("SE-RSS-T1", 1);  // (the first RS packet's time)
                 }
 #endif
                 conn.wait_for_empty_write_slot();

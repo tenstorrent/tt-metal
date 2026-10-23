@@ -959,3 +959,21 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The W-ready check stays under SE_PROBE=HW: a ready word going backwards or past round wr + NWS records old / new
   and spins (a stray write halts the soak at once).
 - After the fix: K3 4000 calls with the check, no hang, never fired; K3 300 calls checked every call: PCC min 0.99987.
+
+### The SE tail cut (per-pass hand-offs + a narrow first pass) - tried, not taken
+- Measured first (RSSTAT, a new SE-RSS-T1 stamp at the first RS packet; LoudBox, from the mesh's last launch): the
+  tail is link-bound once the RS starts - the end chips' 3u streams run at link rate (GLM 82 us, K3 151). K3: the
+  ports send the latent all-to-all first (~20 us after gate / up, while the h exchange and the first passes run), so
+  K3's line tail is link time throughout (latent + 3u) - nothing for an earlier hand-off to cut. GLM: the link idles
+  ~16 us after gate / up (the h exchange ~6 + scatter -2's three passes ~10 before a start entry's hand-off).
+- Tried: the port's first unit (if a start) handed off pass by pass (the compute hands after every pass, the port
+  walks piece by piece over the cores, a piece the pass's column band of the canonical [rows][w] sub-block as row
+  runs; receivers unchanged), and a narrow (1-column) first pass. The CPU RS model (pieces read only after their pass,
+  every piece once) passed. Device: correct (PCC 0.99987 / 0.99988). Perf, Galaxy-projected: K3 448 (was 390 - the
+  first packet stayed behind the latent, the row runs of 1-3 tiles slowed its end streams 151 -> 237 us); GLM 168
+  (was 163-167): the first packet at h exchange + 1 (was + 10) but the end streams 82 -> 102 us (the row-run packets,
+  and the reader flushing before every blocked piece). Narrow passes without pieces: first packet + 12, streams 87.
+- Reverted (kept: the SE-RSS-T1 stamp). A contiguous variant (pass-major sub-blocks, the same pass split for a block
+  on every chip) could keep the GLM streams at link rate, for at most ~9 us on GLM and none on K3.
+- Projection note: the latent's line-vs-ring difference (3 blocks a direction on the line's end chips, 2 on the
+  ring) is not credited in galaxy_projection - K3's SE path is overestimated by about one latent block (~6 us).
