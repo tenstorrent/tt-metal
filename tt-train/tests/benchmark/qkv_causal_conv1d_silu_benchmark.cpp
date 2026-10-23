@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// qkv causal conv1d + SiLU benchmark: one layer "model" (Kimi-like widths), forward + backward.
+// qkv causal conv1d + SiLU benchmark, one layer, forward + backward.
 //   composite - backward built from stock ttnn ops (what you get without the fused kernel)
-//   fused     - ttml::metal::qkv_causal_conv1d_silu_bw
-// Forward is always the fused ttnn kernel. Env: QKV_T, QKV_WIDTH (or QKV_Q/QKV_K/QKV_V), QKV_CHUNKS (csv,
-// default 64,128,256; 256 is the op default and the fastest measured, 32 is 2.4x slower), QKV_SPLITS (csv, 0 = auto).
+//   fused     - ttml::metal::qkv_causal_conv1d_silu_bw, per chunk / splits, with and without tap gradients
+//   autograd  - ops::qkv_causal_conv1d_silu forward + backward from a TILE input with frozen taps: the call the
+//               model makes, layout conversions and tap post-processing included
+// Defaults are the Qwen3.8-27B per-chip shape (TP=4): T=1024, Q=K=512, V=1536. Env: TTML_QKV_CONV_BENCH_T,
+// _WIDTH (sets Q=K=V) or _Q/_K/_V, _CHUNKS (csv, default 64,128,256), _SPLITS (csv, 0 = auto).
 
 #include <benchmark/benchmark.h>
 #include <fmt/format.h>
@@ -26,9 +28,11 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/qkv_causal_conv1d_silu_op.hpp"
 #include "test_utils/random_data.hpp"
 
 namespace {
@@ -66,7 +70,7 @@ struct Widths {
 };
 
 struct Inputs {
-    ttnn::Tensor input_rm, history_rm, actual_start;
+    ttnn::Tensor input_rm, input_tile, history_rm, actual_start;
     std::array<ttnn::Tensor, 4> taps;
     ttnn::Tensor grad_q, grad_k, grad_v;
 };
@@ -74,8 +78,10 @@ struct Inputs {
 Inputs make_inputs(uint32_t T, Widths w) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto tap = [&](uint32_t j) { return random_device(ttnn::Shape{1, 1, w.c()}, 3 + j); };
+    auto input_rm = random_device(ttnn::Shape{1, T, w.c()}, 1, ttnn::Layout::ROW_MAJOR);
     return Inputs{
-        random_device(ttnn::Shape{1, T, w.c()}, 1, ttnn::Layout::ROW_MAJOR),
+        input_rm,
+        ttnn::to_layout(input_rm, ttnn::Layout::TILE),
         random_device(ttnn::Shape{1, 3, w.c()}, 2, ttnn::Layout::ROW_MAJOR),
         ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             std::vector<uint32_t>{0}, ttnn::Shape({1}), device, ttnn::Layout::ROW_MAJOR),
@@ -96,9 +102,8 @@ ttnn::Tensor shifted_rows(const ttnn::Tensor& window, uint32_t begin, uint32_t T
 
 // Backward from stock ops: recompute preact, silu', then dtap_j = sum_t dpre * x[t-3+j], dx = reversed conv.
 void composite_bw(const Inputs& in, uint32_t T) {
-    auto input = ttnn::to_layout(in.input_rm, ttnn::Layout::TILE);
     auto history = ttnn::to_layout(in.history_rm, ttnn::Layout::TILE);
-    auto window = ttnn::concat(std::vector<ttnn::Tensor>{history, input}, 1);
+    auto window = ttnn::concat(std::vector<ttnn::Tensor>{history, in.input_tile}, 1);
     std::array<ttnn::Tensor, 4> views;
     std::optional<ttnn::Tensor> preact;
     for (uint32_t j = 0; j < 4; ++j) {
@@ -124,7 +129,7 @@ void composite_bw(const Inputs& in, uint32_t T) {
     benchmark::DoNotOptimize(grad_input);
 }
 
-void fused_bw(const Inputs& in, Widths w, uint32_t chunk, uint32_t splits) {
+void fused_bw(const Inputs& in, Widths w, uint32_t chunk, uint32_t splits, bool tap_grads) {
     auto out = ttml::metal::qkv_causal_conv1d_silu_bw(
         in.grad_q,
         in.grad_k,
@@ -139,13 +144,14 @@ void fused_bw(const Inputs& in, Widths w, uint32_t chunk, uint32_t splits) {
         w.k,
         w.v,
         chunk,
-        splits);
+        splits,
+        tap_grads);
     benchmark::DoNotOptimize(out);
 }
 
 void fused_fw(const Inputs& in, Widths w, uint32_t chunk) {
     auto out = ttnn::experimental::kda::qkv_causal_conv1d_silu(
-        in.input_rm,
+        in.input_tile,
         in.history_rm,
         in.taps[0],
         in.taps[1],
@@ -160,6 +166,24 @@ void fused_fw(const Inputs& in, Widths w, uint32_t chunk) {
     benchmark::DoNotOptimize(out);
 }
 
+// The model's call: autograd op forward + backward from a TILE input, taps frozen.
+void autograd_fw_bw(const Inputs& in, Widths w) {
+    using namespace ttml;
+    auto input = autograd::create_tensor(in.input_tile, /* requires_grad */ true);
+    std::array<autograd::TensorPtr, 4> taps;
+    for (size_t j = 0; j < 4; ++j) {
+        taps[j] = autograd::create_tensor(in.taps[j], /* requires_grad */ false);
+    }
+    auto [q, k, v] =
+        ops::qkv_causal_conv1d_silu(input, in.history_rm, taps[0], taps[1], taps[2], taps[3], w.q, w.k, w.v);
+    q->set_grad(in.grad_q);
+    k->set_grad(in.grad_k);
+    v->set_grad(in.grad_v);
+    q->backward();
+    benchmark::DoNotOptimize(input->get_grad());
+    autograd::ctx().reset_graph();
+}
+
 template <typename Fn>
 double time_ms(Fn&& fn, uint32_t warmup, uint32_t measure) {
     auto* device = &ttml::autograd::ctx().get_device();
@@ -167,11 +191,14 @@ double time_ms(Fn&& fn, uint32_t warmup, uint32_t measure) {
 }
 
 void BM_QkvCausalConv1dSilu(benchmark::State& state) {
-    const uint32_t T = env_u32("QKV_T", 4096);
-    const uint32_t W = env_u32("QKV_WIDTH", 4096);
-    const Widths w{env_u32("QKV_Q", W), env_u32("QKV_K", W), env_u32("QKV_V", W)};
-    const auto chunks = env_list("QKV_CHUNKS", {64, 128, 256});
-    const auto splits = env_list("QKV_SPLITS", {0});
+    const uint32_t T = env_u32("TTML_QKV_CONV_BENCH_T", 1024);
+    const uint32_t W = env_u32("TTML_QKV_CONV_BENCH_WIDTH", 0);
+    const Widths w{
+        env_u32("TTML_QKV_CONV_BENCH_Q", W != 0 ? W : 512),
+        env_u32("TTML_QKV_CONV_BENCH_K", W != 0 ? W : 512),
+        env_u32("TTML_QKV_CONV_BENCH_V", W != 0 ? W : 1536)};
+    const auto chunks = env_list("TTML_QKV_CONV_BENCH_CHUNKS", {64, 128, 256});
+    const auto splits = env_list("TTML_QKV_CONV_BENCH_SPLITS", {0});
     const uint32_t warmup = 3;
     const uint32_t measure = 10;
 
@@ -179,38 +206,45 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
     const auto grid = device->compute_with_storage_grid_size();
     const auto in = make_inputs(T, w);
     tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
+    fmt::print("T={} Q={} K={} V={} cores={}x{}\n", T, w.q, w.k, w.v, grid.x, grid.y);
 
     const double composite_ms = time_ms([&] { composite_bw(in, T); }, warmup, measure);
-    fmt::print("T={} Q={} K={} V={} cores={}x{}\n", T, w.q, w.k, w.v, grid.x, grid.y);
     fmt::print("composite bw (stock ttnn ops): {:.3f} ms\n", composite_ms);
-    double best_fw = 1e9, best_bw = 1e9;
+    double best_fw = 1e9, best_bw = 1e9, best_bw_frozen = 1e9;
     for (const auto chunk : chunks) {
         const double fw_ms = time_ms([&] { fused_fw(in, w, chunk); }, warmup, measure);
         best_fw = std::min(best_fw, fw_ms);
         for (const auto split : splits) {
-            const double bw_ms = time_ms([&] { fused_bw(in, w, chunk, split); }, warmup, measure);
+            const double bw_ms = time_ms([&] { fused_bw(in, w, chunk, split, true); }, warmup, measure);
+            const double bw_frozen_ms = time_ms([&] { fused_bw(in, w, chunk, split, false); }, warmup, measure);
             best_bw = std::min(best_bw, bw_ms);
+            best_bw_frozen = std::min(best_bw_frozen, bw_frozen_ms);
             fmt::print(
-                "chunk={:4} splits={:3}  fused fw {:.3f} ms  fused bw {:.3f} ms  bw speedup vs composite {:.2f}x\n",
+                "chunk={:4} splits={:3}  fused fw {:.3f} ms  fused bw {:.3f} ms  frozen taps {:.3f} ms  bw speedup vs "
+                "composite {:.2f}x\n",
                 chunk,
                 split,
                 fw_ms,
                 bw_ms,
+                bw_frozen_ms,
                 composite_ms / bw_ms);
         }
     }
-    fmt::print(
-        "step (fw+bw): composite {:.3f} ms  fused {:.3f} ms  speedup {:.2f}x\n",
-        best_fw + composite_ms,
-        best_fw + best_bw,
-        (best_fw + composite_ms) / (best_fw + best_bw));
+    const double autograd_ms = time_ms([&] { autograd_fw_bw(in, w); }, warmup, measure);
+    fmt::print("autograd op, TILE input, frozen taps (fw + bw, auto chunk / splits): {:.3f} ms\n", autograd_ms);
+
     for (auto _ : state) {
-        fused_bw(in, w, chunks.front(), splits.front());
+        state.SetIterationTime(autograd_ms / 1000.0);
     }
+    state.counters["Composite_bw_ms"] = composite_ms;
+    state.counters["Fused_fw_ms"] = best_fw;
+    state.counters["Fused_bw_ms"] = best_bw;
+    state.counters["Fused_bw_frozen_taps_ms"] = best_bw_frozen;
+    state.counters["Autograd_fw_bw_ms"] = autograd_ms;
     ttml::autograd::ctx().reset_graph();
 }
 
-BENCHMARK(BM_QkvCausalConv1dSilu)->Unit(benchmark::kMillisecond)->Iterations(1);
+BENCHMARK(BM_QkvCausalConv1dSilu)->Unit(benchmark::kMillisecond)->UseManualTime()->Iterations(1);
 
 }  // namespace
 
