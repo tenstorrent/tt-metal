@@ -835,12 +835,13 @@ class RouterStream:
         return self.xg.chips[coord]["rings"][0]["p"]
 
     def _dir(self, p, b):
-        """The direction chip p sends owner b's partial (shortest; ring ties by p's parity)."""
+        """The direction chip p sends owner b's partial (shortest; ring ties "fwd" - X+, the fabric routing table's
+        tie: a multi-hop unicast must leave through its route's first hop, or it never lands)."""
         G = self.G
         if not self.xg.ring:
             return "fwd" if b > p else "bwd"
         df = (b - p) % G
-        return "fwd" if df < G - df or (df == G - df and p % 2 == 0) else "bwd"
+        return "fwd" if df <= G - df else "bwd"
 
     def _hops(self, p, b):
         G = self.G

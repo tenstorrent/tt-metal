@@ -344,7 +344,7 @@ class HeadSE3:
             from models.demos.moe_block.tt.routing_stream import RoutingStream
 
             R_, C_ = tuple(mesh_device.shape)
-            luts, nps = port_luts(mesh_device, routing.L)
+            luts, nps = port_luts(mesh_device, routing.L, tuple(routing.torus))  # (the combine's ports: its torus)
             S_ = rows // G
             EPC = router.E // (R_ * C_)
             rows_cap = routing.rows_cap or (2 * S_ * router.K + 32 * EPC + 31) // 32 * 32

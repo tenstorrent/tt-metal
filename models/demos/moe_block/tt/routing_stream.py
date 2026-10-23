@@ -77,6 +77,18 @@ def _plan_fn(subs):
     ):
         assert body.count(a_) == 1, a_
         body = body.replace(a_, b_)
+    # (per sender core its own ready word: (x, y, ready) - the watcher core's two Y senders count apart)
+    for a_, b_ in (
+        ("    a += 2 * NPORT;\n", "    a += 3 * NPORT;\n"),
+        (
+            "            const uint32_t x = get_arg_val<uint32_t>(port_arg + 2 * i), y = get_arg_val<uint32_t>(port_arg + 2 * i + 1);\n"
+            "            noc_semaphore_inc(get_noc_addr(x, y, ready_sem), 1);",
+            "            const uint32_t x = get_arg_val<uint32_t>(port_arg + 3 * i), y = get_arg_val<uint32_t>(port_arg + 3 * i + 1);\n"
+            "            noc_semaphore_inc(get_noc_addr(x, y, get_arg_val<uint32_t>(port_arg + 3 * i + 2)), 1);",
+        ),
+    ):
+        assert body.count(a_) == 1, a_
+        body = body.replace(a_, b_)
     # (the port buffers: absolute addresses, not offsets from the planner's base)
     a_ = "const uint32_t pb = B + get_arg_val<uint32_t>(dst_arg + 3 * d + 2);"
     assert body.count(a_) == 1, a_
@@ -473,7 +485,9 @@ class RoutingStream:
             rows=gs(pc),
             rows2=gs(pc),
             calls_s=gs(scs),
+            calls_s2=gs(scs),  # (the second Y direction's sender: the watcher core's other RISC, its own call count)
             ready=gs(scs),
+            ready2=gs(scs),  # (the second Y direction's sender's: the planners count each sender apart)
         )
         self.addr = {k: int(ttnn.get_global_semaphore_address(v)) for k, v in self.sems.items()}
 
@@ -626,7 +640,12 @@ class RoutingStream:
             v = virt(core)
             dst += [v.x, v.y, b + j * self.PCAP]
         senders = sorted(sv)
-        port_args = [w for k in senders for v in [virt(self._core_of(coord, k))] for w in (v.x, v.y)]
+        port_args = [
+            w
+            for k in senders
+            for v in [virt(self._core_of(coord, k))]
+            for w in (v.x, v.y, self.addr[self._sem(sv, k)[1]])
+        ]
         tail = [int(self.dbg.buffer_address()) if self.dbg is not None else 0, self.addr["ready"]]
 
         def args(q):
@@ -665,6 +684,13 @@ class RoutingStream:
             CT0=ct0,
         )
 
+    @staticmethod
+    def _sem(sv, key):
+        """A sender's (calls, ready) semaphores: the second Y direction's sender (the watcher core's other RISC, on the
+        Galaxy's Y ring) its own pair - one shared call count would hand it the next call's parity."""
+        second_y = key[0] == "y" and key != min(k for k in sv if k[0] == "y")
+        return ("calls_s2", "ready2") if second_y else ("calls_s", "ready")
+
     def send_block(self, coord, key):
         """A sender's RASend args (key None or not serving: [0])."""
         sv = self.serve_cache.get(coord) or self.serve(coord)
@@ -687,8 +713,8 @@ class RoutingStream:
             self.addr["c1"],
             p0.x,
             p0.y,
-            self.addr["calls_s"],
-            self.addr["ready"],
+            self.addr[self._sem(sv, key)[0]],
+            self.addr[self._sem(sv, key)[1]],
             int(node(me).mesh_id),
             self.fbase,
             self.flags,

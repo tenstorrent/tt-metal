@@ -1791,12 +1791,13 @@ class SeEngine3:
         return (rs[0], len(rs)) if rs else (0, 0)
 
     def la_dir(self, p, b):
-        """The direction chip p sends block b's latent (shortest; ring ties by p's parity)."""
+        """The direction chip p sends block b's latent (shortest; ring ties "fwd" - X+, the fabric routing table's
+        tie: a multi-hop unicast must leave through its route's first hop, or it never lands)."""
         G = self.shards
         if not self.rs.kind.startswith("ring"):
             return "fwd" if b > p else "bwd"
         df = (b - p) % G
-        return "fwd" if df < G - df or (df == G - df and p % 2 == 0) else "bwd"
+        return "fwd" if df <= G - df else "bwd"
 
     def _la_brisc(self, p, port, la, cx, cy):
         """The latent hand-offs: [count, my port word] + per destination block with rows of mine its port's NoC."""
