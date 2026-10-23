@@ -1,0 +1,7407 @@
+{
+  "issue_training": [
+    {
+      "traffic": "write",
+      "mode": "noc0",
+      "payload_bytes": 64,
+      "issue_cycles": 39.9375
+    },
+    {
+      "traffic": "write",
+      "mode": "noc1",
+      "payload_bytes": 64,
+      "issue_cycles": 39.4375
+    },
+    {
+      "traffic": "write",
+      "mode": "noc0",
+      "payload_bytes": 128,
+      "issue_cycles": 40.0625
+    },
+    {
+      "traffic": "write",
+      "mode": "noc1",
+      "payload_bytes": 128,
+      "issue_cycles": 39.8125
+    },
+    {
+      "traffic": "write",
+      "mode": "noc0",
+      "payload_bytes": 1024,
+      "issue_cycles": 40.0
+    },
+    {
+      "traffic": "write",
+      "mode": "noc1",
+      "payload_bytes": 1024,
+      "issue_cycles": 39.375
+    },
+    {
+      "traffic": "write",
+      "mode": "noc0",
+      "payload_bytes": 4096,
+      "issue_cycles": 65.6875
+    },
+    {
+      "traffic": "write",
+      "mode": "noc1",
+      "payload_bytes": 4096,
+      "issue_cycles": 64.625
+    }
+  ],
+  "cases": [
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 64,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 21148.0,
+        "estimated_us": 15.665185185185186,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 16.242037037037036,
+      "error_percent": -3.5515979340303483
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 64,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 21980.0,
+        "estimated_us": 16.28148148148148,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 32.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 16.85537037037037,
+      "error_percent": -3.4047836166075207
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 64,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 4988.0,
+        "estimated_us": 3.6948148148148148,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.7375925925925926,
+      "error_percent": -1.1445275727097082
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 64,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 4956.0,
+        "estimated_us": 3.671111111111111,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 32.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.735925925925926,
+      "error_percent": -1.7349063150589927
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 64,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3772.0,
+        "estimated_us": 2.794074074074074,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 128.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.783703703703704,
+      "error_percent": 0.37253858435337683
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 64,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3740.0,
+        "estimated_us": 2.77037037037037,
+        "issue_cycles_per_request": [
+          39.9375,
+          39.4375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 4096,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.09481481481481481,
+        "bank_occupancy_lower_bound_us": 0.011851851851851851,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 32.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 128.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.7824074074074074,
+      "error_percent": -0.4326123128119863
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 128,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 21220.0,
+        "estimated_us": 15.718518518518518,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 16.241481481481483,
+      "error_percent": -3.219921554319083
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 128,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 22068.0,
+        "estimated_us": 16.346666666666668,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 48.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 16.85611111111111,
+      "error_percent": -3.022313041758673
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 128,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 5004.0,
+        "estimated_us": 3.7066666666666666,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.7453703703703702,
+      "error_percent": -1.0333745364647706
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 128,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 4988.0,
+        "estimated_us": 3.6948148148148148,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 48.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.742962962962963,
+      "error_percent": -1.28636453591926
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 128,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3784.0,
+        "estimated_us": 2.802962962962963,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 192.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.7844444444444445,
+      "error_percent": 0.6650704974727306
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 128,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3768.0,
+        "estimated_us": 2.7911111111111113,
+        "issue_cycles_per_request": [
+          40.0625,
+          39.8125
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 8192,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.14222222222222222,
+        "bank_occupancy_lower_bound_us": 0.017777777777777778,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 48.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 192.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 144.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 96.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.7835185185185187,
+      "error_percent": 0.2727696094737553
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 1024,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 22112.0,
+        "estimated_us": 16.37925925925926,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 17.000555555555554,
+      "error_percent": -3.6545646656427233
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 1024,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 22936.0,
+        "estimated_us": 16.98962962962963,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 17.61462962962963,
+      "error_percent": -3.5481870078533206
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 1024,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 5112.0,
+        "estimated_us": 3.7866666666666666,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.837222222222222,
+      "error_percent": -1.3175039814680711
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 1024,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 5072.0,
+        "estimated_us": 3.757037037037037,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 3.8361111111111112,
+      "error_percent": -2.061308230750669
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 1024,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3836.0,
+        "estimated_us": 2.8414814814814813,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 1088.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.8314814814814815,
+      "error_percent": 0.353172007848257
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 1024,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 3796.0,
+        "estimated_us": 2.811851851851852,
+        "issue_cycles_per_request": [
+          40.0,
+          39.375
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 65536,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 0.8059259259259259,
+        "bank_occupancy_lower_bound_us": 0.13037037037037036,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 1088.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 816.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 544.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 272.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 2.828888888888889,
+      "error_percent": -0.602251898402717
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 4096,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 26828.0,
+        "estimated_us": 19.872592592592593,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 19.654074074074074,
+      "error_percent": 1.111823012851909
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 4096,
+        "batch": 1,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 27624.0,
+        "estimated_us": 20.462222222222223,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 20.314444444444444,
+      "error_percent": 0.7274517311163464
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 4096,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 7140.0,
+        "estimated_us": 5.288888888888889,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 5.404814814814815,
+      "error_percent": -2.1448639758788524
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 4096,
+        "batch": 8,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 7093.0,
+        "estimated_us": 5.254074074074074,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 5.3277777777777775,
+      "error_percent": -1.3833854709767057
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc0",
+        "payload_bytes": 4096,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 5672.0,
+        "estimated_us": 4.201481481481482,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "0": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              11,
+              1,
+              0
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              0,
+              1,
+              1
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              1,
+              1,
+              2
+            ],
+            "flit_cycles": 56.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              9,
+              1,
+              10
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              10,
+              1,
+              11
+            ],
+            "flit_cycles": 40.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              8,
+              1,
+              9
+            ],
+            "flit_cycles": 32.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              6,
+              1,
+              7
+            ],
+            "flit_cycles": 24.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              7,
+              1,
+              8
+            ],
+            "flit_cycles": 24.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              0,
+              1,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              2,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              3,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              4,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              5,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              6,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              7,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              0,
+              8,
+              2,
+              9,
+              2
+            ],
+            "flit_cycles": 4160.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 4.311481481481482,
+      "error_percent": -2.5513272055665337
+    },
+    {
+      "case": {
+        "cores": 1,
+        "mode": "noc1",
+        "payload_bytes": 4096,
+        "batch": 16,
+        "banks": "balanced"
+      },
+      "traffic": "write",
+      "prediction": {
+        "estimated_cycles": 5626.5,
+        "estimated_us": 4.167777777777777,
+        "issue_cycles_per_request": [
+          65.6875,
+          64.625
+        ],
+        "contention": true,
+        "read_requests_by_noc": {},
+        "read_bytes_per_iteration": 0,
+        "write_requests_by_noc": {
+          "1": 64
+        },
+        "write_bytes_per_iteration": 262144,
+        "traffic": "write",
+        "completion": "remote_ack",
+        "write_admission_characterized": false,
+        "write_bank_delay_cycles": 22,
+        "link_occupancy_lower_bound_us": 3.0814814814814815,
+        "bank_occupancy_lower_bound_us": 0.5155555555555555,
+        "hottest_response_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              9,
+              2,
+              8,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              8,
+              2,
+              7,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              7,
+              2,
+              6,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              6,
+              2,
+              5,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              5,
+              2,
+              4,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              4,
+              2,
+              3,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              3,
+              2,
+              2,
+              2
+            ],
+            "flit_cycles": 64.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              2,
+              2,
+              1,
+              2
+            ],
+            "flit_cycles": 64.0
+          }
+        ],
+        "hottest_request_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "hottest_all_links": [
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              2,
+              1,
+              1
+            ],
+            "flit_cycles": 4160.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              1,
+              0
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              0,
+              1,
+              11
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              11,
+              1,
+              10
+            ],
+            "flit_cycles": 3120.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              10,
+              1,
+              9
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              9,
+              1,
+              8
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              8,
+              1,
+              7
+            ],
+            "flit_cycles": 2080.0
+          },
+          {
+            "resource": [
+              "link",
+              1,
+              1,
+              1,
+              0,
+              1
+            ],
+            "flit_cycles": 1040.0
+          }
+        ],
+        "model": "physical_bank_service_plus_directed_links",
+        "read_service_profile": null,
+        "finite_router_buffers": false
+      },
+      "measured_us": 4.253888888888889,
+      "error_percent": -2.0242914979757165
+    }
+  ],
+  "median_absolute_error_percent": 1.3504447262223884,
+  "source_sha256": {
+    "tools/perf_calculator/topology_bh.json": "ba7caebde8352feef126253023f315d5a8c0ecf44046af51f1f486ac509c20a2",
+    "tools/perf_calculator/write_probe_bh.jsonl": "fdb8a11197f9f958e0314d9c4550a1f61d7bb46d868d314d5f45250db6c9f31c",
+    "/localdev/dstoiljkovic/tt-metal/tools/perf_calculator/noc_routing_model.py": "bce984a575215c3df1036657b317befa1b9017b012e7c40b6c595e86081b8f6a",
+    "/localdev/dstoiljkovic/tt-metal/tools/perf_calculator/routing.py": "2c8d1747a68e90d988e6facdfbb2181d75a67908d26afa536e4380e5501a951b",
+    "/localdev/dstoiljkovic/tt-metal/tools/perf_calculator/read_service.py": "c0c0454a6944fd8688e21ddc3e4789b5e2e666afeb1d94678221f08de7decbed"
+  },
+  "note": "Only issue-loop scopes supply calibration. No write-admission or total-runtime penalty is fitted; mixed-read verification interference must be assessed separately."
+}

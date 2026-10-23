@@ -1,0 +1,22 @@
+{
+  "architecture": "blackhole",
+  "clock_mhz": 1350,
+  "hop_cycles": 9,
+  "niu_injection_cycles": 5,
+  "niu_ejection_cycles": 5,
+  "flit_bytes": 64,
+  "packet_header_flits": 1,
+  "dram_read_latency_cycles": 126,
+  "dram_write_latency_cycles": 22,
+  "dram_bytes_per_cycle": 47.0805,
+  "empirical_issue_cycles": 0,
+  "empirical_batch_cycles": 0,
+  "conversion_cycles_sensitivity": [
+    0,
+    32,
+    128
+  ],
+  "source_simulator_commit": "c0d2cb8842c520c48e3a28aef66a167e674d100f",
+  "source_simulator_url": "https://github.com/hedgehope/wolfpine/blob/c0d2cb8842c520c48e3a28aef66a167e674d100f/framework/perf/unit_costs.yaml",
+  "provenance": "NoC/DRAM constants retained from simulator unit costs. DRAM parameters are vendor-measurement-derived, not ISA guarantees. Conversion costs are sensitivity values, not measured or sourced timings. Model is standalone, not a Wolfpine kernel execution."
+}

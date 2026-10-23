@@ -1,0 +1,262 @@
+
+SHEET Sheet1
+A1: AI CLK | B1: 1.35 GHz
+A2: Cycle suration | B2: 0.7407 ns
+A3: NoC link bandwidth | B3: 64B/cycle
+A4: NoC link badwidth at 1.35 GHz  | B4: 86.4 GB/s
+A5: DRAM bandwidth  | B5: 512GB/s
+A6: DRAM banks | B6: 8.0
+A7: Tensix cores | B7: 120.0
+A10: Alignement requiremenets
+A11: Memory target | B11: Read | C11: Write
+A12: DRAM | B12: 64B | C12: 16B
+A13: L1 | B13: 16B | C13: 16B
+A16: BH completed unicast transfer estimate
+A17: Payload (bytes) | B17: 65536 | C17: Editable: total bytes moved
+A18: Clock (MHz) | B18: 1350 | C18: Queried BH p150b clock; units MHz
+A19: Router-link latency (cycles) | B19: 9 | C19: BH ISA: 9 cycles per inter-router link, not 9 ns
+A20: Transfer profile ID | B20: 2 | C20: Editable: choose ID 1-8 from the table below
+A21: NoC bandwidth (GB/s) | B21: =INDEX(B36:B43,B20) [cached 82.072] | C21: Measured at 64 KiB; not theoretical link bandwidth
+A22: Round-trip router links | B22: 29 | C22: Editable: total request + response/ACK links. Local 0; near 17; far 29 on verified NoC0 routes.
+A24: NIU crossing time (us) | B24: =B45*B46/B18 [cached 0.014814814814814815]
+A25: Bandwidth time (us) | B25: =B17/(B21*1000) [cached 0.798518374110537]
+A26: Router-link time (us) | B26: =B22*B19/B18 [cached 0.19333333333333333]
+A27: Estimated NoC latency (us) | B27: =B25+B26+B24+B47/1000 [cached 1.0393901289188885]
+A29: Formula | B29: time_us = bytes/(GBps*1000) + (round_trip_links*router_cycles + NIU_crossings*NIU_cycles)/clock_MHz + residual_ns/1000
+A30: Calibration note | B30: 64 KiB measured bandwidth is an effective rate; this is a heuristic estimate for other payload sizes.
+A31: Latency note | B31: Completed unicast reads/nonposted writes only. Multicast profiles below are reference data; this endpoint model does not model multicast ACK fan-in.
+A32: Source | B32: Dispatch BW.xlsx / NOC BWs / BH NOC P150; values copied, no external workbook links.
+A33: Model source | B33: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md#performance
+A35: Profile ID / transfer | B35: BW (GB/s) | C35: Dispatch source cells | D35: Measured latency (us)
+A36: 1: READ NEAR L1 | B36: 82.37 | C36: 'NOC BWs'!G67 (BW), G68 (latency) | D36: 0.16088477
+A37: 2: READ FAR L1 | B37: 82.072 | C37: 'NOC BWs'!H67 (BW), H68 (latency) | D37: 0.24384375
+A38: 3: READ LOCAL L1 | B38: 79.858 | C38: 'NOC BWs'!I67 (BW), I68 (latency) | D38: 0.048296876
+A39: 4: WRITE FAR L1 | B39: 83.375 | C39: 'NOC BWs'!J67 (BW), J68 (latency) | D39: 0.24089453
+A40: 5: MCAST NEAR L1 | B40: 77.933 | C40: 'NOC BWs'!K67 (BW), K68 (latency) | D40: 0.17565039
+A41: 6: MCAST FAR L1 | B41: 49.668 | C41: 'NOC BWs'!L67 (BW), L68 (latency) | D41: 0.35941797
+A42: 7: MCAST MANY L1 | B42: 34.506 | C42: 'NOC BWs'!M67 (BW), M68 (latency) | D42: 0.5609316
+A43: 8: MCAST MANY L1 LINKED | B43: 57.677 | C43: 'NOC BWs'!N67 (BW), N68 (latency) | D43: 0.64235353
+A45: NIU crossings per transaction | B45: 4 | C45: 2 packets x (source NIU-to-router + destination router-to-NIU)
+A46: Cycles per NIU crossing | B46: 5 | C46: Approximate documented value; not a measured decomposition
+A47: Residual overhead (ns) | B47: =B49-B48/B50-B45*B46/(B18/1000) [cached 32.723606660203345] | C47: Calibrated combined overhead minus explicit NIU latency; assumes shared overhead across these reads/writes.
+A48: Calibration payload (bytes) | B48: 64
+A49: Calibration latency (ns) | B49: ='BH validation'!E10*1000 [cached 48.339844]
+A50: Calibration BW (GB/s) | B50: =B38 [cached 79.858]
+A51: Calibration note | B51: Local 64 B measurement sets the overhead. That row is calibration, not independent validation. Residual includes software/L1/barrier and unmodeled endpoint effects.
+A52: Scope | B52: Serialized completed transfers; do not multiply full fixed latency by every request in a pipelined algorithm.
+A53: Routes | B53: See BH routes: physical torus 17 x 12; use physical coordinates, NoC direction and return path.
+A54: No double counting | B54: Explicit NIU term plus residual equals the previous calibrated fixed overhead; estimates remain numerically equivalent.
+
+SHEET WH measurements
+A1: WH measurements — 2026-10-20
+A2: Hardware | B2: wormhole_b0; queried worker grid 8 x 8; physical NoC topology 10 x 12
+A3: Original model | B3: 10 x 12 grid, 9 ns/hop; 99 ns hop term. Retained here to reproduce the original comparison.
+A4: Alternative | B4: 8 x 8 worker-grid predictions are shown separately; neither is an actual route-distance model.
+A5: Measurement | B5: Median of 3 runs; 32768 serialized transfers/run, barrier per transfer; one warm-up workload.
+A6: Timing scope | B6: Host launch + Finish timing amortized over transfers. Timing-only benchmark; no payload correctness validation.
+A7: Bandwidth source | B7: Dispatch BW.xlsx / NOC BWs / WH NOC / 65536-byte row; copied values, no external links.
+A8: Logical endpoints | B8: Initiator (1,0); local (1,0), near (0,0), far (7,7).
+A9: Transfer | B9: Bytes | C9: BW (GB/s) | D9: Est 10x12 (us) | E9: Measured (us) | F9: Error (%) | G9: Est 8x8 (us) | H9: Error 8x8 (%) | I9: Min (us) | J9: Max (us)
+A10: read_local | B10: 64 | C10: 27.84 | D10: =B10/(C10*1000)+(10+12)/2*9/1000 [cached 0.10129885057471265] | E10: 0.07235718 | F10: =(D10/E10-1)*100 [cached 39.998339590780986] | G10: =B10/(C10*1000)+(8+8)/2*9/1000 [cached 0.07429885057471265] | H10: =(G10/E10-1)*100 [cached 2.683452526359731] | I10: 0.06478882 | J10: 0.07342529
+A11: read_local | B11: 2048 | C11: 27.84 | D11: =B11/(C11*1000)+(10+12)/2*9/1000 [cached 0.1725632183908046] | E11: 0.13180542 | F11: =(D11/E11-1)*100 [cached 30.922702868216344] | G11: =B11/(C11*1000)+(8+8)/2*9/1000 [cached 0.1455632183908046] | H11: =(G11/E11-1)*100 [cached 10.437961041969746] | I11: 0.13150024 | J11: 0.13833618
+A12: read_local | B12: 65536 | C12: 27.84 | D12: =B12/(C12*1000)+(10+12)/2*9/1000 [cached 2.4530229885057473] | E12: 2.2133484 | F12: =(D12/E12-1)*100 [cached 10.828597454686628] | G12: =B12/(C12*1000)+(8+8)/2*9/1000 [cached 2.426022988505747] | H12: =(G12/E12-1)*100 [cached 9.60872624055693] | I12: 2.2128906 | J12: 2.2134705
+A13: read_near | B13: 64 | C13: 28.312 | D13: =B13/(C13*1000)+(10+12)/2*9/1000 [cached 0.10126052557219554] | E13: 0.16934204 | F13: =(D13/E13-1)*100 [cached -40.20355159758584] | G13: =B13/(C13*1000)+(8+8)/2*9/1000 [cached 0.07426052557219555] | H13: =(G13/E13-1)*100 [cached -56.14761368636189] | I13: 0.16189575 | J13: 0.16940308
+A14: read_near | B14: 2048 | C14: 28.312 | D14: =B14/(C14*1000)+(10+12)/2*9/1000 [cached 0.17133681831025716] | E14: 0.2354126 | F14: =(D14/E14-1)*100 [cached -27.218501341790045] | G14: =B14/(C14*1000)+(8+8)/2*9/1000 [cached 0.14433681831025716] | H14: =(G14/E14-1)*100 [cached -38.6877260137065] | I14: 0.2270813 | J14: 0.23602295
+A15: read_near | B15: 65536 | C15: 28.312 | D15: =B15/(C15*1000)+(10+12)/2*9/1000 [cached 2.4137781859282286] | E15: 2.3223877 | F15: =(D15/E15-1)*100 [cached 3.9351950549957104] | G15: =B15/(C15*1000)+(8+8)/2*9/1000 [cached 2.3867781859282284] | H15: =(G15/E15-1)*100 [cached 2.7725984738994347] | I15: 2.3215027 | J15: 2.3294067
+A16: read_far | B16: 64 | C16: 28.7 | D16: =B16/(C16*1000)+(10+12)/2*9/1000 [cached 0.10122996515679443] | E16: 0.27529907 | F16: =(D16/E16-1)*100 [cached -63.22909294361422] | G16: =B16/(C16*1000)+(8+8)/2*9/1000 [cached 0.07422996515679443] | H16: =(G16/E16-1)*100 [cached -73.03660882080189] | I16: 0.26745605 | J16: 0.27697754
+A17: read_far | B17: 2048 | C17: 28.7 | D17: =B17/(C17*1000)+(10+12)/2*9/1000 [cached 0.1703588850174216] | E17: 0.3413391 | F17: =(D17/E17-1)*100 [cached -50.09101359398276] | G17: =B17/(C17*1000)+(8+8)/2*9/1000 [cached 0.1433588850174216] | H17: =(G17/E17-1)*100 [cached -58.001036207858526] | I17: 0.3343811 | J17: 0.3418579
+A18: read_far | B18: 65536 | C18: 28.7 | D18: =B18/(C18*1000)+(10+12)/2*9/1000 [cached 2.3824843205574915] | E18: 2.4348145 | F18: =(D18/E18-1)*100 [cached -2.1492470758042725] | G18: =B18/(C18*1000)+(8+8)/2*9/1000 [cached 2.3554843205574914] | H18: =(G18/E18-1)*100 [cached -3.2581611224390405] | I18: 2.4280396 | J18: 2.4354858
+A19: write_far | B19: 64 | C19: 27.808 | D19: =B19/(C19*1000)+(10+12)/2*9/1000 [cached 0.10130149597238206] | E19: 0.27835083 | F19: =(D19/E19-1)*100 [cached -63.60654071971618] | G19: =B19/(C19*1000)+(8+8)/2*9/1000 [cached 0.07430149597238206] | H19: =(G19/E19-1)*100 [cached -73.30652975872856] | I19: 0.27798462 | J19: 0.2784729
+A20: write_far | B20: 2048 | C20: 27.808 | D20: =B20/(C20*1000)+(10+12)/2*9/1000 [cached 0.17264787111622554] | E20: 0.34454346 | F20: =(D20/E20-1)*100 [cached -49.89082912320393] | G20: =B20/(C20*1000)+(8+8)/2*9/1000 [cached 0.14564787111622554] | H20: =(G20/E20-1)*100 [cached -57.72728609731106] | I20: 0.3378296 | J20: 0.3446045
+A21: write_far | B21: 65536 | C21: 27.808 | D21: =B21/(C21*1000)+(10+12)/2*9/1000 [cached 2.4557318757192177] | E21: 2.4412537 | F21: =(D21/E21-1)*100 [cached 0.5930631347007331] | G21: =B21/(C21*1000)+(8+8)/2*9/1000 [cached 2.4287318757192176] | H21: =(G21/E21-1)*100 [cached -0.5129259724535151] | I21: 2.435669 | J21: 2.4417725
+
+SHEET BH validation
+A1: BH validation — measured on p150b, 2026-10-20
+A2: Bandwidth preset | B2: BH P150, Dispatch workbook, 64 KiB measurements; replace BW if testing another BH variant.
+A3: Clock (MHz) | B3: =Sheet1!B18 [cached 1350] | C3: From live p150b query
+A4: Router cycles/link | B4: =Sheet1!B19 [cached 9] | C4: 9 cycles per BH ISA documentation
+A5: NIU cycles/crossing | B5: =Sheet1!B46 [cached 5] | C5: Approximately 5 cycles; four crossings per completed unicast transaction
+A6: Residual overhead (ns) | B6: =Sheet1!B47 [cached 32.723606660203345] | C6: Calibrated local-read baseline minus explicit NIU time; shared across variants as a model assumption
+A7: Measurements | B7: Column E: medians of 3 runs on this BH p150b. Edit inputs to recalculate predictions.
+A8: Units | B8: GB/s = decimal gigabytes per second. Error = (estimate / measured - 1) * 100.
+A9: Transfer | B9: Bytes | C9: BW (GB/s) | D9: Estimated (us) | E9: Measured (us) | F9: Error (%) | G9: Measured min (us) | H9: Measured max (us) | I9: Measured samples (us) | J9: Round-trip links | K9: NIU crossings | L9: Original estimate (us)
+A10: read_local | B10: 64 | C10: =Sheet1!B38 [cached 79.858] | D10: =B10/(C10*1000)+(J10*$B$4+K10*$B$5)/$B$3+$B$6/1000 [cached 0.04833984400000001] | E10: 0.048339844 | F10: =(D10/E10-1)*100 [cached 2.220446049250313e-14] | G10: 0.048187256 | H10: 0.04840088 | I10: [0.048339844, 0.04840088, 0.048187256] | J10: ='BH routes'!L10 [cached 0] | K10: =Sheet1!B45 [cached 4] | L10: 0.09530142252498185
+A11: read_local | B11: 2048 | C11: =Sheet1!B38 [cached 79.858] | D11: =B11/(C11*1000)+(J11*$B$4+K11*$B$5)/$B$3+$B$6/1000 [cached 0.07318394227443714] | E11: 0.07312012 | F11: =(D11/E11-1)*100 [cached 0.08728414892802405] | G11: 0.07305908 | H11: 0.07348633 | I11: [0.07312012, 0.07348633, 0.07305908] | J11: ='BH routes'!L10 [cached 0] | K11: =Sheet1!B45 [cached 4] | L11: 0.12014552079941897
+A12: read_local | B12: 65536 | C12: =Sheet1!B38 [cached 79.858] | D12: =B12/(C12*1000)+(J12*$B$4+K12*$B$5)/$B$3+$B$6/1000 [cached 0.8681950870564252] | E12: 0.88793945 | F12: =(D12/E12-1)*100 [cached -2.2236159170059056] | G12: 0.88775635 | H12: 0.88830566 | I12: [0.88830566, 0.88775635, 0.88793945] | J12: ='BH routes'!L10 [cached 0] | K12: =Sheet1!B45 [cached 4] | L12: 0.9151566655814071
+A13: read_near | B13: 64 | C13: =Sheet1!B36 [cached 82.37] | D13: =B13/(C13*1000)+(J13*$B$4+K13*$B$5)/$B$3+$B$6/1000 [cached 0.16164873671924138] | E13: 0.16134644 | F13: =(D13/E13-1)*100 [cached 0.1873587785645503] | G13: 0.16091919 | H13: 0.16165161 | I13: [0.16134644, 0.16091919, 0.16165161] | J13: ='BH routes'!L11 [cached 17] | K13: =Sheet1!B45 [cached 4] | L13: 0.09527698191088989
+A14: read_near | B14: 2048 | C14: =Sheet1!B36 [cached 82.37] | D14: =B14/(C14*1000)+(J14*$B$4+K14*$B$5)/$B$3+$B$6/1000 [cached 0.1857351759568279] | E14: 0.18615723 | F14: =(D14/E14-1)*100 [cached -0.2267191251030698] | G14: 0.18585205 | H14: 0.18630981 | I14: [0.18585205, 0.18615723, 0.18630981] | J14: ='BH routes'!L11 [cached 17] | K14: =Sheet1!B45 [cached 4] | L14: 0.1193634211484764
+A15: read_near | B15: 65536 | C15: =Sheet1!B36 [cached 82.37] | D15: =B15/(C15*1000)+(J15*$B$4+K15*$B$5)/$B$3+$B$6/1000 [cached 0.9565012315595959] | E15: 0.9479675 | F15: =(D15/E15-1)*100 [cached 0.9002135157160973] | G15: 0.947937 | H15: 0.94799805 | I15: [0.947937, 0.94799805, 0.9479675] | J15: ='BH routes'!L11 [cached 17] | K15: =Sheet1!B45 [cached 4] | L15: 0.8901294767512444
+A16: read_far | B16: 64 | C16: =Sheet1!B37 [cached 82.072] | D16: =B16/(C16*1000)+(J16*$B$4+K16*$B$5)/$B$3+$B$6/1000 [cached 0.2416515579080688] | E16: 0.24441528 | F16: =(D16/E16-1)*100 [cached -1.1307484916373567] | G16: 0.24407959 | H16: 0.2449646 | I16: [0.24407959, 0.24441528, 0.2449646] | J16: ='BH routes'!L12 [cached 29] | K16: =Sheet1!B45 [cached 4] | L16: 0.09527980309971733
+A17: read_far | B17: 2048 | C17: =Sheet1!B37 [cached 82.072] | D17: =B17/(C17*1000)+(J17*$B$4+K17*$B$5)/$B$3+$B$6/1000 [cached 0.26582545399930574] | E17: 0.26904297 | F17: =(D17/E17-1)*100 [cached -1.1959115678414678] | G17: 0.26879883 | H17: 0.26934814 | I17: [0.26879883, 0.26934814, 0.26904297] | J17: ='BH routes'!L12 [cached 29] | K17: =Sheet1!B45 [cached 4] | L17: 0.11945369919095428
+A18: read_far | B18: 65536 | C18: =Sheet1!B37 [cached 82.072] | D18: =B18/(C18*1000)+(J18*$B$4+K18*$B$5)/$B$3+$B$6/1000 [cached 1.0393901289188885] | E18: 1.026001 | F18: =(D18/E18-1)*100 [cached 1.304982053515391] | G18: 1.0254517 | H18: 1.0260315 | I18: [1.026001, 1.0260315, 1.0254517] | J18: ='BH routes'!L12 [cached 29] | K18: =Sheet1!B45 [cached 4] | L18: 0.8930183741105371
+A19: write_far | B19: 64 | C19: =Sheet1!B39 [cached 83.375] | D19: =B19/(C19*1000)+(J19*$B$4+K19*$B$5)/$B$3+$B$6/1000 [cached 0.24163937100025554] | E19: 0.24047852 | F19: =(D19/E19-1)*100 [cached 0.4827254426946537] | G19: 0.24032593 | H19: 0.24060059 | I19: [0.24060059, 0.24047852, 0.24032593] | J19: ='BH routes'!L13 [cached 29] | K19: =Sheet1!B45 [cached 4] | L19: 0.09526761619190405
+A20: write_far | B20: 2048 | C20: =Sheet1!B39 [cached 83.375] | D20: =B20/(C20*1000)+(J20*$B$4+K20*$B$5)/$B$3+$B$6/1000 [cached 0.265435472949281] | E20: 0.2652893 | F20: =(D20/E20-1)*100 [cached 0.055099451534990074] | G20: 0.26516724 | H20: 0.26531982 | I20: [0.2652893, 0.26516724, 0.26531982] | J20: ='BH routes'!L13 [cached 29] | K20: =Sheet1!B45 [cached 4] | L20: 0.11906371814092953
+A21: write_far | B21: 65536 | C21: =Sheet1!B39 [cached 83.375] | D21: =B21/(C21*1000)+(J21*$B$4+K21*$B$5)/$B$3+$B$6/1000 [cached 1.0269107353180964] | E21: 1.0254822 | F21: =(D21/E21-1)*100 [cached 0.13930376539899036] | G21: 1.0254517 | H21: 1.0255432 | I21: [1.0255432, 1.0254822, 1.0254517] | J21: ='BH routes'!L13 [cached 29] | K21: =Sheet1!B45 [cached 4] | L21: 0.8805389805097451
+A24: Run on BH | B24: From a compatible tt-metal checkout with test_bw_and_latency built.
+A25: Query worker grid | B25: d = ttnn.open_device(device_id=0); print(d.compute_with_storage_grid_size()); ttnn.close_device(d)
+A26: Benchmark command | B26: build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency -m 2 -rx 1 -ry 0 -sx X -sy Y -bs 64 -p BYTES -i ITERS -w 1 -l
+A27: Endpoint selection | B27: Logical cores: local X=1,Y=0; near X=0,Y=0; far X=grid.x-1,Y=grid.y-1. Use actual usable worker grid.
+A28: Write case | B28: Append -wr to the benchmark command for write_far.
+A29: Iterations | B29: 64 B: ITERS=32; 2048 B: ITERS=1024; 65536 B: ITERS=32768. Each produces 32768 serialized transfers.
+A30: Repetitions | B30: Run each case 3 times; put median of reported Latency: ... us in column E.
+A31: Portability | B31: All numerical inputs are embedded. Dispatch BW.xlsx and WH CSV files are not needed to use this workbook.
+A32: Model limitation | B32: Route-aware serialized model. NIU cost is explicit; residual is calibrated from local 64 B read. No independent validation for calibration row.
+A34: Measured hardware | B34: Blackhole p150b; UMD device 0, PCI device 1. Firmware 19.5.0. Queried worker grid 11 x 10.
+A35: Measured endpoints | B35: Logical initiator (1,0), local (1,0), near (0,0), far (10,9). Physical NoC0: initiator (2,2), near (1,2), far (15,11); far translated address (13,11).
+A36: Run methodology | B36: 2026-10-20: 3 independent runs/case, 32768 serialized transfers/run; one warm-up workload; median reported.
+A37: Timing limitations | B37: Host enqueue+Finish time amortized over transfers; completion barrier per transfer; no payload correctness check.
+A38: Prediction inputs | B38: Clock 1350 MHz, 9 cycles/router link, ~5 cycles/NIU crossing, actual round-trip links, measured-local residual; imported P150 bandwidths unchanged.
+
+SHEET BH routes
+A1: BH NoC0 physical link counts — verified 2026-10-20
+A2: Physical grid columns | B2: 17
+A3: Physical grid rows | B3: 12
+A4: Clock (MHz) | B4: 1350
+A5: Documented cycles/link | B5: 9
+A6: Earlier assumed ns/link | B6: 9
+A7: Coordinates | B7: Physical NoC0 coordinates after undoing harvesting translation; not logical or translated coordinates.
+A8: Routing | B8: NoC0: increasing X first, then increasing Y, wrapping at 17 and 12. Response/ACK uses the same NoC0 directions.
+A9: Transfer | B9: Src X | C9: Src Y | D9: Dst X | E9: Dst Y | F9: Out X links | G9: Out Y links | H9: Out total | I9: Return X | J9: Return Y | K9: Return total | L9: Round-trip links | M9: At 9 ns (ns) | N9: At 9 cycles (ns)
+A10: local read | B10: 2 | C10: 2 | D10: 2 | E10: 2 | F10: =MOD(D10-B10,$B$2) [cached 0] | G10: =MOD(E10-C10,$B$3) [cached 0] | H10: =F10+G10 [cached 0] | I10: =MOD(B10-D10,$B$2) [cached 0] | J10: =MOD(C10-E10,$B$3) [cached 0] | K10: =I10+J10 [cached 0] | L10: =H10+K10 [cached 0] | M10: =L10*$B$6 [cached 0] | N10: =L10*$B$5/($B$4/1000) [cached 0.0]
+A11: near read | B11: 2 | C11: 2 | D11: 1 | E11: 2 | F11: =MOD(D11-B11,$B$2) [cached 16] | G11: =MOD(E11-C11,$B$3) [cached 0] | H11: =F11+G11 [cached 16] | I11: =MOD(B11-D11,$B$2) [cached 1] | J11: =MOD(C11-E11,$B$3) [cached 0] | K11: =I11+J11 [cached 1] | L11: =H11+K11 [cached 17] | M11: =L11*$B$6 [cached 153] | N11: =L11*$B$5/($B$4/1000) [cached 113.33333333333333]
+A12: far read | B12: 2 | C12: 2 | D12: 15 | E12: 11 | F12: =MOD(D12-B12,$B$2) [cached 13] | G12: =MOD(E12-C12,$B$3) [cached 9] | H12: =F12+G12 [cached 22] | I12: =MOD(B12-D12,$B$2) [cached 4] | J12: =MOD(C12-E12,$B$3) [cached 3] | K12: =I12+J12 [cached 7] | L12: =H12+K12 [cached 29] | M12: =L12*$B$6 [cached 261] | N12: =L12*$B$5/($B$4/1000) [cached 193.33333333333331]
+A13: far write + ACK | B13: 2 | C13: 2 | D13: 15 | E13: 11 | F13: =MOD(D13-B13,$B$2) [cached 13] | G13: =MOD(E13-C13,$B$3) [cached 9] | H13: =F13+G13 [cached 22] | I13: =MOD(B13-D13,$B$2) [cached 4] | J13: =MOD(C13-E13,$B$3) [cached 3] | K13: =I13+J13 [cached 7] | L13: =H13+K13 [cached 29] | M13: =L13*$B$6 [cached 261] | N13: =L13*$B$5/($B$4/1000) [cached 193.33333333333331]
+A16: Near read request | B16: (2,2) -> (3,2) -> ... -> (16,2) -> (0,2) -> (1,2): 16 X links. Data returns (1,2) -> (2,2): 1 link.
+A17: Far read request | B17: (2,2) -> (15,2): 13 X links; (15,2) -> (15,11): 9 Y links. Total 22.
+A18: Far read response | B18: (15,11) -> (16,11) -> (0,11) -> (1,11) -> (2,11): 4 X links; (2,11) -> (2,0) -> (2,1) -> (2,2): 3 Y links. Total 7.
+A19: Physical mapping | B19: Logical (10,9) -> translated (13,11) -> physical (15,11). Initiator logical (1,0) -> physical (2,2).
+A20: Completion semantics | B20: Read: request + data response. Test writes are nonposted; barrier waits for ACK. Local transfer has 0 inter-router links but nonzero endpoint/software latency.
+A21: Scope | B21: Link counts are per request/response pair, not summed across all packets of a large transfer. Payload streaming and packet overlap must be modeled separately.
+A22: Units correction | B22: Official BH ISA docs specify 9 router cycles, NOT 9 ns. At queried 1350 MHz, 9 cycles = 6.6667 ns. Earlier estimates retained for comparison.
+A23: Other latency | B23: NIU-to-router and router-to-NIU each ~5 cycles per docs; software, L1 handling, barriers and congestion are not included in link-only times.
+A24: Routing source | B24: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/RoutingPaths.md
+A25: Latency source | B25: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md#performance
+A26: Topology source | B26: tt_metal/soc_descriptors/blackhole_140_arch.yaml: grid 17 x 12; runtime UMD TRANSLATED -> NOC0 mapping verified.
+A29: 64 B read comparison | B29: Measured (ns) | C29: Measured minus local (ns) | D29: Link time at 9 cycles (ns)
+A30: read_local | B30: 48.339844 | C30: 0.0 | D30: 0.0
+A31: read_near | B31: 161.34644 | C31: 113.006596 | D31: 113.33333333333333
+A32: read_far | B32: 244.41528000000002 | C32: 196.07543600000002 | D32: 193.33333333333331
+A34: Interpretation | B34: The near/far minus-local differences approximately match link time at 9 cycles. This is evidence of consistency, not an independent per-link calibration.
+
+SHEET L1 copy algorithm
+A1: L1 whole-shard copy: serialized vs batched reads
+A2: BH p150b; 2026-10-20 | B2: box=bh-50-special-dstoiljkovic-for-reservation-136502; 2 L1 cores, 1 active NCRISC NoC0 reader
+A3: Clock MHz | B3: 1350
+A4: Residual overhead ns | B4: 32.72360666
+A5: Router cycles/link | B5: 9
+A6: NIU cycles/crossing | B6: 5
+A7: Measurement | B7: DEVICE KERNEL DURATION [ns] / 100 copies per kernel; median of 3 launches; exact equality passed.
+A8: Estimate | B8: N*2048/BW + ceil(N/batch)*((9*links+4*5)*1000/MHz+residual_ns). Model inputs frozen from prior transaction calibration.
+A9: Placement | B9: Variant | C9: Pages | D9: Batch pages | E9: Round-trip links | F9: BW GB/s | G9: Predicted us/copy | H9: Measured us/copy | I9: Error % | J9: Kernel iters | K9: Trials | L9: Std us
+A10: far | B10: batched | C10: 32 | D10: 8 | E10: 29 | F10: 82.072 | G10: =(C10*2048/F10+ROUNDUP(C10/D10,0)*((E10*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 1.7620053933431294] | H10: 1.80195 | I10: =(G10/H10-1)*100 [cached -2.2167433423164074] | J10: 100 | K10: 3 | L10: 2.6246692913348833e-05
+A11: far | B11: serialized | C11: 32 | D11: 1 | E11: 29 | F11: 82.072 | G11: =(C11*2048/F11+ROUNDUP(C11/D11,0)*((E11*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 8.506414527971277] | H11: 8.58924 | I11: =(G11/H11-1)*100 [cached -0.9642933720413249] | J11: 100 | K11: 3 | L11: 2.1602468995164405e-05
+A12: far | B12: batched | C12: 128 | D12: 8 | E12: 29 | F12: 82.072 | G12: =(C12*2048/F12+ROUNDUP(C12/D12,0)*((E12*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 7.048021573372518] | H12: 7.17984 | I12: =(G12/H12-1)*100 [cached -1.835952146948705] | J12: 100 | K12: 3 | L12: 0.00021545816814941713
+A13: far | B13: serialized | C13: 128 | D13: 1 | E13: 29 | F13: 82.072 | G13: =(C13*2048/F13+ROUNDUP(C13/D13,0)*((E13*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 34.02565811188511] | H13: 34.33147 | I13: =(G13/H13-1)*100 [cached -0.8907625805562369] | J13: 100 | K13: 3 | L13: 4.714045208870695e-06
+A14: near | B14: batched | C14: 32 | D14: 8 | E14: 17 | F14: 82.37 | G14: =(C14*2048/F14+ROUNDUP(C14/D14,0)*((E14*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 1.439116495983837] | H14: 1.4792100000000001 | I14: =(G14/H14-1)*100 [cached -2.710467345147949] | J14: 100 | K14: 3 | L14: 0.000613858470840171
+A15: near | B15: serialized | C15: 32 | D15: 1 | E15: 17 | F15: 82.37 | G15: =(C15*2048/F15+ROUNDUP(C15/D15,0)*((E15*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 5.943525630611985] | H15: 5.93442 | I15: =(G15/H15-1)*100 [cached 0.15343758298174137] | J15: 100 | K15: 3 | L15: 0.0
+A16: near | B16: batched | C16: 128 | D16: 8 | E16: 17 | F16: 82.37 | G16: =(C16*2048/F16+ROUNDUP(C16/D16,0)*((E16*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 5.756465983935348] | H16: 5.8886400000000005 | I16: =(G16/H16-1)*100 [cached -2.244559288131931] | J16: 100 | K16: 3 | L16: 0.0015216073372881812
+A17: near | B17: serialized | C17: 128 | D17: 1 | E17: 17 | F17: 82.37 | G17: =(C17*2048/F17+ROUNDUP(C17/D17,0)*((E17*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000 [cached 23.77410252244794] | H17: 23.7122 | I17: =(G17/H17-1)*100 [cached 0.26105769371016496] | J17: 100 | K17: 3 | L17: 4.714045207841718e-05
+A20: Scope | B20: Batched model assumes independent requests overlap within each group; omits issue-rate limits and contention. Not a universal formula for arbitrary algorithms.
+A21: Placement | B21: Reader logical (1,0). Near source (0,0); far source (10,9). Physical routes verified on this specific p150b.
+A22: Validation | B22: Near/far 32 and 128 pages, both variants; also 35 pages with batch=8 and kernel-iters=1 to exercise final partial batch.
+A23: Run | B23: python -m ttnn.operations.examples.l1_copy_batching --placement near --pages 32 128 --batch-pages 8 --kernel-iters 100
+A24: Files | B24: ttnn/ttnn/operations/examples/l1_copy_batching/: inline kernel, CLI, README.md, report.md; tests/ttnn/unit_tests/operations/examples/test_l1_copy_batching.py
+A25: Portability | B25: Results and formulas are embedded; running the example on another machine requires copying the example and test source files into its tt-metal checkout.
+
+SHEET DRAM contention
+A1: Concurrent DRAM reads — BH p150b, 2026-10-20
+A2: Setup | B2: 11x10 usable workers; 8 DRAM banks; NoC0; row-major core prefix; disjoint DRAM input, per-core L1 output
+A3: Aggregate bandwidth ceiling GB/s | B3: 512
+A4: Metric | B4: Max per-core NCRISC duration / 100 repeats; median of 3 launches. Exact equality passed. Excludes launch skew.
+A5: Profiler caveat | B5: Absolute clocks differ across cores; standard global duration is invalid here. Same-core start/end deltas used.
+A6: Model | B6: max(single-core measured time, total bytes / aggregate bandwidth). Calibrated baseline plus bandwidth lower bound.
+A7: Limits | B7: Does not model per-bank/per-link queueing. Effective ~418 GB/s measured at saturation is workload-specific, not an independent prediction.
+A9: Variant | B9: Cores | C9: Pages/core | D9: Batch | E9: Bytes/core | F9: Uncontended us | G9: BW bound us | H9: Measured us | I9: Error % | J9: Aggregate GB/s | K9: Slowdown | L9: Std us
+A10: aligned | B10: 1 | C10: 32 | D10: 8 | E10: =C10*2048 [cached 65536] | F10: =H10 [cached 2.3308592592592596] | G10: =MAX(F10,B10*E10/($B$3*1000)) [cached 2.3308592592592596] | H10: 2.3308592592592596 | I10: =(G10/H10-1)*100 [cached 0.0] | J10: =B10*E10/(H10*1000) [cached 28.11666973870707] | K10: =H10/F10 [cached 1.0] | L10: 0.002810342993243635
+A11: aligned | B11: 8 | C11: 32 | D11: 8 | E11: =C11*2048 [cached 65536] | F11: =H10 [cached 2.3308592592592596] | G11: =MAX(F11,B11*E11/($B$3*1000)) [cached 2.3308592592592596] | H11: 2.3857333333333335 | I11: =(G11/H11-1)*100 [cached -2.300092525320263] | J11: =B11*E11/(H11*1000) [cached 219.75968255742467] | K11: =H11/F11 [cached 1.0235424227593704] | L11: 0.0064954483260165384
+A12: aligned | B12: 32 | C12: 32 | D12: 8 | E12: =C12*2048 [cached 65536] | F12: =H10 [cached 2.3308592592592596] | G12: =MAX(F12,B12*E12/($B$3*1000)) [cached 4.096] | H12: 5.154111111111112 | I12: =(G12/H12-1)*100 [cached -20.529458684545244] | J12: =B12*E12/(H12*1000) [cached 406.88917153512836] | K12: =H12/F12 [cached 2.2112493882402293] | L12: 0.025848411104997186
+A13: aligned | B13: 64 | C13: 32 | D13: 8 | E13: =C13*2048 [cached 65536] | F13: =H10 [cached 2.3308592592592596] | G13: =MAX(F13,B13*E13/($B$3*1000)) [cached 8.192] | H13: 10.172585185185186 | I13: =(G13/H13-1)*100 [cached -19.46983140597933] | J13: =B13*E13/(H13*1000) [cached 412.3144632013858] | K13: =H13/F13 [cached 4.364306915904483] | L13: 0.004036691947345561
+A14: aligned | B14: 110 | C14: 32 | D14: 8 | E14: =C14*2048 [cached 65536] | F14: =H10 [cached 2.3308592592592596] | G14: =MAX(F14,B14*E14/($B$3*1000)) [cached 14.08] | H14: 17.231125925925923 | I14: =(G14/H14-1)*100 [cached -18.287405822882096] | J14: =B14*E14/(H14*1000) [cached 418.36848218684366] | K14: =H14/F14 [cached 7.39260676399738] | L14: 0.01265092709682004
+A15: aligned | B15: 1 | C15: 128 | D15: 8 | E15: =C15*2048 [cached 262144] | F15: =H15 [cached 9.355666666666666] | G15: =MAX(F15,B15*E15/($B$3*1000)) [cached 9.355666666666666] | H15: 9.355666666666666 | I15: =(G15/H15-1)*100 [cached 0.0] | J15: =B15*E15/(H15*1000) [cached 28.01980974097695] | K15: =H15/F15 [cached 1.0] | L15: 0.003995804841690318
+A16: aligned | B16: 8 | C16: 128 | D16: 8 | E16: =C16*2048 [cached 262144] | F16: =H15 [cached 9.355666666666666] | G16: =MAX(F16,B16*E16/($B$3*1000)) [cached 9.355666666666666] | H16: 9.554659259259259 | I16: =(G16/H16-1)*100 [cached -2.0826759719322574] | J16: =B16*E16/(H16*1000) [cached 219.48998316896393] | K16: =H16/F16 [cached 1.0212697394726111] | L16: 0.08553096163710178
+A17: aligned | B17: 32 | C17: 128 | D17: 8 | E17: =C17*2048 [cached 262144] | F17: =H15 [cached 9.355666666666666] | G17: =MAX(F17,B17*E17/($B$3*1000)) [cached 16.384] | H17: 20.47574814814815 | I17: =(G17/H17-1)*100 [cached -19.983387754836258] | J17: =B17*E17/(H17*1000) [cached 409.68505469523836] | K17: =H17/F17 [cached 2.188593167935456] | L17: 0.032860524602056566
+A18: aligned | B18: 64 | C18: 128 | D18: 8 | E18: =C18*2048 [cached 262144] | F18: =H15 [cached 9.355666666666666] | G18: =MAX(F18,B18*E18/($B$3*1000)) [cached 32.768] | H18: 40.6621037037037 | I18: =(G18/H18-1)*100 [cached -19.413908737300943] | J18: =B18*E18/(H18*1000) [cached 412.60078726501916] | K18: =H18/F18 [cached 4.346254003317458] | L18: 0.05813174773303958
+A19: aligned | B19: 110 | C19: 128 | D19: 8 | E19: =C19*2048 [cached 262144] | F19: =H15 [cached 9.355666666666666] | G19: =MAX(F19,B19*E19/($B$3*1000)) [cached 56.32] | H19: 68.98725925925928 | I19: =(G19/H19-1)*100 [cached -18.361737218251793] | J19: =B19*E19/(H19*1000) [cached 417.9879054425508] | K19: =H19/F19 [cached 7.373847499831753] | L19: 0.02407168864408689
+A20: staggered | B20: 1 | C20: 32 | D20: 8 | E20: =C20*2048 [cached 65536] | F20: =H20 [cached 2.3236074074074073] | G20: =MAX(F20,B20*E20/($B$3*1000)) [cached 2.3236074074074073] | H20: 2.3236074074074073 | I20: =(G20/H20-1)*100 [cached 0.0] | J20: =B20*E20/(H20*1000) [cached 28.204420329819218] | K20: =H20/F20 [cached 1.0] | L20: 0.0032951614081847313
+A21: staggered | B21: 8 | C21: 32 | D21: 8 | E21: =C21*2048 [cached 65536] | F21: =H20 [cached 2.3236074074074073] | G21: =MAX(F21,B21*E21/($B$3*1000)) [cached 2.3236074074074073] | H21: 2.4082 | I21: =(G21/H21-1)*100 [cached -3.5126896683245867] | J21: =B21*E21/(H21*1000) [cached 217.70949256706254] | K21: =H21/F21 [cached 1.0364057165263463] | L21: 0.01660315397269991
+A22: staggered | B22: 32 | C22: 32 | D22: 8 | E22: =C22*2048 [cached 65536] | F22: =H20 [cached 2.3236074074074073] | G22: =MAX(F22,B22*E22/($B$3*1000)) [cached 4.096] | H22: 5.172407407407407 | I22: =(G22/H22-1)*100 [cached -20.81056890193691] | J22: =B22*E22/(H22*1000) [cached 405.449887222083] | K22: =H22/F22 [cached 2.2260246679014433] | L22: 0.01829126869828604
+A23: staggered | B23: 64 | C23: 32 | D23: 8 | E23: =C23*2048 [cached 65536] | F23: =H20 [cached 2.3236074074074073] | G23: =MAX(F23,B23*E23/($B$3*1000)) [cached 8.192] | H23: 10.19225925925926 | I23: =(G23/H23-1)*100 [cached -19.625278442972338] | J23: =B23*E23/(H23*1000) [cached 411.51857437198163] | K23: =H23/F23 [cached 4.386394718302002] | L23: 0.007072077368866377
+A24: staggered | B24: 110 | C24: 32 | D24: 8 | E24: =C24*2048 [cached 65536] | F24: =H20 [cached 2.3236074074074073] | G24: =MAX(F24,B24*E24/($B$3*1000)) [cached 14.08] | H24: 17.28951111111111 | I24: =(G24/H24-1)*100 [cached -18.563342193340084] | J24: =B24*E24/(H24*1000) [cached 416.9556879700988] | K24: =H24/F24 [cached 7.440805643842429] | L24: 0.006367777250000476
+A25: staggered | B25: 1 | C25: 128 | D25: 8 | E25: =C25*2048 [cached 262144] | F25: =H25 [cached 9.354881481481481] | G25: =MAX(F25,B25*E25/($B$3*1000)) [cached 9.354881481481481] | H25: 9.354881481481481 | I25: =(G25/H25-1)*100 [cached 0.0] | J25: =B25*E25/(H25*1000) [cached 28.022161533412145] | K25: =H25/F25 [cached 1.0] | L25: 0.0015836190871542132
+A26: staggered | B26: 8 | C26: 128 | D26: 8 | E26: =C26*2048 [cached 262144] | F26: =H25 [cached 9.354881481481481] | G26: =MAX(F26,B26*E26/($B$3*1000)) [cached 9.354881481481481] | H26: 9.680074074074074 | I26: =(G26/H26-1)*100 [cached -3.3594019023423516] | J26: =B26*E26/(H26*1000) [cached 216.64627604625002] | K26: =H26/F26 [cached 1.0347618078578902] | L26: 0.004626945724095751
+A27: staggered | B27: 32 | C27: 128 | D27: 8 | E27: =C27*2048 [cached 262144] | F27: =H25 [cached 9.354881481481481] | G27: =MAX(F27,B27*E27/($B$3*1000)) [cached 16.384] | H27: 20.724140740740744 | I27: =(G27/H27-1)*100 [cached -20.94244000287373] | J27: =B27*E27/(H27*1000) [cached 404.7747071852865] | K27: =H27/F27 [cached 2.215329053795642] | L27: 0.022200167656737296
+A28: staggered | B28: 64 | C28: 128 | D28: 8 | E28: =C28*2048 [cached 262144] | F28: =H25 [cached 9.354881481481481] | G28: =MAX(F28,B28*E28/($B$3*1000)) [cached 32.768] | H28: 40.80813333333333 | I28: =(G28/H28-1)*100 [cached -19.702281571320746] | J28: =B28*E28/(H28*1000) [cached 411.1243183548378] | K28: =H28/F28 [cached 4.362228790831327] | L28: 0.01928709100115127
+A29: staggered | B29: 110 | C29: 128 | D29: 8 | E29: =C29*2048 [cached 262144] | F29: =H25 [cached 9.354881481481481] | G29: =MAX(F29,B29*E29/($B$3*1000)) [cached 56.32] | H29: 69.16041481481481 | I29: =(G29/H29-1)*100 [cached -18.566133313683174] | J29: =B29*E29/(H29*1000) [cached 416.94139743394214] | K29: =H29/F29 [cached 7.392976057657361] | L29: 0.032660246469304835
+A32: Source | B32: ttnn/ttnn/operations/examples/dram_read_contention/; report.md, report.jsonl, inline kernel and CLI. Tests: test_dram_read_contention.py
+
+SHEET BH queue model
+A1: BH DRAM + NoC queue model; live physical routes
+A2: Scope | B2: 110 usable cores; NoC0; 2048-byte pages; eight reads/barrier. Replay uses 8 iterations; measurements use 100.
+A3: Clock MHz | B3: 1350
+A4: DRAM read service cycles | B4: 126
+A5: DRAM bytes/cycle | B5: 47.0805
+A6: Router cycles/hop | B6: 9
+A7: NIU crossing cycles | B7: 5
+A8: Header flits per packet | B8: 1
+A9: Flit bytes | B9: 64
+A10: Important | B10: Replay columns are snapshots at the parameters above. Parameter edits recalculate capacity bounds only; rerun queue_model.py for new queue predictions.
+A11: Model limitations | B11: FIFO packet reservations; unlimited buffering; ideal core issue. No RISC timing, VCs, backpressure, refresh or row state. Shared bank and link capacity modeled separately.
+A12: Provenance | B12: Wolfpine c0d2cb8842c5 derived 126 cycles =529-403 and 47.0805 B/cycle=4096/(665-578); ISA NoC 9/5 cycles and 64-byte flits. Headers included here.
+A13: Comparison | B13: ACTIVE: raw queue replay only. Issue spacing=0; batch residual=0; no measured single-core floor or fitted 418 GB/s. DRAM126cycles/47.0805B-per-cycle remain simulator-derived empirical inputs, not ISA constants.
+A15: Variant | B15: Cores | C15: Pages/core | D15: Batch | E15: Max bank reads | F15: Hot-link packets | G15: Hot-link data flits | H15: Bank bound us | I15: Link bound us | J15: Measured 1-core reference us | K15: Raw queue us | L15: Measured us | M15: Raw error % | N15: Active estimate us | O15: Active error % | P15: Hot physical link | Q15: ISA/simulator capacity bound us
+A16: aligned | B16: 1 | C16: 32 | D16: 8 | E16: 4 | F16: 28 | G16: 896 | H16: =E16*ROUNDUP(2048/$B$5,0)/$B$3 [cached 0.13037037037037036] | I16: =(G16*64/$B$9+F16*$B$8)/$B$3 [cached 0.6844444444444444] | J16: 2.3308592592592596 | K16: 1.92 | L16: 2.3308592592592596 | M16: =(K16/L16-1)*100 [cached -17.62694412488164] | N16: =K16 [cached 1.92] | O16: =M16 [cached -17.62694412488164] | P16: [1, 11, 1, 0] | Q16: =MAX(H16,I16) [cached 0.6844444444444444]
+A17: aligned | B17: 8 | C17: 32 | D17: 8 | E17: 32 | F17: 56 | G17: 1792 | H17: =E17*ROUNDUP(2048/$B$5,0)/$B$3 [cached 1.0429629629629629] | I17: =(G17*64/$B$9+F17*$B$8)/$B$3 [cached 1.3688888888888888] | J17: 2.3308592592592596 | K17: 1.9570370370370371 | L17: 2.3857333333333335 | M17: =(K17/L17-1)*100 [cached -17.969162366412693] | N17: =K17 [cached 1.9570370370370371] | O17: =M17 [cached -17.969162366412693] | P17: [0, 11, 1, 11] | Q17: =MAX(H17,I17) [cached 1.3688888888888888]
+A18: aligned | B18: 32 | C18: 32 | D18: 8 | E18: 128 | F18: 200 | G18: 6400 | H18: =E18*ROUNDUP(2048/$B$5,0)/$B$3 [cached 4.1718518518518515] | I18: =(G18*64/$B$9+F18*$B$8)/$B$3 [cached 4.888888888888889] | J18: 2.3308592592592596 | K18: 4.916018518518518 | L18: 5.154111111111112 | M18: =(K18/L18-1)*100 [cached -4.619469535286491] | N18: =K18 [cached 4.916018518518518] | O18: =M18 [cached -4.619469535286491] | P18: [0, 11, 1, 11] | Q18: =MAX(H18,I18) [cached 4.888888888888889]
+A19: aligned | B19: 64 | C19: 32 | D19: 8 | E19: 256 | F19: 400 | G19: 12800 | H19: =E19*ROUNDUP(2048/$B$5,0)/$B$3 [cached 8.343703703703703] | I19: =(G19*64/$B$9+F19*$B$8)/$B$3 [cached 9.777777777777779] | J19: 2.3308592592592596 | K19: 9.80324074074074 | L19: 10.172585185185186 | M19: =(K19/L19-1)*100 [cached -3.6307825171357555] | N19: =K19 [cached 9.80324074074074] | O19: =M19 [cached -3.6307825171357555] | P19: [0, 11, 1, 11] | Q19: =MAX(H19,I19) [cached 9.777777777777779]
+A20: aligned | B20: 110 | C20: 32 | D20: 8 | E20: 440 | F20: 760 | G20: 21760 | H20: =E20*ROUNDUP(2048/$B$5,0)/$B$3 [cached 14.34074074074074] | I20: =(G20*64/$B$9+F20*$B$8)/$B$3 [cached 16.68148148148148] | J20: 2.3308592592592596 | K20: 16.700833333333332 | L20: 17.231125925925923 | M20: =(K20/L20-1)*100 [cached -3.0775272310831103] | N20: =K20 [cached 16.700833333333332] | O20: =M20 [cached -3.0775272310831103] | P20: [0, 11, 1, 11] | Q20: =MAX(H20,I20) [cached 16.68148148148148]
+A21: aligned | B21: 1 | C21: 128 | D21: 8 | E21: 16 | F21: 112 | G21: 3584 | H21: =E21*ROUNDUP(2048/$B$5,0)/$B$3 [cached 0.5214814814814814] | I21: =(G21*64/$B$9+F21*$B$8)/$B$3 [cached 2.7377777777777776] | J21: 9.355666666666666 | K21: 7.68 | L21: 9.355666666666666 | M21: =(K21/L21-1)*100 [cached -17.91071364948159] | N21: =K21 [cached 7.68] | O21: =M21 [cached -17.91071364948159] | P21: [1, 11, 1, 0] | Q21: =MAX(H21,I21) [cached 2.7377777777777776]
+A22: aligned | B22: 8 | C22: 128 | D22: 8 | E22: 128 | F22: 224 | G22: 7168 | H22: =E22*ROUNDUP(2048/$B$5,0)/$B$3 [cached 4.1718518518518515] | I22: =(G22*64/$B$9+F22*$B$8)/$B$3 [cached 5.475555555555555] | J22: 9.355666666666666 | K22: 7.734814814814815 | L22: 9.554659259259259 | M22: =(K22/L22-1)*100 [cached -19.04667026907174] | N22: =K22 [cached 7.734814814814815] | O22: =M22 [cached -19.04667026907174] | P22: [0, 11, 1, 11] | Q22: =MAX(H22,I22) [cached 5.475555555555555]
+A23: aligned | B23: 32 | C23: 128 | D23: 8 | E23: 512 | F23: 800 | G23: 25600 | H23: =E23*ROUNDUP(2048/$B$5,0)/$B$3 [cached 16.687407407407406] | I23: =(G23*64/$B$9+F23*$B$8)/$B$3 [cached 19.555555555555557] | J23: 9.355666666666666 | K23: 19.582685185185184 | L23: 20.47574814814815 | M23: =(K23/L23-1)*100 [cached -4.3615645030471555] | N23: =K23 [cached 19.582685185185184] | O23: =M23 [cached -4.3615645030471555] | P23: [0, 11, 1, 11] | Q23: =MAX(H23,I23) [cached 19.555555555555557]
+A24: aligned | B24: 64 | C24: 128 | D24: 8 | E24: 1024 | F24: 1600 | G24: 51200 | H24: =E24*ROUNDUP(2048/$B$5,0)/$B$3 [cached 33.37481481481481] | I24: =(G24*64/$B$9+F24*$B$8)/$B$3 [cached 39.111111111111114] | J24: 9.355666666666666 | K24: 39.136574074074076 | L24: 40.6621037037037 | M24: =(K24/L24-1)*100 [cached -3.751723326333145] | N24: =K24 [cached 39.136574074074076] | O24: =M24 [cached -3.751723326333145] | P24: [0, 11, 1, 11] | Q24: =MAX(H24,I24) [cached 39.111111111111114]
+A25: aligned | B25: 110 | C25: 128 | D25: 8 | E25: 1760 | F25: 3040 | G25: 87040 | H25: =E25*ROUNDUP(2048/$B$5,0)/$B$3 [cached 57.36296296296296] | I25: =(G25*64/$B$9+F25*$B$8)/$B$3 [cached 66.72592592592592] | J25: 9.355666666666666 | K25: 66.76222222222222 | L25: 68.98725925925928 | M25: =(K25/L25-1)*100 [cached -3.2252869021440644] | N25: =K25 [cached 66.76222222222222] | O25: =M25 [cached -3.2252869021440644] | P25: [0, 11, 1, 11] | Q25: =MAX(H25,I25) [cached 66.72592592592592]
+A26: staggered | B26: 1 | C26: 32 | D26: 8 | E26: 4 | F26: 28 | G26: 896 | H26: =E26*ROUNDUP(2048/$B$5,0)/$B$3 [cached 0.13037037037037036] | I26: =(G26*64/$B$9+F26*$B$8)/$B$3 [cached 0.6844444444444444] | J26: 2.3236074074074073 | K26: 1.92 | L26: 2.3236074074074073 | M26: =(K26/L26-1)*100 [cached -17.369862314982775] | N26: =K26 [cached 1.92] | O26: =M26 [cached -17.369862314982775] | P26: [1, 11, 1, 0] | Q26: =MAX(H26,I26) [cached 0.6844444444444444]
+A27: staggered | B27: 8 | C27: 32 | D27: 8 | E27: 32 | F27: 56 | G27: 1792 | H27: =E27*ROUNDUP(2048/$B$5,0)/$B$3 [cached 1.0429629629629629] | I27: =(G27*64/$B$9+F27*$B$8)/$B$3 [cached 1.3688888888888888] | J27: 2.3236074074074073 | K27: 1.9537962962962963 | L27: 2.4082 | M27: =(K27/L27-1)*100 [cached -18.869018507752834] | N27: =K27 [cached 1.9537962962962963] | O27: =M27 [cached -18.869018507752834] | P27: [0, 11, 1, 11] | Q27: =MAX(H27,I27) [cached 1.3688888888888888]
+A28: staggered | B28: 32 | C28: 32 | D28: 8 | E28: 128 | F28: 200 | G28: 6400 | H28: =E28*ROUNDUP(2048/$B$5,0)/$B$3 [cached 4.1718518518518515] | I28: =(G28*64/$B$9+F28*$B$8)/$B$3 [cached 4.888888888888889] | J28: 2.3236074074074073 | K28: 4.916111111111111 | L28: 5.172407407407407 | M28: =(K28/L28-1)*100 [cached -4.955067845762762] | N28: =K28 [cached 4.916111111111111] | O28: =M28 [cached -4.955067845762762] | P28: [0, 11, 1, 11] | Q28: =MAX(H28,I28) [cached 4.888888888888889]
+A29: staggered | B29: 64 | C29: 32 | D29: 8 | E29: 256 | F29: 400 | G29: 12800 | H29: =E29*ROUNDUP(2048/$B$5,0)/$B$3 [cached 8.343703703703703] | I29: =(G29*64/$B$9+F29*$B$8)/$B$3 [cached 9.777777777777779] | J29: 2.3236074074074073 | K29: 9.80425925925926 | L29: 10.19225925925926 | M29: =(K29/L29-1)*100 [cached -3.806810542495942] | N29: =K29 [cached 9.80425925925926] | O29: =M29 [cached -3.806810542495942] | P29: [0, 11, 1, 11] | Q29: =MAX(H29,I29) [cached 9.777777777777779]
+A30: staggered | B30: 110 | C30: 32 | D30: 8 | E30: 440 | F30: 760 | G30: 21760 | H30: =E30*ROUNDUP(2048/$B$5,0)/$B$3 [cached 14.34074074074074] | I30: =(G30*64/$B$9+F30*$B$8)/$B$3 [cached 16.68148148148148] | J30: 2.3236074074074073 | K30: 16.700833333333332 | L30: 17.28951111111111 | M30: =(K30/L30-1)*100 [cached -3.404826047391618] | N30: =K30 [cached 16.700833333333332] | O30: =M30 [cached -3.404826047391618] | P30: [0, 11, 1, 11] | Q30: =MAX(H30,I30) [cached 16.68148148148148]
+A31: staggered | B31: 1 | C31: 128 | D31: 8 | E31: 16 | F31: 112 | G31: 3584 | H31: =E31*ROUNDUP(2048/$B$5,0)/$B$3 [cached 0.5214814814814814] | I31: =(G31*64/$B$9+F31*$B$8)/$B$3 [cached 2.7377777777777776] | J31: 9.354881481481481 | K31: 7.68 | L31: 9.354881481481481 | M31: =(K31/L31-1)*100 [cached -17.903823632581606] | N31: =K31 [cached 7.68] | O31: =M31 [cached -17.903823632581606] | P31: [1, 11, 1, 0] | Q31: =MAX(H31,I31) [cached 2.7377777777777776]
+A32: staggered | B32: 8 | C32: 128 | D32: 8 | E32: 128 | F32: 224 | G32: 7168 | H32: =E32*ROUNDUP(2048/$B$5,0)/$B$3 [cached 4.1718518518518515] | I32: =(G32*64/$B$9+F32*$B$8)/$B$3 [cached 5.475555555555555] | J32: 9.354881481481481 | K32: 7.735925925925926 | L32: 9.680074074074074 | M32: =(K32/L32-1)*100 [cached -20.08402139561222] | N32: =K32 [cached 7.735925925925926] | O32: =M32 [cached -20.08402139561222] | P32: [0, 11, 1, 11] | Q32: =MAX(H32,I32) [cached 5.475555555555555]
+A33: staggered | B33: 32 | C33: 128 | D33: 8 | E33: 512 | F33: 800 | G33: 25600 | H33: =E33*ROUNDUP(2048/$B$5,0)/$B$3 [cached 16.687407407407406] | I33: =(G33*64/$B$9+F33*$B$8)/$B$3 [cached 19.555555555555557] | J33: 9.354881481481481 | K33: 19.58277777777778 | L33: 20.724140740740744 | M33: =(K33/L33-1)*100 [cached -5.507407893245997] | N33: =K33 [cached 19.58277777777778] | O33: =M33 [cached -5.507407893245997] | P33: [0, 11, 1, 11] | Q33: =MAX(H33,I33) [cached 19.555555555555557]
+A34: staggered | B34: 64 | C34: 128 | D34: 8 | E34: 1024 | F34: 1600 | G34: 51200 | H34: =E34*ROUNDUP(2048/$B$5,0)/$B$3 [cached 33.37481481481481] | I34: =(G34*64/$B$9+F34*$B$8)/$B$3 [cached 39.111111111111114] | J34: 9.354881481481481 | K34: 39.13759259259259 | L34: 40.80813333333333 | M34: =(K34/L34-1)*100 [cached -4.093646546131513] | N34: =K34 [cached 39.13759259259259] | O34: =M34 [cached -4.093646546131513] | P34: [0, 11, 1, 11] | Q34: =MAX(H34,I34) [cached 39.111111111111114]
+A35: staggered | B35: 110 | C35: 128 | D35: 8 | E35: 1760 | F35: 3040 | G35: 87040 | H35: =E35*ROUNDUP(2048/$B$5,0)/$B$3 [cached 57.36296296296296] | I35: =(G35*64/$B$9+F35*$B$8)/$B$3 [cached 66.72592592592592] | J35: 9.354881481481481 | K35: 66.78055555555555 | L35: 69.16041481481481 | M35: =(K35/L35-1)*100 [cached -3.4410714071504866] | N35: =K35 [cached 66.78055555555555] | O35: =M35 [cached -3.4410714071504866] | P35: [0, 11, 1, 11] | Q35: =MAX(H35,I35) [cached 66.72592592592592]
+A38: Interpretation | B38: At 110 cores /128 pages, bank capacity bound 57.363 us; link bound 66.726 us; raw replay 66.762 us; measured 68.987 us.
+A39: Hot link | B39: Physical NoC0 (0,11)->(1,11). Packet counts include requests and responses.
+A40: Read latency vs occupancy | B40: 126 cycles is pipeline latency, not exclusive bank occupancy per read. Bank occupancy=ceil(bytes/47.0805).
+A41: No double-counting | B41: Add DRAM excess max(0,ceil(bytes/47.0805)-response_flits) to response release; NoC serialization is already charged.
+A42: Source code | B42: ttnn/ttnn/operations/examples/dram_read_contention/queue_model.py; topology and measured comparisons stored alongside.
+
+SHEET Archive low-core
+A1: BH low-core investigation; 2026-10-20
+A2: Scope | B2: Aligned reads; diagnostic clocks separate from uninstrumented measurements; 14 diagnostic +12 held-out correctness cases passed.
+A3: Issue interval cycles | B3: 35
+A4: Effective batch residual cycles | B4: 94.4962499999999
+A5: Calibration | B5: Only one-core /128 pages /batch-eight time fitted; issue cadence from diagnostic kernel. Not universal hardware constants.
+A6: Snapshots | B6: Replay columns below require Python rerun if parameters change. Excel error columns recalculate.
+A7: Caveat | B7: All six held-out batch-eight cases <1.75% error; batch16 eight-core/64-page case +7.68%; other batch sizes still miss.
+A9: Batch | B9: Cores | C9: KiB/core | D9: Ideal issue us | E9: Calibrated us | F9: Measured us | G9: Error %
+A10: 16 | B10: 1 | C10: 128 | D10: 2.6044444444444443 | E10: 3.1688777777777783 | F10: 3.1719925925925927 | G10: =(E10/F10-1)*100 [cached -0.09819741767645995]
+A11: 16 | B11: 4 | C11: 128 | D11: 2.638611111111111 | E11: 3.2359148148148145 | F11: 3.162333333333333 | G11: =(E11/F11-1)*100 [cached 2.326809786491446]
+A12: 16 | B12: 8 | C12: 128 | D12: 2.7755555555555556 | E12: 3.487951851851851 | F12: 3.239288888888889 | G12: =(E12/F12-1)*100 [cached 7.676467628926309]
+A13: 16 | B13: 1 | C13: 512 | D13: 10.417777777777777 | E13: 12.67551111111108 | F13: 12.80282962962963 | G13: =(E13/F13-1)*100 [cached -0.9944560866755325]
+A14: 16 | B14: 4 | C14: 512 | D14: 10.451944444444445 | E14: 12.920325925925896 | F14: 12.838607407407405 | G14: =(E14/F14-1)*100 [cached 0.6365060938879008]
+A15: 16 | B15: 8 | C15: 512 | D15: 10.987962962962962 | E15: 13.776807407407373 | F15: 13.492533333333332 | G15: =(E15/F15-1)*100 [cached 2.106899179353827]
+A16: 8 | B16: 1 | C16: 128 | D16: 3.84 | E16: 4.678496296296289 | F16: 4.6918592592592585 | G16: =(E16/F16-1)*100 [cached -0.28481167538429997]
+A17: 8 | B17: 4 | C17: 128 | D17: 3.8558333333333334 | E17: 4.799051851851845 | F17: 4.743600000000001 | G17: =(E17/F17-1)*100 [cached 1.168982457455181]
+A18: 8 | B18: 8 | C18: 128 | D18: 3.882962962962963 | E18: 4.8511355324074 | F18: 4.767977777777777 | G18: =(E18/F18-1)*100 [cached 1.7440885529542038]
+A19: 8 | B19: 1 | C19: 512 | D19: 15.36 | E19: 18.713985185185116 | F19: 18.745888888888892 | G19: =(E19/F19-1)*100 [cached -0.1701904022416656]
+A20: 8 | B20: 4 | C20: 512 | D20: 15.375833333333333 | E20: 19.17231851851845 | F20: 18.87928148148148 | G20: =(E20/F20-1)*100 [cached 1.5521620212316067]
+A21: 8 | B21: 8 | C21: 512 | D21: 15.438518518518519 | E21: 19.277735532407338 | F21: 19.140237037037036 | G21: =(E21/F21-1)*100 [cached 0.7183740468011734]
+A24: Diagnostic facts | B24: Large-batch issue ~35 cycles/read; empty barrier16cycles; clock pair1cycle. Populated-barrier time includes outstanding DRAM/NoC waits.
+A25: Instrumentation | B25: Instrumented total can change by ~11%; use baseline for prediction comparisons.
+A26: Full grid | B26: 110 cores /128 pages /batch8: calibrated66.891us vs68.987us measured, -3.04%; link bottleneck remains.
+A27: Source | B27: ttnn/ttnn/operations/examples/dram_read_contention/low_core_report.md

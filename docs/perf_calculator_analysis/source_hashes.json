@@ -1,0 +1,20 @@
+{
+  "tools/perf_calculator/test_write_transport.py": "f8f3854e9ca7b4bb52d5de4a17b73984d736e89c7da009e88865318339808035",
+  "tools/perf_calculator/noc_routing_model.py": "bce984a575215c3df1036657b317befa1b9017b012e7c40b6c595e86081b8f6a",
+  "tools/perf_calculator/test_shortlist.py": "94b1f44ff77c682ba9e4edb2b226d830bc0ec1491a7651158ae7c97ad7867116",
+  "tools/perf_calculator/test_noc_routing_model.py": "bbf8b34d1e0a13320faa035d2b655028469db4f6731dc987d780ca9a6940d307",
+  "tools/perf_calculator/test_read_service.py": "f32fc545fe0c837c6853cc071876bbbd1f9c9ae9d0395063d3ced9c65f7d3739",
+  "tools/perf_calculator/validate_transport.py": "5e6dfc4ca68f50e6e07af0b75eb981d27b0234bac4c2c3555ef6c59356efe2d0",
+  "tools/perf_calculator/routing.py": "2c8d1747a68e90d988e6facdfbb2181d75a67908d26afa536e4380e5501a951b",
+  "tools/perf_calculator/read_service.py": "c0c0454a6944fd8688e21ddc3e4789b5e2e666afeb1d94678221f08de7decbed",
+  "tools/perf_calculator/shortlist.py": "b0df809f31d90992b8edd143556978f6bd4a3f9ea4a54c4171f3ba53de69c436",
+  "tools/perf_calculator/read_service_bh.json": "168757aca81090d342bfe39887028497ced6fac8f20bc618859331910fd01d77",
+  "tools/perf_calculator/write_validation_bh.json": "8bf79c811297f2c1e52dd90b716844238acfb4fa092c1e8694c6c383c35d5009",
+  "tools/perf_calculator/model_parameters.json": "4ea4bbfa98f86cf014a2931eabfd90b4d7d0ec8506f5839f2d3ed6036ade61de",
+  "tools/perf_calculator/topology_bh.json": "ba7caebde8352feef126253023f315d5a8c0ecf44046af51f1f486ac509c20a2",
+  "tools/perf_calculator/write_probe_bh.jsonl": "fdb8a11197f9f958e0314d9c4550a1f61d7bb46d868d314d5f45250db6c9f31c",
+  "tools/perf_calculator/read_probe_bh.jsonl": "059ebd6df1f1abce213dd93953b41c481053f833361786be5714e46febd0d4fc",
+  "Data movement perf calculator.xlsx": "4b2afb69037ec59541bddc326b19651c127197c70c57851b7f1220ec32b02276",
+  "tests/ttnn/unit_tests/operations/examples/test_noc_transport.py": "2e5611c88c72256f5334139f2f4ae311186a9cfd7d80cf9034775efe76236a38",
+  "/tmp/noc-write-validation/phase2_measured.jsonl": "d9c53a51baf6fe90f88b271af6bd376e946b531d1fcfbb221d90ae63c0e657b7"
+}

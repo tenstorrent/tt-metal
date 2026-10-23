@@ -1,0 +1,6014 @@
+{
+  "Sheet1": {
+    "A1": {
+      "value": "AI CLK",
+      "formula": null
+    },
+    "B1": {
+      "value": "1.35 GHz",
+      "formula": null
+    },
+    "A2": {
+      "value": "Cycle suration",
+      "formula": null
+    },
+    "B2": {
+      "value": "0.7407 ns",
+      "formula": null
+    },
+    "A3": {
+      "value": "NoC link bandwidth",
+      "formula": null
+    },
+    "B3": {
+      "value": "64B/cycle",
+      "formula": null
+    },
+    "A4": {
+      "value": "NoC link badwidth at 1.35 GHz ",
+      "formula": null
+    },
+    "B4": {
+      "value": "86.4 GB/s",
+      "formula": null
+    },
+    "A5": {
+      "value": "DRAM bandwidth ",
+      "formula": null
+    },
+    "B5": {
+      "value": "512GB/s",
+      "formula": null
+    },
+    "A6": {
+      "value": "DRAM banks",
+      "formula": null
+    },
+    "B6": {
+      "value": "8.0",
+      "formula": null
+    },
+    "A7": {
+      "value": "Tensix cores",
+      "formula": null
+    },
+    "B7": {
+      "value": "120.0",
+      "formula": null
+    },
+    "A10": {
+      "value": "Alignement requiremenets ",
+      "formula": null
+    },
+    "A11": {
+      "value": "Memory target",
+      "formula": null
+    },
+    "B11": {
+      "value": "Read",
+      "formula": null
+    },
+    "C11": {
+      "value": "Write",
+      "formula": null
+    },
+    "A12": {
+      "value": "DRAM",
+      "formula": null
+    },
+    "B12": {
+      "value": "64B",
+      "formula": null
+    },
+    "C12": {
+      "value": "16B",
+      "formula": null
+    },
+    "A13": {
+      "value": "L1",
+      "formula": null
+    },
+    "B13": {
+      "value": "16B",
+      "formula": null
+    },
+    "C13": {
+      "value": "16B",
+      "formula": null
+    },
+    "A16": {
+      "value": "BH completed unicast transfer estimate",
+      "formula": null
+    },
+    "A17": {
+      "value": "Payload (bytes)",
+      "formula": null
+    },
+    "B17": {
+      "value": "65536",
+      "formula": null
+    },
+    "C17": {
+      "value": "Editable: total bytes moved",
+      "formula": null
+    },
+    "A18": {
+      "value": "Clock (MHz)",
+      "formula": null
+    },
+    "B18": {
+      "value": "1350",
+      "formula": null
+    },
+    "C18": {
+      "value": "Queried BH p150b clock; units MHz",
+      "formula": null
+    },
+    "A19": {
+      "value": "Router-link latency (cycles)",
+      "formula": null
+    },
+    "B19": {
+      "value": "9",
+      "formula": null
+    },
+    "C19": {
+      "value": "BH ISA: 9 cycles per inter-router link, not 9 ns",
+      "formula": null
+    },
+    "A20": {
+      "value": "Transfer profile ID",
+      "formula": null
+    },
+    "B20": {
+      "value": "2",
+      "formula": null
+    },
+    "C20": {
+      "value": "Editable: choose ID 1-8 from the table below",
+      "formula": null
+    },
+    "A21": {
+      "value": "NoC bandwidth (GB/s)",
+      "formula": null
+    },
+    "B21": {
+      "value": "82.072",
+      "formula": "INDEX(B36:B43,B20)"
+    },
+    "C21": {
+      "value": "Measured at 64 KiB; not theoretical link bandwidth",
+      "formula": null
+    },
+    "A22": {
+      "value": "Round-trip router links",
+      "formula": null
+    },
+    "B22": {
+      "value": "29",
+      "formula": null
+    },
+    "C22": {
+      "value": "Editable: total request + response/ACK links. Local 0; near 17; far 29 on verified NoC0 routes.",
+      "formula": null
+    },
+    "A24": {
+      "value": "NIU crossing time (us)",
+      "formula": null
+    },
+    "B24": {
+      "value": "0.014814814814814815",
+      "formula": "B45*B46/B18"
+    },
+    "A25": {
+      "value": "Bandwidth time (us)",
+      "formula": null
+    },
+    "B25": {
+      "value": "0.798518374110537",
+      "formula": "B17/(B21*1000)"
+    },
+    "A26": {
+      "value": "Router-link time (us)",
+      "formula": null
+    },
+    "B26": {
+      "value": "0.19333333333333333",
+      "formula": "B22*B19/B18"
+    },
+    "A27": {
+      "value": "Estimated NoC latency (us)",
+      "formula": null
+    },
+    "B27": {
+      "value": "1.0393901289188885",
+      "formula": "B25+B26+B24+B47/1000"
+    },
+    "A29": {
+      "value": "Formula",
+      "formula": null
+    },
+    "B29": {
+      "value": "time_us = bytes/(GBps*1000) + (round_trip_links*router_cycles + NIU_crossings*NIU_cycles)/clock_MHz + residual_ns/1000",
+      "formula": null
+    },
+    "A30": {
+      "value": "Calibration note",
+      "formula": null
+    },
+    "B30": {
+      "value": "64 KiB measured bandwidth is an effective rate; this is a heuristic estimate for other payload sizes.",
+      "formula": null
+    },
+    "A31": {
+      "value": "Latency note",
+      "formula": null
+    },
+    "B31": {
+      "value": "Completed unicast reads/nonposted writes only. Multicast profiles below are reference data; this endpoint model does not model multicast ACK fan-in.",
+      "formula": null
+    },
+    "A32": {
+      "value": "Source",
+      "formula": null
+    },
+    "B32": {
+      "value": "Dispatch BW.xlsx / NOC BWs / BH NOC P150; values copied, no external workbook links.",
+      "formula": null
+    },
+    "A33": {
+      "value": "Model source",
+      "formula": null
+    },
+    "B33": {
+      "value": "https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md#performance",
+      "formula": null
+    },
+    "A35": {
+      "value": "Profile ID / transfer",
+      "formula": null
+    },
+    "B35": {
+      "value": "BW (GB/s)",
+      "formula": null
+    },
+    "C35": {
+      "value": "Dispatch source cells",
+      "formula": null
+    },
+    "D35": {
+      "value": "Measured latency (us)",
+      "formula": null
+    },
+    "A36": {
+      "value": "1: READ NEAR L1",
+      "formula": null
+    },
+    "B36": {
+      "value": "82.37",
+      "formula": null
+    },
+    "C36": {
+      "value": "'NOC BWs'!G67 (BW), G68 (latency)",
+      "formula": null
+    },
+    "D36": {
+      "value": "0.16088477",
+      "formula": null
+    },
+    "A37": {
+      "value": "2: READ FAR L1",
+      "formula": null
+    },
+    "B37": {
+      "value": "82.072",
+      "formula": null
+    },
+    "C37": {
+      "value": "'NOC BWs'!H67 (BW), H68 (latency)",
+      "formula": null
+    },
+    "D37": {
+      "value": "0.24384375",
+      "formula": null
+    },
+    "A38": {
+      "value": "3: READ LOCAL L1",
+      "formula": null
+    },
+    "B38": {
+      "value": "79.858",
+      "formula": null
+    },
+    "C38": {
+      "value": "'NOC BWs'!I67 (BW), I68 (latency)",
+      "formula": null
+    },
+    "D38": {
+      "value": "0.048296876",
+      "formula": null
+    },
+    "A39": {
+      "value": "4: WRITE FAR L1",
+      "formula": null
+    },
+    "B39": {
+      "value": "83.375",
+      "formula": null
+    },
+    "C39": {
+      "value": "'NOC BWs'!J67 (BW), J68 (latency)",
+      "formula": null
+    },
+    "D39": {
+      "value": "0.24089453",
+      "formula": null
+    },
+    "A40": {
+      "value": "5: MCAST NEAR L1",
+      "formula": null
+    },
+    "B40": {
+      "value": "77.933",
+      "formula": null
+    },
+    "C40": {
+      "value": "'NOC BWs'!K67 (BW), K68 (latency)",
+      "formula": null
+    },
+    "D40": {
+      "value": "0.17565039",
+      "formula": null
+    },
+    "A41": {
+      "value": "6: MCAST FAR L1",
+      "formula": null
+    },
+    "B41": {
+      "value": "49.668",
+      "formula": null
+    },
+    "C41": {
+      "value": "'NOC BWs'!L67 (BW), L68 (latency)",
+      "formula": null
+    },
+    "D41": {
+      "value": "0.35941797",
+      "formula": null
+    },
+    "A42": {
+      "value": "7: MCAST MANY L1",
+      "formula": null
+    },
+    "B42": {
+      "value": "34.506",
+      "formula": null
+    },
+    "C42": {
+      "value": "'NOC BWs'!M67 (BW), M68 (latency)",
+      "formula": null
+    },
+    "D42": {
+      "value": "0.5609316",
+      "formula": null
+    },
+    "A43": {
+      "value": "8: MCAST MANY L1 LINKED",
+      "formula": null
+    },
+    "B43": {
+      "value": "57.677",
+      "formula": null
+    },
+    "C43": {
+      "value": "'NOC BWs'!N67 (BW), N68 (latency)",
+      "formula": null
+    },
+    "D43": {
+      "value": "0.64235353",
+      "formula": null
+    },
+    "A45": {
+      "value": "NIU crossings per transaction",
+      "formula": null
+    },
+    "B45": {
+      "value": "4",
+      "formula": null
+    },
+    "C45": {
+      "value": "2 packets x (source NIU-to-router + destination router-to-NIU)",
+      "formula": null
+    },
+    "A46": {
+      "value": "Cycles per NIU crossing",
+      "formula": null
+    },
+    "B46": {
+      "value": "5",
+      "formula": null
+    },
+    "C46": {
+      "value": "Approximate documented value; not a measured decomposition",
+      "formula": null
+    },
+    "A47": {
+      "value": "Residual overhead (ns)",
+      "formula": null
+    },
+    "B47": {
+      "value": "32.723606660203345",
+      "formula": "B49-B48/B50-B45*B46/(B18/1000)"
+    },
+    "C47": {
+      "value": "Calibrated combined overhead minus explicit NIU latency; assumes shared overhead across these reads/writes.",
+      "formula": null
+    },
+    "A48": {
+      "value": "Calibration payload (bytes)",
+      "formula": null
+    },
+    "B48": {
+      "value": "64",
+      "formula": null
+    },
+    "A49": {
+      "value": "Calibration latency (ns)",
+      "formula": null
+    },
+    "B49": {
+      "value": "48.339844",
+      "formula": "'BH validation'!E10*1000"
+    },
+    "A50": {
+      "value": "Calibration BW (GB/s)",
+      "formula": null
+    },
+    "B50": {
+      "value": "79.858",
+      "formula": "B38"
+    },
+    "A51": {
+      "value": "Calibration note",
+      "formula": null
+    },
+    "B51": {
+      "value": "Local 64 B measurement sets the overhead. That row is calibration, not independent validation. Residual includes software/L1/barrier and unmodeled endpoint effects.",
+      "formula": null
+    },
+    "A52": {
+      "value": "Scope",
+      "formula": null
+    },
+    "B52": {
+      "value": "Serialized completed transfers; do not multiply full fixed latency by every request in a pipelined algorithm.",
+      "formula": null
+    },
+    "A53": {
+      "value": "Routes",
+      "formula": null
+    },
+    "B53": {
+      "value": "See BH routes: physical torus 17 x 12; use physical coordinates, NoC direction and return path.",
+      "formula": null
+    },
+    "A54": {
+      "value": "No double counting",
+      "formula": null
+    },
+    "B54": {
+      "value": "Explicit NIU term plus residual equals the previous calibrated fixed overhead; estimates remain numerically equivalent.",
+      "formula": null
+    }
+  },
+  "WH measurements": {
+    "A1": {
+      "value": "WH measurements \u2014 2026-10-20",
+      "formula": null
+    },
+    "A2": {
+      "value": "Hardware",
+      "formula": null
+    },
+    "B2": {
+      "value": "wormhole_b0; queried worker grid 8 x 8; physical NoC topology 10 x 12",
+      "formula": null
+    },
+    "A3": {
+      "value": "Original model",
+      "formula": null
+    },
+    "B3": {
+      "value": "10 x 12 grid, 9 ns/hop; 99 ns hop term. Retained here to reproduce the original comparison.",
+      "formula": null
+    },
+    "A4": {
+      "value": "Alternative",
+      "formula": null
+    },
+    "B4": {
+      "value": "8 x 8 worker-grid predictions are shown separately; neither is an actual route-distance model.",
+      "formula": null
+    },
+    "A5": {
+      "value": "Measurement",
+      "formula": null
+    },
+    "B5": {
+      "value": "Median of 3 runs; 32768 serialized transfers/run, barrier per transfer; one warm-up workload.",
+      "formula": null
+    },
+    "A6": {
+      "value": "Timing scope",
+      "formula": null
+    },
+    "B6": {
+      "value": "Host launch + Finish timing amortized over transfers. Timing-only benchmark; no payload correctness validation.",
+      "formula": null
+    },
+    "A7": {
+      "value": "Bandwidth source",
+      "formula": null
+    },
+    "B7": {
+      "value": "Dispatch BW.xlsx / NOC BWs / WH NOC / 65536-byte row; copied values, no external links.",
+      "formula": null
+    },
+    "A8": {
+      "value": "Logical endpoints",
+      "formula": null
+    },
+    "B8": {
+      "value": "Initiator (1,0); local (1,0), near (0,0), far (7,7).",
+      "formula": null
+    },
+    "A9": {
+      "value": "Transfer",
+      "formula": null
+    },
+    "B9": {
+      "value": "Bytes",
+      "formula": null
+    },
+    "C9": {
+      "value": "BW (GB/s)",
+      "formula": null
+    },
+    "D9": {
+      "value": "Est 10x12 (us)",
+      "formula": null
+    },
+    "E9": {
+      "value": "Measured (us)",
+      "formula": null
+    },
+    "F9": {
+      "value": "Error (%)",
+      "formula": null
+    },
+    "G9": {
+      "value": "Est 8x8 (us)",
+      "formula": null
+    },
+    "H9": {
+      "value": "Error 8x8 (%)",
+      "formula": null
+    },
+    "I9": {
+      "value": "Min (us)",
+      "formula": null
+    },
+    "J9": {
+      "value": "Max (us)",
+      "formula": null
+    },
+    "A10": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B10": {
+      "value": "64",
+      "formula": null
+    },
+    "C10": {
+      "value": "27.84",
+      "formula": null
+    },
+    "D10": {
+      "value": "0.10129885057471265",
+      "formula": "B10/(C10*1000)+(10+12)/2*9/1000"
+    },
+    "E10": {
+      "value": "0.07235718",
+      "formula": null
+    },
+    "F10": {
+      "value": "39.998339590780986",
+      "formula": "(D10/E10-1)*100"
+    },
+    "G10": {
+      "value": "0.07429885057471265",
+      "formula": "B10/(C10*1000)+(8+8)/2*9/1000"
+    },
+    "H10": {
+      "value": "2.683452526359731",
+      "formula": "(G10/E10-1)*100"
+    },
+    "I10": {
+      "value": "0.06478882",
+      "formula": null
+    },
+    "J10": {
+      "value": "0.07342529",
+      "formula": null
+    },
+    "A11": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B11": {
+      "value": "2048",
+      "formula": null
+    },
+    "C11": {
+      "value": "27.84",
+      "formula": null
+    },
+    "D11": {
+      "value": "0.1725632183908046",
+      "formula": "B11/(C11*1000)+(10+12)/2*9/1000"
+    },
+    "E11": {
+      "value": "0.13180542",
+      "formula": null
+    },
+    "F11": {
+      "value": "30.922702868216344",
+      "formula": "(D11/E11-1)*100"
+    },
+    "G11": {
+      "value": "0.1455632183908046",
+      "formula": "B11/(C11*1000)+(8+8)/2*9/1000"
+    },
+    "H11": {
+      "value": "10.437961041969746",
+      "formula": "(G11/E11-1)*100"
+    },
+    "I11": {
+      "value": "0.13150024",
+      "formula": null
+    },
+    "J11": {
+      "value": "0.13833618",
+      "formula": null
+    },
+    "A12": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B12": {
+      "value": "65536",
+      "formula": null
+    },
+    "C12": {
+      "value": "27.84",
+      "formula": null
+    },
+    "D12": {
+      "value": "2.4530229885057473",
+      "formula": "B12/(C12*1000)+(10+12)/2*9/1000"
+    },
+    "E12": {
+      "value": "2.2133484",
+      "formula": null
+    },
+    "F12": {
+      "value": "10.828597454686628",
+      "formula": "(D12/E12-1)*100"
+    },
+    "G12": {
+      "value": "2.426022988505747",
+      "formula": "B12/(C12*1000)+(8+8)/2*9/1000"
+    },
+    "H12": {
+      "value": "9.60872624055693",
+      "formula": "(G12/E12-1)*100"
+    },
+    "I12": {
+      "value": "2.2128906",
+      "formula": null
+    },
+    "J12": {
+      "value": "2.2134705",
+      "formula": null
+    },
+    "A13": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B13": {
+      "value": "64",
+      "formula": null
+    },
+    "C13": {
+      "value": "28.312",
+      "formula": null
+    },
+    "D13": {
+      "value": "0.10126052557219554",
+      "formula": "B13/(C13*1000)+(10+12)/2*9/1000"
+    },
+    "E13": {
+      "value": "0.16934204",
+      "formula": null
+    },
+    "F13": {
+      "value": "-40.20355159758584",
+      "formula": "(D13/E13-1)*100"
+    },
+    "G13": {
+      "value": "0.07426052557219555",
+      "formula": "B13/(C13*1000)+(8+8)/2*9/1000"
+    },
+    "H13": {
+      "value": "-56.14761368636189",
+      "formula": "(G13/E13-1)*100"
+    },
+    "I13": {
+      "value": "0.16189575",
+      "formula": null
+    },
+    "J13": {
+      "value": "0.16940308",
+      "formula": null
+    },
+    "A14": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B14": {
+      "value": "2048",
+      "formula": null
+    },
+    "C14": {
+      "value": "28.312",
+      "formula": null
+    },
+    "D14": {
+      "value": "0.17133681831025716",
+      "formula": "B14/(C14*1000)+(10+12)/2*9/1000"
+    },
+    "E14": {
+      "value": "0.2354126",
+      "formula": null
+    },
+    "F14": {
+      "value": "-27.218501341790045",
+      "formula": "(D14/E14-1)*100"
+    },
+    "G14": {
+      "value": "0.14433681831025716",
+      "formula": "B14/(C14*1000)+(8+8)/2*9/1000"
+    },
+    "H14": {
+      "value": "-38.6877260137065",
+      "formula": "(G14/E14-1)*100"
+    },
+    "I14": {
+      "value": "0.2270813",
+      "formula": null
+    },
+    "J14": {
+      "value": "0.23602295",
+      "formula": null
+    },
+    "A15": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B15": {
+      "value": "65536",
+      "formula": null
+    },
+    "C15": {
+      "value": "28.312",
+      "formula": null
+    },
+    "D15": {
+      "value": "2.4137781859282286",
+      "formula": "B15/(C15*1000)+(10+12)/2*9/1000"
+    },
+    "E15": {
+      "value": "2.3223877",
+      "formula": null
+    },
+    "F15": {
+      "value": "3.9351950549957104",
+      "formula": "(D15/E15-1)*100"
+    },
+    "G15": {
+      "value": "2.3867781859282284",
+      "formula": "B15/(C15*1000)+(8+8)/2*9/1000"
+    },
+    "H15": {
+      "value": "2.7725984738994347",
+      "formula": "(G15/E15-1)*100"
+    },
+    "I15": {
+      "value": "2.3215027",
+      "formula": null
+    },
+    "J15": {
+      "value": "2.3294067",
+      "formula": null
+    },
+    "A16": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B16": {
+      "value": "64",
+      "formula": null
+    },
+    "C16": {
+      "value": "28.7",
+      "formula": null
+    },
+    "D16": {
+      "value": "0.10122996515679443",
+      "formula": "B16/(C16*1000)+(10+12)/2*9/1000"
+    },
+    "E16": {
+      "value": "0.27529907",
+      "formula": null
+    },
+    "F16": {
+      "value": "-63.22909294361422",
+      "formula": "(D16/E16-1)*100"
+    },
+    "G16": {
+      "value": "0.07422996515679443",
+      "formula": "B16/(C16*1000)+(8+8)/2*9/1000"
+    },
+    "H16": {
+      "value": "-73.03660882080189",
+      "formula": "(G16/E16-1)*100"
+    },
+    "I16": {
+      "value": "0.26745605",
+      "formula": null
+    },
+    "J16": {
+      "value": "0.27697754",
+      "formula": null
+    },
+    "A17": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B17": {
+      "value": "2048",
+      "formula": null
+    },
+    "C17": {
+      "value": "28.7",
+      "formula": null
+    },
+    "D17": {
+      "value": "0.1703588850174216",
+      "formula": "B17/(C17*1000)+(10+12)/2*9/1000"
+    },
+    "E17": {
+      "value": "0.3413391",
+      "formula": null
+    },
+    "F17": {
+      "value": "-50.09101359398276",
+      "formula": "(D17/E17-1)*100"
+    },
+    "G17": {
+      "value": "0.1433588850174216",
+      "formula": "B17/(C17*1000)+(8+8)/2*9/1000"
+    },
+    "H17": {
+      "value": "-58.001036207858526",
+      "formula": "(G17/E17-1)*100"
+    },
+    "I17": {
+      "value": "0.3343811",
+      "formula": null
+    },
+    "J17": {
+      "value": "0.3418579",
+      "formula": null
+    },
+    "A18": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B18": {
+      "value": "65536",
+      "formula": null
+    },
+    "C18": {
+      "value": "28.7",
+      "formula": null
+    },
+    "D18": {
+      "value": "2.3824843205574915",
+      "formula": "B18/(C18*1000)+(10+12)/2*9/1000"
+    },
+    "E18": {
+      "value": "2.4348145",
+      "formula": null
+    },
+    "F18": {
+      "value": "-2.1492470758042725",
+      "formula": "(D18/E18-1)*100"
+    },
+    "G18": {
+      "value": "2.3554843205574914",
+      "formula": "B18/(C18*1000)+(8+8)/2*9/1000"
+    },
+    "H18": {
+      "value": "-3.2581611224390405",
+      "formula": "(G18/E18-1)*100"
+    },
+    "I18": {
+      "value": "2.4280396",
+      "formula": null
+    },
+    "J18": {
+      "value": "2.4354858",
+      "formula": null
+    },
+    "A19": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B19": {
+      "value": "64",
+      "formula": null
+    },
+    "C19": {
+      "value": "27.808",
+      "formula": null
+    },
+    "D19": {
+      "value": "0.10130149597238206",
+      "formula": "B19/(C19*1000)+(10+12)/2*9/1000"
+    },
+    "E19": {
+      "value": "0.27835083",
+      "formula": null
+    },
+    "F19": {
+      "value": "-63.60654071971618",
+      "formula": "(D19/E19-1)*100"
+    },
+    "G19": {
+      "value": "0.07430149597238206",
+      "formula": "B19/(C19*1000)+(8+8)/2*9/1000"
+    },
+    "H19": {
+      "value": "-73.30652975872856",
+      "formula": "(G19/E19-1)*100"
+    },
+    "I19": {
+      "value": "0.27798462",
+      "formula": null
+    },
+    "J19": {
+      "value": "0.2784729",
+      "formula": null
+    },
+    "A20": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B20": {
+      "value": "2048",
+      "formula": null
+    },
+    "C20": {
+      "value": "27.808",
+      "formula": null
+    },
+    "D20": {
+      "value": "0.17264787111622554",
+      "formula": "B20/(C20*1000)+(10+12)/2*9/1000"
+    },
+    "E20": {
+      "value": "0.34454346",
+      "formula": null
+    },
+    "F20": {
+      "value": "-49.89082912320393",
+      "formula": "(D20/E20-1)*100"
+    },
+    "G20": {
+      "value": "0.14564787111622554",
+      "formula": "B20/(C20*1000)+(8+8)/2*9/1000"
+    },
+    "H20": {
+      "value": "-57.72728609731106",
+      "formula": "(G20/E20-1)*100"
+    },
+    "I20": {
+      "value": "0.3378296",
+      "formula": null
+    },
+    "J20": {
+      "value": "0.3446045",
+      "formula": null
+    },
+    "A21": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B21": {
+      "value": "65536",
+      "formula": null
+    },
+    "C21": {
+      "value": "27.808",
+      "formula": null
+    },
+    "D21": {
+      "value": "2.4557318757192177",
+      "formula": "B21/(C21*1000)+(10+12)/2*9/1000"
+    },
+    "E21": {
+      "value": "2.4412537",
+      "formula": null
+    },
+    "F21": {
+      "value": "0.5930631347007331",
+      "formula": "(D21/E21-1)*100"
+    },
+    "G21": {
+      "value": "2.4287318757192176",
+      "formula": "B21/(C21*1000)+(8+8)/2*9/1000"
+    },
+    "H21": {
+      "value": "-0.5129259724535151",
+      "formula": "(G21/E21-1)*100"
+    },
+    "I21": {
+      "value": "2.435669",
+      "formula": null
+    },
+    "J21": {
+      "value": "2.4417725",
+      "formula": null
+    }
+  },
+  "BH validation": {
+    "A1": {
+      "value": "BH validation \u2014 measured on p150b, 2026-10-20",
+      "formula": null
+    },
+    "A2": {
+      "value": "Bandwidth preset",
+      "formula": null
+    },
+    "B2": {
+      "value": "BH P150, Dispatch workbook, 64 KiB measurements; replace BW if testing another BH variant.",
+      "formula": null
+    },
+    "A3": {
+      "value": "Clock (MHz)",
+      "formula": null
+    },
+    "B3": {
+      "value": "1350",
+      "formula": "Sheet1!B18"
+    },
+    "C3": {
+      "value": "From live p150b query",
+      "formula": null
+    },
+    "A4": {
+      "value": "Router cycles/link",
+      "formula": null
+    },
+    "B4": {
+      "value": "9",
+      "formula": "Sheet1!B19"
+    },
+    "C4": {
+      "value": "9 cycles per BH ISA documentation",
+      "formula": null
+    },
+    "A5": {
+      "value": "NIU cycles/crossing",
+      "formula": null
+    },
+    "B5": {
+      "value": "5",
+      "formula": "Sheet1!B46"
+    },
+    "C5": {
+      "value": "Approximately 5 cycles; four crossings per completed unicast transaction",
+      "formula": null
+    },
+    "A6": {
+      "value": "Residual overhead (ns)",
+      "formula": null
+    },
+    "B6": {
+      "value": "32.723606660203345",
+      "formula": "Sheet1!B47"
+    },
+    "C6": {
+      "value": "Calibrated local-read baseline minus explicit NIU time; shared across variants as a model assumption",
+      "formula": null
+    },
+    "A7": {
+      "value": "Measurements",
+      "formula": null
+    },
+    "B7": {
+      "value": "Column E: medians of 3 runs on this BH p150b. Edit inputs to recalculate predictions.",
+      "formula": null
+    },
+    "A8": {
+      "value": "Units",
+      "formula": null
+    },
+    "B8": {
+      "value": "GB/s = decimal gigabytes per second. Error = (estimate / measured - 1) * 100.",
+      "formula": null
+    },
+    "A9": {
+      "value": "Transfer",
+      "formula": null
+    },
+    "B9": {
+      "value": "Bytes",
+      "formula": null
+    },
+    "C9": {
+      "value": "BW (GB/s)",
+      "formula": null
+    },
+    "D9": {
+      "value": "Estimated (us)",
+      "formula": null
+    },
+    "E9": {
+      "value": "Measured (us)",
+      "formula": null
+    },
+    "F9": {
+      "value": "Error (%)",
+      "formula": null
+    },
+    "G9": {
+      "value": "Measured min (us)",
+      "formula": null
+    },
+    "H9": {
+      "value": "Measured max (us)",
+      "formula": null
+    },
+    "I9": {
+      "value": "Measured samples (us)",
+      "formula": null
+    },
+    "J9": {
+      "value": "Round-trip links",
+      "formula": null
+    },
+    "K9": {
+      "value": "NIU crossings",
+      "formula": null
+    },
+    "L9": {
+      "value": "Original estimate (us)",
+      "formula": null
+    },
+    "A10": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B10": {
+      "value": "64",
+      "formula": null
+    },
+    "C10": {
+      "value": "79.858",
+      "formula": "Sheet1!B38"
+    },
+    "D10": {
+      "value": "0.04833984400000001",
+      "formula": "B10/(C10*1000)+(J10*$B$4+K10*$B$5)/$B$3+$B$6/1000"
+    },
+    "E10": {
+      "value": "0.048339844",
+      "formula": null
+    },
+    "F10": {
+      "value": "2.220446049250313e-14",
+      "formula": "(D10/E10-1)*100"
+    },
+    "G10": {
+      "value": "0.048187256",
+      "formula": null
+    },
+    "H10": {
+      "value": "0.04840088",
+      "formula": null
+    },
+    "I10": {
+      "value": "[0.048339844, 0.04840088, 0.048187256]",
+      "formula": null
+    },
+    "J10": {
+      "value": "0",
+      "formula": "'BH routes'!L10"
+    },
+    "K10": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L10": {
+      "value": "0.09530142252498185",
+      "formula": null
+    },
+    "A11": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B11": {
+      "value": "2048",
+      "formula": null
+    },
+    "C11": {
+      "value": "79.858",
+      "formula": "Sheet1!B38"
+    },
+    "D11": {
+      "value": "0.07318394227443714",
+      "formula": "B11/(C11*1000)+(J11*$B$4+K11*$B$5)/$B$3+$B$6/1000"
+    },
+    "E11": {
+      "value": "0.07312012",
+      "formula": null
+    },
+    "F11": {
+      "value": "0.08728414892802405",
+      "formula": "(D11/E11-1)*100"
+    },
+    "G11": {
+      "value": "0.07305908",
+      "formula": null
+    },
+    "H11": {
+      "value": "0.07348633",
+      "formula": null
+    },
+    "I11": {
+      "value": "[0.07312012, 0.07348633, 0.07305908]",
+      "formula": null
+    },
+    "J11": {
+      "value": "0",
+      "formula": "'BH routes'!L10"
+    },
+    "K11": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L11": {
+      "value": "0.12014552079941897",
+      "formula": null
+    },
+    "A12": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B12": {
+      "value": "65536",
+      "formula": null
+    },
+    "C12": {
+      "value": "79.858",
+      "formula": "Sheet1!B38"
+    },
+    "D12": {
+      "value": "0.8681950870564252",
+      "formula": "B12/(C12*1000)+(J12*$B$4+K12*$B$5)/$B$3+$B$6/1000"
+    },
+    "E12": {
+      "value": "0.88793945",
+      "formula": null
+    },
+    "F12": {
+      "value": "-2.2236159170059056",
+      "formula": "(D12/E12-1)*100"
+    },
+    "G12": {
+      "value": "0.88775635",
+      "formula": null
+    },
+    "H12": {
+      "value": "0.88830566",
+      "formula": null
+    },
+    "I12": {
+      "value": "[0.88830566, 0.88775635, 0.88793945]",
+      "formula": null
+    },
+    "J12": {
+      "value": "0",
+      "formula": "'BH routes'!L10"
+    },
+    "K12": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L12": {
+      "value": "0.9151566655814071",
+      "formula": null
+    },
+    "A13": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B13": {
+      "value": "64",
+      "formula": null
+    },
+    "C13": {
+      "value": "82.37",
+      "formula": "Sheet1!B36"
+    },
+    "D13": {
+      "value": "0.16164873671924138",
+      "formula": "B13/(C13*1000)+(J13*$B$4+K13*$B$5)/$B$3+$B$6/1000"
+    },
+    "E13": {
+      "value": "0.16134644",
+      "formula": null
+    },
+    "F13": {
+      "value": "0.1873587785645503",
+      "formula": "(D13/E13-1)*100"
+    },
+    "G13": {
+      "value": "0.16091919",
+      "formula": null
+    },
+    "H13": {
+      "value": "0.16165161",
+      "formula": null
+    },
+    "I13": {
+      "value": "[0.16134644, 0.16091919, 0.16165161]",
+      "formula": null
+    },
+    "J13": {
+      "value": "17",
+      "formula": "'BH routes'!L11"
+    },
+    "K13": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L13": {
+      "value": "0.09527698191088989",
+      "formula": null
+    },
+    "A14": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B14": {
+      "value": "2048",
+      "formula": null
+    },
+    "C14": {
+      "value": "82.37",
+      "formula": "Sheet1!B36"
+    },
+    "D14": {
+      "value": "0.1857351759568279",
+      "formula": "B14/(C14*1000)+(J14*$B$4+K14*$B$5)/$B$3+$B$6/1000"
+    },
+    "E14": {
+      "value": "0.18615723",
+      "formula": null
+    },
+    "F14": {
+      "value": "-0.2267191251030698",
+      "formula": "(D14/E14-1)*100"
+    },
+    "G14": {
+      "value": "0.18585205",
+      "formula": null
+    },
+    "H14": {
+      "value": "0.18630981",
+      "formula": null
+    },
+    "I14": {
+      "value": "[0.18585205, 0.18615723, 0.18630981]",
+      "formula": null
+    },
+    "J14": {
+      "value": "17",
+      "formula": "'BH routes'!L11"
+    },
+    "K14": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L14": {
+      "value": "0.1193634211484764",
+      "formula": null
+    },
+    "A15": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B15": {
+      "value": "65536",
+      "formula": null
+    },
+    "C15": {
+      "value": "82.37",
+      "formula": "Sheet1!B36"
+    },
+    "D15": {
+      "value": "0.9565012315595959",
+      "formula": "B15/(C15*1000)+(J15*$B$4+K15*$B$5)/$B$3+$B$6/1000"
+    },
+    "E15": {
+      "value": "0.9479675",
+      "formula": null
+    },
+    "F15": {
+      "value": "0.9002135157160973",
+      "formula": "(D15/E15-1)*100"
+    },
+    "G15": {
+      "value": "0.947937",
+      "formula": null
+    },
+    "H15": {
+      "value": "0.94799805",
+      "formula": null
+    },
+    "I15": {
+      "value": "[0.947937, 0.94799805, 0.9479675]",
+      "formula": null
+    },
+    "J15": {
+      "value": "17",
+      "formula": "'BH routes'!L11"
+    },
+    "K15": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L15": {
+      "value": "0.8901294767512444",
+      "formula": null
+    },
+    "A16": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B16": {
+      "value": "64",
+      "formula": null
+    },
+    "C16": {
+      "value": "82.072",
+      "formula": "Sheet1!B37"
+    },
+    "D16": {
+      "value": "0.2416515579080688",
+      "formula": "B16/(C16*1000)+(J16*$B$4+K16*$B$5)/$B$3+$B$6/1000"
+    },
+    "E16": {
+      "value": "0.24441528",
+      "formula": null
+    },
+    "F16": {
+      "value": "-1.1307484916373567",
+      "formula": "(D16/E16-1)*100"
+    },
+    "G16": {
+      "value": "0.24407959",
+      "formula": null
+    },
+    "H16": {
+      "value": "0.2449646",
+      "formula": null
+    },
+    "I16": {
+      "value": "[0.24407959, 0.24441528, 0.2449646]",
+      "formula": null
+    },
+    "J16": {
+      "value": "29",
+      "formula": "'BH routes'!L12"
+    },
+    "K16": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L16": {
+      "value": "0.09527980309971733",
+      "formula": null
+    },
+    "A17": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B17": {
+      "value": "2048",
+      "formula": null
+    },
+    "C17": {
+      "value": "82.072",
+      "formula": "Sheet1!B37"
+    },
+    "D17": {
+      "value": "0.26582545399930574",
+      "formula": "B17/(C17*1000)+(J17*$B$4+K17*$B$5)/$B$3+$B$6/1000"
+    },
+    "E17": {
+      "value": "0.26904297",
+      "formula": null
+    },
+    "F17": {
+      "value": "-1.1959115678414678",
+      "formula": "(D17/E17-1)*100"
+    },
+    "G17": {
+      "value": "0.26879883",
+      "formula": null
+    },
+    "H17": {
+      "value": "0.26934814",
+      "formula": null
+    },
+    "I17": {
+      "value": "[0.26879883, 0.26934814, 0.26904297]",
+      "formula": null
+    },
+    "J17": {
+      "value": "29",
+      "formula": "'BH routes'!L12"
+    },
+    "K17": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L17": {
+      "value": "0.11945369919095428",
+      "formula": null
+    },
+    "A18": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B18": {
+      "value": "65536",
+      "formula": null
+    },
+    "C18": {
+      "value": "82.072",
+      "formula": "Sheet1!B37"
+    },
+    "D18": {
+      "value": "1.0393901289188885",
+      "formula": "B18/(C18*1000)+(J18*$B$4+K18*$B$5)/$B$3+$B$6/1000"
+    },
+    "E18": {
+      "value": "1.026001",
+      "formula": null
+    },
+    "F18": {
+      "value": "1.304982053515391",
+      "formula": "(D18/E18-1)*100"
+    },
+    "G18": {
+      "value": "1.0254517",
+      "formula": null
+    },
+    "H18": {
+      "value": "1.0260315",
+      "formula": null
+    },
+    "I18": {
+      "value": "[1.026001, 1.0260315, 1.0254517]",
+      "formula": null
+    },
+    "J18": {
+      "value": "29",
+      "formula": "'BH routes'!L12"
+    },
+    "K18": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L18": {
+      "value": "0.8930183741105371",
+      "formula": null
+    },
+    "A19": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B19": {
+      "value": "64",
+      "formula": null
+    },
+    "C19": {
+      "value": "83.375",
+      "formula": "Sheet1!B39"
+    },
+    "D19": {
+      "value": "0.24163937100025554",
+      "formula": "B19/(C19*1000)+(J19*$B$4+K19*$B$5)/$B$3+$B$6/1000"
+    },
+    "E19": {
+      "value": "0.24047852",
+      "formula": null
+    },
+    "F19": {
+      "value": "0.4827254426946537",
+      "formula": "(D19/E19-1)*100"
+    },
+    "G19": {
+      "value": "0.24032593",
+      "formula": null
+    },
+    "H19": {
+      "value": "0.24060059",
+      "formula": null
+    },
+    "I19": {
+      "value": "[0.24060059, 0.24047852, 0.24032593]",
+      "formula": null
+    },
+    "J19": {
+      "value": "29",
+      "formula": "'BH routes'!L13"
+    },
+    "K19": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L19": {
+      "value": "0.09526761619190405",
+      "formula": null
+    },
+    "A20": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B20": {
+      "value": "2048",
+      "formula": null
+    },
+    "C20": {
+      "value": "83.375",
+      "formula": "Sheet1!B39"
+    },
+    "D20": {
+      "value": "0.265435472949281",
+      "formula": "B20/(C20*1000)+(J20*$B$4+K20*$B$5)/$B$3+$B$6/1000"
+    },
+    "E20": {
+      "value": "0.2652893",
+      "formula": null
+    },
+    "F20": {
+      "value": "0.055099451534990074",
+      "formula": "(D20/E20-1)*100"
+    },
+    "G20": {
+      "value": "0.26516724",
+      "formula": null
+    },
+    "H20": {
+      "value": "0.26531982",
+      "formula": null
+    },
+    "I20": {
+      "value": "[0.2652893, 0.26516724, 0.26531982]",
+      "formula": null
+    },
+    "J20": {
+      "value": "29",
+      "formula": "'BH routes'!L13"
+    },
+    "K20": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L20": {
+      "value": "0.11906371814092953",
+      "formula": null
+    },
+    "A21": {
+      "value": "write_far",
+      "formula": null
+    },
+    "B21": {
+      "value": "65536",
+      "formula": null
+    },
+    "C21": {
+      "value": "83.375",
+      "formula": "Sheet1!B39"
+    },
+    "D21": {
+      "value": "1.0269107353180964",
+      "formula": "B21/(C21*1000)+(J21*$B$4+K21*$B$5)/$B$3+$B$6/1000"
+    },
+    "E21": {
+      "value": "1.0254822",
+      "formula": null
+    },
+    "F21": {
+      "value": "0.13930376539899036",
+      "formula": "(D21/E21-1)*100"
+    },
+    "G21": {
+      "value": "1.0254517",
+      "formula": null
+    },
+    "H21": {
+      "value": "1.0255432",
+      "formula": null
+    },
+    "I21": {
+      "value": "[1.0255432, 1.0254822, 1.0254517]",
+      "formula": null
+    },
+    "J21": {
+      "value": "29",
+      "formula": "'BH routes'!L13"
+    },
+    "K21": {
+      "value": "4",
+      "formula": "Sheet1!B45"
+    },
+    "L21": {
+      "value": "0.8805389805097451",
+      "formula": null
+    },
+    "A24": {
+      "value": "Run on BH",
+      "formula": null
+    },
+    "B24": {
+      "value": "From a compatible tt-metal checkout with test_bw_and_latency built.",
+      "formula": null
+    },
+    "A25": {
+      "value": "Query worker grid",
+      "formula": null
+    },
+    "B25": {
+      "value": "d = ttnn.open_device(device_id=0); print(d.compute_with_storage_grid_size()); ttnn.close_device(d)",
+      "formula": null
+    },
+    "A26": {
+      "value": "Benchmark command",
+      "formula": null
+    },
+    "B26": {
+      "value": "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency -m 2 -rx 1 -ry 0 -sx X -sy Y -bs 64 -p BYTES -i ITERS -w 1 -l",
+      "formula": null
+    },
+    "A27": {
+      "value": "Endpoint selection",
+      "formula": null
+    },
+    "B27": {
+      "value": "Logical cores: local X=1,Y=0; near X=0,Y=0; far X=grid.x-1,Y=grid.y-1. Use actual usable worker grid.",
+      "formula": null
+    },
+    "A28": {
+      "value": "Write case",
+      "formula": null
+    },
+    "B28": {
+      "value": "Append -wr to the benchmark command for write_far.",
+      "formula": null
+    },
+    "A29": {
+      "value": "Iterations",
+      "formula": null
+    },
+    "B29": {
+      "value": "64 B: ITERS=32; 2048 B: ITERS=1024; 65536 B: ITERS=32768. Each produces 32768 serialized transfers.",
+      "formula": null
+    },
+    "A30": {
+      "value": "Repetitions",
+      "formula": null
+    },
+    "B30": {
+      "value": "Run each case 3 times; put median of reported Latency: ... us in column E.",
+      "formula": null
+    },
+    "A31": {
+      "value": "Portability",
+      "formula": null
+    },
+    "B31": {
+      "value": "All numerical inputs are embedded. Dispatch BW.xlsx and WH CSV files are not needed to use this workbook.",
+      "formula": null
+    },
+    "A32": {
+      "value": "Model limitation",
+      "formula": null
+    },
+    "B32": {
+      "value": "Route-aware serialized model. NIU cost is explicit; residual is calibrated from local 64 B read. No independent validation for calibration row.",
+      "formula": null
+    },
+    "A34": {
+      "value": "Measured hardware",
+      "formula": null
+    },
+    "B34": {
+      "value": "Blackhole p150b; UMD device 0, PCI device 1. Firmware 19.5.0. Queried worker grid 11 x 10.",
+      "formula": null
+    },
+    "A35": {
+      "value": "Measured endpoints",
+      "formula": null
+    },
+    "B35": {
+      "value": "Logical initiator (1,0), local (1,0), near (0,0), far (10,9). Physical NoC0: initiator (2,2), near (1,2), far (15,11); far translated address (13,11).",
+      "formula": null
+    },
+    "A36": {
+      "value": "Run methodology",
+      "formula": null
+    },
+    "B36": {
+      "value": "2026-10-20: 3 independent runs/case, 32768 serialized transfers/run; one warm-up workload; median reported.",
+      "formula": null
+    },
+    "A37": {
+      "value": "Timing limitations",
+      "formula": null
+    },
+    "B37": {
+      "value": "Host enqueue+Finish time amortized over transfers; completion barrier per transfer; no payload correctness check.",
+      "formula": null
+    },
+    "A38": {
+      "value": "Prediction inputs",
+      "formula": null
+    },
+    "B38": {
+      "value": "Clock 1350 MHz, 9 cycles/router link, ~5 cycles/NIU crossing, actual round-trip links, measured-local residual; imported P150 bandwidths unchanged.",
+      "formula": null
+    }
+  },
+  "BH routes": {
+    "A1": {
+      "value": "BH NoC0 physical link counts \u2014 verified 2026-10-20",
+      "formula": null
+    },
+    "A2": {
+      "value": "Physical grid columns",
+      "formula": null
+    },
+    "B2": {
+      "value": "17",
+      "formula": null
+    },
+    "A3": {
+      "value": "Physical grid rows",
+      "formula": null
+    },
+    "B3": {
+      "value": "12",
+      "formula": null
+    },
+    "A4": {
+      "value": "Clock (MHz)",
+      "formula": null
+    },
+    "B4": {
+      "value": "1350",
+      "formula": null
+    },
+    "A5": {
+      "value": "Documented cycles/link",
+      "formula": null
+    },
+    "B5": {
+      "value": "9",
+      "formula": null
+    },
+    "A6": {
+      "value": "Earlier assumed ns/link",
+      "formula": null
+    },
+    "B6": {
+      "value": "9",
+      "formula": null
+    },
+    "A7": {
+      "value": "Coordinates",
+      "formula": null
+    },
+    "B7": {
+      "value": "Physical NoC0 coordinates after undoing harvesting translation; not logical or translated coordinates.",
+      "formula": null
+    },
+    "A8": {
+      "value": "Routing",
+      "formula": null
+    },
+    "B8": {
+      "value": "NoC0: increasing X first, then increasing Y, wrapping at 17 and 12. Response/ACK uses the same NoC0 directions.",
+      "formula": null
+    },
+    "A9": {
+      "value": "Transfer",
+      "formula": null
+    },
+    "B9": {
+      "value": "Src X",
+      "formula": null
+    },
+    "C9": {
+      "value": "Src Y",
+      "formula": null
+    },
+    "D9": {
+      "value": "Dst X",
+      "formula": null
+    },
+    "E9": {
+      "value": "Dst Y",
+      "formula": null
+    },
+    "F9": {
+      "value": "Out X links",
+      "formula": null
+    },
+    "G9": {
+      "value": "Out Y links",
+      "formula": null
+    },
+    "H9": {
+      "value": "Out total",
+      "formula": null
+    },
+    "I9": {
+      "value": "Return X",
+      "formula": null
+    },
+    "J9": {
+      "value": "Return Y",
+      "formula": null
+    },
+    "K9": {
+      "value": "Return total",
+      "formula": null
+    },
+    "L9": {
+      "value": "Round-trip links",
+      "formula": null
+    },
+    "M9": {
+      "value": "At 9 ns (ns)",
+      "formula": null
+    },
+    "N9": {
+      "value": "At 9 cycles (ns)",
+      "formula": null
+    },
+    "A10": {
+      "value": "local read",
+      "formula": null
+    },
+    "B10": {
+      "value": "2",
+      "formula": null
+    },
+    "C10": {
+      "value": "2",
+      "formula": null
+    },
+    "D10": {
+      "value": "2",
+      "formula": null
+    },
+    "E10": {
+      "value": "2",
+      "formula": null
+    },
+    "F10": {
+      "value": "0",
+      "formula": "MOD(D10-B10,$B$2)"
+    },
+    "G10": {
+      "value": "0",
+      "formula": "MOD(E10-C10,$B$3)"
+    },
+    "H10": {
+      "value": "0",
+      "formula": "F10+G10"
+    },
+    "I10": {
+      "value": "0",
+      "formula": "MOD(B10-D10,$B$2)"
+    },
+    "J10": {
+      "value": "0",
+      "formula": "MOD(C10-E10,$B$3)"
+    },
+    "K10": {
+      "value": "0",
+      "formula": "I10+J10"
+    },
+    "L10": {
+      "value": "0",
+      "formula": "H10+K10"
+    },
+    "M10": {
+      "value": "0",
+      "formula": "L10*$B$6"
+    },
+    "N10": {
+      "value": "0.0",
+      "formula": "L10*$B$5/($B$4/1000)"
+    },
+    "A11": {
+      "value": "near read",
+      "formula": null
+    },
+    "B11": {
+      "value": "2",
+      "formula": null
+    },
+    "C11": {
+      "value": "2",
+      "formula": null
+    },
+    "D11": {
+      "value": "1",
+      "formula": null
+    },
+    "E11": {
+      "value": "2",
+      "formula": null
+    },
+    "F11": {
+      "value": "16",
+      "formula": "MOD(D11-B11,$B$2)"
+    },
+    "G11": {
+      "value": "0",
+      "formula": "MOD(E11-C11,$B$3)"
+    },
+    "H11": {
+      "value": "16",
+      "formula": "F11+G11"
+    },
+    "I11": {
+      "value": "1",
+      "formula": "MOD(B11-D11,$B$2)"
+    },
+    "J11": {
+      "value": "0",
+      "formula": "MOD(C11-E11,$B$3)"
+    },
+    "K11": {
+      "value": "1",
+      "formula": "I11+J11"
+    },
+    "L11": {
+      "value": "17",
+      "formula": "H11+K11"
+    },
+    "M11": {
+      "value": "153",
+      "formula": "L11*$B$6"
+    },
+    "N11": {
+      "value": "113.33333333333333",
+      "formula": "L11*$B$5/($B$4/1000)"
+    },
+    "A12": {
+      "value": "far read",
+      "formula": null
+    },
+    "B12": {
+      "value": "2",
+      "formula": null
+    },
+    "C12": {
+      "value": "2",
+      "formula": null
+    },
+    "D12": {
+      "value": "15",
+      "formula": null
+    },
+    "E12": {
+      "value": "11",
+      "formula": null
+    },
+    "F12": {
+      "value": "13",
+      "formula": "MOD(D12-B12,$B$2)"
+    },
+    "G12": {
+      "value": "9",
+      "formula": "MOD(E12-C12,$B$3)"
+    },
+    "H12": {
+      "value": "22",
+      "formula": "F12+G12"
+    },
+    "I12": {
+      "value": "4",
+      "formula": "MOD(B12-D12,$B$2)"
+    },
+    "J12": {
+      "value": "3",
+      "formula": "MOD(C12-E12,$B$3)"
+    },
+    "K12": {
+      "value": "7",
+      "formula": "I12+J12"
+    },
+    "L12": {
+      "value": "29",
+      "formula": "H12+K12"
+    },
+    "M12": {
+      "value": "261",
+      "formula": "L12*$B$6"
+    },
+    "N12": {
+      "value": "193.33333333333331",
+      "formula": "L12*$B$5/($B$4/1000)"
+    },
+    "A13": {
+      "value": "far write + ACK",
+      "formula": null
+    },
+    "B13": {
+      "value": "2",
+      "formula": null
+    },
+    "C13": {
+      "value": "2",
+      "formula": null
+    },
+    "D13": {
+      "value": "15",
+      "formula": null
+    },
+    "E13": {
+      "value": "11",
+      "formula": null
+    },
+    "F13": {
+      "value": "13",
+      "formula": "MOD(D13-B13,$B$2)"
+    },
+    "G13": {
+      "value": "9",
+      "formula": "MOD(E13-C13,$B$3)"
+    },
+    "H13": {
+      "value": "22",
+      "formula": "F13+G13"
+    },
+    "I13": {
+      "value": "4",
+      "formula": "MOD(B13-D13,$B$2)"
+    },
+    "J13": {
+      "value": "3",
+      "formula": "MOD(C13-E13,$B$3)"
+    },
+    "K13": {
+      "value": "7",
+      "formula": "I13+J13"
+    },
+    "L13": {
+      "value": "29",
+      "formula": "H13+K13"
+    },
+    "M13": {
+      "value": "261",
+      "formula": "L13*$B$6"
+    },
+    "N13": {
+      "value": "193.33333333333331",
+      "formula": "L13*$B$5/($B$4/1000)"
+    },
+    "A16": {
+      "value": "Near read request",
+      "formula": null
+    },
+    "B16": {
+      "value": "(2,2) -> (3,2) -> ... -> (16,2) -> (0,2) -> (1,2): 16 X links. Data returns (1,2) -> (2,2): 1 link.",
+      "formula": null
+    },
+    "A17": {
+      "value": "Far read request",
+      "formula": null
+    },
+    "B17": {
+      "value": "(2,2) -> (15,2): 13 X links; (15,2) -> (15,11): 9 Y links. Total 22.",
+      "formula": null
+    },
+    "A18": {
+      "value": "Far read response",
+      "formula": null
+    },
+    "B18": {
+      "value": "(15,11) -> (16,11) -> (0,11) -> (1,11) -> (2,11): 4 X links; (2,11) -> (2,0) -> (2,1) -> (2,2): 3 Y links. Total 7.",
+      "formula": null
+    },
+    "A19": {
+      "value": "Physical mapping",
+      "formula": null
+    },
+    "B19": {
+      "value": "Logical (10,9) -> translated (13,11) -> physical (15,11). Initiator logical (1,0) -> physical (2,2).",
+      "formula": null
+    },
+    "A20": {
+      "value": "Completion semantics",
+      "formula": null
+    },
+    "B20": {
+      "value": "Read: request + data response. Test writes are nonposted; barrier waits for ACK. Local transfer has 0 inter-router links but nonzero endpoint/software latency.",
+      "formula": null
+    },
+    "A21": {
+      "value": "Scope",
+      "formula": null
+    },
+    "B21": {
+      "value": "Link counts are per request/response pair, not summed across all packets of a large transfer. Payload streaming and packet overlap must be modeled separately.",
+      "formula": null
+    },
+    "A22": {
+      "value": "Units correction",
+      "formula": null
+    },
+    "B22": {
+      "value": "Official BH ISA docs specify 9 router cycles, NOT 9 ns. At queried 1350 MHz, 9 cycles = 6.6667 ns. Earlier estimates retained for comparison.",
+      "formula": null
+    },
+    "A23": {
+      "value": "Other latency",
+      "formula": null
+    },
+    "B23": {
+      "value": "NIU-to-router and router-to-NIU each ~5 cycles per docs; software, L1 handling, barriers and congestion are not included in link-only times.",
+      "formula": null
+    },
+    "A24": {
+      "value": "Routing source",
+      "formula": null
+    },
+    "B24": {
+      "value": "https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/RoutingPaths.md",
+      "formula": null
+    },
+    "A25": {
+      "value": "Latency source",
+      "formula": null
+    },
+    "B25": {
+      "value": "https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md#performance",
+      "formula": null
+    },
+    "A26": {
+      "value": "Topology source",
+      "formula": null
+    },
+    "B26": {
+      "value": "tt_metal/soc_descriptors/blackhole_140_arch.yaml: grid 17 x 12; runtime UMD TRANSLATED -> NOC0 mapping verified.",
+      "formula": null
+    },
+    "A29": {
+      "value": "64 B read comparison",
+      "formula": null
+    },
+    "B29": {
+      "value": "Measured (ns)",
+      "formula": null
+    },
+    "C29": {
+      "value": "Measured minus local (ns)",
+      "formula": null
+    },
+    "D29": {
+      "value": "Link time at 9 cycles (ns)",
+      "formula": null
+    },
+    "A30": {
+      "value": "read_local",
+      "formula": null
+    },
+    "B30": {
+      "value": "48.339844",
+      "formula": null
+    },
+    "C30": {
+      "value": "0.0",
+      "formula": null
+    },
+    "D30": {
+      "value": "0.0",
+      "formula": null
+    },
+    "A31": {
+      "value": "read_near",
+      "formula": null
+    },
+    "B31": {
+      "value": "161.34644",
+      "formula": null
+    },
+    "C31": {
+      "value": "113.006596",
+      "formula": null
+    },
+    "D31": {
+      "value": "113.33333333333333",
+      "formula": null
+    },
+    "A32": {
+      "value": "read_far",
+      "formula": null
+    },
+    "B32": {
+      "value": "244.41528000000002",
+      "formula": null
+    },
+    "C32": {
+      "value": "196.07543600000002",
+      "formula": null
+    },
+    "D32": {
+      "value": "193.33333333333331",
+      "formula": null
+    },
+    "A34": {
+      "value": "Interpretation",
+      "formula": null
+    },
+    "B34": {
+      "value": "The near/far minus-local differences approximately match link time at 9 cycles. This is evidence of consistency, not an independent per-link calibration.",
+      "formula": null
+    }
+  },
+  "L1 copy algorithm": {
+    "A1": {
+      "value": "L1 whole-shard copy: serialized vs batched reads",
+      "formula": null
+    },
+    "A2": {
+      "value": "BH p150b; 2026-10-20",
+      "formula": null
+    },
+    "B2": {
+      "value": "box=bh-50-special-dstoiljkovic-for-reservation-136502; 2 L1 cores, 1 active NCRISC NoC0 reader",
+      "formula": null
+    },
+    "A3": {
+      "value": "Clock MHz",
+      "formula": null
+    },
+    "B3": {
+      "value": "1350",
+      "formula": null
+    },
+    "A4": {
+      "value": "Residual overhead ns",
+      "formula": null
+    },
+    "B4": {
+      "value": "32.72360666",
+      "formula": null
+    },
+    "A5": {
+      "value": "Router cycles/link",
+      "formula": null
+    },
+    "B5": {
+      "value": "9",
+      "formula": null
+    },
+    "A6": {
+      "value": "NIU cycles/crossing",
+      "formula": null
+    },
+    "B6": {
+      "value": "5",
+      "formula": null
+    },
+    "A7": {
+      "value": "Measurement",
+      "formula": null
+    },
+    "B7": {
+      "value": "DEVICE KERNEL DURATION [ns] / 100 copies per kernel; median of 3 launches; exact equality passed.",
+      "formula": null
+    },
+    "A8": {
+      "value": "Estimate",
+      "formula": null
+    },
+    "B8": {
+      "value": "N*2048/BW + ceil(N/batch)*((9*links+4*5)*1000/MHz+residual_ns). Model inputs frozen from prior transaction calibration.",
+      "formula": null
+    },
+    "A9": {
+      "value": "Placement",
+      "formula": null
+    },
+    "B9": {
+      "value": "Variant",
+      "formula": null
+    },
+    "C9": {
+      "value": "Pages",
+      "formula": null
+    },
+    "D9": {
+      "value": "Batch pages",
+      "formula": null
+    },
+    "E9": {
+      "value": "Round-trip links",
+      "formula": null
+    },
+    "F9": {
+      "value": "BW GB/s",
+      "formula": null
+    },
+    "G9": {
+      "value": "Predicted us/copy",
+      "formula": null
+    },
+    "H9": {
+      "value": "Measured us/copy",
+      "formula": null
+    },
+    "I9": {
+      "value": "Error %",
+      "formula": null
+    },
+    "J9": {
+      "value": "Kernel iters",
+      "formula": null
+    },
+    "K9": {
+      "value": "Trials",
+      "formula": null
+    },
+    "L9": {
+      "value": "Std us",
+      "formula": null
+    },
+    "A10": {
+      "value": "far",
+      "formula": null
+    },
+    "B10": {
+      "value": "batched",
+      "formula": null
+    },
+    "C10": {
+      "value": "32",
+      "formula": null
+    },
+    "D10": {
+      "value": "8",
+      "formula": null
+    },
+    "E10": {
+      "value": "29",
+      "formula": null
+    },
+    "F10": {
+      "value": "82.072",
+      "formula": null
+    },
+    "G10": {
+      "value": "1.7620053933431294",
+      "formula": "(C10*2048/F10+ROUNDUP(C10/D10,0)*((E10*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H10": {
+      "value": "1.80195",
+      "formula": null
+    },
+    "I10": {
+      "value": "-2.2167433423164074",
+      "formula": "(G10/H10-1)*100"
+    },
+    "J10": {
+      "value": "100",
+      "formula": null
+    },
+    "K10": {
+      "value": "3",
+      "formula": null
+    },
+    "L10": {
+      "value": "2.6246692913348833e-05",
+      "formula": null
+    },
+    "A11": {
+      "value": "far",
+      "formula": null
+    },
+    "B11": {
+      "value": "serialized",
+      "formula": null
+    },
+    "C11": {
+      "value": "32",
+      "formula": null
+    },
+    "D11": {
+      "value": "1",
+      "formula": null
+    },
+    "E11": {
+      "value": "29",
+      "formula": null
+    },
+    "F11": {
+      "value": "82.072",
+      "formula": null
+    },
+    "G11": {
+      "value": "8.506414527971277",
+      "formula": "(C11*2048/F11+ROUNDUP(C11/D11,0)*((E11*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H11": {
+      "value": "8.58924",
+      "formula": null
+    },
+    "I11": {
+      "value": "-0.9642933720413249",
+      "formula": "(G11/H11-1)*100"
+    },
+    "J11": {
+      "value": "100",
+      "formula": null
+    },
+    "K11": {
+      "value": "3",
+      "formula": null
+    },
+    "L11": {
+      "value": "2.1602468995164405e-05",
+      "formula": null
+    },
+    "A12": {
+      "value": "far",
+      "formula": null
+    },
+    "B12": {
+      "value": "batched",
+      "formula": null
+    },
+    "C12": {
+      "value": "128",
+      "formula": null
+    },
+    "D12": {
+      "value": "8",
+      "formula": null
+    },
+    "E12": {
+      "value": "29",
+      "formula": null
+    },
+    "F12": {
+      "value": "82.072",
+      "formula": null
+    },
+    "G12": {
+      "value": "7.048021573372518",
+      "formula": "(C12*2048/F12+ROUNDUP(C12/D12,0)*((E12*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H12": {
+      "value": "7.17984",
+      "formula": null
+    },
+    "I12": {
+      "value": "-1.835952146948705",
+      "formula": "(G12/H12-1)*100"
+    },
+    "J12": {
+      "value": "100",
+      "formula": null
+    },
+    "K12": {
+      "value": "3",
+      "formula": null
+    },
+    "L12": {
+      "value": "0.00021545816814941713",
+      "formula": null
+    },
+    "A13": {
+      "value": "far",
+      "formula": null
+    },
+    "B13": {
+      "value": "serialized",
+      "formula": null
+    },
+    "C13": {
+      "value": "128",
+      "formula": null
+    },
+    "D13": {
+      "value": "1",
+      "formula": null
+    },
+    "E13": {
+      "value": "29",
+      "formula": null
+    },
+    "F13": {
+      "value": "82.072",
+      "formula": null
+    },
+    "G13": {
+      "value": "34.02565811188511",
+      "formula": "(C13*2048/F13+ROUNDUP(C13/D13,0)*((E13*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H13": {
+      "value": "34.33147",
+      "formula": null
+    },
+    "I13": {
+      "value": "-0.8907625805562369",
+      "formula": "(G13/H13-1)*100"
+    },
+    "J13": {
+      "value": "100",
+      "formula": null
+    },
+    "K13": {
+      "value": "3",
+      "formula": null
+    },
+    "L13": {
+      "value": "4.714045208870695e-06",
+      "formula": null
+    },
+    "A14": {
+      "value": "near",
+      "formula": null
+    },
+    "B14": {
+      "value": "batched",
+      "formula": null
+    },
+    "C14": {
+      "value": "32",
+      "formula": null
+    },
+    "D14": {
+      "value": "8",
+      "formula": null
+    },
+    "E14": {
+      "value": "17",
+      "formula": null
+    },
+    "F14": {
+      "value": "82.37",
+      "formula": null
+    },
+    "G14": {
+      "value": "1.439116495983837",
+      "formula": "(C14*2048/F14+ROUNDUP(C14/D14,0)*((E14*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H14": {
+      "value": "1.4792100000000001",
+      "formula": null
+    },
+    "I14": {
+      "value": "-2.710467345147949",
+      "formula": "(G14/H14-1)*100"
+    },
+    "J14": {
+      "value": "100",
+      "formula": null
+    },
+    "K14": {
+      "value": "3",
+      "formula": null
+    },
+    "L14": {
+      "value": "0.000613858470840171",
+      "formula": null
+    },
+    "A15": {
+      "value": "near",
+      "formula": null
+    },
+    "B15": {
+      "value": "serialized",
+      "formula": null
+    },
+    "C15": {
+      "value": "32",
+      "formula": null
+    },
+    "D15": {
+      "value": "1",
+      "formula": null
+    },
+    "E15": {
+      "value": "17",
+      "formula": null
+    },
+    "F15": {
+      "value": "82.37",
+      "formula": null
+    },
+    "G15": {
+      "value": "5.943525630611985",
+      "formula": "(C15*2048/F15+ROUNDUP(C15/D15,0)*((E15*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H15": {
+      "value": "5.93442",
+      "formula": null
+    },
+    "I15": {
+      "value": "0.15343758298174137",
+      "formula": "(G15/H15-1)*100"
+    },
+    "J15": {
+      "value": "100",
+      "formula": null
+    },
+    "K15": {
+      "value": "3",
+      "formula": null
+    },
+    "L15": {
+      "value": "0.0",
+      "formula": null
+    },
+    "A16": {
+      "value": "near",
+      "formula": null
+    },
+    "B16": {
+      "value": "batched",
+      "formula": null
+    },
+    "C16": {
+      "value": "128",
+      "formula": null
+    },
+    "D16": {
+      "value": "8",
+      "formula": null
+    },
+    "E16": {
+      "value": "17",
+      "formula": null
+    },
+    "F16": {
+      "value": "82.37",
+      "formula": null
+    },
+    "G16": {
+      "value": "5.756465983935348",
+      "formula": "(C16*2048/F16+ROUNDUP(C16/D16,0)*((E16*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H16": {
+      "value": "5.8886400000000005",
+      "formula": null
+    },
+    "I16": {
+      "value": "-2.244559288131931",
+      "formula": "(G16/H16-1)*100"
+    },
+    "J16": {
+      "value": "100",
+      "formula": null
+    },
+    "K16": {
+      "value": "3",
+      "formula": null
+    },
+    "L16": {
+      "value": "0.0015216073372881812",
+      "formula": null
+    },
+    "A17": {
+      "value": "near",
+      "formula": null
+    },
+    "B17": {
+      "value": "serialized",
+      "formula": null
+    },
+    "C17": {
+      "value": "128",
+      "formula": null
+    },
+    "D17": {
+      "value": "1",
+      "formula": null
+    },
+    "E17": {
+      "value": "17",
+      "formula": null
+    },
+    "F17": {
+      "value": "82.37",
+      "formula": null
+    },
+    "G17": {
+      "value": "23.77410252244794",
+      "formula": "(C17*2048/F17+ROUNDUP(C17/D17,0)*((E17*$B$5+4*$B$6)*1000/$B$3+$B$4))/1000"
+    },
+    "H17": {
+      "value": "23.7122",
+      "formula": null
+    },
+    "I17": {
+      "value": "0.26105769371016496",
+      "formula": "(G17/H17-1)*100"
+    },
+    "J17": {
+      "value": "100",
+      "formula": null
+    },
+    "K17": {
+      "value": "3",
+      "formula": null
+    },
+    "L17": {
+      "value": "4.714045207841718e-05",
+      "formula": null
+    },
+    "A20": {
+      "value": "Scope",
+      "formula": null
+    },
+    "B20": {
+      "value": "Batched model assumes independent requests overlap within each group; omits issue-rate limits and contention. Not a universal formula for arbitrary algorithms.",
+      "formula": null
+    },
+    "A21": {
+      "value": "Placement",
+      "formula": null
+    },
+    "B21": {
+      "value": "Reader logical (1,0). Near source (0,0); far source (10,9). Physical routes verified on this specific p150b.",
+      "formula": null
+    },
+    "A22": {
+      "value": "Validation",
+      "formula": null
+    },
+    "B22": {
+      "value": "Near/far 32 and 128 pages, both variants; also 35 pages with batch=8 and kernel-iters=1 to exercise final partial batch.",
+      "formula": null
+    },
+    "A23": {
+      "value": "Run",
+      "formula": null
+    },
+    "B23": {
+      "value": "python -m ttnn.operations.examples.l1_copy_batching --placement near --pages 32 128 --batch-pages 8 --kernel-iters 100",
+      "formula": null
+    },
+    "A24": {
+      "value": "Files",
+      "formula": null
+    },
+    "B24": {
+      "value": "ttnn/ttnn/operations/examples/l1_copy_batching/: inline kernel, CLI, README.md, report.md; tests/ttnn/unit_tests/operations/examples/test_l1_copy_batching.py",
+      "formula": null
+    },
+    "A25": {
+      "value": "Portability",
+      "formula": null
+    },
+    "B25": {
+      "value": "Results and formulas are embedded; running the example on another machine requires copying the example and test source files into its tt-metal checkout.",
+      "formula": null
+    }
+  },
+  "DRAM contention": {
+    "A1": {
+      "value": "Concurrent DRAM reads \u2014 BH p150b, 2026-10-20",
+      "formula": null
+    },
+    "A2": {
+      "value": "Setup",
+      "formula": null
+    },
+    "B2": {
+      "value": "11x10 usable workers; 8 DRAM banks; NoC0; row-major core prefix; disjoint DRAM input, per-core L1 output",
+      "formula": null
+    },
+    "A3": {
+      "value": "Aggregate bandwidth ceiling GB/s",
+      "formula": null
+    },
+    "B3": {
+      "value": "512",
+      "formula": null
+    },
+    "A4": {
+      "value": "Metric",
+      "formula": null
+    },
+    "B4": {
+      "value": "Max per-core NCRISC duration / 100 repeats; median of 3 launches. Exact equality passed. Excludes launch skew.",
+      "formula": null
+    },
+    "A5": {
+      "value": "Profiler caveat",
+      "formula": null
+    },
+    "B5": {
+      "value": "Absolute clocks differ across cores; standard global duration is invalid here. Same-core start/end deltas used.",
+      "formula": null
+    },
+    "A6": {
+      "value": "Model",
+      "formula": null
+    },
+    "B6": {
+      "value": "max(single-core measured time, total bytes / aggregate bandwidth). Calibrated baseline plus bandwidth lower bound.",
+      "formula": null
+    },
+    "A7": {
+      "value": "Limits",
+      "formula": null
+    },
+    "B7": {
+      "value": "Does not model per-bank/per-link queueing. Effective ~418 GB/s measured at saturation is workload-specific, not an independent prediction.",
+      "formula": null
+    },
+    "A9": {
+      "value": "Variant",
+      "formula": null
+    },
+    "B9": {
+      "value": "Cores",
+      "formula": null
+    },
+    "C9": {
+      "value": "Pages/core",
+      "formula": null
+    },
+    "D9": {
+      "value": "Batch",
+      "formula": null
+    },
+    "E9": {
+      "value": "Bytes/core",
+      "formula": null
+    },
+    "F9": {
+      "value": "Uncontended us",
+      "formula": null
+    },
+    "G9": {
+      "value": "BW bound us",
+      "formula": null
+    },
+    "H9": {
+      "value": "Measured us",
+      "formula": null
+    },
+    "I9": {
+      "value": "Error %",
+      "formula": null
+    },
+    "J9": {
+      "value": "Aggregate GB/s",
+      "formula": null
+    },
+    "K9": {
+      "value": "Slowdown",
+      "formula": null
+    },
+    "L9": {
+      "value": "Std us",
+      "formula": null
+    },
+    "A10": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B10": {
+      "value": "1",
+      "formula": null
+    },
+    "C10": {
+      "value": "32",
+      "formula": null
+    },
+    "D10": {
+      "value": "8",
+      "formula": null
+    },
+    "E10": {
+      "value": "65536",
+      "formula": "C10*2048"
+    },
+    "F10": {
+      "value": "2.3308592592592596",
+      "formula": "H10"
+    },
+    "G10": {
+      "value": "2.3308592592592596",
+      "formula": "MAX(F10,B10*E10/($B$3*1000))"
+    },
+    "H10": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "I10": {
+      "value": "0.0",
+      "formula": "(G10/H10-1)*100"
+    },
+    "J10": {
+      "value": "28.11666973870707",
+      "formula": "B10*E10/(H10*1000)"
+    },
+    "K10": {
+      "value": "1.0",
+      "formula": "H10/F10"
+    },
+    "L10": {
+      "value": "0.002810342993243635",
+      "formula": null
+    },
+    "A11": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B11": {
+      "value": "8",
+      "formula": null
+    },
+    "C11": {
+      "value": "32",
+      "formula": null
+    },
+    "D11": {
+      "value": "8",
+      "formula": null
+    },
+    "E11": {
+      "value": "65536",
+      "formula": "C11*2048"
+    },
+    "F11": {
+      "value": "2.3308592592592596",
+      "formula": "H10"
+    },
+    "G11": {
+      "value": "2.3308592592592596",
+      "formula": "MAX(F11,B11*E11/($B$3*1000))"
+    },
+    "H11": {
+      "value": "2.3857333333333335",
+      "formula": null
+    },
+    "I11": {
+      "value": "-2.300092525320263",
+      "formula": "(G11/H11-1)*100"
+    },
+    "J11": {
+      "value": "219.75968255742467",
+      "formula": "B11*E11/(H11*1000)"
+    },
+    "K11": {
+      "value": "1.0235424227593704",
+      "formula": "H11/F11"
+    },
+    "L11": {
+      "value": "0.0064954483260165384",
+      "formula": null
+    },
+    "A12": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B12": {
+      "value": "32",
+      "formula": null
+    },
+    "C12": {
+      "value": "32",
+      "formula": null
+    },
+    "D12": {
+      "value": "8",
+      "formula": null
+    },
+    "E12": {
+      "value": "65536",
+      "formula": "C12*2048"
+    },
+    "F12": {
+      "value": "2.3308592592592596",
+      "formula": "H10"
+    },
+    "G12": {
+      "value": "4.096",
+      "formula": "MAX(F12,B12*E12/($B$3*1000))"
+    },
+    "H12": {
+      "value": "5.154111111111112",
+      "formula": null
+    },
+    "I12": {
+      "value": "-20.529458684545244",
+      "formula": "(G12/H12-1)*100"
+    },
+    "J12": {
+      "value": "406.88917153512836",
+      "formula": "B12*E12/(H12*1000)"
+    },
+    "K12": {
+      "value": "2.2112493882402293",
+      "formula": "H12/F12"
+    },
+    "L12": {
+      "value": "0.025848411104997186",
+      "formula": null
+    },
+    "A13": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B13": {
+      "value": "64",
+      "formula": null
+    },
+    "C13": {
+      "value": "32",
+      "formula": null
+    },
+    "D13": {
+      "value": "8",
+      "formula": null
+    },
+    "E13": {
+      "value": "65536",
+      "formula": "C13*2048"
+    },
+    "F13": {
+      "value": "2.3308592592592596",
+      "formula": "H10"
+    },
+    "G13": {
+      "value": "8.192",
+      "formula": "MAX(F13,B13*E13/($B$3*1000))"
+    },
+    "H13": {
+      "value": "10.172585185185186",
+      "formula": null
+    },
+    "I13": {
+      "value": "-19.46983140597933",
+      "formula": "(G13/H13-1)*100"
+    },
+    "J13": {
+      "value": "412.3144632013858",
+      "formula": "B13*E13/(H13*1000)"
+    },
+    "K13": {
+      "value": "4.364306915904483",
+      "formula": "H13/F13"
+    },
+    "L13": {
+      "value": "0.004036691947345561",
+      "formula": null
+    },
+    "A14": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B14": {
+      "value": "110",
+      "formula": null
+    },
+    "C14": {
+      "value": "32",
+      "formula": null
+    },
+    "D14": {
+      "value": "8",
+      "formula": null
+    },
+    "E14": {
+      "value": "65536",
+      "formula": "C14*2048"
+    },
+    "F14": {
+      "value": "2.3308592592592596",
+      "formula": "H10"
+    },
+    "G14": {
+      "value": "14.08",
+      "formula": "MAX(F14,B14*E14/($B$3*1000))"
+    },
+    "H14": {
+      "value": "17.231125925925923",
+      "formula": null
+    },
+    "I14": {
+      "value": "-18.287405822882096",
+      "formula": "(G14/H14-1)*100"
+    },
+    "J14": {
+      "value": "418.36848218684366",
+      "formula": "B14*E14/(H14*1000)"
+    },
+    "K14": {
+      "value": "7.39260676399738",
+      "formula": "H14/F14"
+    },
+    "L14": {
+      "value": "0.01265092709682004",
+      "formula": null
+    },
+    "A15": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B15": {
+      "value": "1",
+      "formula": null
+    },
+    "C15": {
+      "value": "128",
+      "formula": null
+    },
+    "D15": {
+      "value": "8",
+      "formula": null
+    },
+    "E15": {
+      "value": "262144",
+      "formula": "C15*2048"
+    },
+    "F15": {
+      "value": "9.355666666666666",
+      "formula": "H15"
+    },
+    "G15": {
+      "value": "9.355666666666666",
+      "formula": "MAX(F15,B15*E15/($B$3*1000))"
+    },
+    "H15": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "I15": {
+      "value": "0.0",
+      "formula": "(G15/H15-1)*100"
+    },
+    "J15": {
+      "value": "28.01980974097695",
+      "formula": "B15*E15/(H15*1000)"
+    },
+    "K15": {
+      "value": "1.0",
+      "formula": "H15/F15"
+    },
+    "L15": {
+      "value": "0.003995804841690318",
+      "formula": null
+    },
+    "A16": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B16": {
+      "value": "8",
+      "formula": null
+    },
+    "C16": {
+      "value": "128",
+      "formula": null
+    },
+    "D16": {
+      "value": "8",
+      "formula": null
+    },
+    "E16": {
+      "value": "262144",
+      "formula": "C16*2048"
+    },
+    "F16": {
+      "value": "9.355666666666666",
+      "formula": "H15"
+    },
+    "G16": {
+      "value": "9.355666666666666",
+      "formula": "MAX(F16,B16*E16/($B$3*1000))"
+    },
+    "H16": {
+      "value": "9.554659259259259",
+      "formula": null
+    },
+    "I16": {
+      "value": "-2.0826759719322574",
+      "formula": "(G16/H16-1)*100"
+    },
+    "J16": {
+      "value": "219.48998316896393",
+      "formula": "B16*E16/(H16*1000)"
+    },
+    "K16": {
+      "value": "1.0212697394726111",
+      "formula": "H16/F16"
+    },
+    "L16": {
+      "value": "0.08553096163710178",
+      "formula": null
+    },
+    "A17": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B17": {
+      "value": "32",
+      "formula": null
+    },
+    "C17": {
+      "value": "128",
+      "formula": null
+    },
+    "D17": {
+      "value": "8",
+      "formula": null
+    },
+    "E17": {
+      "value": "262144",
+      "formula": "C17*2048"
+    },
+    "F17": {
+      "value": "9.355666666666666",
+      "formula": "H15"
+    },
+    "G17": {
+      "value": "16.384",
+      "formula": "MAX(F17,B17*E17/($B$3*1000))"
+    },
+    "H17": {
+      "value": "20.47574814814815",
+      "formula": null
+    },
+    "I17": {
+      "value": "-19.983387754836258",
+      "formula": "(G17/H17-1)*100"
+    },
+    "J17": {
+      "value": "409.68505469523836",
+      "formula": "B17*E17/(H17*1000)"
+    },
+    "K17": {
+      "value": "2.188593167935456",
+      "formula": "H17/F17"
+    },
+    "L17": {
+      "value": "0.032860524602056566",
+      "formula": null
+    },
+    "A18": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B18": {
+      "value": "64",
+      "formula": null
+    },
+    "C18": {
+      "value": "128",
+      "formula": null
+    },
+    "D18": {
+      "value": "8",
+      "formula": null
+    },
+    "E18": {
+      "value": "262144",
+      "formula": "C18*2048"
+    },
+    "F18": {
+      "value": "9.355666666666666",
+      "formula": "H15"
+    },
+    "G18": {
+      "value": "32.768",
+      "formula": "MAX(F18,B18*E18/($B$3*1000))"
+    },
+    "H18": {
+      "value": "40.6621037037037",
+      "formula": null
+    },
+    "I18": {
+      "value": "-19.413908737300943",
+      "formula": "(G18/H18-1)*100"
+    },
+    "J18": {
+      "value": "412.60078726501916",
+      "formula": "B18*E18/(H18*1000)"
+    },
+    "K18": {
+      "value": "4.346254003317458",
+      "formula": "H18/F18"
+    },
+    "L18": {
+      "value": "0.05813174773303958",
+      "formula": null
+    },
+    "A19": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B19": {
+      "value": "110",
+      "formula": null
+    },
+    "C19": {
+      "value": "128",
+      "formula": null
+    },
+    "D19": {
+      "value": "8",
+      "formula": null
+    },
+    "E19": {
+      "value": "262144",
+      "formula": "C19*2048"
+    },
+    "F19": {
+      "value": "9.355666666666666",
+      "formula": "H15"
+    },
+    "G19": {
+      "value": "56.32",
+      "formula": "MAX(F19,B19*E19/($B$3*1000))"
+    },
+    "H19": {
+      "value": "68.98725925925928",
+      "formula": null
+    },
+    "I19": {
+      "value": "-18.361737218251793",
+      "formula": "(G19/H19-1)*100"
+    },
+    "J19": {
+      "value": "417.9879054425508",
+      "formula": "B19*E19/(H19*1000)"
+    },
+    "K19": {
+      "value": "7.373847499831753",
+      "formula": "H19/F19"
+    },
+    "L19": {
+      "value": "0.02407168864408689",
+      "formula": null
+    },
+    "A20": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B20": {
+      "value": "1",
+      "formula": null
+    },
+    "C20": {
+      "value": "32",
+      "formula": null
+    },
+    "D20": {
+      "value": "8",
+      "formula": null
+    },
+    "E20": {
+      "value": "65536",
+      "formula": "C20*2048"
+    },
+    "F20": {
+      "value": "2.3236074074074073",
+      "formula": "H20"
+    },
+    "G20": {
+      "value": "2.3236074074074073",
+      "formula": "MAX(F20,B20*E20/($B$3*1000))"
+    },
+    "H20": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "I20": {
+      "value": "0.0",
+      "formula": "(G20/H20-1)*100"
+    },
+    "J20": {
+      "value": "28.204420329819218",
+      "formula": "B20*E20/(H20*1000)"
+    },
+    "K20": {
+      "value": "1.0",
+      "formula": "H20/F20"
+    },
+    "L20": {
+      "value": "0.0032951614081847313",
+      "formula": null
+    },
+    "A21": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B21": {
+      "value": "8",
+      "formula": null
+    },
+    "C21": {
+      "value": "32",
+      "formula": null
+    },
+    "D21": {
+      "value": "8",
+      "formula": null
+    },
+    "E21": {
+      "value": "65536",
+      "formula": "C21*2048"
+    },
+    "F21": {
+      "value": "2.3236074074074073",
+      "formula": "H20"
+    },
+    "G21": {
+      "value": "2.3236074074074073",
+      "formula": "MAX(F21,B21*E21/($B$3*1000))"
+    },
+    "H21": {
+      "value": "2.4082",
+      "formula": null
+    },
+    "I21": {
+      "value": "-3.5126896683245867",
+      "formula": "(G21/H21-1)*100"
+    },
+    "J21": {
+      "value": "217.70949256706254",
+      "formula": "B21*E21/(H21*1000)"
+    },
+    "K21": {
+      "value": "1.0364057165263463",
+      "formula": "H21/F21"
+    },
+    "L21": {
+      "value": "0.01660315397269991",
+      "formula": null
+    },
+    "A22": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B22": {
+      "value": "32",
+      "formula": null
+    },
+    "C22": {
+      "value": "32",
+      "formula": null
+    },
+    "D22": {
+      "value": "8",
+      "formula": null
+    },
+    "E22": {
+      "value": "65536",
+      "formula": "C22*2048"
+    },
+    "F22": {
+      "value": "2.3236074074074073",
+      "formula": "H20"
+    },
+    "G22": {
+      "value": "4.096",
+      "formula": "MAX(F22,B22*E22/($B$3*1000))"
+    },
+    "H22": {
+      "value": "5.172407407407407",
+      "formula": null
+    },
+    "I22": {
+      "value": "-20.81056890193691",
+      "formula": "(G22/H22-1)*100"
+    },
+    "J22": {
+      "value": "405.449887222083",
+      "formula": "B22*E22/(H22*1000)"
+    },
+    "K22": {
+      "value": "2.2260246679014433",
+      "formula": "H22/F22"
+    },
+    "L22": {
+      "value": "0.01829126869828604",
+      "formula": null
+    },
+    "A23": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B23": {
+      "value": "64",
+      "formula": null
+    },
+    "C23": {
+      "value": "32",
+      "formula": null
+    },
+    "D23": {
+      "value": "8",
+      "formula": null
+    },
+    "E23": {
+      "value": "65536",
+      "formula": "C23*2048"
+    },
+    "F23": {
+      "value": "2.3236074074074073",
+      "formula": "H20"
+    },
+    "G23": {
+      "value": "8.192",
+      "formula": "MAX(F23,B23*E23/($B$3*1000))"
+    },
+    "H23": {
+      "value": "10.19225925925926",
+      "formula": null
+    },
+    "I23": {
+      "value": "-19.625278442972338",
+      "formula": "(G23/H23-1)*100"
+    },
+    "J23": {
+      "value": "411.51857437198163",
+      "formula": "B23*E23/(H23*1000)"
+    },
+    "K23": {
+      "value": "4.386394718302002",
+      "formula": "H23/F23"
+    },
+    "L23": {
+      "value": "0.007072077368866377",
+      "formula": null
+    },
+    "A24": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B24": {
+      "value": "110",
+      "formula": null
+    },
+    "C24": {
+      "value": "32",
+      "formula": null
+    },
+    "D24": {
+      "value": "8",
+      "formula": null
+    },
+    "E24": {
+      "value": "65536",
+      "formula": "C24*2048"
+    },
+    "F24": {
+      "value": "2.3236074074074073",
+      "formula": "H20"
+    },
+    "G24": {
+      "value": "14.08",
+      "formula": "MAX(F24,B24*E24/($B$3*1000))"
+    },
+    "H24": {
+      "value": "17.28951111111111",
+      "formula": null
+    },
+    "I24": {
+      "value": "-18.563342193340084",
+      "formula": "(G24/H24-1)*100"
+    },
+    "J24": {
+      "value": "416.9556879700988",
+      "formula": "B24*E24/(H24*1000)"
+    },
+    "K24": {
+      "value": "7.440805643842429",
+      "formula": "H24/F24"
+    },
+    "L24": {
+      "value": "0.006367777250000476",
+      "formula": null
+    },
+    "A25": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B25": {
+      "value": "1",
+      "formula": null
+    },
+    "C25": {
+      "value": "128",
+      "formula": null
+    },
+    "D25": {
+      "value": "8",
+      "formula": null
+    },
+    "E25": {
+      "value": "262144",
+      "formula": "C25*2048"
+    },
+    "F25": {
+      "value": "9.354881481481481",
+      "formula": "H25"
+    },
+    "G25": {
+      "value": "9.354881481481481",
+      "formula": "MAX(F25,B25*E25/($B$3*1000))"
+    },
+    "H25": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "I25": {
+      "value": "0.0",
+      "formula": "(G25/H25-1)*100"
+    },
+    "J25": {
+      "value": "28.022161533412145",
+      "formula": "B25*E25/(H25*1000)"
+    },
+    "K25": {
+      "value": "1.0",
+      "formula": "H25/F25"
+    },
+    "L25": {
+      "value": "0.0015836190871542132",
+      "formula": null
+    },
+    "A26": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B26": {
+      "value": "8",
+      "formula": null
+    },
+    "C26": {
+      "value": "128",
+      "formula": null
+    },
+    "D26": {
+      "value": "8",
+      "formula": null
+    },
+    "E26": {
+      "value": "262144",
+      "formula": "C26*2048"
+    },
+    "F26": {
+      "value": "9.354881481481481",
+      "formula": "H25"
+    },
+    "G26": {
+      "value": "9.354881481481481",
+      "formula": "MAX(F26,B26*E26/($B$3*1000))"
+    },
+    "H26": {
+      "value": "9.680074074074074",
+      "formula": null
+    },
+    "I26": {
+      "value": "-3.3594019023423516",
+      "formula": "(G26/H26-1)*100"
+    },
+    "J26": {
+      "value": "216.64627604625002",
+      "formula": "B26*E26/(H26*1000)"
+    },
+    "K26": {
+      "value": "1.0347618078578902",
+      "formula": "H26/F26"
+    },
+    "L26": {
+      "value": "0.004626945724095751",
+      "formula": null
+    },
+    "A27": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B27": {
+      "value": "32",
+      "formula": null
+    },
+    "C27": {
+      "value": "128",
+      "formula": null
+    },
+    "D27": {
+      "value": "8",
+      "formula": null
+    },
+    "E27": {
+      "value": "262144",
+      "formula": "C27*2048"
+    },
+    "F27": {
+      "value": "9.354881481481481",
+      "formula": "H25"
+    },
+    "G27": {
+      "value": "16.384",
+      "formula": "MAX(F27,B27*E27/($B$3*1000))"
+    },
+    "H27": {
+      "value": "20.724140740740744",
+      "formula": null
+    },
+    "I27": {
+      "value": "-20.94244000287373",
+      "formula": "(G27/H27-1)*100"
+    },
+    "J27": {
+      "value": "404.7747071852865",
+      "formula": "B27*E27/(H27*1000)"
+    },
+    "K27": {
+      "value": "2.215329053795642",
+      "formula": "H27/F27"
+    },
+    "L27": {
+      "value": "0.022200167656737296",
+      "formula": null
+    },
+    "A28": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B28": {
+      "value": "64",
+      "formula": null
+    },
+    "C28": {
+      "value": "128",
+      "formula": null
+    },
+    "D28": {
+      "value": "8",
+      "formula": null
+    },
+    "E28": {
+      "value": "262144",
+      "formula": "C28*2048"
+    },
+    "F28": {
+      "value": "9.354881481481481",
+      "formula": "H25"
+    },
+    "G28": {
+      "value": "32.768",
+      "formula": "MAX(F28,B28*E28/($B$3*1000))"
+    },
+    "H28": {
+      "value": "40.80813333333333",
+      "formula": null
+    },
+    "I28": {
+      "value": "-19.702281571320746",
+      "formula": "(G28/H28-1)*100"
+    },
+    "J28": {
+      "value": "411.1243183548378",
+      "formula": "B28*E28/(H28*1000)"
+    },
+    "K28": {
+      "value": "4.362228790831327",
+      "formula": "H28/F28"
+    },
+    "L28": {
+      "value": "0.01928709100115127",
+      "formula": null
+    },
+    "A29": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B29": {
+      "value": "110",
+      "formula": null
+    },
+    "C29": {
+      "value": "128",
+      "formula": null
+    },
+    "D29": {
+      "value": "8",
+      "formula": null
+    },
+    "E29": {
+      "value": "262144",
+      "formula": "C29*2048"
+    },
+    "F29": {
+      "value": "9.354881481481481",
+      "formula": "H25"
+    },
+    "G29": {
+      "value": "56.32",
+      "formula": "MAX(F29,B29*E29/($B$3*1000))"
+    },
+    "H29": {
+      "value": "69.16041481481481",
+      "formula": null
+    },
+    "I29": {
+      "value": "-18.566133313683174",
+      "formula": "(G29/H29-1)*100"
+    },
+    "J29": {
+      "value": "416.94139743394214",
+      "formula": "B29*E29/(H29*1000)"
+    },
+    "K29": {
+      "value": "7.392976057657361",
+      "formula": "H29/F29"
+    },
+    "L29": {
+      "value": "0.032660246469304835",
+      "formula": null
+    },
+    "A32": {
+      "value": "Source",
+      "formula": null
+    },
+    "B32": {
+      "value": "ttnn/ttnn/operations/examples/dram_read_contention/; report.md, report.jsonl, inline kernel and CLI. Tests: test_dram_read_contention.py",
+      "formula": null
+    }
+  },
+  "BH queue model": {
+    "A1": {
+      "value": "BH DRAM + NoC queue model; live physical routes",
+      "formula": null
+    },
+    "A2": {
+      "value": "Scope",
+      "formula": null
+    },
+    "B2": {
+      "value": "110 usable cores; NoC0; 2048-byte pages; eight reads/barrier. Replay uses 8 iterations; measurements use 100.",
+      "formula": null
+    },
+    "A3": {
+      "value": "Clock MHz",
+      "formula": null
+    },
+    "B3": {
+      "value": "1350",
+      "formula": null
+    },
+    "A4": {
+      "value": "DRAM read service cycles",
+      "formula": null
+    },
+    "B4": {
+      "value": "126",
+      "formula": null
+    },
+    "A5": {
+      "value": "DRAM bytes/cycle",
+      "formula": null
+    },
+    "B5": {
+      "value": "47.0805",
+      "formula": null
+    },
+    "A6": {
+      "value": "Router cycles/hop",
+      "formula": null
+    },
+    "B6": {
+      "value": "9",
+      "formula": null
+    },
+    "A7": {
+      "value": "NIU crossing cycles",
+      "formula": null
+    },
+    "B7": {
+      "value": "5",
+      "formula": null
+    },
+    "A8": {
+      "value": "Header flits per packet",
+      "formula": null
+    },
+    "B8": {
+      "value": "1",
+      "formula": null
+    },
+    "A9": {
+      "value": "Flit bytes",
+      "formula": null
+    },
+    "B9": {
+      "value": "64",
+      "formula": null
+    },
+    "A10": {
+      "value": "Important",
+      "formula": null
+    },
+    "B10": {
+      "value": "Replay columns are snapshots at the parameters above. Parameter edits recalculate capacity bounds only; rerun queue_model.py for new queue predictions.",
+      "formula": null
+    },
+    "A11": {
+      "value": "Model limitations",
+      "formula": null
+    },
+    "B11": {
+      "value": "FIFO packet reservations; unlimited buffering; ideal core issue. No RISC timing, VCs, backpressure, refresh or row state. Shared bank and link capacity modeled separately.",
+      "formula": null
+    },
+    "A12": {
+      "value": "Provenance",
+      "formula": null
+    },
+    "B12": {
+      "value": "Wolfpine c0d2cb8842c5 derived 126 cycles =529-403 and 47.0805 B/cycle=4096/(665-578); ISA NoC 9/5 cycles and 64-byte flits. Headers included here.",
+      "formula": null
+    },
+    "A13": {
+      "value": "Comparison",
+      "formula": null
+    },
+    "B13": {
+      "value": "ACTIVE: raw queue replay only. Issue spacing=0; batch residual=0; no measured single-core floor or fitted 418 GB/s. DRAM126cycles/47.0805B-per-cycle remain simulator-derived empirical inputs, not ISA constants.",
+      "formula": null
+    },
+    "A15": {
+      "value": "Variant",
+      "formula": null
+    },
+    "B15": {
+      "value": "Cores",
+      "formula": null
+    },
+    "C15": {
+      "value": "Pages/core",
+      "formula": null
+    },
+    "D15": {
+      "value": "Batch",
+      "formula": null
+    },
+    "E15": {
+      "value": "Max bank reads",
+      "formula": null
+    },
+    "F15": {
+      "value": "Hot-link packets",
+      "formula": null
+    },
+    "G15": {
+      "value": "Hot-link data flits",
+      "formula": null
+    },
+    "H15": {
+      "value": "Bank bound us",
+      "formula": null
+    },
+    "I15": {
+      "value": "Link bound us",
+      "formula": null
+    },
+    "J15": {
+      "value": "Measured 1-core reference us",
+      "formula": null
+    },
+    "K15": {
+      "value": "Raw queue us",
+      "formula": null
+    },
+    "L15": {
+      "value": "Measured us",
+      "formula": null
+    },
+    "M15": {
+      "value": "Raw error %",
+      "formula": null
+    },
+    "N15": {
+      "value": "Active estimate us",
+      "formula": null
+    },
+    "O15": {
+      "value": "Active error %",
+      "formula": null
+    },
+    "P15": {
+      "value": "Hot physical link",
+      "formula": null
+    },
+    "Q15": {
+      "value": "ISA/simulator capacity bound us",
+      "formula": null
+    },
+    "A16": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B16": {
+      "value": "1",
+      "formula": null
+    },
+    "C16": {
+      "value": "32",
+      "formula": null
+    },
+    "D16": {
+      "value": "8",
+      "formula": null
+    },
+    "E16": {
+      "value": "4",
+      "formula": null
+    },
+    "F16": {
+      "value": "28",
+      "formula": null
+    },
+    "G16": {
+      "value": "896",
+      "formula": null
+    },
+    "H16": {
+      "value": "0.13037037037037036",
+      "formula": "E16*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I16": {
+      "value": "0.6844444444444444",
+      "formula": "(G16*64/$B$9+F16*$B$8)/$B$3"
+    },
+    "J16": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "K16": {
+      "value": "1.92",
+      "formula": null
+    },
+    "L16": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "M16": {
+      "value": "-17.62694412488164",
+      "formula": "(K16/L16-1)*100"
+    },
+    "N16": {
+      "value": "1.92",
+      "formula": "K16"
+    },
+    "O16": {
+      "value": "-17.62694412488164",
+      "formula": "M16"
+    },
+    "P16": {
+      "value": "[1, 11, 1, 0]",
+      "formula": null
+    },
+    "Q16": {
+      "value": "0.6844444444444444",
+      "formula": "MAX(H16,I16)"
+    },
+    "A17": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B17": {
+      "value": "8",
+      "formula": null
+    },
+    "C17": {
+      "value": "32",
+      "formula": null
+    },
+    "D17": {
+      "value": "8",
+      "formula": null
+    },
+    "E17": {
+      "value": "32",
+      "formula": null
+    },
+    "F17": {
+      "value": "56",
+      "formula": null
+    },
+    "G17": {
+      "value": "1792",
+      "formula": null
+    },
+    "H17": {
+      "value": "1.0429629629629629",
+      "formula": "E17*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I17": {
+      "value": "1.3688888888888888",
+      "formula": "(G17*64/$B$9+F17*$B$8)/$B$3"
+    },
+    "J17": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "K17": {
+      "value": "1.9570370370370371",
+      "formula": null
+    },
+    "L17": {
+      "value": "2.3857333333333335",
+      "formula": null
+    },
+    "M17": {
+      "value": "-17.969162366412693",
+      "formula": "(K17/L17-1)*100"
+    },
+    "N17": {
+      "value": "1.9570370370370371",
+      "formula": "K17"
+    },
+    "O17": {
+      "value": "-17.969162366412693",
+      "formula": "M17"
+    },
+    "P17": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q17": {
+      "value": "1.3688888888888888",
+      "formula": "MAX(H17,I17)"
+    },
+    "A18": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B18": {
+      "value": "32",
+      "formula": null
+    },
+    "C18": {
+      "value": "32",
+      "formula": null
+    },
+    "D18": {
+      "value": "8",
+      "formula": null
+    },
+    "E18": {
+      "value": "128",
+      "formula": null
+    },
+    "F18": {
+      "value": "200",
+      "formula": null
+    },
+    "G18": {
+      "value": "6400",
+      "formula": null
+    },
+    "H18": {
+      "value": "4.1718518518518515",
+      "formula": "E18*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I18": {
+      "value": "4.888888888888889",
+      "formula": "(G18*64/$B$9+F18*$B$8)/$B$3"
+    },
+    "J18": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "K18": {
+      "value": "4.916018518518518",
+      "formula": null
+    },
+    "L18": {
+      "value": "5.154111111111112",
+      "formula": null
+    },
+    "M18": {
+      "value": "-4.619469535286491",
+      "formula": "(K18/L18-1)*100"
+    },
+    "N18": {
+      "value": "4.916018518518518",
+      "formula": "K18"
+    },
+    "O18": {
+      "value": "-4.619469535286491",
+      "formula": "M18"
+    },
+    "P18": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q18": {
+      "value": "4.888888888888889",
+      "formula": "MAX(H18,I18)"
+    },
+    "A19": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B19": {
+      "value": "64",
+      "formula": null
+    },
+    "C19": {
+      "value": "32",
+      "formula": null
+    },
+    "D19": {
+      "value": "8",
+      "formula": null
+    },
+    "E19": {
+      "value": "256",
+      "formula": null
+    },
+    "F19": {
+      "value": "400",
+      "formula": null
+    },
+    "G19": {
+      "value": "12800",
+      "formula": null
+    },
+    "H19": {
+      "value": "8.343703703703703",
+      "formula": "E19*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I19": {
+      "value": "9.777777777777779",
+      "formula": "(G19*64/$B$9+F19*$B$8)/$B$3"
+    },
+    "J19": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "K19": {
+      "value": "9.80324074074074",
+      "formula": null
+    },
+    "L19": {
+      "value": "10.172585185185186",
+      "formula": null
+    },
+    "M19": {
+      "value": "-3.6307825171357555",
+      "formula": "(K19/L19-1)*100"
+    },
+    "N19": {
+      "value": "9.80324074074074",
+      "formula": "K19"
+    },
+    "O19": {
+      "value": "-3.6307825171357555",
+      "formula": "M19"
+    },
+    "P19": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q19": {
+      "value": "9.777777777777779",
+      "formula": "MAX(H19,I19)"
+    },
+    "A20": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B20": {
+      "value": "110",
+      "formula": null
+    },
+    "C20": {
+      "value": "32",
+      "formula": null
+    },
+    "D20": {
+      "value": "8",
+      "formula": null
+    },
+    "E20": {
+      "value": "440",
+      "formula": null
+    },
+    "F20": {
+      "value": "760",
+      "formula": null
+    },
+    "G20": {
+      "value": "21760",
+      "formula": null
+    },
+    "H20": {
+      "value": "14.34074074074074",
+      "formula": "E20*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I20": {
+      "value": "16.68148148148148",
+      "formula": "(G20*64/$B$9+F20*$B$8)/$B$3"
+    },
+    "J20": {
+      "value": "2.3308592592592596",
+      "formula": null
+    },
+    "K20": {
+      "value": "16.700833333333332",
+      "formula": null
+    },
+    "L20": {
+      "value": "17.231125925925923",
+      "formula": null
+    },
+    "M20": {
+      "value": "-3.0775272310831103",
+      "formula": "(K20/L20-1)*100"
+    },
+    "N20": {
+      "value": "16.700833333333332",
+      "formula": "K20"
+    },
+    "O20": {
+      "value": "-3.0775272310831103",
+      "formula": "M20"
+    },
+    "P20": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q20": {
+      "value": "16.68148148148148",
+      "formula": "MAX(H20,I20)"
+    },
+    "A21": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B21": {
+      "value": "1",
+      "formula": null
+    },
+    "C21": {
+      "value": "128",
+      "formula": null
+    },
+    "D21": {
+      "value": "8",
+      "formula": null
+    },
+    "E21": {
+      "value": "16",
+      "formula": null
+    },
+    "F21": {
+      "value": "112",
+      "formula": null
+    },
+    "G21": {
+      "value": "3584",
+      "formula": null
+    },
+    "H21": {
+      "value": "0.5214814814814814",
+      "formula": "E21*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I21": {
+      "value": "2.7377777777777776",
+      "formula": "(G21*64/$B$9+F21*$B$8)/$B$3"
+    },
+    "J21": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "K21": {
+      "value": "7.68",
+      "formula": null
+    },
+    "L21": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "M21": {
+      "value": "-17.91071364948159",
+      "formula": "(K21/L21-1)*100"
+    },
+    "N21": {
+      "value": "7.68",
+      "formula": "K21"
+    },
+    "O21": {
+      "value": "-17.91071364948159",
+      "formula": "M21"
+    },
+    "P21": {
+      "value": "[1, 11, 1, 0]",
+      "formula": null
+    },
+    "Q21": {
+      "value": "2.7377777777777776",
+      "formula": "MAX(H21,I21)"
+    },
+    "A22": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B22": {
+      "value": "8",
+      "formula": null
+    },
+    "C22": {
+      "value": "128",
+      "formula": null
+    },
+    "D22": {
+      "value": "8",
+      "formula": null
+    },
+    "E22": {
+      "value": "128",
+      "formula": null
+    },
+    "F22": {
+      "value": "224",
+      "formula": null
+    },
+    "G22": {
+      "value": "7168",
+      "formula": null
+    },
+    "H22": {
+      "value": "4.1718518518518515",
+      "formula": "E22*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I22": {
+      "value": "5.475555555555555",
+      "formula": "(G22*64/$B$9+F22*$B$8)/$B$3"
+    },
+    "J22": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "K22": {
+      "value": "7.734814814814815",
+      "formula": null
+    },
+    "L22": {
+      "value": "9.554659259259259",
+      "formula": null
+    },
+    "M22": {
+      "value": "-19.04667026907174",
+      "formula": "(K22/L22-1)*100"
+    },
+    "N22": {
+      "value": "7.734814814814815",
+      "formula": "K22"
+    },
+    "O22": {
+      "value": "-19.04667026907174",
+      "formula": "M22"
+    },
+    "P22": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q22": {
+      "value": "5.475555555555555",
+      "formula": "MAX(H22,I22)"
+    },
+    "A23": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B23": {
+      "value": "32",
+      "formula": null
+    },
+    "C23": {
+      "value": "128",
+      "formula": null
+    },
+    "D23": {
+      "value": "8",
+      "formula": null
+    },
+    "E23": {
+      "value": "512",
+      "formula": null
+    },
+    "F23": {
+      "value": "800",
+      "formula": null
+    },
+    "G23": {
+      "value": "25600",
+      "formula": null
+    },
+    "H23": {
+      "value": "16.687407407407406",
+      "formula": "E23*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I23": {
+      "value": "19.555555555555557",
+      "formula": "(G23*64/$B$9+F23*$B$8)/$B$3"
+    },
+    "J23": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "K23": {
+      "value": "19.582685185185184",
+      "formula": null
+    },
+    "L23": {
+      "value": "20.47574814814815",
+      "formula": null
+    },
+    "M23": {
+      "value": "-4.3615645030471555",
+      "formula": "(K23/L23-1)*100"
+    },
+    "N23": {
+      "value": "19.582685185185184",
+      "formula": "K23"
+    },
+    "O23": {
+      "value": "-4.3615645030471555",
+      "formula": "M23"
+    },
+    "P23": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q23": {
+      "value": "19.555555555555557",
+      "formula": "MAX(H23,I23)"
+    },
+    "A24": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B24": {
+      "value": "64",
+      "formula": null
+    },
+    "C24": {
+      "value": "128",
+      "formula": null
+    },
+    "D24": {
+      "value": "8",
+      "formula": null
+    },
+    "E24": {
+      "value": "1024",
+      "formula": null
+    },
+    "F24": {
+      "value": "1600",
+      "formula": null
+    },
+    "G24": {
+      "value": "51200",
+      "formula": null
+    },
+    "H24": {
+      "value": "33.37481481481481",
+      "formula": "E24*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I24": {
+      "value": "39.111111111111114",
+      "formula": "(G24*64/$B$9+F24*$B$8)/$B$3"
+    },
+    "J24": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "K24": {
+      "value": "39.136574074074076",
+      "formula": null
+    },
+    "L24": {
+      "value": "40.6621037037037",
+      "formula": null
+    },
+    "M24": {
+      "value": "-3.751723326333145",
+      "formula": "(K24/L24-1)*100"
+    },
+    "N24": {
+      "value": "39.136574074074076",
+      "formula": "K24"
+    },
+    "O24": {
+      "value": "-3.751723326333145",
+      "formula": "M24"
+    },
+    "P24": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q24": {
+      "value": "39.111111111111114",
+      "formula": "MAX(H24,I24)"
+    },
+    "A25": {
+      "value": "aligned",
+      "formula": null
+    },
+    "B25": {
+      "value": "110",
+      "formula": null
+    },
+    "C25": {
+      "value": "128",
+      "formula": null
+    },
+    "D25": {
+      "value": "8",
+      "formula": null
+    },
+    "E25": {
+      "value": "1760",
+      "formula": null
+    },
+    "F25": {
+      "value": "3040",
+      "formula": null
+    },
+    "G25": {
+      "value": "87040",
+      "formula": null
+    },
+    "H25": {
+      "value": "57.36296296296296",
+      "formula": "E25*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I25": {
+      "value": "66.72592592592592",
+      "formula": "(G25*64/$B$9+F25*$B$8)/$B$3"
+    },
+    "J25": {
+      "value": "9.355666666666666",
+      "formula": null
+    },
+    "K25": {
+      "value": "66.76222222222222",
+      "formula": null
+    },
+    "L25": {
+      "value": "68.98725925925928",
+      "formula": null
+    },
+    "M25": {
+      "value": "-3.2252869021440644",
+      "formula": "(K25/L25-1)*100"
+    },
+    "N25": {
+      "value": "66.76222222222222",
+      "formula": "K25"
+    },
+    "O25": {
+      "value": "-3.2252869021440644",
+      "formula": "M25"
+    },
+    "P25": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q25": {
+      "value": "66.72592592592592",
+      "formula": "MAX(H25,I25)"
+    },
+    "A26": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B26": {
+      "value": "1",
+      "formula": null
+    },
+    "C26": {
+      "value": "32",
+      "formula": null
+    },
+    "D26": {
+      "value": "8",
+      "formula": null
+    },
+    "E26": {
+      "value": "4",
+      "formula": null
+    },
+    "F26": {
+      "value": "28",
+      "formula": null
+    },
+    "G26": {
+      "value": "896",
+      "formula": null
+    },
+    "H26": {
+      "value": "0.13037037037037036",
+      "formula": "E26*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I26": {
+      "value": "0.6844444444444444",
+      "formula": "(G26*64/$B$9+F26*$B$8)/$B$3"
+    },
+    "J26": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "K26": {
+      "value": "1.92",
+      "formula": null
+    },
+    "L26": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "M26": {
+      "value": "-17.369862314982775",
+      "formula": "(K26/L26-1)*100"
+    },
+    "N26": {
+      "value": "1.92",
+      "formula": "K26"
+    },
+    "O26": {
+      "value": "-17.369862314982775",
+      "formula": "M26"
+    },
+    "P26": {
+      "value": "[1, 11, 1, 0]",
+      "formula": null
+    },
+    "Q26": {
+      "value": "0.6844444444444444",
+      "formula": "MAX(H26,I26)"
+    },
+    "A27": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B27": {
+      "value": "8",
+      "formula": null
+    },
+    "C27": {
+      "value": "32",
+      "formula": null
+    },
+    "D27": {
+      "value": "8",
+      "formula": null
+    },
+    "E27": {
+      "value": "32",
+      "formula": null
+    },
+    "F27": {
+      "value": "56",
+      "formula": null
+    },
+    "G27": {
+      "value": "1792",
+      "formula": null
+    },
+    "H27": {
+      "value": "1.0429629629629629",
+      "formula": "E27*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I27": {
+      "value": "1.3688888888888888",
+      "formula": "(G27*64/$B$9+F27*$B$8)/$B$3"
+    },
+    "J27": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "K27": {
+      "value": "1.9537962962962963",
+      "formula": null
+    },
+    "L27": {
+      "value": "2.4082",
+      "formula": null
+    },
+    "M27": {
+      "value": "-18.869018507752834",
+      "formula": "(K27/L27-1)*100"
+    },
+    "N27": {
+      "value": "1.9537962962962963",
+      "formula": "K27"
+    },
+    "O27": {
+      "value": "-18.869018507752834",
+      "formula": "M27"
+    },
+    "P27": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q27": {
+      "value": "1.3688888888888888",
+      "formula": "MAX(H27,I27)"
+    },
+    "A28": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B28": {
+      "value": "32",
+      "formula": null
+    },
+    "C28": {
+      "value": "32",
+      "formula": null
+    },
+    "D28": {
+      "value": "8",
+      "formula": null
+    },
+    "E28": {
+      "value": "128",
+      "formula": null
+    },
+    "F28": {
+      "value": "200",
+      "formula": null
+    },
+    "G28": {
+      "value": "6400",
+      "formula": null
+    },
+    "H28": {
+      "value": "4.1718518518518515",
+      "formula": "E28*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I28": {
+      "value": "4.888888888888889",
+      "formula": "(G28*64/$B$9+F28*$B$8)/$B$3"
+    },
+    "J28": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "K28": {
+      "value": "4.916111111111111",
+      "formula": null
+    },
+    "L28": {
+      "value": "5.172407407407407",
+      "formula": null
+    },
+    "M28": {
+      "value": "-4.955067845762762",
+      "formula": "(K28/L28-1)*100"
+    },
+    "N28": {
+      "value": "4.916111111111111",
+      "formula": "K28"
+    },
+    "O28": {
+      "value": "-4.955067845762762",
+      "formula": "M28"
+    },
+    "P28": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q28": {
+      "value": "4.888888888888889",
+      "formula": "MAX(H28,I28)"
+    },
+    "A29": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B29": {
+      "value": "64",
+      "formula": null
+    },
+    "C29": {
+      "value": "32",
+      "formula": null
+    },
+    "D29": {
+      "value": "8",
+      "formula": null
+    },
+    "E29": {
+      "value": "256",
+      "formula": null
+    },
+    "F29": {
+      "value": "400",
+      "formula": null
+    },
+    "G29": {
+      "value": "12800",
+      "formula": null
+    },
+    "H29": {
+      "value": "8.343703703703703",
+      "formula": "E29*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I29": {
+      "value": "9.777777777777779",
+      "formula": "(G29*64/$B$9+F29*$B$8)/$B$3"
+    },
+    "J29": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "K29": {
+      "value": "9.80425925925926",
+      "formula": null
+    },
+    "L29": {
+      "value": "10.19225925925926",
+      "formula": null
+    },
+    "M29": {
+      "value": "-3.806810542495942",
+      "formula": "(K29/L29-1)*100"
+    },
+    "N29": {
+      "value": "9.80425925925926",
+      "formula": "K29"
+    },
+    "O29": {
+      "value": "-3.806810542495942",
+      "formula": "M29"
+    },
+    "P29": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q29": {
+      "value": "9.777777777777779",
+      "formula": "MAX(H29,I29)"
+    },
+    "A30": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B30": {
+      "value": "110",
+      "formula": null
+    },
+    "C30": {
+      "value": "32",
+      "formula": null
+    },
+    "D30": {
+      "value": "8",
+      "formula": null
+    },
+    "E30": {
+      "value": "440",
+      "formula": null
+    },
+    "F30": {
+      "value": "760",
+      "formula": null
+    },
+    "G30": {
+      "value": "21760",
+      "formula": null
+    },
+    "H30": {
+      "value": "14.34074074074074",
+      "formula": "E30*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I30": {
+      "value": "16.68148148148148",
+      "formula": "(G30*64/$B$9+F30*$B$8)/$B$3"
+    },
+    "J30": {
+      "value": "2.3236074074074073",
+      "formula": null
+    },
+    "K30": {
+      "value": "16.700833333333332",
+      "formula": null
+    },
+    "L30": {
+      "value": "17.28951111111111",
+      "formula": null
+    },
+    "M30": {
+      "value": "-3.404826047391618",
+      "formula": "(K30/L30-1)*100"
+    },
+    "N30": {
+      "value": "16.700833333333332",
+      "formula": "K30"
+    },
+    "O30": {
+      "value": "-3.404826047391618",
+      "formula": "M30"
+    },
+    "P30": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q30": {
+      "value": "16.68148148148148",
+      "formula": "MAX(H30,I30)"
+    },
+    "A31": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B31": {
+      "value": "1",
+      "formula": null
+    },
+    "C31": {
+      "value": "128",
+      "formula": null
+    },
+    "D31": {
+      "value": "8",
+      "formula": null
+    },
+    "E31": {
+      "value": "16",
+      "formula": null
+    },
+    "F31": {
+      "value": "112",
+      "formula": null
+    },
+    "G31": {
+      "value": "3584",
+      "formula": null
+    },
+    "H31": {
+      "value": "0.5214814814814814",
+      "formula": "E31*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I31": {
+      "value": "2.7377777777777776",
+      "formula": "(G31*64/$B$9+F31*$B$8)/$B$3"
+    },
+    "J31": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "K31": {
+      "value": "7.68",
+      "formula": null
+    },
+    "L31": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "M31": {
+      "value": "-17.903823632581606",
+      "formula": "(K31/L31-1)*100"
+    },
+    "N31": {
+      "value": "7.68",
+      "formula": "K31"
+    },
+    "O31": {
+      "value": "-17.903823632581606",
+      "formula": "M31"
+    },
+    "P31": {
+      "value": "[1, 11, 1, 0]",
+      "formula": null
+    },
+    "Q31": {
+      "value": "2.7377777777777776",
+      "formula": "MAX(H31,I31)"
+    },
+    "A32": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B32": {
+      "value": "8",
+      "formula": null
+    },
+    "C32": {
+      "value": "128",
+      "formula": null
+    },
+    "D32": {
+      "value": "8",
+      "formula": null
+    },
+    "E32": {
+      "value": "128",
+      "formula": null
+    },
+    "F32": {
+      "value": "224",
+      "formula": null
+    },
+    "G32": {
+      "value": "7168",
+      "formula": null
+    },
+    "H32": {
+      "value": "4.1718518518518515",
+      "formula": "E32*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I32": {
+      "value": "5.475555555555555",
+      "formula": "(G32*64/$B$9+F32*$B$8)/$B$3"
+    },
+    "J32": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "K32": {
+      "value": "7.735925925925926",
+      "formula": null
+    },
+    "L32": {
+      "value": "9.680074074074074",
+      "formula": null
+    },
+    "M32": {
+      "value": "-20.08402139561222",
+      "formula": "(K32/L32-1)*100"
+    },
+    "N32": {
+      "value": "7.735925925925926",
+      "formula": "K32"
+    },
+    "O32": {
+      "value": "-20.08402139561222",
+      "formula": "M32"
+    },
+    "P32": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q32": {
+      "value": "5.475555555555555",
+      "formula": "MAX(H32,I32)"
+    },
+    "A33": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B33": {
+      "value": "32",
+      "formula": null
+    },
+    "C33": {
+      "value": "128",
+      "formula": null
+    },
+    "D33": {
+      "value": "8",
+      "formula": null
+    },
+    "E33": {
+      "value": "512",
+      "formula": null
+    },
+    "F33": {
+      "value": "800",
+      "formula": null
+    },
+    "G33": {
+      "value": "25600",
+      "formula": null
+    },
+    "H33": {
+      "value": "16.687407407407406",
+      "formula": "E33*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I33": {
+      "value": "19.555555555555557",
+      "formula": "(G33*64/$B$9+F33*$B$8)/$B$3"
+    },
+    "J33": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "K33": {
+      "value": "19.58277777777778",
+      "formula": null
+    },
+    "L33": {
+      "value": "20.724140740740744",
+      "formula": null
+    },
+    "M33": {
+      "value": "-5.507407893245997",
+      "formula": "(K33/L33-1)*100"
+    },
+    "N33": {
+      "value": "19.58277777777778",
+      "formula": "K33"
+    },
+    "O33": {
+      "value": "-5.507407893245997",
+      "formula": "M33"
+    },
+    "P33": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q33": {
+      "value": "19.555555555555557",
+      "formula": "MAX(H33,I33)"
+    },
+    "A34": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B34": {
+      "value": "64",
+      "formula": null
+    },
+    "C34": {
+      "value": "128",
+      "formula": null
+    },
+    "D34": {
+      "value": "8",
+      "formula": null
+    },
+    "E34": {
+      "value": "1024",
+      "formula": null
+    },
+    "F34": {
+      "value": "1600",
+      "formula": null
+    },
+    "G34": {
+      "value": "51200",
+      "formula": null
+    },
+    "H34": {
+      "value": "33.37481481481481",
+      "formula": "E34*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I34": {
+      "value": "39.111111111111114",
+      "formula": "(G34*64/$B$9+F34*$B$8)/$B$3"
+    },
+    "J34": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "K34": {
+      "value": "39.13759259259259",
+      "formula": null
+    },
+    "L34": {
+      "value": "40.80813333333333",
+      "formula": null
+    },
+    "M34": {
+      "value": "-4.093646546131513",
+      "formula": "(K34/L34-1)*100"
+    },
+    "N34": {
+      "value": "39.13759259259259",
+      "formula": "K34"
+    },
+    "O34": {
+      "value": "-4.093646546131513",
+      "formula": "M34"
+    },
+    "P34": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q34": {
+      "value": "39.111111111111114",
+      "formula": "MAX(H34,I34)"
+    },
+    "A35": {
+      "value": "staggered",
+      "formula": null
+    },
+    "B35": {
+      "value": "110",
+      "formula": null
+    },
+    "C35": {
+      "value": "128",
+      "formula": null
+    },
+    "D35": {
+      "value": "8",
+      "formula": null
+    },
+    "E35": {
+      "value": "1760",
+      "formula": null
+    },
+    "F35": {
+      "value": "3040",
+      "formula": null
+    },
+    "G35": {
+      "value": "87040",
+      "formula": null
+    },
+    "H35": {
+      "value": "57.36296296296296",
+      "formula": "E35*ROUNDUP(2048/$B$5,0)/$B$3"
+    },
+    "I35": {
+      "value": "66.72592592592592",
+      "formula": "(G35*64/$B$9+F35*$B$8)/$B$3"
+    },
+    "J35": {
+      "value": "9.354881481481481",
+      "formula": null
+    },
+    "K35": {
+      "value": "66.78055555555555",
+      "formula": null
+    },
+    "L35": {
+      "value": "69.16041481481481",
+      "formula": null
+    },
+    "M35": {
+      "value": "-3.4410714071504866",
+      "formula": "(K35/L35-1)*100"
+    },
+    "N35": {
+      "value": "66.78055555555555",
+      "formula": "K35"
+    },
+    "O35": {
+      "value": "-3.4410714071504866",
+      "formula": "M35"
+    },
+    "P35": {
+      "value": "[0, 11, 1, 11]",
+      "formula": null
+    },
+    "Q35": {
+      "value": "66.72592592592592",
+      "formula": "MAX(H35,I35)"
+    },
+    "A38": {
+      "value": "Interpretation",
+      "formula": null
+    },
+    "B38": {
+      "value": "At 110 cores /128 pages, bank capacity bound 57.363 us; link bound 66.726 us; raw replay 66.762 us; measured 68.987 us.",
+      "formula": null
+    },
+    "A39": {
+      "value": "Hot link",
+      "formula": null
+    },
+    "B39": {
+      "value": "Physical NoC0 (0,11)->(1,11). Packet counts include requests and responses.",
+      "formula": null
+    },
+    "A40": {
+      "value": "Read latency vs occupancy",
+      "formula": null
+    },
+    "B40": {
+      "value": "126 cycles is pipeline latency, not exclusive bank occupancy per read. Bank occupancy=ceil(bytes/47.0805).",
+      "formula": null
+    },
+    "A41": {
+      "value": "No double-counting",
+      "formula": null
+    },
+    "B41": {
+      "value": "Add DRAM excess max(0,ceil(bytes/47.0805)-response_flits) to response release; NoC serialization is already charged.",
+      "formula": null
+    },
+    "A42": {
+      "value": "Source code",
+      "formula": null
+    },
+    "B42": {
+      "value": "ttnn/ttnn/operations/examples/dram_read_contention/queue_model.py; topology and measured comparisons stored alongside.",
+      "formula": null
+    }
+  },
+  "Archive low-core": {
+    "A1": {
+      "value": "BH low-core investigation; 2026-10-20",
+      "formula": null
+    },
+    "A2": {
+      "value": "Scope",
+      "formula": null
+    },
+    "B2": {
+      "value": "Aligned reads; diagnostic clocks separate from uninstrumented measurements; 14 diagnostic +12 held-out correctness cases passed.",
+      "formula": null
+    },
+    "A3": {
+      "value": "Issue interval cycles",
+      "formula": null
+    },
+    "B3": {
+      "value": "35",
+      "formula": null
+    },
+    "A4": {
+      "value": "Effective batch residual cycles",
+      "formula": null
+    },
+    "B4": {
+      "value": "94.4962499999999",
+      "formula": null
+    },
+    "A5": {
+      "value": "Calibration",
+      "formula": null
+    },
+    "B5": {
+      "value": "Only one-core /128 pages /batch-eight time fitted; issue cadence from diagnostic kernel. Not universal hardware constants.",
+      "formula": null
+    },
+    "A6": {
+      "value": "Snapshots",
+      "formula": null
+    },
+    "B6": {
+      "value": "Replay columns below require Python rerun if parameters change. Excel error columns recalculate.",
+      "formula": null
+    },
+    "A7": {
+      "value": "Caveat",
+      "formula": null
+    },
+    "B7": {
+      "value": "All six held-out batch-eight cases <1.75% error; batch16 eight-core/64-page case +7.68%; other batch sizes still miss.",
+      "formula": null
+    },
+    "A9": {
+      "value": "Batch",
+      "formula": null
+    },
+    "B9": {
+      "value": "Cores",
+      "formula": null
+    },
+    "C9": {
+      "value": "KiB/core",
+      "formula": null
+    },
+    "D9": {
+      "value": "Ideal issue us",
+      "formula": null
+    },
+    "E9": {
+      "value": "Calibrated us",
+      "formula": null
+    },
+    "F9": {
+      "value": "Measured us",
+      "formula": null
+    },
+    "G9": {
+      "value": "Error %",
+      "formula": null
+    },
+    "A10": {
+      "value": "16",
+      "formula": null
+    },
+    "B10": {
+      "value": "1",
+      "formula": null
+    },
+    "C10": {
+      "value": "128",
+      "formula": null
+    },
+    "D10": {
+      "value": "2.6044444444444443",
+      "formula": null
+    },
+    "E10": {
+      "value": "3.1688777777777783",
+      "formula": null
+    },
+    "F10": {
+      "value": "3.1719925925925927",
+      "formula": null
+    },
+    "G10": {
+      "value": "-0.09819741767645995",
+      "formula": "(E10/F10-1)*100"
+    },
+    "A11": {
+      "value": "16",
+      "formula": null
+    },
+    "B11": {
+      "value": "4",
+      "formula": null
+    },
+    "C11": {
+      "value": "128",
+      "formula": null
+    },
+    "D11": {
+      "value": "2.638611111111111",
+      "formula": null
+    },
+    "E11": {
+      "value": "3.2359148148148145",
+      "formula": null
+    },
+    "F11": {
+      "value": "3.162333333333333",
+      "formula": null
+    },
+    "G11": {
+      "value": "2.326809786491446",
+      "formula": "(E11/F11-1)*100"
+    },
+    "A12": {
+      "value": "16",
+      "formula": null
+    },
+    "B12": {
+      "value": "8",
+      "formula": null
+    },
+    "C12": {
+      "value": "128",
+      "formula": null
+    },
+    "D12": {
+      "value": "2.7755555555555556",
+      "formula": null
+    },
+    "E12": {
+      "value": "3.487951851851851",
+      "formula": null
+    },
+    "F12": {
+      "value": "3.239288888888889",
+      "formula": null
+    },
+    "G12": {
+      "value": "7.676467628926309",
+      "formula": "(E12/F12-1)*100"
+    },
+    "A13": {
+      "value": "16",
+      "formula": null
+    },
+    "B13": {
+      "value": "1",
+      "formula": null
+    },
+    "C13": {
+      "value": "512",
+      "formula": null
+    },
+    "D13": {
+      "value": "10.417777777777777",
+      "formula": null
+    },
+    "E13": {
+      "value": "12.67551111111108",
+      "formula": null
+    },
+    "F13": {
+      "value": "12.80282962962963",
+      "formula": null
+    },
+    "G13": {
+      "value": "-0.9944560866755325",
+      "formula": "(E13/F13-1)*100"
+    },
+    "A14": {
+      "value": "16",
+      "formula": null
+    },
+    "B14": {
+      "value": "4",
+      "formula": null
+    },
+    "C14": {
+      "value": "512",
+      "formula": null
+    },
+    "D14": {
+      "value": "10.451944444444445",
+      "formula": null
+    },
+    "E14": {
+      "value": "12.920325925925896",
+      "formula": null
+    },
+    "F14": {
+      "value": "12.838607407407405",
+      "formula": null
+    },
+    "G14": {
+      "value": "0.6365060938879008",
+      "formula": "(E14/F14-1)*100"
+    },
+    "A15": {
+      "value": "16",
+      "formula": null
+    },
+    "B15": {
+      "value": "8",
+      "formula": null
+    },
+    "C15": {
+      "value": "512",
+      "formula": null
+    },
+    "D15": {
+      "value": "10.987962962962962",
+      "formula": null
+    },
+    "E15": {
+      "value": "13.776807407407373",
+      "formula": null
+    },
+    "F15": {
+      "value": "13.492533333333332",
+      "formula": null
+    },
+    "G15": {
+      "value": "2.106899179353827",
+      "formula": "(E15/F15-1)*100"
+    },
+    "A16": {
+      "value": "8",
+      "formula": null
+    },
+    "B16": {
+      "value": "1",
+      "formula": null
+    },
+    "C16": {
+      "value": "128",
+      "formula": null
+    },
+    "D16": {
+      "value": "3.84",
+      "formula": null
+    },
+    "E16": {
+      "value": "4.678496296296289",
+      "formula": null
+    },
+    "F16": {
+      "value": "4.6918592592592585",
+      "formula": null
+    },
+    "G16": {
+      "value": "-0.28481167538429997",
+      "formula": "(E16/F16-1)*100"
+    },
+    "A17": {
+      "value": "8",
+      "formula": null
+    },
+    "B17": {
+      "value": "4",
+      "formula": null
+    },
+    "C17": {
+      "value": "128",
+      "formula": null
+    },
+    "D17": {
+      "value": "3.8558333333333334",
+      "formula": null
+    },
+    "E17": {
+      "value": "4.799051851851845",
+      "formula": null
+    },
+    "F17": {
+      "value": "4.743600000000001",
+      "formula": null
+    },
+    "G17": {
+      "value": "1.168982457455181",
+      "formula": "(E17/F17-1)*100"
+    },
+    "A18": {
+      "value": "8",
+      "formula": null
+    },
+    "B18": {
+      "value": "8",
+      "formula": null
+    },
+    "C18": {
+      "value": "128",
+      "formula": null
+    },
+    "D18": {
+      "value": "3.882962962962963",
+      "formula": null
+    },
+    "E18": {
+      "value": "4.8511355324074",
+      "formula": null
+    },
+    "F18": {
+      "value": "4.767977777777777",
+      "formula": null
+    },
+    "G18": {
+      "value": "1.7440885529542038",
+      "formula": "(E18/F18-1)*100"
+    },
+    "A19": {
+      "value": "8",
+      "formula": null
+    },
+    "B19": {
+      "value": "1",
+      "formula": null
+    },
+    "C19": {
+      "value": "512",
+      "formula": null
+    },
+    "D19": {
+      "value": "15.36",
+      "formula": null
+    },
+    "E19": {
+      "value": "18.713985185185116",
+      "formula": null
+    },
+    "F19": {
+      "value": "18.745888888888892",
+      "formula": null
+    },
+    "G19": {
+      "value": "-0.1701904022416656",
+      "formula": "(E19/F19-1)*100"
+    },
+    "A20": {
+      "value": "8",
+      "formula": null
+    },
+    "B20": {
+      "value": "4",
+      "formula": null
+    },
+    "C20": {
+      "value": "512",
+      "formula": null
+    },
+    "D20": {
+      "value": "15.375833333333333",
+      "formula": null
+    },
+    "E20": {
+      "value": "19.17231851851845",
+      "formula": null
+    },
+    "F20": {
+      "value": "18.87928148148148",
+      "formula": null
+    },
+    "G20": {
+      "value": "1.5521620212316067",
+      "formula": "(E20/F20-1)*100"
+    },
+    "A21": {
+      "value": "8",
+      "formula": null
+    },
+    "B21": {
+      "value": "8",
+      "formula": null
+    },
+    "C21": {
+      "value": "512",
+      "formula": null
+    },
+    "D21": {
+      "value": "15.438518518518519",
+      "formula": null
+    },
+    "E21": {
+      "value": "19.277735532407338",
+      "formula": null
+    },
+    "F21": {
+      "value": "19.140237037037036",
+      "formula": null
+    },
+    "G21": {
+      "value": "0.7183740468011734",
+      "formula": "(E21/F21-1)*100"
+    },
+    "A24": {
+      "value": "Diagnostic facts",
+      "formula": null
+    },
+    "B24": {
+      "value": "Large-batch issue ~35 cycles/read; empty barrier16cycles; clock pair1cycle. Populated-barrier time includes outstanding DRAM/NoC waits.",
+      "formula": null
+    },
+    "A25": {
+      "value": "Instrumentation",
+      "formula": null
+    },
+    "B25": {
+      "value": "Instrumented total can change by ~11%; use baseline for prediction comparisons.",
+      "formula": null
+    },
+    "A26": {
+      "value": "Full grid",
+      "formula": null
+    },
+    "B26": {
+      "value": "110 cores /128 pages /batch8: calibrated66.891us vs68.987us measured, -3.04%; link bottleneck remains.",
+      "formula": null
+    },
+    "A27": {
+      "value": "Source",
+      "formula": null
+    },
+    "B27": {
+      "value": "ttnn/ttnn/operations/examples/dram_read_contention/low_core_report.md",
+      "formula": null
+    }
+  }
+}

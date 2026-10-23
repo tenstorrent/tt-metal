@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "model": "effective_read_admission_per_noc_bank",
+  "physical_resource": "unresolved: aggregate read-path characterization, not DRAM array occupancy",
+  "topology_signature": "588db557b661151d6ec91cae2a3f4d02826ef5014a9b330dea9aa2092cbef497",
+  "cycles_per_request_by_noc_bank": [
+    17.654261363636362,
+    16.854829545454546
+  ],
+  "source_file": "read_probe_bh.jsonl",
+  "source_sha256": "059ebd6df1f1abce213dd93953b41c481053f833361786be5714e46febd0d4fc",
+  "training_cases": [
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "mode": "noc0",
+      "pages": 64,
+      "batch": 16,
+      "median_cycles": 15535.75,
+      "clock_mhz": 1350.0,
+      "host": "bh-50-special-dstoiljkovic-for-reservation-136502"
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "mode": "noc1",
+      "pages": 64,
+      "batch": 16,
+      "median_cycles": 14832.25,
+      "clock_mhz": 1350.0,
+      "host": "bh-50-special-dstoiljkovic-for-reservation-136502"
+    }
+  ],
+  "derivation": "median_cycles_per_iteration / (cores * pages_per_core / bank_count)",
+  "limitations": [
+    "Finite credit counts and VC buffers are not identified.",
+    "Balanced saturation timing includes residual routing/barrier effects.",
+    "Per-bank localization and payload-independent interval are hypotheses requiring held-out validation."
+  ]
+}

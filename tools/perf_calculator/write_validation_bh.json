@@ -1,0 +1,747 @@
+{
+  "architecture": "blackhole",
+  "clock_mhz": 1350,
+  "date": "2026-10-21",
+  "single_core": {
+    "median_absolute_error_percent": 1.3504447262223884,
+    "cases": [
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 64,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 15.665185185185186,
+        "measured_us": 16.242037037037036,
+        "error_percent": -3.5515979340303483
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 64,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 16.28148148148148,
+        "measured_us": 16.85537037037037,
+        "error_percent": -3.4047836166075207
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 64,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.6948148148148148,
+        "measured_us": 3.7375925925925926,
+        "error_percent": -1.1445275727097082
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 64,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.671111111111111,
+        "measured_us": 3.735925925925926,
+        "error_percent": -1.7349063150589927
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 64,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.794074074074074,
+        "measured_us": 2.783703703703704,
+        "error_percent": 0.37253858435337683
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 64,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.77037037037037,
+        "measured_us": 2.7824074074074074,
+        "error_percent": -0.4326123128119863
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 128,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 15.718518518518518,
+        "measured_us": 16.241481481481483,
+        "error_percent": -3.219921554319083
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 128,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 16.346666666666668,
+        "measured_us": 16.85611111111111,
+        "error_percent": -3.022313041758673
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 128,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.7066666666666666,
+        "measured_us": 3.7453703703703702,
+        "error_percent": -1.0333745364647706
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 128,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.6948148148148148,
+        "measured_us": 3.742962962962963,
+        "error_percent": -1.28636453591926
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 128,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.802962962962963,
+        "measured_us": 2.7844444444444445,
+        "error_percent": 0.6650704974727306
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 128,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.7911111111111113,
+        "measured_us": 2.7835185185185187,
+        "error_percent": 0.2727696094737553
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 1024,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 16.37925925925926,
+        "measured_us": 17.000555555555554,
+        "error_percent": -3.6545646656427233
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 1024,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 16.98962962962963,
+        "measured_us": 17.61462962962963,
+        "error_percent": -3.5481870078533206
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 1024,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.7866666666666666,
+        "measured_us": 3.837222222222222,
+        "error_percent": -1.3175039814680711
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 1024,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 3.757037037037037,
+        "measured_us": 3.8361111111111112,
+        "error_percent": -2.061308230750669
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 1024,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.8414814814814813,
+        "measured_us": 2.8314814814814815,
+        "error_percent": 0.353172007848257
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 1024,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 2.811851851851852,
+        "measured_us": 2.828888888888889,
+        "error_percent": -0.602251898402717
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 4096,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 19.872592592592593,
+        "measured_us": 19.654074074074074,
+        "error_percent": 1.111823012851909
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 4096,
+          "batch": 1,
+          "banks": "balanced"
+        },
+        "estimated_us": 20.462222222222223,
+        "measured_us": 20.314444444444444,
+        "error_percent": 0.7274517311163464
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 4096,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 5.288888888888889,
+        "measured_us": 5.404814814814815,
+        "error_percent": -2.1448639758788524
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 4096,
+          "batch": 8,
+          "banks": "balanced"
+        },
+        "estimated_us": 5.254074074074074,
+        "measured_us": 5.3277777777777775,
+        "error_percent": -1.3833854709767057
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc0",
+          "payload_bytes": 4096,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 4.201481481481482,
+        "measured_us": 4.311481481481482,
+        "error_percent": -2.5513272055665337
+      },
+      {
+        "case": {
+          "cores": 1,
+          "mode": "noc1",
+          "payload_bytes": 4096,
+          "batch": 16,
+          "banks": "balanced"
+        },
+        "estimated_us": 4.167777777777777,
+        "measured_us": 4.253888888888889,
+        "error_percent": -2.0242914979757165
+      }
+    ]
+  },
+  "multicore": [
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 2.902210648148148,
+      "measured_us": 2.9027777777777777,
+      "error_percent": -0.019537480063791524,
+      "std_us": 0.0032296636083839468
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 4.608923611111111,
+      "measured_us": 5.101111111111111,
+      "error_percent": -9.648633195382272,
+      "std_us": 0.03463812531953162
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 2.7924305555555557,
+      "measured_us": 2.808148148148148,
+      "error_percent": -0.5597137958322285,
+      "std_us": 0.0028206567058755216
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 4.79056712962963,
+      "measured_us": 5.2118518518518515,
+      "error_percent": -8.083206011938593,
+      "std_us": 0.012729969607201517
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 1.9515046296296297,
+      "measured_us": 1.9670370370370371,
+      "error_percent": -0.789634720391641,
+      "std_us": 0.000911743231488235
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 4.577743055555556,
+      "measured_us": 4.284074074074074,
+      "error_percent": 6.854899714705631,
+      "std_us": 0.014880133781129365
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 11.825,
+      "measured_us": 13.92,
+      "error_percent": -15.050287356321846,
+      "std_us": 0.07020461960968429
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 33.41222222222222,
+      "measured_us": 33.1737037037037,
+      "error_percent": 0.718998760731937,
+      "std_us": 0.06970331011027538
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 5.262893518518519,
+      "measured_us": 7.290925925925926,
+      "error_percent": -27.815841609306336,
+      "std_us": 0.1137641533123469
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 33.41210648148148,
+      "measured_us": 33.42351851851852,
+      "error_percent": -0.03414373334368337,
+      "std_us": 0.04718451653692179
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 5.933333333333334,
+      "measured_us": 7.273518518518519,
+      "error_percent": -18.425541665605827,
+      "std_us": 0.06469824437949419
+    },
+    {
+      "cores": 32,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 33.41210648148148,
+      "measured_us": 33.22796296296296,
+      "error_percent": 0.5541823876587637,
+      "std_us": 0.055506818128141365
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 4.730543981481482,
+      "measured_us": 6.878703703703704,
+      "error_percent": -31.22913581908736,
+      "std_us": 0.08226963931373513
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 13.685011574074075,
+      "measured_us": 14.161111111111111,
+      "error_percent": -3.362021054008102,
+      "std_us": 0.018193970873113082
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 3.1944560185185185,
+      "measured_us": 3.667962962962963,
+      "error_percent": -12.909261877114153,
+      "std_us": 0.053788515405937355
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 13.685520833333333,
+      "measured_us": 14.311296296296296,
+      "error_percent": -4.372598051267451,
+      "std_us": 0.015672575717782626
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 2.5108333333333333,
+      "measured_us": 3.5914814814814813,
+      "error_percent": -30.089202846241104,
+      "std_us": 0.02217420738721068
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 13.685520833333333,
+      "measured_us": 12.619259259259259,
+      "error_percent": 8.449478310636295,
+      "std_us": 0.0255117714028199
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 26.324074074074073,
+      "measured_us": 37.687407407407406,
+      "error_percent": -30.151538975588664,
+      "std_us": 0.053257482069972766
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 100.15185185185184,
+      "measured_us": 99.31462962962964,
+      "error_percent": 0.8429998937159899,
+      "std_us": 0.07672234514253391
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 15.28613425925926,
+      "measured_us": 21.343333333333334,
+      "error_percent": -28.379817620212744,
+      "std_us": 0.1089172676549299
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 100.1517361111111,
+      "measured_us": 99.27259259259259,
+      "error_percent": 0.8855853318211038,
+      "std_us": 0.08387082627878344
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 13.201666666666666,
+      "measured_us": 19.462962962962962,
+      "error_percent": -32.17031398667935,
+      "std_us": 0.058021139896568034
+    },
+    {
+      "cores": 96,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 100.1517361111111,
+      "measured_us": 99.35981481481481,
+      "error_percent": 0.7970237241003986,
+      "std_us": 0.10627747929975577
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 4.956724537037037,
+      "measured_us": 7.764814814814815,
+      "error_percent": -36.16429167660387,
+      "std_us": 0.04894062918665008
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 15.673344907407408,
+      "measured_us": 16.139444444444443,
+      "error_percent": -2.8879527956581996,
+      "std_us": 0.03020042787149545
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 3.452002314814815,
+      "measured_us": 4.861666666666666,
+      "error_percent": -28.99549575286633,
+      "std_us": 0.07410171706431158
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 15.673298611111111,
+      "measured_us": 16.34111111111111,
+      "error_percent": -4.086701910654789,
+      "std_us": 0.07322434849570209
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 2.6147569444444443,
+      "measured_us": 3.8472222222222223,
+      "error_percent": -32.03519855595669,
+      "std_us": 0.025473943760234465
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 128,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 15.671076388888888,
+      "measured_us": 14.405740740740741,
+      "error_percent": 8.783551439112491,
+      "std_us": 0.02930306144673098
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 27.74185185185185,
+      "measured_us": 42.071851851851854,
+      "error_percent": -34.06077785798546,
+      "std_us": 0.08795336399867335
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc0",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 114.75,
+      "measured_us": 113.81351851851852,
+      "error_percent": 0.8228209563076794,
+      "std_us": 0.1105771738898202
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 17.29712962962963,
+      "measured_us": 24.648888888888887,
+      "error_percent": -29.825925592018265,
+      "std_us": 0.0728117063501375
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "noc1",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 114.74988425925926,
+      "measured_us": 113.84759259259259,
+      "error_percent": 0.7925434751137495,
+      "std_us": 0.06886485044553677
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "balanced",
+      "traffic": "write",
+      "estimated_us": 14.44150462962963,
+      "measured_us": 21.813333333333333,
+      "error_percent": -33.795058238250476,
+      "std_us": 0.14829203198072105
+    },
+    {
+      "cores": 110,
+      "payload_bytes": 1024,
+      "batch": 16,
+      "mode": "split",
+      "banks": "hotspot",
+      "traffic": "write",
+      "estimated_us": 114.74988425925926,
+      "measured_us": 113.63888888888889,
+      "error_percent": 0.977654200277045,
+      "std_us": 0.021538111816754073
+    }
+  ],
+  "source_sha256": {
+    "tools/perf_calculator/noc_routing_model.py": "bce984a575215c3df1036657b317befa1b9017b012e7c40b6c595e86081b8f6a",
+    "tools/perf_calculator/routing.py": "2c8d1747a68e90d988e6facdfbb2181d75a67908d26afa536e4380e5501a951b",
+    "tools/perf_calculator/topology_bh.json": "ba7caebde8352feef126253023f315d5a8c0ecf44046af51f1f486ac509c20a2",
+    "tools/perf_calculator/write_probe_bh.jsonl": "fdb8a11197f9f958e0314d9c4550a1f61d7bb46d868d314d5f45250db6c9f31c",
+    "/tmp/noc-write-validation/phase2_measured.jsonl": "d9c53a51baf6fe90f88b271af6bd376e946b531d1fcfbb221d90ae63c0e657b7",
+    "tests/ttnn/unit_tests/operations/examples/test_noc_transport.py": "2e5611c88c72256f5334139f2f4ae311186a9cfd7d80cf9034775efe76236a38"
+  },
+  "limitations": [
+    "Single-core issue scopes supply empirical issue intervals, not total-runtime fitting.",
+    "Single-core cases informed first-command timing correction; multicore predictions were frozen before measurement.",
+    "Balanced multicore timing is substantially underestimated; no fitted penalty applied.",
+    "No synchronized core start; metric is max local scope duration, not global earliest-start/latest-end.",
+    "Mixed read/write traffic not hardware validated."
+  ]
+}
