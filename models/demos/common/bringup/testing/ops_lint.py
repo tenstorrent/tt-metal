@@ -16,6 +16,7 @@ and every op folder a README.md with SECTIONS. Checks:
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -87,6 +88,36 @@ def doc_problems(root: Path, folders: list[str] | None = None) -> list[str]:
     return out
 
 
+def _dotted(node) -> str:
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _calls(text: str, names: set, pats: dict) -> list[tuple[int, str]]:
+    """F174: (line, op) of real calls to the listed stock ops: the parsed code, never a name inside a string or comment
+    (DeepSeek-V4.1 P.22: a Setting's help text naming the stock op cost a whole agent attempt). A file that does not
+    parse falls back to the line pattern outside comments."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return [
+            (n, s)
+            for n, ln in enumerate(text.splitlines(), 1)
+            if not ln.lstrip().startswith("#")
+            for s, pat in pats.items()
+            if pat.search(ln)
+        ]
+    return sorted(
+        (c.lineno, _dotted(c.func)) for c in ast.walk(tree) if isinstance(c, ast.Call) and _dotted(c.func) in names
+    )
+
+
 def stock_problems(repo: Path, model_dir: str, files: list[str], breadcrumbs: Path, base: str | None = "HEAD"):
     index = parse_index((repo / FORKS / "INDEX.md").read_text()) if (repo / FORKS / "INDEX.md").exists() else {}
     alt: dict[str, list[str]] = {}
@@ -106,11 +137,14 @@ def stock_problems(repo: Path, model_dir: str, files: list[str], breadcrumbs: Pa
         if not p.is_file():
             continue
         had = _base_lines(repo, rel, base)
-        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
-            if line.lstrip().startswith("#") or line.strip() in had:
+        text = p.read_text(errors="replace")
+        lines = text.splitlines()
+        for n, s in _calls(text, set(alt), pats):
+            line = lines[n - 1] if 0 < n <= len(lines) else ""
+            if line.strip() in had:
                 continue
-            for s, pat in pats.items():
-                if pat.search(line) and f"stock {s} instead of".lower() not in notes:
+            if True:
+                if f"stock {s} instead of".lower() not in notes:
                     out.append(
                         f"{rel}:{n}: calls {s}; INDEX.md lists {' / '.join(alt[s])} to consider instead: use it, or "
                         f"justify in BREADCRUMBS.md with one line `stock {s} instead of {alt[s][0]}: <reason>`"

@@ -336,3 +336,17 @@ def test_frozen_tests_keep_the_structural_column_factor_under_its_old_name():
     lim = CC.limits(None)
     assert lim["component_col_factor"] == lim["struct_col_factor"]
     assert "component_rel" not in lim and "component_floor" not in lim and "component_row" not in lim
+
+
+def test_freeze_validation_runs_leave_the_task_results_alone(sandbox):
+    """F172: freeze's reference and zero-stub runs wrote their metrics over the task's results (DeepSeek-V4.1
+    C.swa.shared_expert: rel 1.0 everywhere, read as an all-zero shared expert). They write to a scratch dir now."""
+    (sandbox.repo / "tests").mkdir(exist_ok=True)
+    (sandbox.repo / "src").mkdir(exist_ok=True)
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    led = sandbox.tasks(impl_task())
+    res = led.results_dir / "C.1.json"
+    res.parent.mkdir(parents=True, exist_ok=True)
+    res.write_text('{"task": "C.1", "metrics": {"device_rel": {"value": 0.002}}}\n')
+    freeze_task(sandbox.spec, led, "C.1", commit=False)
+    assert res.read_text() == '{"task": "C.1", "metrics": {"device_rel": {"value": 0.002}}}\n'
