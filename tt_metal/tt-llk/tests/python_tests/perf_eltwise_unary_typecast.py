@@ -10,7 +10,9 @@ primitives is gated `#ifndef DISABLE_SFPLOADMACRO`; compiling with
 TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback.
 Running this module twice -- once without the env (macro ON,
 optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
--- gives a clean A/B on the same tree.
+-- gives a clean A/B on the same tree. The last two cases of _TYPECAST_PERF_CASES
+are plain loops with no macro path; they are measured for their own cost and the
+A/B does not apply to them.
 
 Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
@@ -51,10 +53,13 @@ from helpers.test_variant_parameters import (
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
 # including the paths re-introduced by issue #46751.
 #
-# dest_acc is the production setting EXCEPT for the two rows marked below: their
-# macro fast path is gated !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes
-# for 32-bit outputs (typecast.cpp:38-41), so production takes the plain loop. Those
-# rows measure the macro in isolation and their speedup is not production-realized.
+# dest_acc is the production setting EXCEPT for the rows marked below:
+#  * the two "NOT production-reachable" rows: their macro fast path is gated
+#    !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes for 32-bit outputs
+#    (typecast.cpp:38-41), so production takes the plain loop. Those rows measure
+#    the macro in isolation and their speedup is not production-realized;
+#  * the last row: ttnn.typecast runs UInt16 -> Float16_b in 16-bit Dest; the row
+#    measures the kernel's separate 32-bit-Dest arm.
 _TYPECAST_PERF_CASES = [
     # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
     # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
@@ -69,6 +74,15 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
+    # The two plain-loop paths below have no macro arm (the ON/OFF A/B does not
+    # apply) and are here for their own cost: the fp32_to_fp16b rounding loop
+    # carries a NaN guard, and uint16_to_fp16b has a separate 32-bit-Dest arm that
+    # loads the whole Dest word.
+    # fp32_to_fp16b; Float32 needs 32-bit Dest (production).
+    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+    # uint16_to_fp16b, 32-bit-Dest arm -- NOT production's (ttnn runs this pair
+    # in 16-bit Dest, through the macro arm).
+    (DataFormat.UInt16, DataFormat.Float16_b, DestAccumulation.Yes),
 ]
 
 

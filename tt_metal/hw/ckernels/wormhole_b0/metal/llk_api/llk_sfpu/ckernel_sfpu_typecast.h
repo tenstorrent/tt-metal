@@ -31,6 +31,19 @@ constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
 // -128 as SFPIADD's 12-bit signed immediate
 constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 
+// +infinity as an SFPLOADI FLOATB (upper 16 bits) immediate; any |x| above it is a NaN.
+constexpr std::uint32_t TYPECAST_FP32_INF_IMM16 = 0x7F80;
+
+// The fp32 quiet-NaN mantissa (bit 22 alone) as SFPSETMAN's 12-bit immediate, which the
+// instruction places at mantissa bits 22..11.
+constexpr std::uint32_t TYPECAST_FP32_QUIET_NAN_MAN_IMM12 = 0x800;
+
+// SFPSETMAN mod1 selector that takes the new mantissa from the immediate.
+constexpr std::uint32_t SFPSETMAN_MOD1_ARG_IMM = 1;
+
+// SFPSETSGN mod1 selector that takes the new sign from the immediate.
+constexpr std::uint32_t SFPSETSGN_MOD1_ARG_IMM = 1;
+
 // Disarms the SFPLOADMACRO "Misc" / Load-Macro-Control config that the typecast init functions program
 // unconditionally (the init dispatch passes only APPROX, so it cannot see is_fp32_dest_acc_en and always arms
 // the macro). The 32-bit Dest (is_fp32_dest_acc_en) typecast paths fall back to a plain TTI_ loop that never
@@ -107,37 +120,57 @@ inline void calculate_typecast_fp32_to_uint16() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_uint16_to_fp16b() {
+    if constexpr (is_fp32_dest_acc_en) {
+        // 32-bit Dest: the UInt16 datum is the low half of the 32-bit word and a 16-bit (LO16)
+        // load reads the other half, so load the whole word and keep the low 16 bits (LREG1 =
+        // UINT16_LOW_MASK, loaded by init_typecast_uint16_to_fp16b), as
+        // calculate_typecast_uint16_to_fp32 does. One plain loop for both builds: the macro
+        // below is tied to the LO16 load.
+        // The init still armed the macro Misc word, so disarm the leftover state first (WH
+        // hangs otherwise running a plain loop with it; see disarm_sfploadmacro_misc, which is
+        // empty when SFPLOADMACRO is disabled).
+        disarm_sfploadmacro_misc();
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+        }
+    } else {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-    }
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+        }
 #else
-    // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple        | MAD | Round            | Store   |
-    // - | ---- | ------------- | --- | ---------------- | ------- |
-    // 0 | [v]  |               |     |                  |         |
-    // 0 | ...  | [v] = cast(v) |     |                  |         |
-    // 0 | ...  |               |     | [v] L16 = rnd(v) |         |
-    // 0 | ...  |               |     |                  | [v] L16 |
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row.
+        //
+        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+        //
+        // t | Load | Simple        | MAD | Round            | Store   |
+        // - | ---- | ------------- | --- | ---------------- | ------- |
+        // 0 | [v]  |               |     |                  |         |
+        // 0 | ...  | [v] = cast(v) |     |                  |         |
+        // 0 | ...  |               |     | [v] L16 = rnd(v) |         |
+        // 0 | ...  |               |     |                  | [v] L16 |
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_2, v >> 2);
-    }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
+        for (int d = 0; d < ITERATIONS; d++) {
+            int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+            TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_2, v >> 2);
+        }
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPNOP;
 #endif
+    }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -280,10 +313,29 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
+    //
+    // Round-to-nearest-even on the bit pattern (+0x7FFF + lsb, then clear the low 16 bits) is
+    // only valid outside NaN: on a NaN the add can carry out of the mantissa (0x7FFFFFFF ->
+    // 0x80000000, a signed zero) and the mask can clear every mantissa bit a low-payload NaN
+    // had (0x7F800001 -> 0x7F800000, infinity). Infinity itself passes the rounding unchanged
+    // (its lsb and low half are 0). So NaN lanes, found as |x| > +inf the way
+    // ckernel_sfpu_comp.h does, are replaced by the canonical quiet NaN with the input sign
+    // (sign | 0x7FC00000) before the rounding: its low half is zero, so the add cannot carry
+    // out of it and the mask leaves it as it is. The payload is not kept.
+    constexpr std::uint32_t ABS_V = p_sfpu::LREG2;
+    constexpr std::uint32_t INF = p_sfpu::LREG3;
+    TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, TYPECAST_FP32_INF_IMM16);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG1, ABS_V, SFPSETSGN_MOD1_ARG_IMM);  // lreg[2] = |x|
+        // LaneEnabled = |x| > +inf (NaN)
+        TTI_SFPIADD(0, INF, ABS_V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_LT0);
+        // lreg[1] = (lreg[1] & 0x80000000) | 0x7FC00000
+        TTI_SFPSETMAN(TYPECAST_FP32_QUIET_NAN_MAN_IMM12, p_sfpu::LREG1, p_sfpu::LREG1, SFPSETMAN_MOD1_ARG_IMM);
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);                            // lreg[0] >>= 16
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                            // lreg[0] &= 1
         TTI_SFPIADD(0, p_sfpu::LREG13, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[1] += 0x7FFF
@@ -827,7 +879,15 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp16b() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+#else
+    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_fp16b falls
+    // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
+    // so that path is correct; the macro-programming below only targets LREG0, so LREG1
+    // survives. The 16-bit Dest macro path does not read LREG1 (it only uses it as a VD).
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
+
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);
 
