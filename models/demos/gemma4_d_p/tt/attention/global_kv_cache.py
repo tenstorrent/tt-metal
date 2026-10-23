@@ -21,6 +21,8 @@ own permutations.
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
 import ttnn
@@ -148,6 +150,45 @@ def _gather_columns(tensor: ttnn.Tensor, columns: torch.Tensor, memory_config) -
     )
 
 
+_DEVICE_PERMUTATION_CACHE: dict[tuple, ttnn.Tensor] = {}
+
+
+def _permute_columns(tensor: ttnn.Tensor, columns: torch.Tensor, memory_config) -> ttnn.Tensor:
+    """_gather_columns for a bfloat16 tensor, as a matmul with a one-hot selection matrix. With HiFi4 and fp32
+    accumulation each output is one input times 1.0, so the result is bit-exact, and the matmul is far cheaper than
+    ttnn.gather's per-element reads."""
+    device = tensor.device()
+    width = int(tensor.shape[-1])
+    cols = tuple(int(x) for x in columns.tolist())
+    key = (id(device), width, cols)
+    selection = _DEVICE_PERMUTATION_CACHE.get(key)
+    if selection is None:
+        matrix = torch.zeros(1, 1, width, len(cols), dtype=torch.bfloat16)
+        matrix[0, 0, cols, range(len(cols))] = 1
+        selection = ttnn.from_torch(
+            matrix,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        _DEVICE_PERMUTATION_CACHE[key] = selection
+    return ttnn.matmul(
+        tensor,
+        selection,
+        memory_config=memory_config,
+        compute_kernel_config=_exact_matmul_config(device.arch()),
+    )
+
+
+@functools.cache
+def _exact_matmul_config(arch):
+    return ttnn.init_device_compute_kernel_config(
+        arch, math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+
 def pack_global_query_device(
     query: ttnn.Tensor,
     packed_q_scale_weight: ttnn.Tensor | None,
@@ -230,7 +271,7 @@ def pack_global_kv_device(
             None,
             memory_config=memory_config,
         )
-        k_rotary = _gather_columns(roped, interleave, memory_config)
+        k_rotary = _permute_columns(roped, interleave, memory_config)
         for tensor in (active_value, scaled, roped):
             tensor.deallocate(True)
         if owns_active_rope:

@@ -10,6 +10,8 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
     GLOBAL_HEAD_DIM,
     GLOBAL_PACKED_DIM,
     GLOBAL_ROTARY_DIM,
+    _gather_columns,
+    _permute_columns,
     global_kv_indices,
     pack_global_kv_device,
     pack_global_kv_reference,
@@ -244,3 +246,29 @@ def test_device_packed_global_transforms_match_reference(mesh_device):
     assert_with_pcc(pack_global_kv_reference(canonical_k, value.float()), actual_packed, 0.999)
     assert_with_pcc(pack_global_query_reference(canonical_q.float(), gamma.float()), actual_q, 0.999)
     assert_with_pcc(value.float(), actual_v, 0.9999)
+
+
+@parametrize_mesh_with_fabric()
+def test_permute_columns_matches_gather_bit_exact(mesh_device):
+    """The one-hot matmul must reproduce ttnn.gather bit for bit, over a wide range of bfloat16 magnitudes."""
+    torch.manual_seed(2)
+    x = torch.randn(1, 1, 256, GLOBAL_ROTARY_DIM) * torch.logspace(-8, 8, GLOBAL_ROTARY_DIM)
+    x = x.bfloat16()
+    half = GLOBAL_ROTARY_DIM // 2
+    interleave = torch.stack((torch.arange(half), torch.arange(half, GLOBAL_ROTARY_DIM)), dim=1).reshape(-1)
+    tt_x = ttnn.from_torch(
+        x,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def to_torch(tensor):
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+
+    permuted = to_torch(_permute_columns(tt_x, interleave, ttnn.DRAM_MEMORY_CONFIG))
+    gathered = to_torch(_gather_columns(tt_x, interleave, ttnn.DRAM_MEMORY_CONFIG))
+    assert torch.equal(gathered, x[..., interleave])
+    assert torch.equal(permuted, gathered)
