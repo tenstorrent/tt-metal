@@ -105,7 +105,7 @@ inline void send_notification(
     // Notify mailbox that the packets have been sent
     connection.wait_for_empty_write_slot();
     RECORD_FABRIC_HEADER(packet_header);
-    connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    connection.send_payload_flush_blocking_from_address((uint32_t)(uintptr_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 inline void send_packet(
@@ -125,7 +125,7 @@ inline void send_packet(
     RECORD_FABRIC_HEADER(packet_header);
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    connection.send_payload_blocking_from_address((uint32_t)(uintptr_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 // connect to edm
