@@ -52,6 +52,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 #include "tensor_shape.h"
 
+#ifdef BCAST_COL_SHAPE_CONTRACT
+// Compile-time contract of the shape predicate the unpack init and math execute assert on. The
+// harness passes the face grids (face_r_dim, num_faces_r_dim, num_faces_c_dim) it derives from the
+// tile dimensions, so a predicate that admitted a one-face-column or short-face tile again fails this
+// translation unit instead of trapping on the device.
+struct FaceGrid
+{
+    std::uint8_t face_r_dim;
+    std::uint8_t num_faces_r_dim;
+    std::uint8_t num_faces_c_dim;
+};
+
+constexpr bool bcast_col_shape_accepted(const FaceGrid grid)
+{
+    return ckernel::validate_tensor_shape_sub_bcast_col_custom_(
+        ckernel::make_tensor_shape(grid.face_r_dim, ckernel::MAX_FACE_C_DIM, grid.num_faces_r_dim, grid.num_faces_c_dim));
+}
+
+template <std::size_t N>
+constexpr bool bcast_col_shapes_all(const FaceGrid (&grids)[N], const bool accepted)
+{
+    for (const FaceGrid& grid : grids)
+    {
+        if (bcast_col_shape_accepted(grid) != accepted)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr FaceGrid BCAST_COL_ACCEPTED_GRIDS[] = {BCAST_COL_SHAPE_CONTRACT_ACCEPTED};
+constexpr FaceGrid BCAST_COL_REJECTED_GRIDS[] = {BCAST_COL_SHAPE_CONTRACT_REJECTED};
+static_assert(bcast_col_shapes_all(BCAST_COL_ACCEPTED_GRIDS, true), "custom bcast-col shape predicate must accept the 32x32 and 16x32 tiles");
+static_assert(bcast_col_shapes_all(BCAST_COL_REJECTED_GRIDS, false), "custom bcast-col shape predicate must reject one-face-column and short-face tiles");
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
