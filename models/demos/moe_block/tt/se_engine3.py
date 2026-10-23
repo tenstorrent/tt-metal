@@ -33,6 +33,7 @@ NSEM_OWN = 2 + 2 * NWS
 # (the router logits on the engine, SE_RTR: words of a zeroed L1 tensor - a K chunk of x rows / W_r^T landed (the
 # round), the leads' acks - 16 B apart; the semaphore ids are all taken by the kernel_lib families)
 RXR, RWR, RXA, RWA = 0, 16, 32, 48
+RGATE = 64  # (every engine core's partials written: the W streams' gate, SE_RTR_GATE)
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
 RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12)  # (down + reduce-scatter CBs)
@@ -240,7 +241,7 @@ void kernel_main() {
     const uint32_t n0d = get_arg_val<uint32_t>(a++);
 #ifdef SE_RTR
     const uint32_t R0 = a;  // (the router logits' args)
-    a += 12 + SE_RB;
+    a += 12 + 3 * MT;
 #endif
     const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
     const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
@@ -272,7 +273,7 @@ void kernel_main() {
         // the last round's chunk: its slot reserved again), read the chunk from DRAM, multicast it and set the round
         DeviceZoneScopedN("SE-RTRLD");
         const bool lx = cxv == get_arg_val<uint32_t>(R0 + 7), lw = etc && cy == 0;
-        const bool hw = get_arg_val<uint32_t>(R0 + 11 + SE_RB);
+        const bool hw = get_arg_val<uint32_t>(R0 + 9);
         const uint32_t x0 = get_arg_val<uint32_t>(R0 + 6), x1 = get_arg_val<uint32_t>(R0 + 7), yv = get_arg_val<uint32_t>(R0 + 8);
         const auto xg = TensorAccessor(rx_args, get_arg_val<uint32_t>(R0), 2048);
         const auto wg2 = TensorAccessor(rw_args, get_arg_val<uint32_t>(R0 + 1), 2048);
@@ -321,18 +322,32 @@ void kernel_main() {
     {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
         DeviceZoneScopedN("SE-RTROUT");
         cb_wait_front(SE_RO, SE_ETC * MT);
-        const uint32_t ro = get_read_ptr(SE_RO), hold = get_arg_val<uint32_t>(R0 + 9 + SE_RB);
-        const uint32_t ctr = get_arg_val<uint32_t>(R0 + 10 + SE_RB);
+        // (row tile r of mine: my own owner's block into its router core's HOLD, another owner's straight into the
+        // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
+        const uint32_t ro = get_read_ptr(SE_RO);
         for (uint32_t r = 0; r < MT; ++r) {
-            const uint32_t R = cy * MT + r, bb = R / SE_RB, j = R % SE_RB;  // (row tile R: block bb, router core j)
-            const uint32_t jw = get_arg_val<uint32_t>(R0 + 9 + j), jx = jw & 0xFFFF, jy = jw >> 16;
+            const uint32_t dw = get_arg_val<uint32_t>(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
+            const uint32_t base = get_arg_val<uint32_t>(R0 + 11 + 3 * r), ctr = get_arg_val<uint32_t>(R0 + 12 + 3 * r);
             for (uint32_t e = 0; e < etc; ++e)
-                noc_async_write(ro + (e * MT + r) * 4096, get_noc_addr(jx, jy, hold + (bb * SE_ET + re0 + e) * 4096), 4096);
-            noc_async_write_barrier();  // (landed before the count: the router reads HOLD on it)
-            if (etc) noc_semaphore_inc(get_noc_addr(jx, jy, ctr), etc);
+                noc_async_write(ro + (e * MT + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
+            noc_async_write_barrier();  // (landed before the count)
+            if (etc) noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
         }
         cb_pop_front(SE_RO, SE_ETC * MT);
+#ifdef SE_RTR_GATE
+        {  // (my partials are written: router core 0 counts every engine core's, then opens the W gate)
+            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + 3 * MT);
+            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + 3 * MT)), 1);
+        }
+#endif
     }
+#ifdef SE_RTR_GATE
+    {  // my W stream waits until every engine core's partials are written (RGATE, multicast by router core 0): the
+       // streams' DRAM reads on NOC1 crowd the partials' writes into the mover column (GLM: in at ~47 us, not ~22)
+        while (*ew(RGATE_ID) == 0) invalidate_l1_cache();
+        *ew(RGATE_ID) = 0;  // (re-armed: the next call's comes after every core's next partials)
+    }
+#endif
     constexpr bool rout = true;
 #else
     constexpr bool rout = true;
@@ -1050,14 +1065,14 @@ class SeEngine3:
         self.crs = cores
         if router is not None:  # (the router phase's words, zero; re-armed by their owners each call)
             self.ewords = ttnn.from_torch(
-                torch.zeros(GX * GY, 16, dtype=torch.int32),
+                torch.zeros(GX * GY, 64, dtype=torch.int32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
-                    ttnn.ShardSpec(cores, (1, 16), ttnn.ShardOrientation.ROW_MAJOR),
+                    ttnn.ShardSpec(cores, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -1344,10 +1359,14 @@ class SeEngine3:
             nct_len += len(ttnn.TensorAccessorArgs(prep["xbuf"]).get_compile_time_args()) if prep is not None else 0
             nd += "#define SE_RTR\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RTR_CB.items())
             nd += f"#define SE_KTO {self.rtr['KTO']}\n#define SE_ETC {self.ETC}\n#define SE_ET {self.rtr['ET']}\n"
-            nd += f"#define SE_RB {len(rtr['cores'])}\n#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
+            nd += f"#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
+            if rtr.get("gate"):
+                nd += f"#define SE_RTR_GATE\n#define RGATE_ID {RGATE}\n"
+
             nd += f"#define RXA_ID {RXA}\n#define RWA_ID {RWA}\n#define SE_KC {self.KC}\n"
             nd += f"#define SE_EW {int(self.ewords.buffer_address())}u\n"
             nd += f"#define SE_RTR_CT0 {nct_len}\n"
+
         if prep is not None:
             nd += "#define SE_PREP\n" + "".join(
                 f"#define SE_{k.upper()} {v}\n" for k, v in PREP_CB.items() if k != "lrdy"
@@ -1495,8 +1514,9 @@ class SeEngine3:
 
     def _rtr_args(self, rtr, cx, cy):
         """The router logits' NCRISC args (SE_RTR): x, W_r^T, my column's expert tiles (valid count, first), RX / RW,
-        the row's NoC x (far end, first core - NOC1 multicasts from the far corner), my row's NoC y, the router cores'
-        NoC (x | y << 16), their HOLD, their counter, my column has experts."""
+        the row's NoC x (far end, first core - NOC1 multicasts from the far corner), my row's NoC y, my column has
+        experts, per row tile of mine its partials' destination (NoC, base, count address: router engine_args), the
+        W gate's counter (NoC, address)."""
         GX, ETC, ET = self.GX, self.ETC, self.rtr["ET"]
         e0 = cx * ETC
         nv = max(0, min(ETC, ET - e0))
@@ -1504,10 +1524,21 @@ class SeEngine3:
         return (
             [int(rtr["x"].buffer_address()), int(rtr["w"].buffer_address()), nv, e0]
             + [self.base + self.off["rx"], self.base + self.off["rw"]]
-            + [virt(GX - 1, cy).x, virt(0, cy).x, virt(0, cy).y]
-            + [c.x | (c.y << 16) for c in rtr["cores"]]
-            + [rtr["hold"], rtr["ctr"], int(nv > 0)]
+            + [virt(GX - 1, cy).x, virt(0, cy).x, virt(0, cy).y, int(nv > 0)]
+            + [w for r in range(self.MT) for w in rtr["dests"][cy * self.MT + r]]
+            + list(rtr["gate_ctr"])
         )
+
+    def gate_target(self):
+        """Where the router cores multicast their "partials in" words (SE_RTR_GATE): the engine grid's NoC rectangle
+        (top-left, bottom-right: a NOC0 multicast), its core count, the words' address (RGATE + 16 j)."""
+        virt = [
+            self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(self.cx0 + c, y))
+            for c in range(self.GX)
+            for y in range(self.GY)
+        ]
+        rect = (min(v.x for v in virt), min(v.y for v in virt), max(v.x for v in virt), max(v.y for v in virt))
+        return dict(rect=rect, n=self.GX * self.GY, addr=int(self.ewords.buffer_address()) + RGATE)
 
     def prep_units(self, p, prep, cx, cy):
         """Dispatch prep's units on core (cx, cy) of chip position p: [(source offset in the PU view, tiles, latent

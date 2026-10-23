@@ -845,3 +845,24 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - SE-RASEND 25 -> 3-4 us a chip. GLM Galaxy-projected 193 -> 182 (packed totals) -> 178 us from the mesh's last
   launch (1.95x of 91; chain binds, SE 160). K3 chain 294 -> 271 (SE path binds: 373). Plans / route words bit-exact
   every call; mock Galaxy builds.
+
+### The partial logits' way out: straight from the engine to the ports (no router-core hop); the W gate (option)
+- SE-RTROUT (the engine's partials into the router cores) 18 -> 42-47 us. Probes (timing only): a quarter of the
+  bytes -> most in by ~20; the writes looped back to the writer -> all done at 19-20 (so: delivery); the router
+  cores' polls spaced out -> no change; the engine's W streams held back 30 us after a core's partials -> all in by
+  21-22. The cores done first start their W streams (DRAM reads on NOC1) and crowd the rest's writes.
+- Bypass (the coordinator's): each engine core writes its own owner's row tiles into the router core's HOLD and every
+  other owner's straight into the port sub-block the router core used to hand it to (router engine_args(coord): per
+  row tile (NoC, base, count)); the router cores wait their own block only (ET) and hand nothing off. The ports'
+  LStream: one word a (unit, core) sub-block (16 a port, a new mailbox region past the routing's), "in" at need =
+  ET tiles (engine) or 1 (a router core's hand-off, the router-core path).
+- The W gate (RouterSpec.w_gate, default off): every engine core counts its partials written on router core 0, which
+  multicasts one word to the engine (a 16-byte-aligned source word: a misaligned one never landed - probe); the
+  engine's W streams wait for it. Gated: partials in at ~22-27 but the SE path +10 us (GLM 173-179); not gated with
+  the bypass: RTROUT 18 -> 30, GLM 166.
+- GLM Galaxy-projected 178 -> 166 us from the mesh's last launch (1.82x of 91; SE path 166, chain 166). K3 chain
+  271 -> 253 (SE path 370 binds). Picks / plans / route words per call as before; the router-core path and the gate
+  pass; mock Galaxy builds.
+- Next in the chain (GLM, from the mesh's last launch): logits in at ~45 (dev 7) / 60-71 (the others: dev 7's
+  partials at its ports ~25, ~35-45 us on the line under the x gather); then on every router core ~14 us from the last
+  arrival to the top-K start (the fin), top-K ~12, rows ~12.

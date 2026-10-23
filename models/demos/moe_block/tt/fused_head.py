@@ -26,6 +26,9 @@ class RouterSpec:
     route_scale: float = 1.0
     logits_first: bool | None = None
     on_engine: bool | None = None  # (the logits' matmul on the engine's cores at the start; None: the head's choice)
+    # (on the engine: its W streams start once every router core has its partials - their DRAM reads would crowd the
+    # partials' writes; None: the head's choice, HeadSE3.router_w_gate)
+    w_gate: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -158,9 +161,10 @@ class HeadSE3:
         if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-            words = (
-                2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4
-            )  # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count)
+            # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count, then the logits
+            # ports' sub-block words: 16 B a (unit, core), 16 a port)
+            self.lw_off = (2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
+            words = self.lw_off + 4 * 16
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -201,8 +205,10 @@ class HeadSE3:
                 prio_first=self.logits_priority(router, latent),
                 on_engine=self.router_on_engine(router, latent),
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
-                words=int(self.mbox.buffer_address()) + 16 * GX * GY,
+                words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
             )
+            if self.router.on_engine and self.router_w_gate(router, latent):
+                self.router.gate = self.eng.gate_target()
         self.routing = None
         if routing is not None:
             from ttnn.bringup.combine_rf.combine_plan import port_luts
@@ -312,6 +318,16 @@ class HeadSE3:
         if router.on_engine is not None:
             return router.on_engine
         return True
+
+    def router_w_gate(self, router, latent):
+        """The engine's W streams gated on every engine core's partials written (RouterSpec.w_gate). Ungated, the
+        cores done with their partials start their W streams (DRAM reads, NOC1) and slow the rest's writes (router
+        cores only: GLM's in at ~47 us, ~22 gated - probe: the W streams held back). With the other owners' partials
+        straight to the ports (5 router + the port cores take them) ungated is 18 -> 30 us, and the gate's later W
+        costs the SE path ~10 us (GLM Galaxy-projected 179 gated, 166 not: both paths 166) - off by default."""
+        if router.w_gate is not None:
+            return router.w_gate
+        return False
 
     def logits_priority(self, router, latent):
         """The ports' logits-vs-x-gather priority. From the Galaxy projections (tests/galaxy_projection.py) and the
@@ -443,7 +459,7 @@ class HeadSE3:
                     xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
                     rtr=(
-                        dict(x=x, w=self.rw[0], **self.router.engine_args())
+                        dict(x=x, w=self.rw[0], gate=self.router.gate is not None, **self.router.engine_args(coord))
                         if self.router is not None and self.router.on_engine
                         else None
                     ),

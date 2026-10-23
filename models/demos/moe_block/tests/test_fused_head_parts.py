@@ -201,9 +201,9 @@ def _router_specs():
     from models.demos.moe_block.tt.fused_head import RouterSpec
 
     # (GLM-type: the logits ahead of the x gather; K3: after it) - the head's choices unless the test overrides them
-    # (HSE3_ON_ENGINE / HSE3_LOGITS_FIRST = 0 | 1: the RouterSpec fields, for A/B runs)
+    # (HSE3_ON_ENGINE / HSE3_LOGITS_FIRST / HSE3_W_GATE = 0 | 1: the RouterSpec fields, for A/B runs)
     o = lambda k: None if os.environ.get(k) is None else bool(int(os.environ[k]))  # noqa: E731
-    kw = dict(on_engine=o("HSE3_ON_ENGINE"), logits_first=o("HSE3_LOGITS_FIRST"))
+    kw = dict(on_engine=o("HSE3_ON_ENGINE"), logits_first=o("HSE3_LOGITS_FIRST"), w_gate=o("HSE3_W_GATE"))
     return {
         "glm": RouterSpec(E=288, K=8, route_scale=2.5, **kw),
         "k3": RouterSpec(E=448, K=16, **kw),
@@ -365,6 +365,8 @@ def test_head_se3(mesh_device, device_params):
 
         def check(k, y):
             xs = xss[k]
+            if os.environ.get("SE_PROBE"):  # (a timing probe: no checks)
+                return 1.0
             if head.router is not None:
                 _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
             if head.latent and "xbuf" not in head.outputs:
@@ -394,6 +396,10 @@ def test_head_se3(mesh_device, device_params):
             return min(ps)
 
         us, pss = _calls(mesh_device, lambda k: head.run(xts[k], w), check)
+        if os.environ.get("SE_RTR_GATE_DBG"):  # PROBE: the engine cores' gate masks (word 60: 0x100 | arrived)
+            for d, t in enumerate(ttnn.get_device_tensors(head.eng.ewords)):
+                m = ttnn.to_torch(t).reshape(-1, 64)[:, 60].tolist()
+                logger.info(f"GATE_DBG dev {d}: masks {sorted(set(hex(v) for v in m))} r {m[:12]}")
         if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":  # (the skew-corrected projection's map: each mesh row's
             # devices by TP position, next to the profile - tests/galaxy_projection.py)
             import json

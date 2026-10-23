@@ -68,8 +68,8 @@ void kernel_main() {
        // with an increment of this counter a tile): all G x ET in -> the compute (RDY)
         DeviceZoneScopedN("SE-RENGWAIT");
         volatile tt_l1_ptr uint32_t* ec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_ENG);
-        noc_semaphore_wait_min(ec, G * ET);
-        noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - G * ET);  // (re-arm)
+        noc_semaphore_wait_min(ec, ET);  // (my own block's tiles: the others' go straight to the ports)
+        noc_semaphore_inc(get_noc_addr(RT_ENG), 0u - ET);  // (re-arm)
         noc_async_atomic_barrier();
         cb_reserve_back(RDY, 1);
         cb_push_back(RDY, 1);
@@ -77,6 +77,20 @@ void kernel_main() {
         // (FINC) would hand HOLD to the ports before the engine's partials landed - stale HOLD: the last call's
         // planner overlay in it, K3's picks 99.10%)
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2) + 112) = 1;
+#ifdef RT_GATE
+        if (get_arg_val<uint32_t>(4) == 0) {  // (router core 0: every engine core's partials written (its count) -> the
+                                              // gate word on every engine core: their W streams start)
+            volatile tt_l1_ptr uint32_t* gc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_GATE_CTR);
+            noc_semaphore_wait_min(gc, RT_GATE_N);
+            noc_semaphore_inc(get_noc_addr(RT_GATE_CTR), 0u - RT_GATE_N);  // (re-arm)
+            noc_async_atomic_barrier();
+            volatile tt_l1_ptr uint32_t* one = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_GATE_SRC);
+            *one = 1;
+            noc_semaphore_set_multicast(reinterpret_cast<uint32_t>(one),
+                                        get_noc_multicast_addr(RT_GATE_X0, RT_GATE_Y0, RT_GATE_X1, RT_GATE_Y1, RT_GATE), RT_GATE_N);
+            noc_async_write_barrier();
+        }
+#endif
     }
 #else
     // W_r^T is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
@@ -513,18 +527,17 @@ void kernel_main() {
 # fused increment of the downstream router core's arrival counter. One dedicated header, flushed per packet.
 LSTREAM = r"""
 struct LStream {
-    uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, u, i, sent;
-    uint32_t seen[8];
+    uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, u, i, sent;
     void init(uint32_t a) {
         r0 = a; nu = get_arg_val<uint32_t>(a); nc = get_arg_val<uint32_t>(a + 1 + 2 * nu);
         const uint32_t t = a + 2 + 2 * nu + nc;
         buf = get_arg_val<uint32_t>(t); word = get_arg_val<uint32_t>(t + 1); zone = get_arg_val<uint32_t>(t + 2);
         actr = get_arg_val<uint32_t>(t + 3); et = get_arg_val<uint32_t>(t + 4); rpl = get_arg_val<uint32_t>(t + 5);
+        need = get_arg_val<uint32_t>(t + 6);  // (a sub-block's word when in: 1 hand-off, or et engine tiles)
         u = 0; i = 0; sent = 0;
-        for (uint32_t c = 0; c < 8; ++c) seen[c] = 0;
     }
     bool done() const { return u >= nu; }
-    static uint32_t len(uint32_t a) { const uint32_t nu = get_arg_val<uint32_t>(a); return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 6; }
+    static uint32_t len(uint32_t a) { const uint32_t nu = get_arg_val<uint32_t>(a); return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 7; }
     // send what is ready (unit u: an owner chip, multi-hop; core i of my link: its partial of that owner's rows);
     // blocking: until everything is sent
     template <typename C, typename H>
@@ -532,13 +545,12 @@ struct LStream {
         while (u < nu) {
             if (i >= nc) { ++u; i = 0; continue; }
             const uint32_t w0 = get_arg_val<uint32_t>(r0 + 1 + 2 * u), mesh = get_arg_val<uint32_t>(r0 + 2 + 2 * u);
-            volatile tt_l1_ptr uint32_t* wd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * i);
+            volatile tt_l1_ptr uint32_t* wd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (u * nc + i));
             invalidate_l1_cache();
-            if (*wd < seen[i] + 1) {
+            if (*wd < need) {
                 if (!blocking) return;
-                noc_semaphore_wait_min(wd, seen[i] + 1);
+                noc_semaphore_wait_min(wd, need);
             }
-            ++seen[i];
             const uint32_t cw = get_arg_val<uint32_t>(r0 + 2 + 2 * nu + i), x = cw & 0xFF, y = (cw >> 8) & 0xFF;
             const uint32_t src0 = buf + ((u * nc + i) * et) * 4096;
             const uint32_t dst0 = zone + (w0 >> 16) * et * 4096;
@@ -559,7 +571,7 @@ struct LStream {
         }
     }
     void rearm() {
-        for (uint32_t c = 0; c < nc; ++c) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * c) = 0;
+        for (uint32_t c = 0; c < nu * nc; ++c) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * c) = 0;
     }
 };
 """
@@ -623,6 +635,7 @@ class RouterStream:
                 ("out", 32 * 4 * K),
                 ("words", 128),
                 ("route", 32 * 4 * 2),
+                ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
             ]:
                 off[k], o = o, al(o + v)
             return off, o
@@ -641,7 +654,8 @@ class RouterStream:
         self.pbuf_sub = (G - 1) * nlink * ET * 4096
         assert self.pbuf_sub <= abytes
         self.pbase, self.words = self.base, words
-        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2)]
+        # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
+        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
         self.arr = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
         ttnn.synchronize_device(mesh_device)
 
@@ -720,7 +734,7 @@ class RouterStream:
         straight to their owners (multi-hop unicast; the owner sums them): no relay chain."""
         p = self._pos(coord)
         if self.xg.chips[coord]["rings"][0][("next" if d == "fwd" else "prev")] is None:
-            return [0, 0] + [0] * 6
+            return [0, 0] + [0] * 7
         bs = self._dests(p, d)
         js = self._port_layout(v)
         virt = self.mesh.worker_core_from_logical_core
@@ -730,7 +744,9 @@ class RouterStream:
             out += [int(n.chip_id) | (p if p < b else p - 1) << 16, int(n.mesh_id)]
         out += [len(js)] + [virt(self.cores[j]).x | virt(self.cores[j]).y << 8 for j in js]
         rpl = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 4096)
-        return out + [self.pbase, self.words, self.base + self.off["arr"], self.arr[0], self.ET, rpl]
+        assert len(bs) * len(js) <= 16, "the port's sub-block words: 16 a port"
+        need = self.ET if self.on_engine else 1  # (engine tiles straight in, or one hand-off of the sub-block)
+        return out + [self.pbase, self.words, self.base + self.off["arr"], self.arr[0], self.ET, rpl, need]
 
     def _ra_src(self, coord, ct0):
         if self.ra is None:
@@ -766,11 +782,30 @@ class RouterStream:
             return [self.ra.addr["rows2"], 0]
         return [self.ra.addr["rows2"], self.ra.pbases[q]] + self._ra_pargs(q)
 
-    def engine_args(self):
-        """What the engine needs to put the partial logits in place (se_engine3 pieces(rtr=)): the router cores' NoC,
-        their HOLD, their counter."""
+    def engine_args(self, coord):
+        """What the engine needs to put chip coord's partial logits in place (se_engine3 pieces(rtr=)): per row tile R
+        (owner block R // RB, router core j = R % RB) its destination - my own block's into router core j's HOLD
+        (its count: the engine counter), another owner's straight into the port sub-block the router core would have
+        handed it to (its word: ET tiles) - as (NoC x | y << 16, base, count address); and the W gate's counter
+        (router core 0: NoC, address)."""
         virt = self.mesh.worker_core_from_logical_core
-        return dict(cores=[virt(c) for c in self.cores], hold=self.base + self.off["hold"], ctr=self.arr[1])
+        p, G, RB, ET = self._pos(coord), self.G, self.RB, self.ET
+        ports = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
+        dests = []
+        for R in range(G * RB):
+            bb, j = R // RB, R % RB
+            if bb == p:
+                c = virt(self.cores[j])
+                dests.append((c.x | c.y << 16, self.base + self.off["hold"] + bb * ET * 4096, self.arr[1]))
+            else:
+                l = j % self.nv
+                js = self._port_layout(l)
+                d = self._dir(p, bb)
+                k = self._dests(p, d).index(bb) * len(js) + js.index(j)
+                pc = ports[(d, l)]
+                dests.append((pc.x | pc.y << 16, self.pbase + k * ET * 4096, self.words + 16 * k))
+        c0 = virt(self.cores[0])
+        return dict(dests=dests, gate_ctr=(c0.x | c0.y << 16, self.arr[2]))
 
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
@@ -790,6 +825,7 @@ class RouterStream:
 
     ra = None  # (the routing exchange + planner riding the router BRISC: routing_stream.RoutingStream)
 
+    gate = None  # (the engine's W-stream gate: se_engine3's gate_target - fused_head sets it with RouterSpec.w_gate)
     prep = None  # (dispatch prep's route words: dict(EPC, torus) - fused_head sets it with a RoutingSpec's prep)
 
     def pieces(self, coord, x, w, b, ix, out, route=None):
@@ -828,7 +864,9 @@ class RouterStream:
             b0 + off["out"],
             self.scale_bits,
         ]
-        hand = [b for d in ("fwd", "bwd") for b in self._dests(p, d)]  # (my partials of the other owners)
+        # (my partials of the other owners - the router cores hand them to the ports; on the engine its cores write
+        # them straight into the ports' sub-blocks: none here)
+        hand = [] if self.on_engine else [b for d in ("fwd", "bwd") for b in self._dests(p, d)]
         hand.sort(key=lambda b: -self._hops(p, b))  # (the farthest first: their way is longest)
         for j, core in enumerate(self.cores):
             # entries = blocks (HOLD slot b: token tile b of my rows); the hand-offs, then my own block's fin
@@ -855,7 +893,7 @@ class RouterStream:
                 d = self._dir(p, bb)
                 u = self._dests(p, d).index(bb)
                 pc = ports[(d, l)]
-                hs += [bb, pc.x, pc.y, self.pbase + (u * len(js) + i) * ET * 4096, self.words + 16 * i]
+                hs += [bb, pc.x, pc.y, self.pbase + (u * len(js) + i) * ET * 4096, self.words + 16 * (u * len(js) + i)]
             b_rt[core.x][core.y] = (
                 [len(hs) // 5]
                 + hs
@@ -880,6 +918,11 @@ class RouterStream:
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
+        if self.on_engine and self.gate is not None:  # (the engine's W-stream gate: se_engine3 gate_target)
+            g = self.gate
+            eng += f"#define RT_GATE {g['addr']}u\n#define RT_GATE_N {g['n']}u\n#define RT_GATE_SRC {self.base + self.off['gate']}u\n"
+            eng += f"#define RT_GATE_CTR {self.arr[2]}u\n"
+            eng += "".join(f"#define RT_GATE_{k} {v}u\n" for k, v in zip(("X0", "Y0", "X1", "Y1"), g["rect"]))
         self.ncrisc = ttnn.KernelDescriptor(
             kernel_source=eng
             + self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
