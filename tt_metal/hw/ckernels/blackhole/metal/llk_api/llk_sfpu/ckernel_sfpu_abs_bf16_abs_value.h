@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_abs_bf16_replay_window.h"
 #include "sfpu/ckernel_sfpu_abs_bf16_abs_value.h"
 
 namespace ckernel::sfpu::bf16::abs {
