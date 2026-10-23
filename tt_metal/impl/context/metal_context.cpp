@@ -115,15 +115,10 @@ ContextId extract_context_id(const IDevice* device) {
     return device_concrete->get_context_id();
 }
 
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
-    return mesh_device->impl().get_context_id();
-}
-
 ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
     ContextId context_id = DEFAULT_CONTEXT_ID;
     if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
+        context_id = mesh_device->impl().get_context_id();
     } else if (device != nullptr) {
         context_id = extract_context_id(device);
     } else {

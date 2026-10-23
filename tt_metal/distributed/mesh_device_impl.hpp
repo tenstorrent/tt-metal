@@ -23,7 +23,7 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
-#include "context/context_types.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
