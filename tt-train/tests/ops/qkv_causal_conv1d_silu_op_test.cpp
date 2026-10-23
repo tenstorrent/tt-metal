@@ -8,6 +8,7 @@
 
 #include <array>
 #include <random>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -30,7 +31,7 @@ xt::xarray<float> random_tensor(const std::vector<size_t>& shape, uint32_t seed)
     std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
     xt::xarray<float> out = xt::empty<float>(shape);
     for (auto& value : out) {
-        value = dist(gen);
+        value = static_cast<float>(bfloat16(dist(gen)));  // exact on the device, so references see the same inputs
     }
     return out;
 }
@@ -77,6 +78,24 @@ Reference reference(const Shape& s, const Problem& p) {
     return ref;
 }
 
+// grad_input in double precision, for checks tighter than the float reference can support.
+xt::xarray<double> grad_input_f64(const Shape& s, const Problem& p) {
+    const size_t T = s.T;
+    const auto f64 = [](const xt::xarray<float>& a) { return xt::xarray<double>(xt::cast<double>(a)); };
+    xt::xarray<double> window = xt::concatenate(xt::xtuple(f64(p.h), f64(p.x)), 1);
+    xt::xarray<double> preact = xt::zeros<double>({size_t{1}, T, size_t{s.C()}});
+    for (size_t j = 0; j < 4; ++j) {
+        preact += f64(p.taps[j]) * xt::view(window, xt::all(), xt::range(j, j + T), xt::all());
+    }
+    xt::xarray<double> sig = 1.0 / (1.0 + xt::exp(-preact));
+    xt::xarray<double> grad_preact = f64(p.grad_y) * sig * (1.0 + preact * (1.0 - sig));
+    xt::xarray<double> grad_window = xt::zeros_like(window);
+    for (size_t j = 0; j < 4; ++j) {
+        xt::view(grad_window, xt::all(), xt::range(j, j + T), xt::all()) += f64(p.taps[j]) * grad_preact;
+    }
+    return xt::view(grad_window, xt::all(), xt::range(3, 3 + T), xt::all());
+}
+
 void expect_close(const xt::xarray<float>& expected, const xt::xarray<float>& actual, const std::string& name) {
     ASSERT_EQ(expected.shape(), actual.shape()) << name;
     const float scale = static_cast<float>(xt::amax(xt::abs(expected))());
@@ -121,14 +140,10 @@ protected:
     }
 };
 
-// Runs the fused backward directly and checks every gradient against the xtensor reference.
-void check_metal_bw(
-    const Shape& s, uint32_t chunk, uint32_t splits, uint32_t seed, const std::string& tag, float x_scale = 1.0F) {
+// Runs the fused backward directly: (grad_input, grad_tap0..3).
+auto run_metal_bw(const Shape& s, const Problem& p, uint32_t chunk, uint32_t splits) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
-    const auto p = random_problem(s, seed, x_scale);
-    const auto ref = reference(s, p);
-
     auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
     auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
     std::array<ttnn::Tensor, 4> taps;
@@ -138,9 +153,17 @@ void check_metal_bw(
     auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
     auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
     auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
-
-    auto [grad_input, g0, g1, g2, g3] = metal::qkv_causal_conv1d_silu_bw(
+    return metal::qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, taps[0], taps[1], taps[2], taps[3], s.Q, s.K, s.V, chunk, splits);
+}
+
+// Checks every gradient against the xtensor reference.
+void check_metal_bw(
+    const Shape& s, uint32_t chunk, uint32_t splits, uint32_t seed, const std::string& tag, float x_scale = 1.0F) {
+    using namespace ttml;
+    const auto p = random_problem(s, seed, x_scale);
+    const auto ref = reference(s, p);
+    auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, p, chunk, splits);
     expect_close(ref.grad_input, core::to_xtensor(grad_input), tag + " grad_input");
     const std::array<ttnn::Tensor, 4> grads = {g0, g1, g2, g3};
     for (size_t j = 0; j < 4; ++j) {
@@ -211,8 +234,19 @@ TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
 
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
 TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
-    check_metal_bw({256, 128, 64, 64}, 256, 4, 7, "large preact", /*x_scale=*/4.0F);
-    check_metal_bw({256, 128, 64, 64}, 64, 3, 8, "large preact chunk 64", /*x_scale=*/4.0F);
+    using namespace ttml;
+    constexpr double tolerance = 0.01;  // of max|grad_input|, per element; a bf16 sigmoid gives several percent
+    for (const auto& [chunk, splits, seed] : {std::tuple{256U, 4U, 7U}, std::tuple{64U, 3U, 8U}}) {
+        const Shape s{256, 128, 64, 64};
+        const auto p = random_problem(s, seed, /*x_scale=*/4.0F);
+        const auto expected = grad_input_f64(s, p);
+        const auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, p, chunk, splits);
+        const xt::xarray<double> actual = xt::cast<double>(core::to_xtensor(grad_input));
+        const double scale = xt::amax(xt::abs(expected))();
+        const double max_diff = xt::amax(xt::abs(actual - expected))();
+        EXPECT_LE(max_diff, tolerance * scale)
+            << "chunk " << chunk << ": max|diff| = " << max_diff << " of max|grad_input| = " << scale;
+    }
 }
 
 TEST_F(QkvCausalConv1dSiluTest, RandomShapes) {
