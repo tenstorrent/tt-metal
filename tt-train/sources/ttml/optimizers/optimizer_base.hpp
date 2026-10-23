@@ -78,12 +78,15 @@ public:
     // LRs at construction.
     [[nodiscard]] virtual std::vector<float> get_initial_group_lrs();
 
-    // Deprecated single-LR API, kept for existing callers; use the per-group methods above instead. get_lr() is the
-    // first group's LR, and set_lr(lr) applies the same factor lr / initial_lr[0] to every group's initial LR, so the
-    // groups keep their ratios.
+    // Deprecated single-LR API, kept for existing callers and to be removed; use the per-group methods above instead.
+    // - get_lr(): the first group's LR.
+    // - set_lr(lr): sets the first group to lr and scales the others by the same factor, keeping their ratios. It
+    //   scales relative to the initial LRs once a scheduler has recorded them, and to the current LRs before that.
+    //   It doesn't record them itself, so a scheduler attached afterwards takes the LRs set_lr left as its base.
+    //   Without a scheduler, set_lr(0) loses the ratios: a later set_lr(lr) gives every group lr.
+    // - get_initial_lr(): the first group's initial LR (see get_initial_group_lrs).
     [[nodiscard]] float get_lr() const;
     void set_lr(float lr);
-    // The first group's initial LR (see get_initial_group_lrs).
     [[nodiscard]] float get_initial_lr();
 
     virtual void print_stats() const;

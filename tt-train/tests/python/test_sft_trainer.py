@@ -279,7 +279,7 @@ def test_sft_config_custom_values():
 # ---------------------------------------------------------------------------
 
 
-def _stepped_lrs(monkeypatch, start_step=0, **lr_kwargs):
+def _stepped_lrs(monkeypatch, start_step=0, lr=1.0, **lr_kwargs):
     """LRs a 4-step SFTTrainer run steps its optimizer with, from start_step on (as after load_checkpoint)."""
     from ttml.modules import AbstractModuleBase
     from ttml.trainers import SFTConfig, SFTTrainer
@@ -289,11 +289,11 @@ def _stepped_lrs(monkeypatch, start_step=0, **lr_kwargs):
             return None
 
     class MockOptimizer(ttml.optimizers.OptimizerBase):
-        """One param group with LR 1.0, so the recorded LRs are the schedule's factors."""
+        """One param group; records the LR of every step()."""
 
         def __init__(self):
             super().__init__(ttml.NamedParameters())
-            self.lr, self.stepped_lrs = 1.0, []
+            self.lr, self.stepped_lrs = lr, []
 
         def zero_grad(self):
             pass
@@ -308,6 +308,7 @@ def _stepped_lrs(monkeypatch, start_step=0, **lr_kwargs):
             (self.lr,) = lrs
 
     monkeypatch.setattr(SFTTrainer, "_build_loss_fn", lambda self: None)  # needs a device mesh; unused here
+    monkeypatch.setattr("ttml.trainers.sft_trainer.profiler_marker", lambda *args, **kwargs: None)
     optimizer = MockOptimizer()
     trainer = SFTTrainer(
         NoParamsModel(),
@@ -336,7 +337,8 @@ def test_sft_trainer_lr_lambda_per_step_and_on_resume(monkeypatch):
 def test_sft_trainer_deprecated_lr_schedule(monkeypatch, expect_error):
     """The deprecated lr_schedule gives the same LRs, warns, and can't be combined with lr_lambda."""
     factors = [0.25, 0.5, 0.75, 1.0]
+    absolute_lrs = [0.5 * f for f in factors]
     with pytest.warns(DeprecationWarning, match="lr_schedule"):
-        assert _stepped_lrs(monkeypatch, lr_schedule=lambda step: factors[step]) == factors
+        assert _stepped_lrs(monkeypatch, lr=0.5, lr_schedule=lambda step: absolute_lrs[step]) == absolute_lrs
     with expect_error(ValueError, "not both"):
         _stepped_lrs(monkeypatch, lr_lambda=lambda step: 1.0, lr_schedule=lambda step: 1.0)
