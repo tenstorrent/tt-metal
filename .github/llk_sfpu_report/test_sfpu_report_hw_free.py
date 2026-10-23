@@ -231,12 +231,14 @@ def test_binary_ops_are_their_own_family():
 def test_detection_compiles_modules_and_kernels_that_exist(family):
     module = runner.PYTHON_TESTS / detect.MODULES[family]
     assert module.is_file()
+    source_users = [
+        module,
+        runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py",
+        runner.PYTHON_TESTS / "test_eltwise_unary_sfpu.py",
+    ]
     for source in detect.SOURCES[family]:
         assert (runner.TOOL_LLK / "tests" / "sources" / source).is_file()
-        assert (
-            f"sources/{source}"
-            in module.read_text() + (runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py").read_text()
-        )
+        assert any(f"sources/{source}" in user.read_text() for user in source_users)
 
 
 def test_the_accuracy_driver_is_in_the_harness_only_while_it_runs(monkeypatch, tmp_path):
@@ -288,6 +290,18 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     }
     assert builders
     assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
+
+
+def test_the_unary_accuracy_driver_uses_the_shared_runner():
+    """Unary accuracy must call eltwise_unary_sfpu. A hand-built TestConfig keeps the
+    old block-count contract, and the report then compiles no unary accuracy variant."""
+    import ast
+
+    tree = ast.parse(accuracy.DRIVER_SOURCE.read_text())
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
+    called = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert "eltwise_unary_sfpu" in called
+    assert {"NUM_BLOCKS", "NUM_TILES_IN_BLOCK", "get_num_blocks_and_num_tiles_in_block"} & imported == set()
 
 
 @pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])

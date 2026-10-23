@@ -31,27 +31,12 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
-    FastMode,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
-)
 from helpers.ulp_sweep import golden_input, stimuli_format_for, sweep_spec
 
 pytestmark = pytest.mark.accuracy
@@ -122,6 +107,11 @@ def special_values(fmt):
 
 
 def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
+    # The shared runner emits the unified kernel's contract (dest_sync, PERF_RUN_TYPE,
+    # LOOP_FACTOR, ...). A hand-built TestConfig here fails to compile that kernel,
+    # and the accuracy job swallows the error.
+    from test_eltwise_unary_sfpu import eltwise_unary_sfpu
+
     src_B = src_A.clone()
     # As the nightly ULP sweep computes it: on what the kernel receives (a -0.0 the
     # unpack turns into +0.0 is +0.0 to the golden too).
@@ -133,43 +123,18 @@ def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
         formats.input_format,
         dimensions,
     )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(dimensions, dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
+    result = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
-        unpack_to_dest=(formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes),
+        approx_mode=approx_mode,
+        mathop=mathop,
+        input_dimensions=dimensions,
+        src_A=src_A,
+        src_B=src_B,
+        tile_cnt_A=tile_cnt,
+        tile_cnt_B=tile_cnt,
+        check_golden=False,
     )
-    result = configuration.run().result
     return golden, torch.tensor(result, dtype=format_dict[formats.output_format])
 
 
