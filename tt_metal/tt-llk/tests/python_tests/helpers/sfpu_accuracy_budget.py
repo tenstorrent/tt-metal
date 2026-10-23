@@ -39,8 +39,6 @@ from itertools import product
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Type, TypeVar
 
-import yaml
-
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
@@ -51,6 +49,7 @@ from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read i
     has_ulp_gate,
     ulp_dtype,
 )
+from .ulp_provenance import PROVENANCE_FIELDS, check_provenance, load_yaml
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -417,40 +416,11 @@ def _enum_member(enum_cls: Type[E], value: Any, where: str) -> E:
         ) from None
 
 
-def _refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
-    """PyYAML keeps the last of two identical mapping keys without a word, so a
-    copy-pasted op name would drop the earlier op's whole table. Checked on the node
-    tree the standard ``SafeLoader`` composes, before it constructs anything. ``<<``
-    merge keys are skipped: overriding a merged field is what they are for."""
-    if isinstance(node, yaml.MappingNode):
-        seen = set()
-        for key, value in node.value:
-            if key.tag == "tag:yaml.org,2002:merge":
-                continue
-            if key.value in seen:
-                raise ValueError(
-                    f"{where}: duplicate entry for {key.value!r}. YAML keeps only the "
-                    "last, so the earlier one would vanish with nothing to catch it."
-                )
-            seen.add(key.value)
-            _refuse_duplicate_keys(value, where)
-    elif isinstance(node, yaml.SequenceNode):
-        for item in node.value:
-            _refuse_duplicate_keys(item, where)
-
-
 def _read_yaml(path: Path) -> Dict[str, Any]:
-    """*path* through PyYAML's ``SafeLoader``, refusing duplicate keys."""
-    with open(path, encoding="utf-8") as handle:
-        loader = yaml.SafeLoader(handle)
-        try:
-            node = loader.get_single_node()
-            if node is None:
-                return {}
-            _refuse_duplicate_keys(node, path.name)
-            loaded = loader.construct_document(node)
-        finally:
-            loader.dispose()
+    """*path* through :func:`ulp_provenance.load_yaml` and the refusals it makes."""
+    loaded = load_yaml(path.read_text(encoding="utf-8"), path.name)
+    if loaded is None:
+        return {}
     if not isinstance(loaded, dict):
         raise ValueError(
             f"{path.name}: expected a mapping at the top level, got {type(loaded).__name__}"
@@ -461,7 +431,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 def _row_to_entry(
     where: str, row: Dict[str, Any]
 ) -> Tuple[BudgetKey, AccuracyContract]:
-    unknown = set(row) - set(_KEY_FIELDS) - _CONTRACT_FIELDS
+    unknown = set(row) - set(_KEY_FIELDS) - _CONTRACT_FIELDS - set(PROVENANCE_FIELDS)
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
     key = BudgetKey(
@@ -475,7 +445,10 @@ def _row_to_entry(
     metric = _enum_member(Metric, contract.pop("metric", "ulp"), where)
     # AccuracyContract.__post_init__ owns the rest of the validation, so a row that is
     # half-converted between the two metrics is refused there rather than here.
-    return key, AccuracyContract(metric=metric, **contract)
+    entry = key, AccuracyContract(metric=metric, **contract)
+    # The resolved metric, not the raw scalar: `metric: TOLERANCE` names the member too.
+    check_provenance(where, row, tolerance=metric is Metric.TOLERANCE)
+    return entry
 
 
 def _load_table(path: Path = _TABLE_PATH) -> Dict[MathOperation, _BudgetTable]:

@@ -1,135 +1,213 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-//
-// Streaming profiler device layer: relay bring-up, host<->device clock sync, quiesce, and the teardown
-// completeness check for one MeshDevice's local Blackhole devices.
 #pragma once
 
-#include <chrono>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/streaming_profiler/capture_context.hpp"
+
+namespace tt {
+class Cluster;
+}
+namespace tt::llrt {
+class RunTimeOptions;
+}
 
 namespace tt::tt_metal {
 
 namespace distributed {
 class MeshDevice;
-class MeshCoordinate;
 class D2HSocket;
 }  // namespace distributed
 class Program;
 class IDevice;
+class Hal;
+class MetalContext;
 
 namespace streaming_profiler {
 
-// One device whose relays came up: the sockets the receiver ingests and what its consumers need to decode them.
-struct CapturedDevice {
-    uint32_t chip_id = 0;
-    int numa_node = -1;                                            // the node the sockets bind their FIFOs to
-    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // one per relay, in relay order
-    CaptureContext::Device ctx;
-    DeviceClock clock;
+// Returns whether this process profiles its mesh devices, which requires the profiler to be enabled on Blackhole with
+// DRAM programmable cores.
+bool can_capture(const Hal& hal, const llrt::RunTimeOptions& rtoptions);
+bool can_capture(const MetalContext& mc);
+
+std::vector<CoreCoord> sorted_yx(const std::unordered_set<CoreCoord>& cores);
+
+struct CoreCoords {
+    CoreCoord logical, virt, phys;
+};
+CoreCoords locate_core(tt::Cluster& cluster, uint32_t chip, const CoreCoord& logical, CoreType type);
+
+void zero_l1(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr, uint32_t bytes);
+void zero_profiler_control(tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt, uint64_t addr);
+
+// Compiles the program, then launches it without waiting for it. It compiles first because launching onto an idle eth
+// core that holds no valid binary wedges the core and can take the host down.
+void launch_resident(IDevice* device, Program& program);
+
+struct CapturedSocket {
+    distributed::D2HSocket* socket = nullptr;  // owned by the DevicePrograms that booted it
+    uint32_t device_index = 0;
+    uint32_t socket_index = 0;
+    int numa_node = -1;
+    bool sync_socket = false;
 };
 
-// What quiesce() reports per (device index, socket index): Drained, the relay pushed its last page and waits on
-// its socket barrier; Done, it saw every byte acked.
-enum class RelayState { Running, Drained, Done };
+enum class RelayState { Running, AwaitingAcks, Done };
 using RelayStateFn = std::function<void(uint32_t device_index, uint32_t socket_index, RelayState)>;
 
-// The relays of one capture: up to kMaxRelays DRISCs per device, each sweeping a band of the worker grid into its
-// own socket. Destruction releases the spool, so it must precede the mesh allocator's.
-class Devices {
+// Runs a capture's resident kernels on each chip. Relays on DRAM cores ship the worker cores' profiler rings to the
+// host. On the idle eth cores, the wall-clock core measures the chip's wall clock against its refclk, and the eth relay
+// ships the eth cores' profiler rings and the clock sync's records. With the sync check on, a third idle eth core, the
+// check core, samples both clocks to measure the sync's accuracy. The active eth cores on the two sides of a synced
+// link run its link sync ports. Destroying a DevicePrograms stops these kernels and closes their sockets, so it must be
+// destroyed while its mesh is open.
+class DevicePrograms {
 public:
-    Devices() = default;
-    ~Devices();
-    Devices(const Devices&) = delete;
-    Devices& operator=(const Devices&) = delete;
+    DevicePrograms();
+    ~DevicePrograms();
+    DevicePrograms(const DevicePrograms&) = delete;
+    DevicePrograms& operator=(const DevicePrograms&) = delete;
 
-    // Brings the relays up on every eligible local Blackhole device and syncs each clock. A device that fails is
-    // logged and left unarmed, so its markers are overwritten rather than blocked on.
-    std::vector<CapturedDevice> boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    // Stops every relay through its stop word (1 = quiesce, then 2 = release the NIU once it is done), reporting
-    // each relay's states through `on_state` (may be empty), then disarms the device's producers. A relay that does
-    // not finish within 10 s is a fault. The resident idle FW is left alone.
+    // Launches the relays, wall-clock core, eth relay and check core on every local chip and opens their sockets.
+    // Returns false, after logging why, where the profiler can't run.
+    [[nodiscard]] bool boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    const CaptureContext& capture_context() const { return capture_; }
+    const std::vector<CapturedSocket>& sockets() const { return sockets_; }
+    // Sets the go word of every chip's wall-clock core, eth relay and check core, and starts the link sync. Call it
+    // only once the receiver's ingest threads are draining the sockets, or the eth relay fills its FIFOs before any
+    // consumer attaches.
+    void start();
+    // Stops the link sync ports and every resident core, reports each socket's relay state to `on_state`, and disarms
+    // the producers. Only the first call does anything, and the destructor makes that call if nothing else has.
     void quiesce(const RelayStateFn& on_state);
-    // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
-    // worker lane's own tail against the consumed-words mirror `heads` (empty when nothing decoded the device).
     void verify_completeness(uint32_t device_index);
 
 private:
-    static constexpr uint32_t kMaxRelays = 8;
-
-    struct Relay {
-        // Launched outside the command queue: a DRAM-only program touches no fast-dispatch resource, so it stays
-        // resident across every workload, while going through the CQ would deadlock the first Finish().
-        std::unique_ptr<Program> program;
-        CoreCoord logical;
-        CoreCoord virt;
+    struct L1Range {
+        uint64_t addr = 0;
+        uint32_t bytes = 0;
     };
-    struct WorkerCore {
-        CoreCoord logical, physical, virt;
+    // A core whose kernel runs for the whole capture. It is launched outside the command queue, where it would deadlock
+    // the first Finish().
+    struct ResidentCore {
+        std::unique_ptr<Program> program;
+        CoreCoords core;
+        std::string name;
+        uint64_t ctrl = 0;
+        // L1 besides the control block that start_resident zeroes before it starts the core.
+        std::optional<L1Range> stale_l1;
+        uint32_t socket_index = 0;
+        uint32_t socket_count = 0;
+    };
+    struct Producer : CoreCoords {
+        CoreType type = CoreType::WORKER;
+        uint64_t control_vector_l1 = 0;
+    };
+    struct SocketSpec {
+        uint32_t cfg = 0;
+        uint32_t fifo_bytes = 0;
+        bool sync_socket = false;
     };
     struct DeviceCtx {
+        distributed::MeshDevice* mesh;
+        distributed::MeshCoordinate coord;
+        IDevice* device;
+        uint32_t index = 0;
         uint32_t chip_id = 0;
-        IDevice* device = nullptr;
-        CapturedDevice out;
-        std::vector<WorkerCore> cores;  // the compute grid, row-major, so a relay's band is a contiguous run
-        Relay relays[kMaxRelays];
-        uint32_t n_relays = 0;
+        uint32_t worker_count = 0;
+        int numa_node = -1;
+        // The relays' sockets in relay order, then the eth relay's sync socket and its frames socket.
+        std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
+        // Filled while the device boots on its own thread, then appended to DevicePrograms::sockets_ in device order.
+        std::vector<CapturedSocket> captured;
+        std::optional<ResidentCore> check;
+        // The worker grid in row-major order, which the relays split into bands, then the wall-clock core, then the eth
+        // cores the eth relay drains.
+        std::vector<Producer> producers;
+        std::vector<ResidentCore> relays;
+        ResidentCore wall_clock;
+        ResidentCore eth_relay;
 
-        DeviceCtx();
+        const Producer& wall_clock_producer() const { return producers[worker_count]; }
+        std::span<const Producer> drained_by_eth_relay() const {
+            return std::span(producers).subspan(worker_count + 1);
+        }
+
+        DeviceCtx(distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord);
         ~DeviceCtx();
         DeviceCtx(DeviceCtx&&) noexcept;
     };
-    // The DRISC L1 layout every relay shares: staging slots, per-core scratch, the done (with heartbeat) and stop
-    // words, and the socket config at the top.
-    struct RelayL1 {
-        uint32_t stage_base = 0, n_stage = 0, core_records = 0, done = 0, stop = 0, cfg = 0;
+    struct LinkPort {
+        const DeviceCtx& ctx;
+        const Producer& producer;
+    };
+    // The idle eth L1 layout shared by the wall-clock core, the eth relay and the check core, plus link and link_ring
+    // on the cores that run link sync ports.
+    struct EthL1 {
+        uint32_t frames_cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, sample_ring = 0, sync_ring = 0, link = 0,
+                 link_ring = 0;
+    };
+    // The L1 addresses of each relay's buffers on its DRAM core, and the address and size of its GDDR spool, which are
+    // 0 when the spool is off. The spool is the HAL's PROFILER DRAM region, which MetalEnv sizes for it when the
+    // streaming profiler is on, so it lies below every allocator's unreserved base.
+    struct DriscL1 {
+        uint32_t stage_base = 0, core_records = 0, ctrl = 0, cfg = 0, spool_addr = 0, spool_bytes = 0;
+        uint64_t host_ctrl = 0;
     };
 
-    bool boot_device(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    void carve_l1();
+    void enumerate_worker_grid(DeviceCtx& ctx);
+    void enumerate_eth_cores(DeviceCtx& ctx);
+    Producer& add_producer(DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t control_vector_l1);
+    void choose_relay_cores(DeviceCtx& ctx);
+    void start_resident(
         DeviceCtx& ctx,
-        const distributed::MeshCoordinate& coord);
-    void enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    // Relay count, each relay's DRAM view and core, and a check that firmware left that core's NIUs in stream
-    // mode. False: no relay can run on this device.
-    bool choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    void reserve_spool();
-    // Configures the relay's TLB window, builds its socket, launches it and confirms its heartbeat. False means
-    // capture must be abandoned for this device.
-    bool launch_relay(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        DeviceCtx& ctx,
-        const distributed::MeshCoordinate& coord,
-        uint32_t d);
-    // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
-    // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
-    void set_producers_armed(const DeviceCtx& ctx, bool armed);
-    void write_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
-    // A DRISC L1 address as the host reaches it over the NoC.
-    uint64_t relay_noc_addr(uint32_t l1) const { return drisc_l1_noc_ + (l1 - drisc_l1_base_); }
+        ResidentCore& resident,
+        HalProgrammableCoreType core_type,
+        const std::vector<SocketSpec>& specs,
+        std::unique_ptr<Program> program);
+    std::unique_ptr<Program> relay_program(const DeviceCtx& ctx, uint32_t relay_index);
+    std::unique_ptr<Program> wall_clock_program(const DeviceCtx& ctx);
+    std::unique_ptr<Program> check_program(const DeviceCtx& ctx);
+    std::unique_ptr<Program> eth_relay_program(const DeviceCtx& ctx);
+    void plan_links();
+    // Returns the link's transmitter port, then its receiver port.
+    std::array<LinkPort, 2> link_ports(const CaptureContext::Link& link) const;
+    void launch_links();
+    // Stops each transmitter before its receiver, so the transmitter's last round is still echoed by a running
+    // receiver.
+    void stop_links();
+    void await_stop(const DeviceCtx& ctx, const ResidentCore& resident, const RelayStateFn& on_state);
+    // Writes `armed` to PROFILER_ARMED on every producer of the chip. Clearing it once every relay is done releases a
+    // producer blocked on a full ring.
+    void write_producers_armed(const DeviceCtx& ctx, uint32_t armed);
 
-    ContextId context_id_{0};
-    uint64_t prof_l1_ = 0;        // Tensix profiler L1 base (control vector, then the per-RISC rings)
-    uint32_t drisc_l1_base_ = 0;  // DRISC L1 unreserved region, and its NoC-addressable base
-    uint64_t drisc_l1_noc_ = 0;
-    uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
-    RelayL1 l1_;
-    // GDDR spool: the HAL's PROFILER DRAM region, which MetalEnv sizes for the spool when the streaming profiler
-    // is on, so it lies below every allocator's unreserved base. Bytes 0 = direct push.
-    uint32_t spool_bytes_ = 0;
-    uint32_t spool_addr_ = 0;
+    uint64_t control_vector_l1_ = 0;
+    MetalContext* mc_ = nullptr;
+    DriscL1 drisc_l1_;
+    EthL1 eth_l1_;
     std::vector<DeviceCtx> devices_;
+    CaptureContext capture_;
+    std::vector<CapturedSocket> sockets_;
+    // Empty when the fabric routers run the ports.
+    std::vector<std::unique_ptr<Program>> resident_link_programs_;
+    bool fabric_link_sync_ = false;
+    bool links_running_ = false;
+    bool quiesced_ = false;
 };
 
 }  // namespace streaming_profiler

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
