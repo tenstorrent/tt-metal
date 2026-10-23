@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <chrono>
 #include <future>
+#include <optional>
 #include <set>
 #include <thread>
 
@@ -34,9 +35,11 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
+#include "hostdev/cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
+#include <umd/device/coordinates/grendel_noc_address_resolver.hpp>
 #include <umd/device/types/blackhole_eth.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -56,6 +59,63 @@ tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
 // until another process's CreateDevice releases the uncore again.
 tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
     return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
+}
+
+// Port this core uses to reach SPA instance `dest`. Local GDDR stays on D2D0: that is the window
+// the remapper claims. A recorded peer route selects the port. With no topology, Mimir 0 reaches
+// any other instance through D2D1 and every other sender uses D2D0.
+uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
+    if (dest == sender) {
+        return 0;
+    }
+    const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
+    if (channels.empty()) {
+        return sender == 0 ? 1 : 0;
+    }
+    TT_FATAL(channel < channels.size(), "CCE channel {} has no mimir_channels entry", channel);
+    for (const auto& route : channels[channel].routes) {
+        if (route.peer_instance == dest) {
+            TT_FATAL(route.d2d < 2, "CCE GDDR route d2d {} is not 0 or 1", route.d2d);
+            return static_cast<uint8_t>(route.d2d);
+        }
+    }
+    return 0;
+}
+
+CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
+    const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
+    uint32_t sender = channel;
+    if (!channels.empty()) {
+        TT_FATAL(channel < channels.size(), "CCE channel {} has no mimir_channels entry", channel);
+        sender = channels[channel].instance;
+    }
+    const tt::umd::GrendelAddressWindows windows{};
+    CceSpaRoutes routes{};
+    routes.gddr_d2d_base[0] = windows.dram_base;
+    routes.gddr_d2d_base[1] = windows.dram_base + CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride;
+    routes.gddr_instance_stride = windows.dram_stride;
+    routes.sram_spa_base = windows.dram_l1_base;
+    routes.sram_tile_stride = windows.dram_l1_stride;
+    for (uint32_t dest = 0; dest < CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
+        routes.gddr_d2d[dest] = cce_gddr_port(soc, channel, sender, dest);
+    }
+    return routes;
+}
+
+std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescriptor& soc, const CoreCoord& translated) {
+    // Matches get_metal_dram_cores: once any view is programmable, only those views are CCE cores.
+    const bool only_programmable = soc.arch == tt::ARCH::QUASAR && soc.has_programmable_dram_views();
+    for (size_t view = 0; view < soc.dram_bank_endpoint_coords.size(); ++view) {
+        if (only_programmable && !soc.is_dram_view_programmable(static_cast<int>(view))) {
+            continue;
+        }
+        for (const auto& endpoint : soc.dram_bank_endpoint_coords[view]) {
+            if (endpoint.x == translated.x && endpoint.y == translated.y) {
+                return static_cast<uint32_t>(soc.get_channel_for_dram_view(static_cast<int>(view)));
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 // Mock devices reuse the on-disk firmware sources of a real arch's package.
@@ -1595,6 +1655,16 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 virtual_dram_core,
                 dram_launch_msg.view(),
                 dram_go_msg.view());
+            if (cluster_.arch() == ARCH::QUASAR) {
+                const auto dram_channel = dram_channel_for_translated_core(soc_d, virtual_dram_core);
+                TT_FATAL(dram_channel.has_value(), "DRAM core {} has no programmable view", virtual_dram_core.str());
+                const CceSpaRoutes routes = cce_spa_routes_for_channel(soc_d, *dram_channel);
+                const uint64_t routes_addr =
+                    hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                    hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                cluster_.write_core(
+                    &routes, sizeof(routes), {static_cast<size_t>(device_id), virtual_dram_core}, routes_addr);
+            }
             dram_not_done_cores.insert(virtual_dram_core);
         }
     }

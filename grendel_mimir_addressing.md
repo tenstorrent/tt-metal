@@ -39,11 +39,9 @@ Done in step 6. Chippy brings up clocks, cold reset, GDDR, D2D, firewalls and th
 
 Metal's DRAM firmware load asserts and deasserts `RiscType::ALL_NEO_DMS`. That is the eight CCE harts. It does not hold the uncore, and it does not call `release_cce_uncore_for_firmware_load`, so it does not rewrite the remap. Teardown still resets harts with `RiscType::ALL_DATA_MOVEMENT` and leaves the uncore running.
 
-### 6. Device-side addressing is wired for MMK
+### 6. Device-side addresses come from the host
 
-`tt_metal/hw/inc/experimental/cce_gddr.h` hardcodes the SPA bases, and it hardcodes the MMK route: a sender on Mimir 0 reaches another die through D2D1 (`0x1002000000000`), and every other sender uses the D2D0 window. M0 D2D0 is not connected to Mimir 1.
-
-Kernels keep calling `cce_gddr_*` and `cce_sram_*`. The bases move from these constants to values the host supplies. Tensix kernels on full Grendel still reach GDDR through the NOC/ATT, so a CCE kernel and a Tensix kernel stay different sources.
+Done in step 7. `cce_gddr_*` and `cce_sram_*` read `CceSpaRoutes` immediately after the CCE bank-to-NOC staging range. The host fills that table per CCE after firmware has copied the staging tables, from the package windows and from `mimir_channels` routes. Local GDDR uses the D2D0 window. A recorded peer route selects the other port. With no topology, Mimir 0 still reaches other instances through D2D1. Tensix kernels still use the NOC/ATT and do not read this table.
 
 ### 7. Metal picks behaviour by target type
 
@@ -72,7 +70,7 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave th
 | Who is looking | CCE SRAM | GDDR |
 | --- | --- | --- |
 | Host, through Metal | DRAM core coordinate plus `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`), or `get_dev_noc_addr` | NOC worker endpoint plus the view's `address_offset` |
-| CCE kernel, today | Its own SRAM at local 0; another CCE's SRAM at `0x1280000000` | `0x1000000000000`, or the D2D1 window, through a volatile pointer |
+| CCE kernel | Its own SRAM at local 0; another CCE's SRAM from `CceSpaRoutes` | The route base in `CceSpaRoutes`, through a volatile pointer |
 | Firmware link | `MEM_CCE_SRAM_LOCAL_BASE == 0` | — |
 
 ## Proposed sequence
@@ -112,7 +110,7 @@ Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG. Host
 
 Done. The descriptor key is `address_space`. `mimir_1x1.yaml` and `mimir_2x_package.yaml` set `mimir_local`. A descriptor that omits the key, including the Quasar simulation descriptors, stays `full_package`. `address_windows_for` is what `EmuTTDevice`, `GrendelJtagTTDevice`, and `RtlSimulationTTDevice` call. Emulation and JTAG reject `full_package` because their transport is still chiplet-local.
 
-Package windows, from `models/qsr.s1/att/address_map.csv`: CCE SRAM `0x1280000000` stride 4 MiB, Mimir config `0x1300000000` stride 128 MiB. CCE control is the per-CCE offset in that window. Package-mode HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. Mimir-local keeps `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`).
+Package windows, from `models/qsr.s1/att/address_map.csv`: CCE SRAM `0x1280000000` stride 4 MiB, Mimir config `0x1300000000` stride 128 MiB. CCE control is the per-CCE offset in that window. Package-mode HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. Mimir-local keeps `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`). `RtlSimulationTTDevice` keeps its existing coordinate-plus-core-local-address protocol for every `full_package` descriptor; it does not infer an ATT geometry from the descriptor size.
 
 Check: `GrendelNocAddressResolver.PackageCceSramMatchesGoldenAddressMap` and `PackageMimirConfigCarriesCceControl`. Behaviour on current Mimir hardware does not change.
 
@@ -136,7 +134,7 @@ Check: two Metal runs in a row on each target, including teardown. The second ru
 
 ### Step 7. Device-side addresses come from the host
 
-The host writes each core's GDDR and peer-SRAM route bases into core info or the bank-to-NOC tables, computed from the descriptor. `cce_gddr.h` keeps `cce_gddr_*` and `cce_sram_*` and reads those bases instead of the constants. CCE kernels do not move to the dataflow API.
+Done. DRAM firmware load writes `CceSpaRoutes` immediately after the CCE bank-to-NOC staging range, after firmware has copied the bank tables. `core_info_msg_t` is unchanged: Blackhole sizes its DRAM mailbox to that struct. `cce_gddr_*` and `cce_sram_*` read the table. The kernels are unchanged and are not on the dataflow API. The GDDR port comes from `mimir_channels` when the descriptor has it.
 
 Check: the Metal kernel tests on both models, and the Quasar ZeBu regression so the Tensix path is unchanged.
 
@@ -191,7 +189,7 @@ Size the case from the descriptor:
 - `CreateDeviceMinimal` on a package with no Tensix cores does not build an allocator. `device->allocator()` is an empty pointer. Test the pointer. Do not dereference it.
 - A DRAM view may be 512 MiB (`dram_view_size` 536870912). `dram_bank_size` stays 8 GiB. The second half's `address_offset` is 4 GiB (4294967296). `gddr_sweep_from_soc` treats a positive view smaller than 1 GiB as one slot whose stride is the view size. Do not require the view to be a non-zero multiple of 1 GiB. Kernel slot math stays `(slot_base + slot) * slot_stride` in `uint64`. `slot_base` is the view's `address_offset` divided by the slot stride, so the 4 GiB half is slot 8 of a 512 MiB stride. Leave `kDramOffset` at `0x800`.
 - Host CCE SRAM goes through `write_cce_sram` and `read_cce_sram`. Pass a logical DRAM core and a HAL NOC address: `cce_sram_noc_addr(offset)` or `hal.get_dev_noc_addr(...)`. Do not form the chiplet-local AXI address `0x40000000 + cce_index * 0x400000`, and do not add `MEM_CCE_L1_NOC_OFFSET` in contract test code. The helper applies the HAL offset. Kernel-local SRAM stays 0.
-- Peer SRAM and peer GDDR in a CCE kernel still use `cce_gddr.h` (`cce_gddr_*`, `cce_sram_*`). Step 7 replaces the constants with bases the host supplies. Do not move CCE kernels onto the dataflow API. Do not edit the kernels under `tests/tt_metal/tt_metal/test_kernels/misc/` as part of porting a host test.
+- Peer SRAM and peer GDDR in a CCE kernel still use `cce_gddr.h` (`cce_gddr_*`, `cce_sram_*`). Those functions read `CceSpaRoutes`, which `CreateDevice` writes after the CCE bank-to-NOC staging range from the package windows and `mimir_channels`. Do not put SPA bases back in the kernel. Do not move CCE kernels onto the dataflow API. Do not edit the kernels under `tests/tt_metal/tt_metal/test_kernels/misc/` as part of porting a host test.
 
 ### Live SiVal server
 
