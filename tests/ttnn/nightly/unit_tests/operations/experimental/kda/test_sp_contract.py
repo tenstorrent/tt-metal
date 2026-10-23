@@ -18,6 +18,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     host_protocol,
     initial_state,
     recurrent_oracle,
+    split_summaries,
     summary_oracle,
     to_device,
 )
@@ -104,15 +105,15 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
             if dim == 128
             else ttnn.DRAM_MEMORY_CONFIG
         )
-        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
+        packed = ttnn.experimental.kda.summarize_chunk_recurrence(
             *inputs,
             groups_per_head=groups,
             actual_start=actual_start,
             sequence_parallel_axis=axis,
-            memory_config=memory,
+            tail=True,
         )
-        assert len(summaries) == 4
-        assert all(t.dtype == ttnn.bfloat16 and t.memory_config() == memory for t in summaries)
+        assert packed.dtype == ttnn.bfloat16
+        summaries = split_summaries(packed, memory)
         entries = ttnn.experimental.kda.affine_exclusive_scan(
             *summaries[:2],
             head_tt,
@@ -201,7 +202,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                     nrmse_threshold=0.015,
                 )
         _assert_immutable(owned, before)
-        current = [*owned, *summaries, entries, output, final]
+        current = [*owned, packed, *summaries, entries, output, final]
         if previous:
             for old, new in zip(previous, current, strict=True):
                 assert all(
@@ -320,8 +321,9 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     for kwargs in ({"actual_start": actual_start}, {"tail_entry_states": seed}):
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
-    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
-    assert all(t.dtype == ttnn.bfloat16 for t in (a, b, tail_a, tail_b))
+    a, b, tail_a, tail_b = split_summaries(
+        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start, tail=True)
+    )
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
     with expect_error(TypeError, "incompatible function arguments"):

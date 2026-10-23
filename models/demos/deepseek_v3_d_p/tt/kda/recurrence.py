@@ -168,6 +168,22 @@ def _reshape_chunks_for_groups(
     )
 
 
+def _unpack_summary(summaries: ttnn.Tensor, slot: int, memory_config: ttnn.MemoryConfig) -> AffineTransform:
+    """Transitional (tt_metal_tracker-57p1): split one packed [A | B] slot until the prefix ops read it directly."""
+    _, group_heads, key_dim, row_width = tuple(summaries.shape)
+
+    def part(begin: int, end: int) -> ttnn.Tensor:
+        sliced = ttnn.slice(
+            summaries,
+            (slot, 0, 0, begin),
+            (slot + 1, group_heads, key_dim, end),
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        )
+        return ttnn.to_memory_config(ttnn.reshape(sliced, (group_heads, key_dim, end - begin)), memory_config)
+
+    return AffineTransform(part(0, key_dim), part(key_dim, row_width))
+
+
 def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     *,
@@ -179,19 +195,19 @@ def _summarize_chunk_groups(
     compute_config: _RecurrenceComputeConfig,
 ) -> AffineTransform:
     """Summarize whole groups for the single-rank path at the BF16 prefix boundary."""
-    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+    # A single sequence rank has no split tail, so only the head summaries are needed.
+    summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
-        memory_config=summary_memory_config,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
-    # A single sequence rank has no split tail, so only the head summaries are needed.
-    ttnn.deallocate(tail_a)
-    ttnn.deallocate(tail_b)
-    return AffineTransform(a, b)
+    summary = _unpack_summary(summaries, 0, summary_memory_config)
+    ttnn.deallocate(summaries)
+    return summary
 
 
 def _scan_chunks(
@@ -453,7 +469,7 @@ def _scan_sp_grouped_chunks(
     if groups == 1:
         # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
         # without a head), and the group enters at the rank's own entry state.
-        (packed,) = ttnn.experimental.kda.summarize_chunk_recurrence(
+        packed = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
@@ -461,7 +477,6 @@ def _scan_sp_grouped_chunks(
             sequence_parallel_axis=sequence_parallel_axis,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
-            packed_head=True,
         )
         group_entry_states, prefix_final_state = distributed_prefix(
             packed,
@@ -473,15 +488,19 @@ def _scan_sp_grouped_chunks(
             gather_buffer=gather_buffer,
         )
     else:
-        head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
-            memory_config=memory,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
+            tail=True,
         )
+        head, tail = (_unpack_summary(summaries, slot, memory) for slot in (0, 1))
+        ttnn.deallocate(summaries)
+        head_a, head_b, tail_a, tail_b = head.a, head.b, tail.a, tail.b
         local_entry_state, prefix_final_state = _partition_prefix(
             AffineTransform(head_a, head_b),
             initial_state,
