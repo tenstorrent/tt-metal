@@ -140,7 +140,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
             return ttnn.unsqueeze(
-                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length),
+                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length),
                 0,
             )
 
@@ -510,7 +510,9 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
         # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
-        hidden = ttnn.embedding(as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT)
+        hidden = ttnn.embedding(
+            as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+        )
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
@@ -569,9 +571,9 @@ class MiniMaxH3Transformer3DModel(Module):
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            # The native untilize of the TILE table keeps the gather's programs free of the request's length.
+            # runtime_rows keeps the gather's and the TILE table's untilize's programs free of the request's length.
             gathered = ttnn.embedding(
-                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length
+                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
             )
             return ttnn.unsqueeze(gathered, 0)
 

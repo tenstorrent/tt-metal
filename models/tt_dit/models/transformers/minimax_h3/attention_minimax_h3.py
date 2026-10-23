@@ -552,6 +552,7 @@ class MiniMaxH3Attention(Module):
                 num_heads=self.n_local_heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
+                runtime_rows=self.dynamic_length,
             )
             return out
 
@@ -640,7 +641,7 @@ class MiniMaxH3Attention(Module):
                 ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
+        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE, runtime_rows=self.dynamic_length)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         # Each device holds canonical heads [d * n_local, (d+1) * n_local), so gathering on TP

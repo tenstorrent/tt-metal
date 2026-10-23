@@ -426,6 +426,11 @@ pipeline-level hashes.
 - `compute_program_hash` drops the rows (`hash_spec_without_rows`) and hashes everything else that changes
   the program (dtype, layout, sharding, grid, which optional tensors are present); blockings and core grids
   come from a config object pinned at construction (`length_classes.py`), never from the shape.
+- A converted op is opt-in: the runtime-row program is selected by a hashed bool attribute
+  (`runtime_rows`, `dynamic_local_n`, a pinned config), default off, and the model passes
+  `runtime_rows=self.dynamic_length` (`nlp_create_qkv_heads`, `concatenate_heads`, `ttnn.embedding`, which
+  forwards it to the TILE table's untilize). Without the flag the op is main's: main's work split, kernels,
+  hash and cache-hit validation, so every other model's programs are byte-identical to main's.
 - One common runtime word per kernel carries the per-device row count, and every per-core range is derived
   from it on device with `ttnn/operations/common/shared_with_host/runtime_length.hpp`, so a reader and its
   writer can never disagree on the split; `validate_on_program_cache_hit` checks the capacity and the
