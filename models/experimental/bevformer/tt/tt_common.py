@@ -88,6 +88,8 @@ class TTConv2D:
     output and, with a single slice, returns that tensor as it is, whatever layout was asked for.
     Without ``dram_activation``, a ROW_MAJOR conv runs unsliced on the L1 path, so its activation
     and output must fit in L1.
+    ``l1_output`` lets a 1x1 conv run as ``ttnn.linear`` write its output height-sharded in L1
+    when each core's shard fits ``L1_OUTPUT_MAX_SHARD_BYTES``; ``output_in_l1`` says whether it does.
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
     conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
     in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
@@ -113,8 +115,10 @@ class TTConv2D:
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_dtype=None,
         output_layout=None,
+        l1_output=False,
     ):
         self.dram_activation = dram_activation
+        self.output_in_l1 = False
         self.input_dtype = input_dtype
         self.input_layout = input_layout
         self.input_memory_config = input_memory_config
@@ -197,6 +201,44 @@ class TTConv2D:
             self.linear_weight = ttnn.to_device(self.weight, self.device)
             self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
             self.linear_program_config = self._linear_program_config(grid, fp32_dest_acc_en)
+            if l1_output:
+                self._l1_output_config(grid, fp32_dest_acc_en)
+
+    # A pointwise linear's output shard per core above this stays in DRAM: layer3's 1024-channel
+    # output takes about 650 KB per core next to the matmul's own buffers.
+    L1_OUTPUT_MAX_SHARD_BYTES = 768 * 1024
+
+    def _l1_output_config(self, grid, fp32_dest_acc_en):
+        """Rows over every core, each core's output rows kept in its own L1 as a height shard, when
+        that shard fits L1_OUTPUT_MAX_SHARD_BYTES."""
+        num_cores = grid.x * grid.y
+        rows_t = math.ceil(self.batch_size * self.input_height * self.input_width / ttnn.TILE_SIZE)
+        per_core_m = math.ceil(rows_t / num_cores)
+        if per_core_m * ttnn.TILE_SIZE * self.out_channels * 2 > self.L1_OUTPUT_MAX_SHARD_BYTES:
+            return
+        in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
+        max_subblock = 4 if fp32_dest_acc_en else 8
+        self.linear_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=max(w for w in range(1, 5) if in_t % w == 0),
+            out_subblock_h=1,
+            out_subblock_w=max(w for w in range(1, max_subblock + 1) if out_t % w == 0),
+            out_block_h=1,
+            out_block_w=out_t,
+            per_core_M=per_core_m,
+            per_core_N=out_t,
+            fuse_batch=True,
+            fused_activation=None if self.linear_activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            mcast_in0=False,
+        )
+        self.linear_output_memory_config = ttnn.create_sharded_memory_config(
+            shape=(per_core_m * ttnn.TILE_SIZE, self.out_channels),
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.output_in_l1 = True
 
     # A widening linear whose activation gives each grid row fewer tile rows than this keeps
     # ttnn.linear's own split: layer4's 512 -> 2048 runs faster on it than on the 2D split.
@@ -291,7 +333,7 @@ class TTConv2D:
                 self.linear_weight,
                 bias=self.linear_bias,
                 dtype=self.output_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.linear_output_memory_config if self.output_in_l1 else ttnn.DRAM_MEMORY_CONFIG,
                 program_config=self.linear_program_config,
                 compute_kernel_config=self.compute_config,
             )
