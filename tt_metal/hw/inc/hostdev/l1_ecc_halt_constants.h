@@ -11,10 +11,10 @@
 constexpr uint32_t L1_ECC_HALT_REASON_DBE = 0xECC00001;
 constexpr uint32_t L1_ECC_HALT_REASON_UNEXPECTED = 0xECC00003;
 
-// Blackhole Tensix ECC_CTRL fields. The two clears hold while 1 and re-arm on 0, so they are always pulsed.
+// Blackhole Tensix ECC_CTRL fields. The two clears act while held at 1, so they are always pulsed.
 enum EccCtrl : uint32_t {
     ECC_CTRL_VIEW_MASK = 0xFu,         // [3:0]: ECC_STATUS view select
-    ECC_CTRL_COUNTS_CLR = 1u << 4,     // [4]
+    ECC_CTRL_COUNTS_CLR = 1u << 4,     // [4]: also clears the last error's valid bit
     ECC_CTRL_IRQ_CLR = 1u << 5,        // [5]
     ECC_CTRL_L1_DBE_IRQ_EN = 1u << 9,  // [9]
 };
@@ -37,8 +37,7 @@ enum class EccView : uint32_t {
 // ECC_STATUS fields. Masks are in place; a field's value is (status & MASK) >> SHIFT.
 enum EccStatus : uint32_t {
     // Views 1 and 2: L1 counts.
-    ECC_DBE_COUNT_MASK = 0x3Fu,      // [5:0]
-    ECC_DBE_COUNT_OVF_MASK = 0x7Fu,  // [6:0]: count and its overflow bit
+    ECC_DBE_COUNT_MASK = 0x3Fu,  // [5:0]
     ECC_SBE_COUNT_SHIFT = 7,
     ECC_SBE_COUNT_MASK = 0xFFu << 7,  // [14:7]
     // Views 3 and 6: last L1 error.
@@ -47,6 +46,17 @@ enum EccStatus : uint32_t {
     ECC_LAST_ERR_BANKS_MASK = 0xFFFFu << 12,  // [27:12], one-hot
     ECC_LAST_ERR_ROW_MASK = 0xFFFu,           // [11:0]
 };
+
+// Blackhole PIC: the handler table (RISC_PIC_INT_PCS) and BRISC_INT_NO number the software IRQs first, then the
+// hardware IRQs.
+constexpr uint32_t pic_num_sw_ints = 32;
+constexpr uint32_t pic_num_hw_ints = 4;
+constexpr uint32_t pic_hw_int_err = 3;  // hardware IRQ raised by the tile's ECC errors and its watchdog
+
+constexpr uint32_t riscv_mret_insn = 0x30200073;    // mret: return from the interrupt handler
+constexpr uint32_t riscv_j_back_insn = 0xffdff06f;  // j .-4: jump back to the previous instruction
+// Returns from an interrupt handler without using the stack. The jump retries an mret the branch predictor skipped.
+constexpr uint32_t brisc_int_release_code[2] = {riscv_mret_insn, riscv_j_back_insn};
 
 // L1 has 32 banks of 16 B SECDED words. Rows are 32 words apart in the default bank interleave.
 constexpr uint32_t l1_ecc_banks = 32;

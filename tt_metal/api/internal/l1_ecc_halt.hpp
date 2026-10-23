@@ -20,8 +20,7 @@ class MeshDevice;
 namespace tt::tt_metal::internal {
 
 // Guards one host wait loop against a Blackhole Tensix BRISC halted on an L1 ECC error (its halt
-// record in mailboxes_t::l1_ecc_halt), or stuck in an interrupt handler without one (BRISC_INT_NO stays set).
-// Checks the watched chips' Tensix cores once the loop has been stalled for
+// record in mailboxes_t::l1_ecc_halt). Checks the watched chips' Tensix cores once the loop has been stalled for
 // a while, periodically after that, and at once if another wait has already reported a halt. No-op when the
 // feature is off.
 class L1EccHaltWatch {
