@@ -270,7 +270,7 @@ def _writer_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int
         plan.out_out_subblock[0],  # out_subblock_h (plan-derived)
         0,  # k_partial_col
         0,  # use_zigzag_balancing
-        0,  # use_windowed_mask
+        0,  # windowed_mode (WindowedMode::None)
         int(plan.config.use_runtime_lengths),
     ]
     args.extend(_accessor_args(output))
