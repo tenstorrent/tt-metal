@@ -74,26 +74,19 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         if (channel_block != loaded_block) {
             weights.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
-                const uint32_t page = first_tile_column + tile_column;
-                noc.async_read(tap0, weights, tap_bytes, {.page_id = page}, {.offset_bytes = tile_column * tile_bytes});
-                noc.async_read(
-                    tap1,
-                    weights,
-                    tap_bytes,
-                    {.page_id = page},
-                    {.offset_bytes = (channel_tiles_per_block + tile_column) * tile_bytes});
-                noc.async_read(
-                    tap2,
-                    weights,
-                    tap_bytes,
-                    {.page_id = page},
-                    {.offset_bytes = (2 * channel_tiles_per_block + tile_column) * tile_bytes});
-                noc.async_read(
-                    tap3,
-                    weights,
-                    tap_bytes,
-                    {.page_id = page},
-                    {.offset_bytes = (3 * channel_tiles_per_block + tile_column) * tile_bytes});
+                // weights[tap][tile_column]; the accessors have distinct types, hence no array
+                const auto read_tap = [&](const auto& tap, uint32_t index) {
+                    noc.async_read(
+                        tap,
+                        weights,
+                        tap_bytes,
+                        {.page_id = first_tile_column + tile_column},
+                        {.offset_bytes = (index * channel_tiles_per_block + tile_column) * tile_bytes});
+                };
+                read_tap(tap0, 0);
+                read_tap(tap1, 1);
+                read_tap(tap2, 2);
+                read_tap(tap3, 3);
             }
             noc.async_read_barrier();
             weights.push_back(tap_count * channel_tiles_per_block);
