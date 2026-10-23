@@ -99,7 +99,14 @@ inline void _llk_math_fast_untilize_copy_face_fp32_(const std::uint32_t dst_row)
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
 }
 
-template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+// A tile in one SrcA bank arrives as F2, F3, F0, F1 at rows 0, 16, 32, 48.
+inline void _llk_math_fast_untilize_copy_bank_face_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    TTI_MOVA2D(0, src_row, ADDR_MOD_4, p_mova2d::MOV_8_ROWS, dst_row);
+    TTI_MOVA2D(0, src_row + 8, ADDR_MOD_4, p_mova2d::MOV_8_ROWS, dst_row + 8);
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM, bool bank_per_tile = false>
 inline void _llk_math_fast_untilize_copy_tile_(const std::uint32_t tile_index)
 {
     const std::uint32_t top_row    = FAST_UNTILIZE_TOP_STRIP_ROW_OFFSET + tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS;
@@ -108,7 +115,15 @@ inline void _llk_math_fast_untilize_copy_tile_(const std::uint32_t tile_index)
     // The unpacker presents each tile as F2, F3, F0, F1. Copy bottom faces
     // first, then top faces, so SrcA is consumed in arrival order while DEST is
     // arranged into the shared fast-untilize two-strip layout.
-    if constexpr (is_fp32_dest_acc_en)
+    if constexpr (bank_per_tile)
+    {
+        _llk_math_fast_untilize_copy_bank_face_(0, bottom_row);
+        _llk_math_fast_untilize_copy_bank_face_(16, bottom_row + FAST_UNTILIZE_PHASE_ROWS);
+        _llk_math_fast_untilize_copy_bank_face_(32, top_row);
+        _llk_math_fast_untilize_copy_bank_face_(48, top_row + FAST_UNTILIZE_PHASE_ROWS);
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
+    }
+    else if constexpr (is_fp32_dest_acc_en)
     {
         _llk_math_fast_untilize_copy_face_fp32_(bottom_row);
         _llk_math_fast_untilize_copy_face_fp32_(bottom_row + FAST_UNTILIZE_PHASE_ROWS);
@@ -124,7 +139,7 @@ inline void _llk_math_fast_untilize_copy_tile_(const std::uint32_t tile_index)
     }
 }
 
-template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
+template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM, bool bank_per_tile = false>
 inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const std::uint32_t block_ct_dim)
 {
     static_assert(max_unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM || !is_fp32_dest_acc_en, "BH fast-untilize chunks over 4 tiles need a 16-bit DEST");
@@ -133,33 +148,33 @@ inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 
-    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(0);
-    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(1);
+    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(0);
+    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(1);
     if (block_ct_dim >= 3)
     {
-        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(2);
+        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(2);
     }
     if (block_ct_dim >= 4)
     {
-        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(3);
+        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(3);
     }
     if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
     {
         if (block_ct_dim >= 5)
         {
-            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(4);
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(4);
         }
         if (block_ct_dim >= 6)
         {
-            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(5);
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(5);
         }
         if (block_ct_dim >= 7)
         {
-            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(6);
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(6);
         }
         if (block_ct_dim >= 8)
         {
-            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim>(7);
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(7);
         }
     }
 

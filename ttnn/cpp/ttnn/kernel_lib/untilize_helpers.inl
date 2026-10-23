@@ -54,6 +54,22 @@ constexpr bool fast_untilize_block_float_input() {
 #endif
 }
 
+// One SrcA bank per tile: a single chunk (not four-tile chunks) of Float16_b input at 4, 6 or 8 tiles or Bfp8_b input
+// at 4 to 8, 16-bit DEST.
+template <uint32_t block_width_tiles, uint32_t input_dfb, untilize_config::FastChunk fast_chunk>
+constexpr bool fast_untilize_bank_per_tile() {
+#ifdef ARCH_BLACKHOLE
+    constexpr auto input_format = dfb_l1_format<input_dfb>();
+    return fast_chunk == untilize_config::FastChunk::Auto &&
+           ((input_format == static_cast<uint32_t>(DataFormat::Float16_b) &&
+             fast_untilize_bank_per_tile_ct<block_width_tiles, DST_ACCUM_MODE, false>()) ||
+            (input_format == static_cast<uint32_t>(DataFormat::Bfp8_b) &&
+             fast_untilize_bank_per_tile_ct<block_width_tiles, DST_ACCUM_MODE, true>()));
+#else
+    return false;
+#endif
+}
+
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_untilize() {
 #ifdef ARCH_BLACKHOLE
@@ -185,14 +201,16 @@ ALWI void untilize_init() {
                 DST_ACCUM_MODE,
                 four_tile_chunks,
                 true,
-                fast_untilize_block_float_input<input_dfb>()>(input_dfb, output_dfb);
+                fast_untilize_block_float_input<input_dfb>(),
+                fast_untilize_bank_per_tile<block_width_tiles, input_dfb, fast_chunk>()>(input_dfb, output_dfb);
         } else {
             fast_untilize_init_skip_remap<
                 block_width_tiles,
                 DST_ACCUM_MODE,
                 four_tile_chunks,
                 true,
-                fast_untilize_block_float_input<input_dfb>()>(input_dfb, output_dfb);
+                fast_untilize_block_float_input<input_dfb>(),
+                fast_untilize_bank_per_tile<block_width_tiles, input_dfb, fast_chunk>()>(input_dfb, output_dfb);
         }
     } else if constexpr (dispatch::use_block_based_pack_path) {
         if constexpr (configure_remap) {
@@ -214,8 +232,11 @@ ALWI void untilize_uninit() {
     using dispatch = UntilizeDispatchConfig<block_width_tiles, input_dfb, output_dfb>;
 
     if constexpr (dispatch::use_fast) {
-        fast_untilize_uninit<block_width_tiles, DST_ACCUM_MODE, fast_chunk == untilize_config::FastChunk::FourTiles>(
-            output_dfb);
+        fast_untilize_uninit<
+            block_width_tiles,
+            DST_ACCUM_MODE,
+            fast_chunk == untilize_config::FastChunk::FourTiles,
+            fast_untilize_bank_per_tile<block_width_tiles, input_dfb, fast_chunk>()>(output_dfb);
     } else {
         pack_untilize_uninit(output_dfb);
     }
@@ -333,7 +354,8 @@ ALWI void untilize(uint32_t num_blocks) {
                 DST_ACCUM_MODE,
                 fast_chunk == untilize_config::FastChunk::FourTiles,
                 true,
-                fast_untilize_block_float_input<input_dfb>()>(input_dfb, output_dfb);
+                fast_untilize_block_float_input<input_dfb>(),
+                fast_untilize_bank_per_tile<block_width_tiles, input_dfb, fast_chunk>()>(input_dfb, output_dfb);
             in_dfb.pop_front(block_width_tiles);
             out_dfb.push_back(block_width_tiles);
         }

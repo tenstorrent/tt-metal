@@ -29,13 +29,13 @@ inline bool llk_unpack_fast_untilize_is_bfp_b_input(const std::uint32_t operand)
     return llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
 inline void llk_unpack_fast_untilize_init(const std::uint32_t operand, const std::uint32_t dense_init_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t init_unit_dim =
         llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) ? 1 : dense_init_unit_dim;
-    ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en>(
+    ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en, bank_per_tile>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
 }
 
@@ -167,7 +167,8 @@ inline void llk_unpack_fast_untilize_pass_restore_unit_dim(
     }
 }
 
+template <bool bank_per_tile = false>
 inline void llk_unpack_fast_untilize_uninit() {
     SAN_HOOK(unsupported());
-    ckernel::_llk_unpack_fast_untilize_uninit_();
+    ckernel::_llk_unpack_fast_untilize_uninit_<bank_per_tile>();
 }

@@ -40,18 +40,24 @@ namespace ckernel {
 // its exponent section.
 
 // four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; allow_face_passes lets rows wider than eight
-// tiles take face-pair passes, block_float_input selects their per-tile unpack. Init and block must agree on all three.
+// tiles take face-pair passes, block_float_input selects their per-tile unpack, bank_per_tile (single chunk of 4 to 8
+// tiles, 16-bit DEST) hands off per tile. Init, block and uninit must agree on all four.
 template <
     std::uint32_t full_ct_dim,
     bool configure_remap,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
     bool allow_face_passes = false,
-    bool block_float_input = false>
+    bool block_float_input = false,
+    bool bank_per_tile = false>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
+    static_assert(
+        !bank_per_tile || (!is_fp32_dest_acc_en && full_ct_dim >= 4 &&
+                           full_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST && !four_tile_chunks),
+        "fast_untilize bank_per_tile needs a single chunk of 4 to 8 tiles with a 16-bit DEST");
     if constexpr (full_ct_dim == 1) {
         if constexpr (configure_remap) {
             pack_untilize_init<1, 1, is_fp32_dest_acc_en>(icb, ocb, call_line);
@@ -81,7 +87,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     if constexpr (face_passes) {
         UNPACK((llk_unpack_fast_untilize_pass_init<block_float_input>(icb, first_unit_dim)));
     } else {
-        UNPACK((llk_unpack_fast_untilize_init<is_fp32_dest_acc_en>(icb, first_unit_dim)));
+        UNPACK((llk_unpack_fast_untilize_init<is_fp32_dest_acc_en, bank_per_tile>(icb, first_unit_dim)));
     }
     if constexpr (configure_remap) {
         MATH((llk_math_fast_untilize_init()));
@@ -107,7 +113,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
     bool allow_face_passes = false,
-    bool block_float_input = false>
+    bool block_float_input = false,
+    bool bank_per_tile = false>
 ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_untilize_init_impl<
         full_ct_dim,
@@ -115,7 +122,8 @@ ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
         is_fp32_dest_acc_en,
         four_tile_chunks,
         allow_face_passes,
-        block_float_input>(icb, ocb, call_line);
+        block_float_input,
+        bank_per_tile>(icb, ocb, call_line);
 }
 
 template <
@@ -123,7 +131,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
     bool allow_face_passes = false,
-    bool block_float_input = false>
+    bool block_float_input = false,
+    bool bank_per_tile = false>
 ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_untilize_init_impl<
         full_ct_dim,
@@ -131,7 +140,8 @@ ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
         is_fp32_dest_acc_en,
         four_tile_chunks,
         allow_face_passes,
-        block_float_input>(icb, ocb, call_line);
+        block_float_input,
+        bank_per_tile>(icb, ocb, call_line);
 }
 
 template <
@@ -139,7 +149,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool four_tile_chunks = false,
     bool allow_face_passes = false,
-    bool block_float_input = false>
+    bool block_float_input = false,
+    bool bank_per_tile = false>
 ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
@@ -204,7 +215,7 @@ ALWI void fast_untilize_block(
 
         MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
         UNPACK((llk_unpack_fast_untilize_block(icb, input_tile_index, unit_dim)));
-        MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, max_unit_dim>(0, unit_dim)));
+        MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(0, unit_dim)));
         MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
         PACK((llk_packer_wait_for_math_done()));
@@ -245,7 +256,11 @@ ALWI void fast_untilize_block(
 #endif
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
+template <
+    std::uint32_t full_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool four_tile_chunks = false,
+    bool bank_per_tile = false>
 ALWI void fast_untilize_uninit(uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -255,7 +270,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
         return;
     }
 
-    UNPACK((llk_unpack_fast_untilize_uninit()));
+    UNPACK((llk_unpack_fast_untilize_uninit<bank_per_tile>()));
     MATH((llk_math_fast_untilize_uninit()));
     // Leave the math/pack semaphore in the mode requested by the kernel so
     // a following LLK does not inherit fast-untilize's private half-sync.

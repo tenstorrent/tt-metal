@@ -76,6 +76,17 @@ constexpr std::uint32_t fast_untilize_first_pass_unit(const std::uint32_t full_c
 // MOP key of a pass unit, so a switch between pass and chunk units in one row reprograms the MOP.
 constexpr std::uint32_t FAST_UNTILIZE_PASS_MOP_KEY = 0x100;
 
+// One SrcA bank per tile pays in a single chunk with a 16-bit DEST: Float16_b input at 4, 6 and 8 tiles, Bfp8_b input at 4 to 8.
+constexpr std::uint32_t FAST_UNTILIZE_BANK_PER_TILE_CT_MASK_BF16 = (1u << 4) | (1u << 6) | (1u << 8);
+constexpr std::uint32_t FAST_UNTILIZE_BANK_PER_TILE_CT_MASK_BFP8 = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8);
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en, bool bfp8_input>
+constexpr bool fast_untilize_bank_per_tile_ct()
+{
+    return !is_fp32_dest_acc_en && full_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST &&
+           (((bfp8_input ? FAST_UNTILIZE_BANK_PER_TILE_CT_MASK_BFP8 : FAST_UNTILIZE_BANK_PER_TILE_CT_MASK_BF16) >> (full_ct_dim & 31u)) & 1u);
+}
+
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
 constexpr std::uint32_t fast_untilize_max_unit_dim()
 {

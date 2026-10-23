@@ -23,9 +23,13 @@
 namespace ckernel
 {
 
-template <bool is_fp32_dest_acc_en>
+// bank_per_tile (16-bit DEST): a tile fills one SrcA bank and only the fourth UNPACR sets the dvalid, so unpack and math hand off
+// per tile instead of per face. Unpack_Src_Reg_Set_Upd steps the row by 16 per UNPACR once SRCA_SET_Base stops taking the set
+// from the destination address.
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
 inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
 {
+    static_assert(!(bank_per_tile && is_fp32_dest_acc_en), "bank per tile needs a 16-bit DEST");
     LLK_ASSERT(unit_dim >= 1 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize unpack supports unit_dim 1 to 8");
 
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -47,6 +51,14 @@ inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
         ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb_set_dvalid);
         tmp.program();
     }
+    else if constexpr (bank_per_tile)
+    {
+        static constexpr std::uint32_t unpack_srca_nodv = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(unit_dim, 2, unpack_srca_nodv, unpack_srca_nodv);
+        tmp.set_last_inner_loop_instr(unpack_srca);
+        tmp.set_last_outer_loop_instr(unpack_srca);
+        tmp.program();
+    }
     else
     {
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
@@ -54,12 +66,17 @@ inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
     }
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
 inline void _llk_unpack_fast_untilize_init_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
 {
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
-    _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
+    _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en, bank_per_tile>(init_unit_dim);
+    if constexpr (bank_per_tile)
+    {
+        TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd_RMW>(1);
+    }
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -305,8 +322,15 @@ inline void _llk_unpack_fast_untilize_bfp_rest_block_(const std::uint32_t addres
     _llk_unpack_fast_untilize_bfp_faces_<4>(address, tile_stride_16B, unit_dim, 0);
 }
 
+template <bool bank_per_tile = false>
 inline void _llk_unpack_fast_untilize_uninit_()
 {
+    if constexpr (bank_per_tile)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd_RMW>(0);
+        TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
+    }
 }
 
 } // namespace ckernel
