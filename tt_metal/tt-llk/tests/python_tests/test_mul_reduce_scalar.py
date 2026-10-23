@@ -24,6 +24,7 @@ tiles" — mirroring the on-silicon MulReduceScalarTinyTile gtest suite.
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import parametrize
@@ -51,22 +52,13 @@ FORMATS = [
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 
 
-def _dest_acc(output_format):
-    """Native fp32 DEST is required whenever the output is Float32."""
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
-
-
 def _num_tiles_for_format(formats):
     """DEST half-sync holds 8 bf16 tiles or 4 fp32 tiles; every multiply-phase
     product must be resident before the reduce phase consumes it. The cap is in
     DEST tile-slots, so it applies to tiny tiles too (matching the gtest)."""
     return (
         [1, 2, 3, 4]
-        if _dest_acc(formats.output_format) == DestAccumulation.Yes
+        if dest_acc_for(formats.output_format) == DestAccumulation.Yes
         else [1, 2, 3, 7, 8]
     )
 
@@ -83,7 +75,7 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
-    dest_acc = _dest_acc(formats.output_format)
+    dest_acc = dest_acc_for(formats.output_format)
     input_dimensions = [num_tiles * tile_dimensions[0], tile_dimensions[1]]
 
     # A ~ U[0, 1] mirrors the on-silicon gtest and keeps the accumulated sum

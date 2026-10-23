@@ -35,8 +35,9 @@ is also covered by ``test_rmsnorm_clear_product_tile.py``.
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import MathFidelity, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -65,15 +66,6 @@ TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 # budget (<= 8 bf16 / <= 4 fp32). Fixed at 4 so it is valid for both bf16 and
 # native-fp32 DEST while still forcing multiple chunks for the larger tile counts.
 CHUNK_SIZE = 4
-
-
-def _dest_acc(output_format):
-    """Native fp32 DEST is required whenever the output is Float32."""
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
 
 
 def _num_tiles_for_format(formats):
@@ -105,7 +97,7 @@ def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimen
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
-    dest_acc = _dest_acc(formats.output_format)
+    dest_acc = dest_acc_for(formats.output_format)
     input_dimensions = [num_tiles * tile_dimensions[0], tile_dimensions[1]]
 
     # A ~ U[0, 1] mirrors the on-silicon gtest and keeps the accumulated sum well
