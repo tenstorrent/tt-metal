@@ -3087,3 +3087,42 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
 models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k "test_capture"` (DS41_MATMUL_CONFIG=auto writes
 calls_auto.json), then `-k "test_sweep or test_rule_boxes"`; gate: `PYTHONPATH=$PWD python -m
 models.demos.common.bringup gate P.23 --spec models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.
+
+## P.24 perf attempt 1 (2026-10-23): batched attention wo_a on a tuned 2D config (WO_A_CONFIG tuned / auto)
+
+What: `tt/mm_configs.py:rule` gives the batched matmul with one weight per group (attn.wo_a, [1, 2, 1024, 4096] bf16 .
+[1, 2, 4096, 1024] bfp8 -> bf16, HiFi2, fp32 DEST, 8 calls a chunk) a MatmulMultiCoreReuseMultiCastProgramConfig with
+fuse_batch=False (auto's own family: each core loops the batches, fp32 partials between K blocks) at the widest in0
+block whose CBs fit L1_BUDGET, 32 tiles of K included (batched calls only; auto picks 1, K-51). On 2x2: grid 11x8,
+pm4 pn3, bw32, subblock 4x1, ~790 KB of CBs. The minimal_matmul branch is now batch == 1 only; a broadcast over
+per-batch weights (x batch != w batch) stays auto. Started from the comparison agent's patch (reports/pr54943/
+p24_mm_configs.patch, applied as is). New setting WO_A_CONFIG {tuned (default), auto}: auto = no config for the
+batched call (the path before P.24), checked in `program_config` before its cache; tuned only acts with
+MATMUL_CONFIG=tuned. Nothing else changed (dtypes, fidelity, ckc, memory configs, other sites).
+DS41-113 (never MatmulMultiCoreReuseProgramConfig: bf16 K-block partials) held and is updated: the safe explicit
+config exists, it is auto's family.
+Sweep (tests/perf/test_matmul_sweep.py, extended: batched calls also get the 2D fuse_batch=False family, in0 blocks
+1..32, both mcast orientations; minimal_matmul now tries every out subblock of each blocking), P23_SITES=attn.wo_a,
+2x2, 20 calls, real-time profiler, L1 as in the model (1381 KiB for CBs):
+| config | ms / call | vs auto (rel) | vs fp64 |
+|---|---|---|---|
+| auto | 0.4769 | - | 4.381e-3 |
+| rule (2d nofuse 11x8 pm4 pn3 bw32 sb4x1) | 0.1160 | 0 (max abs 0) | 4.381e-3 |
+| 2d nofuse bw16 / bw8 | 0.1229 / 0.1465 | 0 | 4.381e-3 |
+| bmm (MatmulMultiCoreReuseProgramConfig) bw1 / 2 / 4 | rejected | - | 2.81e-2 / 1.56e-2 / 9.47e-3 |
+wo_a per chunk 3.816 -> 0.928 ms. Other boxes (test_rule_boxes, same run): wo_a at 640 rows 0.2564 -> 0.0674 ms (11x10),
+0.2569 -> 0.1078 (8x8 grid); 512 rows 0.2564 -> 0.0669 / 0.2557 -> 0.0783; every one bit-identical to auto, det 1;
+every other site's rule unchanged and ok. In-model capture: chunk out vs golden rel 0.02803 (= P.23).
+Quick A/B (measure --task P.24, on): 31 err_* within limits, min layer PCC 0.99676 (L03), host_transfers_per_layer 0,
+wall 102.9 ms. gate P.24 --check: all 10 units PASS; the 8 swap units' metrics equal P.23's to the last digit (e.g.
+swa_15 err_swap_out 0.026917). Profile (plain, on): device_ms_total 69.69 (P.23) -> 66.77 ms (limit < 69.7),
+attention 22.85 -> 20.00, every other section within 0.03; chips 67.04-68.05 -> 64.07-65.22. Clean wall 111.1 ms
+(P.23 run 98.6; this run's spread 27.1 ms vs 8.5: wall noise, the device time is the measure).
+Gotchas: the background-moved gate --check was cut at the tool's 20-min limit after 7 units; per-unit
+`--check --unit 'P.24#<name>'` (the full unit id) runs in the foreground. `-k sweep` still selects test_capture and
+test_rule_boxes (module name).
+Re-run: `P23_SITES=attn.wo_a PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k "test_sweep"` (needs generated/ds41_p23/
+calls_auto.json from `DS41_MATMUL_CONFIG=auto ... -k test_capture`); A/B: `python -m models.demos.common.bringup.
+orchestrator measure --task P.24`; gate: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.24 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.

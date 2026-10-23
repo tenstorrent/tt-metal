@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "DS41-113",
+   "how": "never MatmulMultiCoreReuseProgramConfig for wo_a: the rule's batched path uses 2D mcast fuse_batch=False; the sweep keeps the bmm candidates only to show them rejected (vs fp64 9.5e-3..2.8e-2)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-51",
+   "how": "auto's in0_block_w 1 at fp32 DEST is the slowness; the rule picks the widest in0 block that fits L1 (32 tiles at K 4096)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-114",
+   "how": "sweep L1 budget = the model's 1382 KiB free for CBs (filler buffer); the bw32 config needs ~790 KB",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-112",
+   "how": "the batched path skips the minimal_matmul branch (batch == 1 only); minimal subblocks now all swept",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-113",
+   "evidence": "its 'no safe explicit config / keep auto' is out of date: MatmulMultiCoreReuseMultiCastProgramConfig(fuse_batch=False) takes per-batch weights, auto already uses it; at in0_block_w 32 it is bit-identical to auto (vs auto 0, vs fp64 4.381e-3 both) and 0.4769 -> 0.1160 ms (generated/ds41_p23/sweep_p24.log, P.24 test_sweep). Entry updated in known_issues.md.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "which program-config family auto picks for a batched matmul (fuse_batch=False 2D mcast), i.e. that the same family is the safe explicit one"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.24",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T14:51:10",
+  "head": "badbeee883a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.24.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.24_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.24_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.24.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
