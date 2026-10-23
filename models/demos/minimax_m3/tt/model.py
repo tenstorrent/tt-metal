@@ -341,10 +341,11 @@ class Model:
         return args
 
     def release_sub_device_managers(self):
-        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py). Call before closing the
-        mesh: a manager left registered at close can segfault the teardown. Idempotent; a later forward
-        re-creates it."""
+        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py) and the MSA overlap one
+        (tt/ccl.py). Call before closing the mesh: a manager left registered at close can segfault the teardown.
+        Idempotent; a later forward re-creates them."""
         shared_overlap.release(self.mesh_device)
+        self.ccl_manager.release_msa_overlap()
 
     def _forward_layers_and_head(
         self,

@@ -84,7 +84,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     // and the ones patched on a cache hit cannot drift.
     const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
     const tt::tt_metal::CoreCoord grid = dyn.grid;
-    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    auto core_grid = tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(dyn.origin, {dyn.origin.x + grid.x - 1, dyn.origin.y + grid.y - 1}));
     const uint32_t num_cores = dyn.num_cores;
 
     // ---- CBs (fixed ids = Cb enum; descriptor insertion order is irrelevant) ----
@@ -311,7 +312,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
     for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        const tt::tt_metal::CoreCoord core = SparseSDPAMsaOperation::core_at(dyn, i);
         uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
         uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
         // Both sides index the same slot enums, so a reorder here cannot silently desync the

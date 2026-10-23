@@ -184,10 +184,32 @@ def release(mesh_device):
     del _MANAGERS[id(mesh_device)]
 
 
+# id(mesh device) -> [fn()] that remove that mesh's other sub-device managers (tt/ccl.py's MSA overlap, one per
+# CCLManager), so one release_all() at teardown removes every manager a test or script created.
+_RELEASE_HOOKS = {}
+
+
+def register_release_hook(mesh_device, fn):
+    """release_all() calls fn() after this mesh's MoE manager is gone; fn unregisters itself once its manager is
+    removed."""
+    hooks = _RELEASE_HOOKS.setdefault(id(mesh_device), [])
+    if fn not in hooks:
+        hooks.append(fn)
+
+
+def unregister_release_hook(mesh_device, fn):
+    hooks = _RELEASE_HOOKS.get(id(mesh_device), [])
+    if fn in hooks:
+        hooks.remove(fn)
+
+
 def release_all():
-    """release() every mesh that has an overlap manager."""
+    """release() every mesh that has an overlap manager, then the registered hooks (the MSA overlap managers)."""
     for entry in list(_MANAGERS.values()):
         release(entry.mesh_device)
+    for hooks in list(_RELEASE_HOOKS.values()):
+        for fn in list(hooks):
+            fn()
 
 
 class SharedExpertOverlap:

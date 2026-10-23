@@ -22,12 +22,19 @@ load-balancing — MSA work per query is a fixed top-k, not the dense causal tri
 gathered full context and the current chunk's queries all begin at ``cached_len``, this scalar is
 uniform across SP devices (no per-device offset needed). Causality is encoded entirely by the block
 selection; sparse_sdpa_msa applies no token mask.
+
+Entry points: ``msa_sp_attention_nocache`` (a first chunk: gather the chunk's own K/V), ``msa_sp_attention_cache_read``
+(a later chunk: gather its cache slot) and, for packed forwards, ``msa_chunks_pipelined`` (several chunks, the next
+one's gather overlapped under this one's attention on two sub-devices; ``MSA_CHUNK_OVERLAP`` and
+``msa_overlap_chunks`` decide when it runs, and only sub-device-confined ops may run inside its window).
 """
+
+from dataclasses import dataclass
 
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.utils.profiler_utils import zone
+from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
@@ -35,6 +42,13 @@ from .operations import apply_qk_norm_per_head, apply_rope
 # consecutive queries on a core re-select mostly the same blocks, so a resident block saves a DRAM re-read. Output
 # is identical either way. Not the model's DRAM KV cache.
 MSA_KV_BLOCK_CACHE = True
+
+# Packed forwards (TtPrefillRuntime.prefill_forward, tt/prefill_chunk.py): gather the next warm chunk's K/V/index_k
+# prefix on a strip of cores while this chunk's block selection and sparse_sdpa_msa run on the rest
+# (CCLManager.get_msa_overlap). A warm chunk has cached_len > 0: it attends a cache prefix and needs the gather; a
+# cold one (cached_len == 0) attends only itself. Output is identical to the serial chain. Needs at least two warm
+# chunks in the forward. Eager only: the device-side join is an event record, which trace capture rejects.
+MSA_CHUNK_OVERLAP = True
 
 
 def _ensure_dram(t):
@@ -44,11 +58,23 @@ def _ensure_dram(t):
     return t
 
 
-def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None):
+def high_bw_sp_gather(
+    t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None, overlap=None
+):
     """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
     ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
     ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache; ``gathered_dim_size``
-    bounds the rows moved per rank (rank r still lands at its fixed slot r*rows)."""
+    bounds the rows moved per rank (rank r still lands at its fixed slot r*rows). ``overlap`` (an
+    MsaOverlap, see tt/ccl.py) confines the workers to its gather sub-device with its persistent semaphores,
+    so the gather can run beside compute on the other sub-device."""
+    kwargs = {}
+    if overlap is not None:
+        kwargs = dict(
+            subdevice_id=overlap.gather_sd_id,
+            sub_core_grids=overlap.gather_cores,
+            ready_semaphore=overlap.ready_semaphore,
+            data_valid_semaphore=overlap.data_valid_semaphore,
+        )
     return ttnn.experimental.high_bw_all_gather(
         t,
         dim=2,
@@ -57,6 +83,7 @@ def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index
         num_links=ccl_manager.num_links,
         input_batch_index=input_batch_index,
         gathered_dim_size=gathered_dim_size,
+        **kwargs,
     )
 
 
@@ -124,6 +151,97 @@ def index_branch_forward(
     return iq, ik
 
 
+def msa_select_blocks(
+    index_q,
+    index_k,
+    *,
+    chunk_start_idx,
+    scale,
+    num_groups,
+    block_size,
+    topk_blocks,
+    cluster_axis=None,
+    block_cyclic_sp_axis=None,
+    block_cyclic_chunk_local=None,
+    kv_len=None,
+    overlap=None,
+    index_k_tp_sharded=False,
+):
+    """Indexer scores + top-k -> block ids [1, num_groups, Sq, topk] (uint32, row-major). Arguments as for
+    msa_indexer_sparse. ``overlap`` confines the indexer and the top-k to the compute sub-device."""
+    # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
+    with zone("indexer"):
+        block_scores = ttnn.experimental.indexer_score_msa(
+            index_q,
+            index_k,
+            chunk_start_idx=chunk_start_idx,
+            scale=scale,
+            num_groups=num_groups,
+            block_size=block_size,
+            program_config=ttnn.IndexerScoreProgramConfig(
+                q_chunk_size=64,  # work units: q rows per group, keys per band (tokens)
+                k_chunk_size=1024,
+                head_group_size=0,
+            ),
+            seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
+            block_cyclic_sp_axis=block_cyclic_sp_axis,
+            block_cyclic_chunk_local=block_cyclic_chunk_local,
+            kv_len=kv_len,
+            sub_core_grids=overlap.compute_cores if overlap is not None else None,
+            block_cyclic_cache_tp_sharded=index_k_tp_sharded,
+        )
+
+        # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
+        # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
+        # valid_length bounds the search to the populated block columns when K sits in a worst-case buffer.
+        topk_kwargs = {}
+        if kv_len is not None:
+            assert kv_len % block_size == 0, f"kv_len ({kv_len}) must be a whole number of {block_size}-token blocks"
+            topk_kwargs["valid_length"] = kv_len // block_size
+        if overlap is not None:
+            # topk_large_indices takes the sub-device explicitly and the rectangle within it; indexer_score_msa and
+            # sparse_sdpa_msa take only the rectangle, and the runtime infers their sub-device from its cores.
+            topk_kwargs["subdevice_id"] = overlap.compute_sd_id
+            topk_kwargs["sub_core_grids"] = overlap.compute_cores
+        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks, **topk_kwargs)
+    return block_ids
+
+
+def msa_sparse_attend(
+    q_rm,
+    k,
+    v,
+    block_ids,
+    *,
+    chunk_start_idx,
+    scale,
+    block_size,
+    cluster_axis=None,
+    block_cyclic_sp_axis=None,
+    block_cyclic_chunk_local=None,
+    overlap=None,
+):
+    """sparse_sdpa_msa over the selected blocks: row-major q in, row-major out [1, Hq, Sq, head_dim]. The caller
+    owns the layout conversions (the overlap window admits only ops that stay on one sub-device)."""
+    # sparse_sdpa_msa: q + block-ids row-major, K/V tiled; expands blocks->tokens internally. chunk_start_idx +
+    # cluster_axis drive the token-level diagonal-block causal mask with the per-device SP start (chunk_start =
+    # chunk_start_idx + rank*Sq); q must be bf16 (the op rejects fp8 q under causal).
+    return ttnn.transformer.sparse_sdpa_msa(
+        q_rm,
+        k,
+        v,
+        block_ids,
+        scale=scale,
+        block_size=block_size,
+        chunk_start_idx=chunk_start_idx,
+        cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
+        enable_kv_block_cache=MSA_KV_BLOCK_CACHE,
+        sub_core_grids=overlap.compute_cores if overlap is not None else None,
+    )
+
+
 def msa_indexer_sparse(
     index_q,
     index_k,
@@ -136,7 +254,6 @@ def msa_indexer_sparse(
     num_groups,
     block_size,
     topk_blocks,
-    device,
     return_block_ids=False,
     cluster_axis=None,
     block_cyclic_sp_axis=None,
@@ -148,15 +265,13 @@ def msa_indexer_sparse(
 
     index_q [1, num_groups, Sq, index_dim]   index_k [1, 1, T, index_dim]   (1 shared index-k head)
     q       [1, Hq, Sq, head_dim]            k, v    [1, n_kv, T, head_dim]  (TILE layout)
-    cluster_axis: when set, the merged op derives a PER-DEVICE causal chunk_start from the device's
-      mesh coordinate along that axis -> chunk_start = chunk_start_idx + rank*Sq (Sq = q's S/sp rows),
-      so q/index_q stay SP-sharded. None -> uniform chunk_start_idx (single-device / gathered query).
-      (Replaces the old host-built per-device chunk_offset tile; mesh-coord approach, #47939.)
-    block_cyclic_sp_axis / block_cyclic_chunk_local (set together): the AllGather'd K/V/index_k are
-      still in block-cyclic ("slab") SP order; the indexer (K reader) and sparse_sdpa_msa (K reader /
-      V writer) remap each natural block-id to its physical block IN-KERNEL (#49490/#48772), so the
-      caller no longer untilize->transpose->tilize them to natural order on the host. None -> the
-      tensors are already natural (single-chunk / pre-reordered).
+    cluster_axis: when set, the ops derive a PER-DEVICE causal chunk_start from the device's mesh
+      coordinate along that axis -> chunk_start = chunk_start_idx + rank*Sq (Sq = q's S/sp rows), so
+      q/index_q stay SP-sharded. None -> uniform chunk_start_idx (single-device / gathered query).
+    block_cyclic_sp_axis / block_cyclic_chunk_local (set together): the AllGather'd K/V/index_k stay in
+      block-cyclic ("slab") SP order; the indexer (K reader) and sparse_sdpa_msa (K reader / V writer)
+      remap each natural block-id to its physical block in-kernel, so nothing is reordered on the host.
+      None -> the tensors are already natural (single-chunk / pre-reordered).
     kv_len: when K/index_k are allocated at a FIXED worst-case T (the persistent high_bw_all_gather
       buffers, T = cache capacity) this is the valid natural-position prefix actually written (a multiple
       of block_size). The indexer scores/writes only columns [0, kv_len) (hash-excluded runtime arg, so a
@@ -166,52 +281,27 @@ def msa_indexer_sparse(
       (chip (s, t) at (s*tp + t)*rows) rather than sp; the indexer's key remap follows. K / V keep the SP layout.
     -> out  [1, Hq, Sq, head_dim]
     """
-    # Pass the dedup flag only when set, so the TP-replicated path issues the exact same call as before.
-    tp_sharded_kwargs = {"block_cyclic_cache_tp_sharded": True} if index_k_tp_sharded else {}
-    # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
-    with zone("indexer"):
-        block_scores = ttnn.experimental.indexer_score_msa(
-            index_q,
-            index_k,
-            chunk_start_idx=chunk_start_idx,
-            scale=scale,
-            num_groups=num_groups,
-            block_size=block_size,
-            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
-            seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
-            block_cyclic_sp_axis=block_cyclic_sp_axis,
-            block_cyclic_chunk_local=block_cyclic_chunk_local,
-            kv_len=kv_len,
-            **tp_sharded_kwargs,
-        )
-
-        # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
-        # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
-        # valid_length bounds the search to the populated block columns when K sits in a worst-case buffer.
-        topk_kwargs = {}
-        if kv_len is not None:
-            assert kv_len % block_size == 0, f"kv_len ({kv_len}) must be a whole number of {block_size}-token blocks"
-            topk_kwargs["valid_length"] = kv_len // block_size
-        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks, **topk_kwargs)
-
-    # sparse_sdpa_msa (#48700): q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
-    # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
-    # SP start (chunk_start = chunk_start_idx + rank*Sq); q must be bf16 (the op rejects fp8 q under causal).
+    geometry = dict(
+        chunk_start_idx=chunk_start_idx,
+        cluster_axis=cluster_axis,
+        block_cyclic_sp_axis=block_cyclic_sp_axis,
+        block_cyclic_chunk_local=block_cyclic_chunk_local,
+    )
+    block_ids = msa_select_blocks(
+        index_q,
+        index_k,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=block_size,
+        topk_blocks=topk_blocks,
+        kv_len=kv_len,
+        index_k_tp_sharded=index_k_tp_sharded,
+        **geometry,
+    )
     with zone("sparse_sdpa"):
-        out = ttnn.transformer.sparse_sdpa_msa(
-            ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
-            k,
-            v,
-            block_ids,
-            scale=scale,
-            block_size=block_size,
-            chunk_start_idx=chunk_start_idx,
-            cluster_axis=cluster_axis,
-            block_cyclic_sp_axis=block_cyclic_sp_axis,
-            block_cyclic_chunk_local=block_cyclic_chunk_local,
-            enable_kv_block_cache=MSA_KV_BLOCK_CACHE,
+        out = msa_sparse_attend(
+            ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT), k, v, block_ids, scale=scale, block_size=block_size, **geometry
         )
-
         # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
         # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
         out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
@@ -233,7 +323,6 @@ def msa_sp_attention_nocache(
     block_size,
     topk_blocks,
     num_groups=1,
-    return_block_ids=False,
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
 
@@ -271,8 +360,8 @@ def msa_sp_attention_nocache(
         v_full = gather("msa_nocache_v", v)
     with zone("ag_index_k"):
         index_k_full = gather("msa_nocache_index_k", index_k)
-    # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
-    # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
+    # Per-device causality from the mesh coordinate: device r derives chunk_start = cached_len + r*Sq (Sq = q's
+    # s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(
         index_q,
         index_k_full,
@@ -284,7 +373,6 @@ def msa_sp_attention_nocache(
         num_groups=num_groups,
         block_size=block_size,
         topk_blocks=topk_blocks,
-        device=device,
         cluster_axis=sp_axis,
     )
 
@@ -404,6 +492,80 @@ def _gather_tp_sharded_index_k(
     return high_bw_sp_gather(row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp)
 
 
+def msa_cache_gather(
+    kv_cache, *, cache_row, mesh_config, ccl_manager, cached_len, chunk_local, block_size, set_idx=0, overlap=None
+):
+    """Gather ``cache_row`` (= slot_id * num_layers + layer) of the packed cache across SP into the persistent
+    worst-case buffers ``(k_full, v_full, index_k_full, kv_len)``. ``set_idx`` selects one of two buffer sets so a
+    gather can land while the other set is still being read (the packed-forward overlap); ``overlap`` runs it on
+    the gather sub-device. The gathered tensors alias the persistent buffers: never deallocate."""
+    sp_axis = mesh_config.sp_axis
+    device = ccl_manager.mesh_device
+    sp = device.shape[sp_axis]
+    assert sp > 1, "msa_cache_gather needs sp > 1 (high_bw_all_gather rejects a one-device axis)"
+    # The replicated cache tensors carry a 1-D tensor topology, and high_bw_all_gather requires
+    # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
+    assert sp_axis == 0, f"msa_cache_gather needs sp_axis == 0 (got {sp_axis})"
+    seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
+    kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size)
+    assert (
+        n_rows <= seq_local and kv_len <= seq_local * sp
+    ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
+    bufs = msa_gather_buffers(kv_cache, ccl_manager, sp, set_idx)
+
+    def gather(name, cache_t):
+        return high_bw_sp_gather(
+            cache_t,
+            mesh_config,
+            ccl_manager,
+            bufs[name],
+            input_batch_index=cache_row,
+            gathered_dim_size=n_rows * sp,
+            overlap=overlap,
+        )
+
+    # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
+    # attributable to their consumer (see tests/perf/profile_prefill.py).
+    with zone("ag_kv"):
+        k_full = gather("k", kv_cache.k)
+        v_full = gather("v", kv_cache.v)
+    with zone("ag_index_k"):
+        if kv_cache.index_k_tp_axis is None:
+            index_k_full = gather("index_k", kv_cache.index_k)
+        else:
+            # The two-leg (or full-mesh) rebuild runs on the whole grid; the pipelined path never takes a deduped
+            # cache (msa_overlap_chunks), so this is the serial chain.
+            assert overlap is None and set_idx == 0, "a TP-deduped index_k cache is gathered serially"
+            index_k_full = _gather_tp_sharded_index_k(
+                kv_cache.index_k,
+                cache_row=cache_row,
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                tp_axis=kv_cache.index_k_tp_axis,
+                cached_len=cached_len,
+                chunk_local=chunk_local,
+                block_size=block_size,
+            )
+    return k_full, v_full, index_k_full, kv_len
+
+
+def msa_gather_buffers(kv_cache, ccl_manager, sp, set_idx=0):
+    """Buffer set ``set_idx`` of the persistent worst-case gather buffers for this cache: ``k`` / ``v`` /
+    ``index_k`` -> [1, 1, seq_local*sp, hd], allocated on first use by a full-grid op (so never inside the
+    overlap window)."""
+    seq_local = kv_cache.k.shape[2]
+    return {
+        name: ccl_manager.get_high_bw_gather_buffer(
+            # set 0 keeps the serial path's key, so both paths share those buffers
+            f"msa_cache_{name}" if set_idx == 0 else f"msa_cache_{name}/{set_idx}",
+            (1, 1, seq_local * sp, cache_t.shape[3]),
+            cache_t.dtype,
+        )
+        for name, cache_t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", kv_cache.index_k))
+        if not (name == "index_k" and kv_cache.index_k_tp_axis is not None)  # deduped: rebuilt by its own route
+    }
+
+
 def msa_sp_attention_cache_read(
     q,
     index_q,
@@ -431,44 +593,15 @@ def msa_sp_attention_cache_read(
     A TP-deduped index_k cache (``kv_cache.index_k_tp_axis``) is rebuilt by ``_gather_tp_sharded_index_k``.
     """
     sp_axis = mesh_config.sp_axis
-    device = ccl_manager.mesh_device
-    sp = device.shape[sp_axis]
-    assert sp > 1, "msa_sp_attention_cache_read needs sp > 1 (high_bw_all_gather rejects a one-device axis)"
-    # The replicated cache tensors carry a 1-D tensor topology, and high_bw_all_gather requires
-    # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
-    assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
-    seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
-    kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size)
-    assert (
-        n_rows <= seq_local and kv_len <= seq_local * sp
-    ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
-    index_k_tp_axis = kv_cache.index_k_tp_axis
-
-    def gather(key, cache_t):
-        buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
-        return high_bw_sp_gather(
-            cache_t, mesh_config, ccl_manager, buf, input_batch_index=cache_row, gathered_dim_size=n_rows * sp
-        )
-
-    # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
-    # attributable to their consumer (see tests/perf/profile_prefill.py).
-    with zone("ag_kv"):
-        k_full = gather("msa_cache_k", kv_cache.k)
-        v_full = gather("msa_cache_v", kv_cache.v)
-    with zone("ag_index_k"):
-        if index_k_tp_axis is None:
-            index_k_full = gather("msa_cache_index_k", kv_cache.index_k)
-        else:
-            index_k_full = _gather_tp_sharded_index_k(
-                kv_cache.index_k,
-                cache_row=cache_row,
-                mesh_config=mesh_config,
-                ccl_manager=ccl_manager,
-                tp_axis=index_k_tp_axis,
-                cached_len=cached_len,
-                chunk_local=chunk_local,
-                block_size=block_size,
-            )
+    k_full, v_full, index_k_full, kv_len = msa_cache_gather(
+        kv_cache,
+        cache_row=cache_row,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+        cached_len=cached_len,
+        chunk_local=chunk_local,
+        block_size=block_size,
+    )
     return msa_indexer_sparse(
         index_q,
         index_k_full,
@@ -480,10 +613,138 @@ def msa_sp_attention_cache_read(
         num_groups=num_groups,
         block_size=block_size,
         topk_blocks=topk_blocks,
-        device=device,
         cluster_axis=sp_axis,
         block_cyclic_sp_axis=sp_axis,
         block_cyclic_chunk_local=chunk_local,
         kv_len=kv_len,
-        index_k_tp_sharded=index_k_tp_axis is not None,
+        index_k_tp_sharded=kv_cache.index_k_tp_axis is not None,
     )
+
+
+@dataclass
+class MsaChunk:
+    """One warm chunk of a packed forward as msa_chunks_pipelined consumes it: its post-RoPE queries
+    (tiled, this chip's rows) and the cache position they attend from."""
+
+    q: ttnn.Tensor
+    index_q: ttnn.Tensor
+    slot_id: int  # KV-cache slot of the request; the layer is the call's
+    cached_len: int
+    s_local: int
+
+
+def msa_overlap_chunks(cached_lens, kv_cache, mesh_config, ccl_manager):
+    """Indices of a packed forward's chunks (given by their ``cached_lens``) that msa_chunks_pipelined takes:
+    the warm ones (cached_len > 0) when the overlap is on, a cache exists, at least two are warm and there is
+    an SP axis to gather over, and a TP-replicated index_k cache; [] otherwise, and every chunk then runs its
+    serial chain."""
+    warm = [i for i, c in enumerate(cached_lens) if c > 0]
+    if not (MSA_CHUNK_OVERLAP and kv_cache is not None and len(warm) >= 2):
+        return []
+    if kv_cache.index_k_tp_axis is not None:  # a TP-deduped index_k is rebuilt by a full-grid gather: no window
+        return []
+    return warm if ccl_manager.mesh_device.shape[mesh_config.sp_axis] >= 2 else []
+
+
+def msa_chunks_pipelined(
+    chunks, *, kv_cache, layer_idx, mesh_config, ccl_manager, scale, block_size, topk_blocks, num_groups
+):
+    """The MSA chains of a packed forward's warm chunks (``MsaChunk`` records in forward order), with the
+    next chunk's cache gather overlapped under this chunk's block selection and sparse attention. Reads
+    cache layer ``layer_idx`` of each chunk's slot. Returns the tiled attention outputs in chunk order.
+
+    Schedule, with G(i) = chunk i's K/V/index_k gather (gather sub-device, buffer set i % 2) and C(i) = its
+    indexer -> top-k -> sparse_sdpa_msa (compute sub-device):
+        G(0); for i: join(G(i), C(i-1)); C(i); G(i+1)
+    The join before C(i) covers both sub-devices, so C(i) and G(i+1), enqueued after it, start only once G(i)
+    has landed and C(i-1) has released the buffer set G(i+1) overwrites; G(i+1) does not wait for C(i), which
+    is the overlap (a program stalls only on its own sub-device's predecessors). A join over one sub-device
+    would race that overwrite. Only sub-device-confined ops may run inside the window: the runtime does not
+    reject a program that spans both sub-devices (a layout change, an allocation that runs as a program); it
+    stalls on one of them and runs the program on the gather strip beside the in-flight gather, silently
+    (program.cpp determine_sub_device_ids). test_msa_chunks_pipelined_vs_serial (bit-exact against the serial
+    chain) is the guard. The gather allocates nothing (persistent buffers, caller-owned semaphores), so a tensor
+    freed on the compute side is only ever reused by a later compute-side program, after its reader. Eager only:
+    the join is an event record, which trace capture rejects. Contract: tech_reports/SubDevices/SubDevices.md.
+    """
+    overlap = ccl_manager.get_msa_overlap()
+    sp_axis = mesh_config.sp_axis
+    sp = ccl_manager.mesh_device.shape[sp_axis]
+    for set_idx in (0, 1):  # both buffer sets exist before the window (their allocation is a full-grid op)
+        msa_gather_buffers(kv_cache, ccl_manager, sp, set_idx)
+    q_rm = [ttnn.to_layout(c.q, ttnn.ROW_MAJOR_LAYOUT) for c in chunks]
+
+    def gather(i):
+        c = chunks[i]
+        with zone(f"gather{i}", FINE):
+            return msa_cache_gather(
+                kv_cache,
+                cache_row=kv_cache.cache_row(c.slot_id, layer_idx),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                cached_len=c.cached_len,
+                chunk_local=c.s_local,
+                block_size=block_size,
+                set_idx=i % 2,
+                overlap=overlap,
+            )
+
+    outs = []
+    block_ids = None
+    try:
+        with overlap.window():
+            pending = gather(0)
+            for i, c in enumerate(chunks):
+                overlap.join()
+                k_full, v_full, index_k_full, kv_len = pending
+                geometry = dict(
+                    chunk_start_idx=c.cached_len,
+                    cluster_axis=sp_axis,
+                    block_cyclic_sp_axis=sp_axis,
+                    block_cyclic_chunk_local=c.s_local,
+                )
+                with zone(f"chunk{i}", FINE):
+                    block_ids = msa_select_blocks(
+                        c.index_q,
+                        index_k_full,
+                        scale=scale,
+                        num_groups=num_groups,
+                        block_size=block_size,
+                        topk_blocks=topk_blocks,
+                        kv_len=kv_len,
+                        overlap=overlap,
+                        **geometry,
+                    )
+                    with zone("sparse_sdpa"):
+                        outs.append(
+                            msa_sparse_attend(
+                                q_rm[i],
+                                k_full,
+                                v_full,
+                                block_ids,
+                                scale=scale,
+                                block_size=block_size,
+                                overlap=overlap,
+                                **geometry,
+                            )
+                        )
+                    ttnn.deallocate(block_ids)
+                    block_ids = None
+                if i + 1 < len(chunks):
+                    pending = gather(i + 1)
+    except BaseException:
+        if block_ids is not None:  # the block ids of the chunk whose attention raised
+            ttnn.deallocate(block_ids)
+        for out_rm in outs:  # the finished chunks' outputs, which an aborted window never tiles
+            ttnn.deallocate(out_rm)
+        raise
+    finally:
+        for t in q_rm:
+            ttnn.deallocate(t)
+    # The tiling the serial chain charges to sparse_sdpa, outside the window (a full-grid op).
+    tiled = []
+    for i, out_rm in enumerate(outs):
+        with zone(f"chunk{i}", FINE), zone("sparse_sdpa"):
+            tiled.append(ttnn.to_layout(out_rm, ttnn.TILE_LAYOUT))
+        ttnn.deallocate(out_rm)
+    return tiled

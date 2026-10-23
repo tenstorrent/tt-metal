@@ -106,7 +106,8 @@ struct SparseSDPAMsaOperation {
     // cache_batch_idx, chunk_start_idx/cluster_axis. Single-sourced so create_descriptor (miss-bake) and
     // override_runtime_arguments (hit-patch) write the same values and cannot drift.
     struct DispatchArgs {
-        tt::tt_metal::CoreCoord grid;  // per-core arg order: core i == {i % grid.x, i / grid.x}
+        tt::tt_metal::CoreCoord grid;    // worker rectangle size; per-core arg order: core i == core_at(i)
+        tt::tt_metal::CoreCoord origin;  // its first core ((0, 0) without sub_core_grids)
         uint32_t num_cores = 0;
         uint32_t base_work = 0;  // total_work = S * n_kv over num_cores; the first `extra` cores take one more
         uint32_t extra = 0;
@@ -120,6 +121,9 @@ struct SparseSDPAMsaOperation {
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+    static tt::tt_metal::CoreCoord core_at(const DispatchArgs& dyn, uint32_t i) {
+        return {dyn.origin.x + i % dyn.grid.x, dyn.origin.y + i / dyn.grid.x};
+    }
 
     // Circular-buffer ids, shared with the kernels as compile-time args. Fixed ids (not allocation order), so a
     // conditional buffer -- the causal mask tiles, the block cache -- is skipped without renumbering the rest.
@@ -196,6 +200,7 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
-    bool enable_kv_block_cache = false);
+    bool enable_kv_block_cache = false,
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

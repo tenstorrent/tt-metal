@@ -26,7 +26,7 @@ def state_dict(request):
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
-    """Remove the MoE overlap sub-device managers before the test's fixtures close the mesh."""
+    """Remove the MoE and MSA overlap sub-device managers before the test's fixtures close the mesh."""
     overlap = sys.modules.get("models.demos.minimax_m3.tt.moe.shared_overlap")
     if overlap is not None:
         overlap.release_all()
