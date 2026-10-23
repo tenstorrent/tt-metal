@@ -629,3 +629,26 @@ def test_ternary_zero_size_dim(device, shape_a, shape_b, shape_c, op):
 
     assert output.shape == expected
     assert ttnn.to_torch(output).shape == expected
+
+
+def test_zero_size_dim_skips_launch(device):
+    device.enable_program_cache()
+    device.clear_program_cache()
+    torch_x = torch.zeros((1, 1, 0, 64), dtype=torch.bfloat16)
+    x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = [
+        ttnn.where(x, x, x),
+        ttnn.addcmul(x, x, x, value=1.0),
+        ttnn.addcdiv(x, x, x, value=1.0),
+        ttnn.lerp(x, x, x),
+        ttnn.mac(x, x, x),
+        ttnn.mac(x, x, 1.5),
+        ttnn.add(x, x),
+        ttnn.relu(x),
+        ttnn.typecast(x, ttnn.float32),
+    ]
+
+    assert device.num_program_cache_entries() == 0
+    assert all(output.shape == torch_x.shape for output in outputs)
+    device.disable_and_clear_program_cache()

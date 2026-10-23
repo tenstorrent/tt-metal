@@ -247,6 +247,15 @@ public:
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
+    static bool skip_launch(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& tensor_return_value)
+        requires HasSkipLaunch<DeviceOperation>
+    {
+        return DeviceOperation::skip_launch(attrs, tensor_args, tensor_return_value);
+    }
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
