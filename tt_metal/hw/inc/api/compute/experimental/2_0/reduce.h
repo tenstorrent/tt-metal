@@ -65,13 +65,14 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
  * Reduce one tile of data (with the scaler tile) into DST[idst]. Pair with reduce_init. DST must be acquired.
  * itile / itile_scaler index within data / scaler. Per-tile input addresses are derived from each operand's
  * geometry via tile_stride_words (one-tile page; exp section included for block floats).
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  *
  * | Template | is_fp32_dest_acc_en    | fp32 dest-accumulate mode          | bool       | | False |
  * | Function | data / scaler          | Input operands                    | LLKOperand | | True |
  * | Function | itile / itile_scaler   | Tile indices within data / scaler | uint32_t   | | True |
  * | Function | idst                   | DST register index for the result | uint32_t   | | True |
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
  */
 // clang-format on
 template <
@@ -149,14 +150,15 @@ ALWI void reduce_block(
  * already be in the source registers (e.g. staged by a preceding fused op like tilize); takes no LLKOperand.
  * Geometry comes from num_faces (row-major face layout). Pair with reduce_init. DST must be acquired. For a
  * non-default face layout, use the TensorShape overload below.
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  *
  * | Template | reduce_type         | SUM / AVG / MAX                          | PoolType  | | True |
  * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True |
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool      | | False |
  * | Function | idst                | DST register index for the result       | uint32_t  | | True |
  * | Function | num_faces           | Number of faces to reduce (default 4)   | uint32_t  | 1 / 2 / 4 | False |
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -170,14 +172,15 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM
 /**
  * Math-only reduction into DST[idst] with an explicit tile geometry. As above, source tiles must already be
  * in the source registers; takes no LLKOperand. Pair with reduce_init. DST must be acquired.
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  *
  * | Template | reduce_type         | SUM / AVG / MAX                          | PoolType             | | True |
  * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True |
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool                 | | False |
  * | Function | idst                | DST register index for the result       | uint32_t             | | True |
  * | Function | tensor_shape        | Tile geometry to reduce                  | ckernel::TensorShape | | True |
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

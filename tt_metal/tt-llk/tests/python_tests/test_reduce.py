@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
     REDUCE_TO_ONE,
+    SFPU_INDEX_TRACKING,
 )
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, tolerances
@@ -194,6 +195,7 @@ def test_reduce(
             REDUCE_TO_ONE(is_reduce_to_one),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            SFPU_INDEX_TRACKING(False),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -374,6 +376,7 @@ def test_reduce_bfp4_b(
             REDUCE_TO_ONE(is_reduce_to_one),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            SFPU_INDEX_TRACKING(False),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -549,6 +552,58 @@ def _fp32_ulps(magnitude: float, ulps: int) -> float:
 def test_reduce_scalar_fp32_exact(
     formats, pool_type, math_fidelity, scaler_row, pattern, tile_mode, tile_dimensions
 ):
+    _check_reduce_scalar_fp32_exact(
+        formats,
+        pool_type,
+        math_fidelity,
+        scaler_row,
+        pattern,
+        tile_mode,
+        tile_dimensions,
+    )
+
+
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)],
+    pool_type=[ReducePool.Sum, ReducePool.Average],
+    math_fidelity=[MathFidelity.HiFi4],
+    tile_mode=["single", "reduce_to_one"],
+)
+def test_reduce_scalar_fp32_after_index_tracking(
+    formats, pool_type, math_fidelity, tile_mode
+):
+    """The fp32 SFPU tail must not inherit SFPU Dest index tracking.
+
+    A topk or max_pool_with_indices init sets LaneConfig.ENABLE_DEST_INDEX and nothing
+    resets it between kernels. While it is set, a non-load write into LREG4-LREG7 is
+    replaced by the tracked index (HW erratum TEN-2932); the tail's SFPMAD, SFPADD and
+    SFPSHFT2 writes into LREG4 and LREG5 are such writes. The reduce init has to put the
+    SFPU configuration back to its default before the tail runs, as every SFPU op init
+    does. The kernel sets the bit right before the reduce init, and the result is held to
+    the same exact gate as test_reduce_scalar_fp32_exact.
+    """
+    _check_reduce_scalar_fp32_exact(
+        formats,
+        pool_type,
+        math_fidelity,
+        "uniform",
+        "random",
+        tile_mode,
+        [32, 32],
+        index_tracking=True,
+    )
+
+
+def _check_reduce_scalar_fp32_exact(
+    formats,
+    pool_type,
+    math_fidelity,
+    scaler_row,
+    pattern,
+    tile_mode,
+    tile_dimensions,
+    index_tracking=False,
+):
     num_tiles, is_reduce_to_one, tiles_in_block = FP32_EXACT_TILE_MODES[tile_mode]
     output_tiles = 1 if is_reduce_to_one else num_tiles
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -662,6 +717,7 @@ def test_reduce_scalar_fp32_exact(
             REDUCE_TO_ONE(is_reduce_to_one),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            SFPU_INDEX_TRACKING(index_tracking),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -691,7 +747,8 @@ def test_reduce_scalar_fp32_exact(
         golden = goldens[o]
         where = (
             f"output tile {o}/{output_tiles}, tile={tile_dimensions}, mode={tile_mode}, "
-            f"scaler_row={scaler_row}, pattern={pattern}, fidelity={math_fidelity.name}"
+            f"scaler_row={scaler_row}, pattern={pattern}, fidelity={math_fidelity.name}, "
+            f"index_tracking={index_tracking}"
         )
         if pattern == "overflow":
             # The fp32 face pooling overflows; the pre-fix tail carried that through.

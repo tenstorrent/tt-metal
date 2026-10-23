@@ -138,8 +138,9 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
  * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  * Return value: None
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
@@ -226,6 +227,9 @@ ALWI void reduce_block(
  * --------------------
  *
  * For finer control in using this kernel, such as specifying different layout of faces, use the TensorShape overloaded function.
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -233,8 +237,6 @@ ALWI void reduce_block(
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -255,6 +257,9 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
 // clang-format off
 /**
  * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ * NOTE: On Wormhole and Blackhole, with fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the
+ * SFPU: the init resets the SFPU configuration register and each tile overwrites LREG0-LREG2 and LREG4-LREG5, so
+ * re-run any SFPU init that preloads an LREG or configures the SFPU before the next SFPU op.
  *
  * | Param Type | Name                      | Description                                                                             | Type                 | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|----------------------|------------------------------------------------|----------|
@@ -262,8 +267,6 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim            | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t             | Must be less than the acquired size of DST REG | True     |
  * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
- * NOTE: With fp32 DEST accumulation and HiFi2 or higher, REDUCE_SCALAR SUM/AVG finishes on the SFPU and overwrites SFPU
- * LREG0-LREG5; re-run any SFPU init that preloads an LREG before the next SFPU op.
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

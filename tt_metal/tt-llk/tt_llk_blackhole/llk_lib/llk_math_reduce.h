@@ -15,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
@@ -27,6 +28,12 @@ constexpr std::uint32_t REDUCE_SCALAR_SCRATCH_ROW = 4;
 constexpr std::uint32_t REDUCE_SCALAR_SCALER_ROW = 8;
 // SFPLOAD/SFPSTORE address bit that selects the odd columns of a 4-row block.
 constexpr std::uint32_t SFPU_ODD_COLS = 2;
+
+// REDUCE_SCALAR SUM/AVG with fp32 DEST at HiFi2 and up finish on the SFPU (see reduce_scalar_fp32_sum); MAX, LoFi (the
+// face pooling already consumes only 4 SrcA mantissa bits) and 16-bit DEST keep the FPU transpose, as does int
+// (is_int_fpu_en, checked at the call).
+template <PoolType type, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+constexpr bool reduce_scalar_fp32_sfpu_tail = is_fp32_dest_acc_en && is_high_fidelity(math_fidelity) && type != PoolType::MAX;
 
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
@@ -100,7 +107,9 @@ inline void reduce_row_perform_transpose()
  * row's column 0, each step one fp32 rounding; no term is split or passes through Src, so nothing underflows that
  * the true fp32 product would not. Writes column 0 of result row 0 only (the packer reads element [0]).
  *
- * Overwrites SFPU LREG0-LREG5 and leaves the lane flags enabled with all lanes on.
+ * Overwrites SFPU LREG0-LREG2 and LREG4-LREG5 and leaves the lane flags enabled with all lanes on. Runs under the
+ * default SFPU configuration that @ref _llk_math_reduce_init_ establishes: with LaneConfig.ENABLE_DEST_INDEX set,
+ * the SFPMAD, SFPADD and SFPSHFT2 writes into LREG4 and LREG5 would be replaced by the tracked index.
  */
 inline __attribute__((noinline)) void reduce_scalar_fp32_sum()
 {
@@ -334,8 +343,8 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
- * @note Overwrites SFPU LREG0-LREG5 for fp32-DEST HiFi2+ REDUCE_SCALAR SUM/AVG; re-run any SFPU init that
- *       preloads an LREG before the next SFPU op (@ref _llk_math_reduce_uninit_ does not restore them).
+ * @note Overwrites SFPU LREG0-LREG2 and LREG4-LREG5 for fp32-DEST HiFi2+ REDUCE_SCALAR SUM/AVG; re-run any SFPU
+ *       init that preloads an LREG before the next SFPU op (@ref _llk_math_reduce_uninit_ does not restore them).
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
@@ -394,9 +403,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        // SUM/AVG with fp32 DEST at HiFi2 and up finish on the SFPU (see reduce_scalar_fp32_sum); MAX, LoFi (the
-        // face pooling already consumes only 4 SrcA mantissa bits), 16-bit DEST and int keep the FPU transpose.
-        constexpr bool fp32_sfpu_tail = is_fp32_dest_acc_en && high_fidelity && type != PoolType::MAX && !is_int_fpu_en;
+        constexpr bool fp32_sfpu_tail = reduce_scalar_fp32_sfpu_tail<type, is_fp32_dest_acc_en, math_fidelity> && !is_int_fpu_en;
 
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
@@ -585,6 +592,9 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @param tensor_shape: Tile shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
+ * @note For fp32-DEST HiFi2+ REDUCE_SCALAR SUM/AVG this resets the SFPU configuration register (LaneConfig) to
+ *       its default, as every SFPU op init does, so index tracking left by a topk or max_pool_with_indices init
+ *       cannot reach the SFPU tail of @ref _llk_math_reduce_.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
@@ -607,6 +617,15 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
     math::_configure_default_zero_flag_state_();
+
+    if constexpr (dim == ReduceDim::REDUCE_SCALAR && reduce_scalar_fp32_sfpu_tail<type, is_fp32_dest_acc_en, math_fidelity>)
+    {
+        // The SFPU tail writes LREG4 and LREG5 with SFPMAD, SFPADD and SFPSHFT2. While LaneConfig.ENABLE_DEST_INDEX is
+        // set, any such write is replaced by the tracked index (HW erratum TEN-2932): the topk and
+        // max_pool_with_indices inits set that bit, only an SFPU op init clears it, and nothing resets it between
+        // kernels. The FPU-only tail never touched the SFPU, so reduce had no SFPU init to inherit one from.
+        sfpu::_init_sfpu_config_reg();
+    }
 }
 
 /**

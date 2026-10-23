@@ -1706,6 +1706,20 @@ class REDUCE_TO_ONE(RuntimeParameter):
 
 
 @dataclass
+class SFPU_INDEX_TRACKING(RuntimeParameter):
+    """Enable SFPU Dest index tracking (LaneConfig.ENABLE_DEST_INDEX) before the op under test,
+    the state a topk or max_pool_with_indices init leaves behind."""
+
+    sfpu_index_tracking: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_INDEX_TRACKING = {str(self.sfpu_index_tracking).lower()};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "bool SFPU_INDEX_TRACKING;", "?"
+
+
+@dataclass
 class SRCA_REUSE_COUNT(RuntimeParameter):
     srca_reuse_count: int = 0
 

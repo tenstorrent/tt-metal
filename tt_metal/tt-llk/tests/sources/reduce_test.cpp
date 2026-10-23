@@ -57,6 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "params.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 #include "tensor_shape.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -73,6 +74,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    if (params.SFPU_INDEX_TRACKING)
+    {
+        // What a topk or max_pool_with_indices init leaves in LaneConfig (ENABLE_DEST_INDEX set); the reduce init must
+        // not let it reach the fp32 SFPU tail.
+        ckernel::sfpu::_sfpu_load_config32_(0xF, 0x0, 0x4);
+    }
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
 
     if (params.IS_REDUCE_TO_ONE)
