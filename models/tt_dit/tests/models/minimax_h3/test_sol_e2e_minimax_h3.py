@@ -50,6 +50,55 @@ def _psnr(a: np.ndarray, b: np.ndarray) -> float:
     return 10 * np.log10(255.0**2 / max(mse, 1e-9))
 
 
+def _cell(value, spec: str) -> str:
+    return "-" if value is None else format(value, spec)
+
+
+def _results_table(results: list[dict], duration_s: int) -> str:
+    """One terminal table for every config in the run."""
+    dense_wall = next((r["wall_total_s"] for r in results if not r["config"]["sol"]), None)
+    headers = (
+        "config",
+        "wall_s",
+        "steps",
+        "dense_fwd",
+        "sparse_fwd",
+        "dense_ms",
+        "sparse_ms",
+        "steady_ms",
+        "psnr",
+        "psnr_min",
+        "vs_dense",
+    )
+    rows = []
+    for r in results:
+        st = r["step_times"]
+        ratio = r["wall_total_s"] / dense_wall if dense_wall and r["config"]["sol"] else None
+        rows.append(
+            (
+                r["label"],
+                f"{r['wall_total_s']:.1f}",
+                str(r["steps_seen"]),
+                str(st["n_dense_forwards"]),
+                str(st["n_sparse_forwards"]),
+                _cell(st["dense_forward_ms_mean"], ".0f"),
+                _cell(st["sparse_forward_ms_mean"], ".0f"),
+                _cell(st["sparse_forward_ms_steady_mean"], ".0f"),
+                _cell(r.get("psnr_vs_dense_mean"), ".2f"),
+                _cell(r.get("psnr_vs_dense_min"), ".2f"),
+                "-" if ratio is None else f"{100 * ratio:.1f}%",
+            )
+        )
+    widths = [max(len(h), *(len(row[i]) for row in rows)) for i, h in enumerate(headers)]
+    line = "  ".join(h.rjust(w) if i else h.ljust(w) for i, (h, w) in enumerate(zip(headers, widths)))
+    body = [
+        "  ".join(cell.rjust(w) if i else cell.ljust(w) for i, (cell, w) in enumerate(zip(row, widths)))
+        for row in rows
+    ]
+    rule = "  ".join("-" * w for w in widths)
+    return f"sol e2e {duration_s}s\n{line}\n{rule}\n" + "\n".join(body)
+
+
 def _parse(cfg: str) -> dict:
     parts = cfg.split(":")
     if parts[0] == "dense":
@@ -374,7 +423,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
                 rec["psnr_vs_dense_mean"] = float(np.mean(per_frame))
                 rec["psnr_vs_dense_min"] = float(np.min(per_frame))
             results.append(rec)
-            logger.info(f"RESULT {json.dumps(rec)}")
     finally:
         T.MiniMaxH3Transformer3DModel.forward = orig_forward
         P.MiniMaxH3Pipeline._denoise = orig_denoise
@@ -383,9 +431,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
         for attn in attns:
             attn.sol_attn = False
             attn.sol_active = False
-    (artifacts / f"results_{duration_s}s_{int(time.time())}.json").write_text(json.dumps(results, indent=1))
-    for r in results:
-        logger.info(
-            f"{r['label']:>28}: total {r['wall_total_s']:.1f} s, steps {r['steps_seen']}, "
-            f"psnr vs dense {r.get('psnr_vs_dense_mean', float('nan')):.2f} dB (min {r.get('psnr_vs_dense_min', float('nan')):.2f})"
-        )
+        if results:
+            (artifacts / f"results_{duration_s}s_{int(time.time())}.json").write_text(json.dumps(results, indent=1))
+            print("\n" + _results_table(results, duration_s), flush=True)

@@ -78,6 +78,14 @@ def build_fused_constants(
         erow[0, 0, r * TILE : (r + 1) * TILE, r] = 1.0
     ones = torch.zeros(1, 1, TILE, TILE)
     ones[0, 0, 0, :] = 1.0
+    # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard ps = 4t + q at
+    # rows q*8 + n (n = moment tile 0..7: DT sums, DT sums of squares); selector tile n has ones at row 0, columns
+    # q*8 + n, so selector[n] @ gather[t] puts the sum over that tile's shards of moment n in row 0, accumulated over t.
+    assert S <= 4 or S == 8, S  # 5..7 would leave garbage rows in the second gather tile
+    shsel = torch.zeros(1, 1, 8 * TILE, TILE)
+    for n in range(8):
+        for q in range(min(4, S)):
+            shsel[0, 0, n * TILE, q * 8 + n] = 1.0
     out = {
         "const_or": const_or,
         "colconst": colconst,
@@ -85,6 +93,7 @@ def build_fused_constants(
         "ksel": ksel,
         "erow": erow,
         "ones": ones,
+        "shsel": shsel,
         "n_valid_blocks": c["n_valid_blocks"],
         "nkcl": nkcl,
     }
@@ -239,6 +248,7 @@ class SolPrepassFused:
                 "ksel": self._upload(c["ksel"], shard=False),
                 "erow": self._upload(c["erow"], shard=False),
                 "ones": self._upload(c["ones"], shard=False),
+                "shsel": self._upload(c["shsel"], shard=False),
                 "geo": self._upload(
                     torch.tensor(
                         [
@@ -418,8 +428,13 @@ class SolPrepassFused:
         self.route_units = (units, units_per_shard)
         ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core
         mask_t = NKCLT if mode == 0 else NBPT  # per shard
+        # (head, shard) units read only their shard's pooled K and exchange partial moments between the S cores of
+        # a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime args
+        # 8..) and a semaphore; cb 23 receives the peers' partials (S slots), 24 ships this unit's, 25 the head totals.
+        core_xy = self._core_noc_xy(nx, ny) if units_per_shard else []
+        st["route_core_xy"] = core_xy
         sizes = {
-            0: NBGT * DT,
+            0: (NBPT if units_per_shard else NBGT) * DT,
             1: NBPT * DT,
             2: 1,
             3: NQCT * NBPT,
@@ -441,17 +456,50 @@ class SolPrepassFused:
             20: DT,
             21: NKCLT,
         }
+        if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 26: reader's mask copy, 29: shsel
+            sizes.update({23: (S + 3) // 4, 24: 8, 26: mask_t, 29: 8})
         cbs = [self._cb(i, n, cores) for i, n in sizes.items()]
         row_bytes = geo.nkc_pad * 4  # chunk-form row buffer: 32 complete rows
         cbs.append(self._cb(19, 32, cores, page_size=row_bytes, dtype=ttnn.uint32))
         cbs.append(self._cb(22, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))  # gather-form ring
+        if units_per_shard:  # the reader's own row ring (it writes mask rows 16..31)
+            cbs.append(self._cb(27, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))
         total = sum(n for n in sizes.values()) * TILE_BYTES + 32 * row_bytes + SCRATCH_PAGES * geo.nb_pad * 4
         if total > L1_CB_BUDGET:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
-        reader = self._kernel("sol_route_reader.cpp", cores, ct + acc_in, [], [0] * 8, ttnn.ReaderConfigDescriptor())
+        acc_extra = [a for t in (mask, st["shsel"]) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
+        reader = self._kernel(
+            "sol_route_reader.cpp", cores, ct + acc_in + acc_extra, [],
+            [0] * 10 + core_xy,
+            ttnn.ReaderConfigDescriptor(),
+        )
         writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0], ttnn.WriterConfigDescriptor())
         compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
-        return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=cores, initial_value=0)] if units_per_shard else []
+        return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs)
+
+    def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
+        """NoC coordinates (x | y << 8) of every logical worker core, index y*nx + x. One program with common runtime
+        args runs on every chip of the mesh, so the coordinates must agree across chips (virtual worker coordinates do);
+        verified against every mesh coordinate when the experimental per-chip query is available."""
+        md = self.mesh_device
+        logical = [(x, y) for y in range(ny) for x in range(nx)]
+        xy = [md.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for x, y in logical]
+        per_chip = getattr(getattr(getattr(ttnn, "_ttnn", None), "multi_device", None), "experimental", None)
+        per_chip = getattr(per_chip, "worker_core_from_logical_core", None)
+        if per_chip is not None:
+            rows, cols = tuple(md.shape)
+            for r in range(rows):
+                for c in range(cols):
+                    mc = ttnn.MeshCoordinate(r, c)
+                    for (x, y), w0 in zip(logical, xy):
+                        w = per_chip(md, mc, ttnn.CoreCoord(x, y))
+                        if (w.x, w.y) != (w0.x, w0.y):
+                            raise ValueError(
+                                f"worker core ({x},{y}) maps to NoC ({w.x},{w.y}) on chip {mc} but ({w0.x},{w0.y}) on "
+                                "chip (0,0): the route program's common core coordinates would be wrong"
+                            )
+        return [w.x | (w.y << 8) for w in xy]
 
     def _run_route(
         self, q_bar: ttnn.Tensor, kc: ttnn.Tensor
@@ -492,10 +540,14 @@ class SolPrepassFused:
             st["route_prog"] = self._route_program(q_bar, kc, mask, bias, union)
         prog = st["route_prog"]
         ins = [q_bar, kc, st["const_or"], st["colconst"], st["qsel"], st["ksel"], st["erow"], st["ones"]]
-        prog.kernels[0].common_runtime_args = [t.buffer_address() for t in ins]
+        prog.kernels[0].common_runtime_args = (
+            [t.buffer_address() for t in ins]
+            + [mask.buffer_address(), st["shsel"].buffer_address()]
+            + st["route_core_xy"]
+        )
         prog.kernels[1].common_runtime_args = [mask.buffer_address(), bias.buffer_address(), union.buffer_address()]
         t2 = time.perf_counter()
-        ttnn.generic_op([*ins, mask, bias, union], prog)
+        ttnn.generic_op([*ins, st["shsel"], mask, bias, union], prog)
         t3 = time.perf_counter()
         self.host_times["route"] = {"alloc": t1 - t0, "patch": t2 - t1, "launch": t3 - t2}
         return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None)

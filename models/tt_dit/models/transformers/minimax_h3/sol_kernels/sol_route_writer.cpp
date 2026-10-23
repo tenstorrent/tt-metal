@@ -37,6 +37,25 @@ inline uint32_t tile_elem_nz(uint32_t tile_addr, uint32_t r, uint32_t c) {
     const uint32_t face = ((r >> 4) << 1) | (c >> 4);
     return e[face * 256 + (r & 15) * 16 + (c & 15)] != 0 ? 1u : 0u;
 }
+
+// Row r of ntiles consecutive 32x32 bf16 tiles -> 32*ntiles uint32 words (1 where the element is nonzero) at out_addr.
+// In the face layout a row of a face is 16 contiguous elements (32 bytes), so the row is read as 8 words per face,
+// two elements per word (low half = even column), instead of one indexed 16-bit element at a time.
+inline void tile_row_to_words(uint32_t tiles_addr, uint32_t r, uint32_t ntiles, uint32_t out_addr) {
+    CoreLocalMem<volatile uint32_t> w(out_addr);
+    const uint32_t row_bytes = (((r >> 4) << 1) * 256 + (r & 15) * 16) * 2;  // the row's start in the left face
+    uint32_t k = 0;
+    for (uint32_t t = 0; t < ntiles; ++t) {
+        for (uint32_t f = 0; f < 2; ++f) {  // left face (columns 0..15), right face (16..31)
+            CoreLocalMem<volatile uint32_t> e(tiles_addr + t * TILE_BYTES + row_bytes + f * 512);
+            for (uint32_t i = 0; i < 8; ++i) {
+                const uint32_t v = e[i];
+                w[k++] = (v & 0xFFFFu) != 0 ? 1u : 0u;
+                w[k++] = (v >> 16) != 0 ? 1u : 0u;
+            }
+        }
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -131,15 +150,14 @@ void kernel_main() {
                         }
                     }
                 } else {
-                    for (uint32_t r = 0; r < 32; ++r) {
+                    // (head, shard) units: the reader builds rows 16..31 from its own copy of the mask tiles.
+                    constexpr uint32_t R_END = UNITS_PER_SHARD ? 16 : 32;
+                    for (uint32_t r = 0; r < R_END; ++r) {
                         if (ring_used != 0 && (ring_used % RING_PAGES) == 0) {
                             noc.async_write_barrier();  // the ring wraps
                         }
                         const uint32_t saddr = ring_base + (ring_used % RING_PAGES) * (NBP * 4);
-                        CoreLocalMem<volatile uint32_t> w(saddr);
-                        for (uint32_t b = 0; b < NBP; ++b) {
-                            w[b] = tile_elem_nz(mbase + (b >> 5) * TILE_BYTES, r, b & 31);
-                        }
+                        tile_row_to_words(mbase, r, NBPT, saddr);  // NBP = 32 * NBPT words
                         noc.async_write(
                             CoreLocalMem<uint32_t>(saddr),
                             mk,
