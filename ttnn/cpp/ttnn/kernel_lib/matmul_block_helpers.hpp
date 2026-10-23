@@ -35,7 +35,7 @@ namespace compute_kernel_lib {
  * cannot infer it from shape.
  *
  * SubblockMajor (default): grouped per subblock — subblock(0,0)'s tiles, then
- *   subblock(0,1)'s, etc. One sequential pack_tile_block per subblock.
+ *   subblock(0,1)'s, etc. One sequential pack_block per subblock.
  * TileRowMajor: grouped per tile-row — tile(0,0)..tile(0,N-1), then row 1, etc.
  *   Per-tile absolute-offset pack, reserve/push per M-row-group. Decouples subblock
  *   choice from writer-visible layout (lets factories grow subblocks); required for
