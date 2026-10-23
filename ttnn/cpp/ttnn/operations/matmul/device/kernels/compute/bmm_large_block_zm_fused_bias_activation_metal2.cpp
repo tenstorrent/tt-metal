@@ -95,19 +95,19 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <typename DFB>
 FORCE_INLINE void reload_from_dfb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
-    uint32_t mm_partials_dfb_id,
+    DFB& mm_partials_dfb,
     uint32_t mm_partials_reload_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
-    // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
-    // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
+    // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals the id of
+    // mm_partials_dfb unless the partials buffer is also read as an FPU operand elsewhere (the
     // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
     // directly; instead a second buffer aliases the same SRAM with UnpackToDestFp32 set, and the
     // reload copies through that alias while the FPU consumer keeps the original view. The alias
@@ -119,7 +119,7 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
-    if (mm_partials_reload_dfb_id != mm_partials_dfb_id) {
+    if (mm_partials_reload_dfb_id != mm_partials_dfb.get_id()) {
         DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
         // Only the unpacker owns the FIFO read pointer; keep this off the MATH/PACK threads.
         UNPACK((mm_partials_reload_dfb.evil_set_read_ptr(mm_partials_dfb.get_read_ptr())));
@@ -136,15 +136,15 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename IDFB, typename ODFB>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
-    uint32_t interm_dfb_id,
-    uint32_t out_dfb_id) {
-    DataflowBuffer interm_dfb(interm_dfb_id);
-    DataflowBuffer out_dfb(out_dfb_id);
+    IDFB& interm_dfb,
+    ODFB& out_dfb) {
+    const uint32_t interm_dfb_id = interm_dfb.get_id();
+    const uint32_t out_dfb_id = out_dfb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_dfb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -265,6 +265,7 @@ void kernel_main() {
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
 #endif
     DataflowBuffer mm_out_dfb(mm_out_dfb_id);
+    DataflowBuffer out_dfb(out_dfb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -422,7 +423,7 @@ void kernel_main() {
                                 reload_from_dfb_to_dst(
                                     in0_dfb_id,
                                     in1_dfb_id,
-                                    mm_partials_dfb_id,
+                                    mm_partials_dfb,
                                     mm_partials_reload_dfb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
@@ -703,7 +704,7 @@ void kernel_main() {
                     copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb_id, out_dfb_id);
+                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb, out_dfb);
                     }
                     pack_untilize_uninit(mm_partials_dfb_id);
                 }

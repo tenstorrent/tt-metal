@@ -90,16 +90,17 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
     }
 }
 
+template <typename DFB>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
+    DFB& mm_partials_cb,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_cb(mm_partials_cb_id);
+    const uint32_t mm_partials_cb_id = mm_partials_cb.get_id();
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);
@@ -115,15 +116,15 @@ FORCE_INLINE void reload_from_cb_to_dst(
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename IDFB, typename ODFB>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
-    uint32_t interm_cb_id,
-    uint32_t out_cb_id) {
-    DataflowBuffer interm_cb(interm_cb_id);
-    DataflowBuffer out_cb(out_cb_id);
+    IDFB& interm_cb,
+    ODFB& out_cb) {
+    const uint32_t interm_cb_id = interm_cb.get_id();
+    const uint32_t out_cb_id = out_cb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -240,6 +241,7 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
     DataflowBuffer mm_out_cb(mm_out_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -377,7 +379,7 @@ void kernel_main() {
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
-                                    mm_partials_cb_id,
+                                    mm_partials_cb,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
@@ -601,7 +603,7 @@ void kernel_main() {
                     copy_init(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
+                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb, out_cb);
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
