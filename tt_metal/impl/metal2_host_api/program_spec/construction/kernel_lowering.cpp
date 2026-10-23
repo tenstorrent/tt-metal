@@ -74,12 +74,19 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         kernel_spec.unique_id);
     const auto& gen1 = *dm_config.config_1xx;
 
+    auto defines = to_defines_map(kernel_spec.compiler_options.defines);
+    // The watcher's NoC sanitizer checks that the two kernels sharing a dedicated NOC keep to disjoint
+    // command buffers; only kernels built with this define run the check (internal/debug/sanitize.h).
+    if (gen1.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
+        defines["DEDICATED_NOC_SHARED"] = "1";
+    }
+
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .defines = std::move(defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,

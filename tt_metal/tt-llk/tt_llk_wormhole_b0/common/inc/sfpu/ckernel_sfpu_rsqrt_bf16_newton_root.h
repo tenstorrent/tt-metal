@@ -5,6 +5,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_rsqrt_bf16_replay_window.h"
 #include "sfpi.h"
 
 // Sibling stock wrappers may include another generated config while this
@@ -30,7 +31,7 @@ namespace ckernel::sfpu::bf16::rsqrt
 // so exponent-zero lanes take y * 1.5 (LREG7, set per tile) and store stock's word.
 constexpr std::uint32_t kNewtonRsqrtCompactSlots = 28u;
 
-inline void newton_rsqrt_compact_row()
+inline void newton_rsqrt_compact_row_head()
 {
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);                                  // x
     TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG6, sfpi::SFPEXEXP_MOD1_NODEBIAS);   // biased exponent
@@ -48,7 +49,11 @@ inline void newton_rsqrt_compact_row()
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // y *= t
     TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG5, 1);                                // |x|
     TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);               // exponent zero
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // stock's y * 1.5
+}
+
+inline void newton_rsqrt_compact_row_tail()
+{
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // stock's y * 1.5
     TTI_SFPENCC(3, 0, 0, 10);
     TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0); // x < 0
     TTI_SFPLOADI(p_sfpu::LREG0, 0, 0x7FC0);
@@ -69,15 +74,18 @@ inline void calculate_newton_root()
     static_assert(Config::kKind == 1);
     static_assert(Iterations == 8 || Iterations == 32);
     static_assert(Config::kBodySlots == kNewtonRsqrtCompactSlots);
-    TTI_SFPLOADI(p_sfpu::LREG7, 0, 0x3FC0); // 1.5
-    TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    newton_rsqrt_compact_row();
-    TTI_INCRWC(0, 2, 0, 0);
-#pragma GCC unroll 8
-    for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        TTI_SFPLOADI(p_sfpu::LREG7, 0, 0x3FC0); // 1.5
+        auto head = [&] { newton_rsqrt_compact_row_head(); };
+        auto tail = [&] { newton_rsqrt_compact_row_tail(); };
+        record_split<0, Config::kBodySlots, 16>(head, tail);
         TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int row = 1; row < Iterations; ++row)
+        {
+            replay_split<0, Config::kBodySlots, 16>(head, tail);
+            TTI_INCRWC(0, 2, 0, 0);
+        }
     }
 }
 } // namespace ckernel::sfpu::bf16::rsqrt

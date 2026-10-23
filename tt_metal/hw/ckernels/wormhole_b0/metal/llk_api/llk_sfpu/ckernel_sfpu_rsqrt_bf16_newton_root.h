@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_rsqrt_bf16_replay_window.h"
 // Sibling stock wrappers may include another generated config while this
 // shared runtime is being parsed. Expose its adapter interface first.
 namespace ckernel::sfpu::bf16::rsqrt {
