@@ -46,6 +46,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     static_assert(row_bytes % L1_ALIGNMENT == 0 && row_bytes % DRAM_ALIGNMENT == 0);
     const uint32_t tile_bytes = weights.get_entry_size();
+    // The row broadcast reads row 0, so only the two top faces of a tap tile are needed.
+    constexpr uint32_t tap_bytes = 2 * tt::constants::FACE_HW * sizeof(uint16_t);
 
     DataflowBuffer ones(dfb::ones);
     // A tile of 1.0, needed because the FPU has no add-constant: stage B computes 1 + preact * (1 - s) with it.
@@ -76,24 +78,23 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             weights.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
                 const uint32_t page = first_tile_column + tile_column;
-                noc.async_read(
-                    tap0, weights, tile_bytes, {.page_id = page}, {.offset_bytes = tile_column * tile_bytes});
+                noc.async_read(tap0, weights, tap_bytes, {.page_id = page}, {.offset_bytes = tile_column * tile_bytes});
                 noc.async_read(
                     tap1,
                     weights,
-                    tile_bytes,
+                    tap_bytes,
                     {.page_id = page},
                     {.offset_bytes = (channel_tiles_per_block + tile_column) * tile_bytes});
                 noc.async_read(
                     tap2,
                     weights,
-                    tile_bytes,
+                    tap_bytes,
                     {.page_id = page},
                     {.offset_bytes = (2 * channel_tiles_per_block + tile_column) * tile_bytes});
                 noc.async_read(
                     tap3,
                     weights,
-                    tile_bytes,
+                    tap_bytes,
                     {.page_id = page},
                     {.offset_bytes = (3 * channel_tiles_per_block + tile_column) * tile_bytes});
             }
