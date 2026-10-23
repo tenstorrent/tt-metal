@@ -23,14 +23,14 @@ void check_valid_vc(uint32_t vc) {
 
 }  // namespace
 
-const std::vector<L1CreditCounterReason>& CreditTransportPlan::reasons(uint32_t vc) const {
+const std::vector<L1CreditCounterReason>& CreditTransportPlan::get_l1_counters_reasons(uint32_t vc) const {
     check_valid_vc(vc);
-    return reasons_[vc];
+    return per_vc_l1_counters_reasons_[vc];
 }
 
 void CreditTransportPlan::add_counter_reason(uint32_t vc, L1CreditCounterReason reason) {
     check_valid_vc(vc);
-    reasons_[vc].push_back(reason);
+    per_vc_l1_counters_reasons_[vc].push_back(reason);
 }
 
 // ============================================================================
