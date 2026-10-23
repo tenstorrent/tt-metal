@@ -500,6 +500,9 @@
     # constrained runners. They are validated locally on 1x4/1x8 (issue #44953).
     # The cheap pure-Python test_gemma4_make_sampling_args_* regression (no device)
     # does not match "test_sampling_" and is intentionally still run.
+    # The custom-op shape sweeps (tests/unit/custom_ops, parametrized over the
+    # 26B lane, 31B and 12B per-chip shapes) run in the 26B/31B/12B unit entries
+    # on both architectures; they do not fit the tier-3 budgets here.
     pytest --timeout 600 \
       --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -508,6 +511,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/custom_ops \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -552,6 +556,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --ignore=models/demos/gemma4/tests/unit/custom_ops \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e4b

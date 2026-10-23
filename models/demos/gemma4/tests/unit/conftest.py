@@ -171,6 +171,8 @@ def _stub_runtime(patch):
             # The short-prefill trace opt-in is off for the contract tests (the stubbed prefill is eager).
             "trace_short_prefill_max": lambda: 128,
             "trace_short_prefill_opt_in": lambda prefill_seq_len=None, batch_size=1: False,
+            # The boot-captured batched prefill buckets never admit the stubbed prefill (no bucket matches).
+            "batched_prefill_trace_bucket": lambda batch, empty_slots, max_batch, padded_len: None,
         },
         "models.tt_transformers.tt.common": {
             "get_padded_prefill_len": _padded_length,
