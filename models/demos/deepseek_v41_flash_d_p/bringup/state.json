@@ -5829,17 +5829,36 @@
   },
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 0.0,
+  "duration_s": 1.5,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-10-23T15:08:06"
+   },
+   {
+    "reused": [
+     "P.24#swa_15",
+     "P.24#swa_engram_18",
+     "P.24#enc_source_17",
+     "P.24#enc_source_engram_20",
+     "P.24#enc_reuse_15",
+     "P.24#dec_candidate_17",
+     "P.24#dec_reindex_16",
+     "P.24#dec_reuse_15",
+     "P.24#test_ladder",
+     "P.24#test_profile"
+    ],
+    "s": 1.5,
+    "status": "PASS",
+    "t": "2026-10-23T15:08:21"
    }
   ],
-  "last_run": "2026-10-23T15:08:06",
+  "last_run": "2026-10-23T15:08:20",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.24.log",
   "metrics": {
+   "device_ms_total": 66.77,
    "err_layer_L00": 0.024829373735482503,
    "err_layer_L00_limit": 0.057040304657989094,
    "err_layer_L01": 0.033803919979285176,
@@ -5907,10 +5926,46 @@
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-10-23T15:08:05",
+  "stamp": {
+   "reused": [
+    "P.24#swa_15",
+    "P.24#swa_engram_18",
+    "P.24#enc_source_17",
+    "P.24#enc_source_engram_20",
+    "P.24#enc_reuse_15",
+    "P.24#dec_candidate_17",
+    "P.24#dec_reindex_16",
+    "P.24#dec_reuse_15",
+    "P.24#test_ladder",
+    "P.24#test_profile"
+   ],
+   "units": {
+    "P.24#dec_candidate_17": "5b8c6178e15d329e",
+    "P.24#dec_reindex_16": "a1a0a38d38824721",
+    "P.24#dec_reuse_15": "85f3e63596d1972f",
+    "P.24#enc_reuse_15": "8954e4645aba42af",
+    "P.24#enc_source_17": "f04040929670abf4",
+    "P.24#enc_source_engram_20": "864e3ff8d3083294",
+    "P.24#swa_15": "e099d61d8bd174be",
+    "P.24#swa_engram_18": "3d0ec75a11dd5a0f",
+    "P.24#test_ladder": "9c34e7397e6466e7",
+    "P.24#test_profile": "1453e3000c3730d1"
+   }
+  },
+  "started": "2026-10-23T15:08:18",
   "status": "PASS",
-  "units": null,
+  "units": {
+   "P.24#dec_candidate_17": "PASS",
+   "P.24#dec_reindex_16": "PASS",
+   "P.24#dec_reuse_15": "PASS",
+   "P.24#enc_reuse_15": "PASS",
+   "P.24#enc_source_17": "PASS",
+   "P.24#enc_source_engram_20": "PASS",
+   "P.24#swa_15": "PASS",
+   "P.24#swa_engram_18": "PASS",
+   "P.24#test_ladder": "PASS",
+   "P.24#test_profile": "PASS"
+  },
   "waiting": null
  },
  "P.3": {
