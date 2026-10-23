@@ -69,12 +69,10 @@ def fidelity_phases(math_fidelity: MathFidelity) -> range:
 
 
 def warn_unmodelled_split(op_name: str, arch_name: str, stacklevel: int = 2) -> None:
-    """Say so when a multiply falls back to the exact product.
-
+    """
     "HiFi4 included" in the message below is not a slip. Wormhole's and
     Blackhole's per-phase masks never reach SrcA's least significant bit, so no
-    fidelity there is the exact product -- see the ``mantissa_split`` note in
-    :mod:`.fpu`.
+    fidelity there is the exact product.
 
     `stacklevel` counts from here, and the default 2 blames the immediate
     caller. It cannot be made to blame the calling test instead: ``build_chain``
@@ -101,12 +99,6 @@ def split_mantissa(
     place: the implicit leading 1 belongs to the high half, so a masked
     mantissa re-read as a float is not the remainder. Subtracting is exact and
     needs no implicit-bit bookkeeping.
-
-    Equivalent to the mask-and-reassemble the lightweight golden performs. Its
-    masks keep the top ``1 + keep_bits`` bits of an 11-bit ``{implicit,
-    mantissa}`` field for the high half and the remaining bits with the
-    implicit position cleared for the low half, which reassembles to exactly
-    this remainder.
     """
     high = truncate_mantissa(values, keep_bits)
     return high, values.to(torch.float32) - high
