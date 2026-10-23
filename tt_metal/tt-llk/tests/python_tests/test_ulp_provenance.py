@@ -200,6 +200,17 @@ def test_no_key_line_carries_a_run_clause(live):
     assert not [op for op, b in live.blocks.items() if "measured by:" in b.header]
 
 
+def test_log10_retains_simulator_context_and_row_local_measurements(live):
+    """Removing the duplicate key-line run must not relabel simulator data as silicon."""
+    block = live.blocks["Log10"]
+    assert "craq-sim" in block.header and "30e35f9b" in block.header
+    assert "not silicon" in block.header
+    assert block.rows
+    for row in block.rows:
+        assert row.provenance.run == date(2026, 10, 15)
+        assert row.provenance.measured is not None
+
+
 def test_the_provenance_fields_are_the_loaders(tmp_path):
     """The fields are the :class:`Provenance` dataclass's, none of them a contract or key
     field, and the loader accepts each one on a row."""

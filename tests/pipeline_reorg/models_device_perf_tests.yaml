@@ -141,7 +141,6 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   budget_type: device_perf
-
 - name: Llama 3.3-70B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
@@ -158,7 +157,6 @@
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   budget_type: device_perf
-
 - name: Qwen3-32B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
@@ -194,7 +192,6 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
   budget_type: device_perf
-
 - name: Stable Diffusion XL LoRA device-perf tests
   cmd: |
     export HF_HUB_OFFLINE=0
@@ -208,7 +205,6 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
   budget_type: device_perf
-
 - name: Stable Diffusion XL op device-perf tests
   cmd: |
     # Host call-stack sampling off: Tracy teardown 30-110 s -> 5-6 s per test; device timings come from the CSV.
@@ -221,7 +217,6 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
   budget_type: device_perf
-
 - name: ResNet-50 device perf tests
   cmd: |
     pytest --timeout {pytest_timeout} models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
@@ -238,7 +233,6 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: device_perf
-
 - name: ResNet-50 e2e model perf tests
   cmd: |
     pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m model_perf_t3000
@@ -249,7 +243,6 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: device_perf
-
 - name: DeepSeek-V3 decode device perf tests (Galaxy)
   cmd: |
     export MESH_DEVICE=TG
@@ -264,7 +257,6 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: device_perf
-
 - name: DeepSeek-V3 fused-op device perf tests (Galaxy)
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
@@ -311,3 +303,57 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: device_perf
+- name: "ttnn eltwise generated bf16 log10"
+  cmd: >-
+    pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_unflushed_zero_and_subnormal_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_accurate[log10]
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_nonpositive_domain[accurate-log10]
+  skus:
+    wh_n300_civ2:
+      timeout: 2
+    bh_p150b_civ2:
+      timeout: 2
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: log10_bw
+# generated bf16 op: log1p
+# generated bf16 op: log1p_bw
+# generated bf16 op: log2
+# generated bf16 op: log2_bw
+# generated bf16 op: log_bw
+# generated bf16 op: log_sigmoid
+# generated bf16 op: log_sigmoid_bw
+# generated bf16 op: logit
+# generated bf16 op: logit_bw
+# generated bf16 op: logiteps_bw
+# generated bf16 op: mish
+# generated bf16 op: multigammaln
+# generated bf16 op: multigammaln_bw
+# generated bf16 op: pack_relu
+# generated bf16 op: polygamma
+# generated bf16 op: reciprocal
+# generated bf16 op: reciprocal_bw
+# generated bf16 op: relu6_bw
+# generated bf16 op: relu_bw
+# generated bf16 op: rsqrt
+# generated bf16 op: rsqrt_bw
+# generated bf16 op: selu
+# generated bf16 op: selu_bw
+# generated bf16 op: sigmoid
+# generated bf16 op: silu_bw
+# generated bf16 op: sinh_bw
+# generated bf16 op: softplus
+# generated bf16 op: softplus_bw
+# generated bf16 op: softshrink
+# generated bf16 op: softshrink_bw
+# generated bf16 op: softsign
+# generated bf16 op: softsign_bw
+# generated bf16 op: sqrt
+# generated bf16 op: sqrt_bw
+# generated bf16 op: square_bw
+# generated bf16 op: tanh
+# generated bf16 op: tanhshrink
+# generated bf16 op: xielu
+# generated bf16 ops end

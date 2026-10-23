@@ -343,6 +343,7 @@ template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MOD
 ALWI void log_with_base_tile_init() {
     // TODO(AP): move out init
     MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::log_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::log10_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // clang-format off
@@ -362,6 +363,20 @@ ALWI void log_with_base_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool base_is_two = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
+    MATH(if constexpr (
+        ckernel::sfpu::log10_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx && !base_is_two) {
+        if (base_scale == 0x3ede5bd9u) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_log,
+                (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, 32, base_is_two),
+                idst,
+                VectorMode::None,
+                base_scale);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
