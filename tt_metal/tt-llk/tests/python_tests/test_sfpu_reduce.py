@@ -652,12 +652,15 @@ INT32_MAX_MIN_BLOCKS = [
 def _int32_sign_boundary_block(dims):
     """Int32 block whose rows each pivot on the -1 / 0 boundary (or a neighbour of it), so the row result is
     decided by exactly the pairs the Blackhole row path's sign-magnitude order map sends to -0 / +0.
+
+    The pattern index advances by one extra step every 4 rows, so rows 4, 8 and 12 apart (the four accumulators
+    of a face pair) never share a pattern, and every pair of accumulators differs in at least one row's MAX and MIN.
     """
     rows, cols = dims
     values = torch.empty(dims, dtype=torch.int64)
     for r in range(rows):
         c = (7 * r + 3) % cols  # one planted lane per row, a different column each row
-        pattern = r % 6
+        pattern = (r + r // 4) % 6
         if pattern == 0:  # {-1, 0}: MAX 0, MIN -1
             values[r, :] = -1
             values[r, c] = 0
@@ -685,11 +688,8 @@ def _int32_sign_boundary_block(dims):
 @pytest.mark.parametrize("mathop, dims", INT32_MAX_MIN_BLOCKS)
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
 def test_int32_reduce_max_min_sign_boundary(mathop, dims, reduce_pool):
-    """Int32 MAX/MIN where -1 against 0 (and -2 against -1) decides every row.
-
-    The Blackhole row path XORs 0x7FFFFFFF into negative operands so that a plain sign-magnitude SFPSWAP orders
-    them as two's-complement; that sends -1 to -0, so these rows only come out right if SFPSWAP ranks -0 below +0
-    and the map is undone before the store. Random Int32 data almost never makes that pair decide a row.
+    """Int32 MAX/MIN where -1 vs 0, -2 vs -1 or INT32_MIN decides every row; random data almost never does.
+    See int32_to_swap_order for the order map these pairs exercise.
     """
     if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
