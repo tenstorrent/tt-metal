@@ -52,7 +52,7 @@ public:
     // exhausted (rec untouched). local, if given, receives each segment's own-NOC address (DstRun::local), for a
     // local copy of the packet.
     template <class Read>
-    uint32_t next(PacketRecord* rec, Read&& read, uint64_t* local = nullptr) {
+    AG_INLINE uint32_t next(PacketRecord* rec, Read&& read, uint64_t* local = nullptr) {
         uint64_t addrs[NOC_SCATTER_WRITE_MAX_CHUNKS];
         uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS];
         uint32_t nseg = 0, used = 0;
@@ -96,7 +96,7 @@ public:
 
 private:
     // Loads the next piece (and the next run when this one is done); false when the walk is exhausted.
-    bool pull() {
+    AG_INLINE bool pull() {
         while (!src_.next(cur_)) {
             DstRun r;
             if (!walk_.next(r)) {

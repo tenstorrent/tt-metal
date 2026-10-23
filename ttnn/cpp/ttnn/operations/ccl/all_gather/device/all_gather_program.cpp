@@ -109,7 +109,8 @@ tt::tt_metal::KernelDescriptor reader_kernel(
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader.compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader.compile_time_args);
     reader.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = kReaderNoc};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = kernel_nocs(plan.choice.algo, plan.ring).reader};
     return reader;
 }
 
@@ -127,7 +128,8 @@ tt::tt_metal::KernelDescriptor writer_kernel(
     writer.named_compile_time_args.emplace_back("WDELAY", force.writer_delay);
     writer.named_compile_time_args.insert(writer.named_compile_time_args.end(), extra.begin(), extra.end());
     writer.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = kWriterNoc};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = kernel_nocs(plan.choice.algo, plan.ring).writer};
     return writer;
 }
 
