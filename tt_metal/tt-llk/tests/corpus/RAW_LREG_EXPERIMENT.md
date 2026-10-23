@@ -13,6 +13,9 @@ The LLK harness selects **both** its driver and headers through `tests/sfpi`
 declarations. It is a local overlay, not a new release artifact. Extra `-B`
 options select the backend but do not replace those headers. The setup script
 downloads the pinned release and can replace an experimental overlay.
+The first `-B` directory below contains only `as` and `ld` symlinks to the
+aligned binutils install, so the next `-B` still selects the checking `cc1plus`.
+It does not modify the main build's wrappers or the system toolchain.
 
 Use the existing target-only ABI preflight first: it sets
 `TT_LLK_REQUIRE_RAW_LREG_METADATA` for WH/BH/QSR Tensix and checks actual
@@ -34,7 +37,7 @@ bash corpus/test_raw_lreg_metadata_abi.sh \
 CHIP_ARCH=blackhole \
 LLK_HOME=/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk \
 PYTHONPATH=/tmp/alignment-llk-deps.yNAmql:/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk/tests/python_tests:/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk/tools/python \
-TT_LLK_EXTRA_COMPILER_OPTIONS='-B/home/ttuser/sfpi-gcc-build.gwrxQL/gcc/ -B/opt/tenstorrent/sfpi/compiler/bin/' \
+TT_LLK_EXTRA_COMPILER_OPTIONS='-B/tmp/sfpi-aligned-binutils-prefix.nDvVsy/ -B/home/ttuser/sfpi-gcc-build.gwrxQL/gcc/ -B/opt/tenstorrent/sfpi/compiler/bin/' \
 RUNNER_TEMP="$(mktemp -d /tmp/sfpi-clean-silicon.XXXXXX)" \
 /home/ttuser/tt-metal/tt_metal/tt-llk/tests/.venv/bin/python -m pytest -q \
   python_tests/test_sfpu_binary_campaign.py python_tests/test_topk_campaign.py \
@@ -47,6 +50,13 @@ selected Blackhole correctness cases; it is not a full silicon sweep or timing
 result. Header tree: `ee378aa6c6c7f62ce503d044142b40f5cc4f9c7b`.
 Actual `cc1plus` SHA256:
 `a6df6f810bb96ce6c0944d05f212b3222ab7bfc10e60511d53b909f9c290053a`.
+Matched assembler SHA256:
+`39a1076f3b93480a4859fe54633b505740a689e61354b0eb4bae0b1a099ee5b8`;
+linker SHA256:
+`3375a50c8cdfa0e66f8c784dc40a8cee7fb6bfc1a181425a3d5a212e2979f767`.
+The 14-case matched-binutils run passed in 50.30s. Its exec trace confirms 43
+invocations each of that backend, assembler and linker, with no stock assembler
+or linker execution: `/tmp/sfpi-clean-matched-f261-execve-20261023.log`.
 The source/ELF/build paths and initial unreproduced QSR probe failure are retained
 in `/home/ttuser/sfpi-alignment.UbW4Dy/sfpi-direct-metal-clean-receipt.json`;
 the scoped probe investigation is `/tmp/sfpi-clean-qsr-metadata.88oex9`.
