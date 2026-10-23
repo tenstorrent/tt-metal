@@ -580,6 +580,30 @@ if want m11; then
     [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m11_logs" 2>/dev/null
 fi
 
+# M11 A/B (2026-10-23, after the first m11 run): the 512/1024-row checks passed (PCC 0.9999) but the 5 s parity
+# failed at PCC 0.973-0.979 on all four calls (finite outputs, so a wrong page rather than a hang or NaN). The
+# small geometries never fill the lookahead (one or two pieces per iteration, two chunks per core), so the fault
+# needs the real shape. Each run is one ~2 min parity at 5 s; read them together:
+#   m8        credits off (M8 handshake, 2 pages)            -> must pass: the environment and build are sane
+#   m8_kv3    credits off, 3 pages                            -> fails: the 3-deep CB itself is the fault
+#   cred_kv2  credits on, 2 pages (one piece in flight)       -> fails: the credit protocol; passes: needs 2 in flight
+#   r1184     credits on, 3 pages, the 1184-row check         -> a third geometry (partial chunks, 19 chunks/head)
+#   watch     credits on, 3 pages, 5 s parity under the assert-only watcher: the stream's ASSERTs (chain
+#             membership per piece, grant-cursor phase) and ChainLink's unicast-only assert only fire here;
+#             generated/watcher/watcher.log is copied to log_val_m11ab_watcher.log.
+if want m11ab; then
+    P="4x8 and resident_call_parity and r4736"
+    run m11ab_m8 600 env TT_SOL_CHAIN_CREDITS=0 pytest "$T" -s -k "$P"
+    run m11ab_m8_kv3 600 env TT_SOL_CHAIN_CREDITS=0 TT_SOL_KV_PAGES=3 pytest "$T" -s -k "$P"
+    run m11ab_cred_kv2 600 env TT_SOL_KV_PAGES=2 pytest "$T" -s -k "$P"
+    run m11ab_r1184 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and r1184k512"
+    run m11ab_watch 900 env TT_METAL_WATCHER=5 TT_METAL_WATCHER_DISABLE_ETH=1 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 \
+        TT_METAL_WATCHER_DISABLE_CB_SANITIZE=1 TT_METAL_WATCHER_DISABLE_PAUSE=1 TT_METAL_WATCHER_DISABLE_RING_BUFFER=1 \
+        TT_METAL_WATCHER_DISABLE_STACK_USAGE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 \
+        pytest "$T" -s -k "$P"
+    [ -f generated/watcher/watcher.log ] && cp generated/watcher/watcher.log "log_val_m11ab_watcher.log" 2>/dev/null
+fi
+
 # M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
 # config buffer (73424 > 70656); outlining the S1/S5 flushes and the P@V issue left it 336 B over (70992), so the
 # resident build now compiles the compute kernel at O2 (factory; ~30 % smaller TRISC binaries, the level every
