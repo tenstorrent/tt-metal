@@ -5,7 +5,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
