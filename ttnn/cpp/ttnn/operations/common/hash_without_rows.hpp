@@ -54,4 +54,9 @@ inline ttsl::hash::hash_t hash_spec_without_rows(const std::optional<Tensor>& te
                               : ttsl::hash::hash_objects_with_default_seed(salt);
 }
 
+// Rows of a tensor with its upper dims folded in, tile-padded: the count the row-free kernels iterate.
+inline uint32_t folded_rows(const Tensor& tensor) {
+    return static_cast<uint32_t>(tensor.physical_volume() / tensor.padded_shape()[-1]);
+}
+
 }  // namespace ttnn::operations::common

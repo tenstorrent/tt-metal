@@ -8,6 +8,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -197,6 +198,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     bool use_bias = bias_tensor.has_value();
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    // A gate of one folded tile row is broadcast from tile row 0; the validator admits no other [..., 1, N] gate.
+    const uint32_t broadcast_ternary_b =
+        use_fused_ternary &&
+                operations::common::folded_rows(fused_ternary_input_b.value()) == tt::constants::TILE_HEIGHT
+            ? 1u
+            : 0u;
 
     /**
      * Determine dataformats, compute kernel config
@@ -860,8 +867,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in0_args.push_back(defer_write_k_block);
         in0_args.push_back(max_defer_write_k_block);
         if (use_fused_ternary) {
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in0_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            in0_args.push_back(broadcast_ternary_b);
         }
         if (fuse_op) {
             std::vector<uint32_t> fused_args;
@@ -913,8 +919,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_args.push_back(defer_write_k_block);
         in1_args.push_back(max_defer_write_k_block);
         if (use_fused_ternary) {
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in1_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            in1_args.push_back(broadcast_ternary_b);
         }
         if (fuse_op) {
             std::vector<uint32_t> fused_args;
@@ -960,8 +965,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         compute_runtime_args.push_back(N_end_tile);
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            compute_runtime_args.push_back(broadcast_ternary_b);
         }
         program.kernels[compute_kernels_id].emplace_runtime_args(core, compute_runtime_args);
     }
@@ -976,9 +980,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         two_input_split};
 }
 
-// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common.
-// Every per-call value (row count, buffer addresses) is a common runtime arg, so a hit patches
-// one vector per kernel and no per-core work is done.
+// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common: every per-call
+// value (row count, buffer addresses) is a common runtime arg, so a hit patches one vector per kernel.
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const MinimalMatmulParams& /*operation_attributes*/,
