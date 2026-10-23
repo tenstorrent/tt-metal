@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_planner_nanobind.hpp"
+#include "ttnn-nanobind/reduce_planner.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +18,7 @@
 
 #include "ttnn/kernel_lib/host/reduce_host.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::reduce_planner {
 namespace {
 
 namespace host = ttnn::kernel_lib::host;
@@ -35,10 +35,7 @@ std::uint32_t append_runtime_args(const Plan& plan, nb::list runtime_args, bool 
 
 }  // namespace
 
-void bind_reduce_planner(nb::module_& mod) {
-    auto planner = mod.def_submodule(
-        "planner",
-        "Host-side reduction planning and compile-time argument serialization. Planning never executes a kernel.");
+void py_module(nb::module_& planner) {
     planner.attr("NO_CB_ID") = host::no_cb_id;
 
     nb::enum_<tt::tt_metal::ReduceOpMath>(planner, "ReduceMath")
@@ -425,4 +422,4 @@ void bind_reduce_planner(nb::module_& mod) {
         "Plan an explicitly ordered sequence of reductions; input descriptions may reuse a CB ID.");
 }
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::reduce_planner

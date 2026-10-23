@@ -134,6 +134,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/tensor.cpp
     cpp/ttnn-nanobind/types.cpp
     cpp/ttnn-nanobind/bfp_utils.cpp
+    cpp/ttnn-nanobind/reduce_planner.cpp
     cpp/ttnn-nanobind/operations/copy.cpp
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp

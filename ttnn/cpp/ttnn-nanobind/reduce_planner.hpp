@@ -6,10 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::reduction::detail {
-
+namespace ttnn::reduce_planner {
 namespace nb = nanobind;
 
-void bind_reduce_planner(nb::module_& mod);
+void py_module(nb::module_& planner);
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::reduce_planner
