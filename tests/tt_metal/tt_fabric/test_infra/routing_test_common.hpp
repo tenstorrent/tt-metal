@@ -51,7 +51,6 @@ inline tt::tt_metal::CoreCoord get_active_ethernet_core(tt::tt_metal::IDevice* d
             tt::LogTest,
             "No active ethernet link found on device {}. Need 1 active ethernet link for this test.",
             device->id());
-        tt::tt_metal::CloseDevice(device);
         throw std::runtime_error("Test cannot run on specified device.");
     }
 

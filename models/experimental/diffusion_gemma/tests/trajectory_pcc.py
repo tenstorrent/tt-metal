@@ -19,7 +19,7 @@ util the plan references — inside the device tests that own those tensors.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, NamedTuple, Optional
 
 import torch
 
@@ -29,7 +29,13 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
     """Repo-standard PCC wrapper; magnitude drift is gated separately by max |Δ|."""
-    _, pcc = comp_pcc(a.flatten().float(), b.flatten().float(), pcc=0.0)
+    a = a.flatten().float()
+    b = b.flatten().float()
+    a_const = bool(torch.all(a == a[0])) if a.numel() else True
+    b_const = bool(torch.all(b == b[0])) if b.numel() else True
+    if a_const or b_const:
+        return 1.0 if a_const and b_const and torch.equal(a, b) else 0.0
+    _, pcc = comp_pcc(a, b, pcc=0.0)
     return float(pcc)
 
 
@@ -164,3 +170,63 @@ def assert_trajectory_matches(ref: DenoiseTrajectory, cand: DenoiseTrajectory, *
     comparison = compare_trajectories(ref, cand, **kwargs)
     assert comparison.passed, f"denoise trajectory mismatch: {comparison}"
     return comparison
+
+
+class SoundEntropyVerdict(NamedTuple):
+    """Variance-gated per-step entropy-fidelity verdict (#48291)."""
+
+    passed: bool
+    mode: str  # "pcc" (structured step) or "abs" (near-constant step)
+    std: float  # across-position std of the reference entropy profile
+    pcc: Optional[float]  # Pearson correlation (None on the abs branch)
+    max_abs: float  # max |Δ entropy| across positions
+
+
+def sound_entropy_step_fidelity(
+    ref_entropy: torch.Tensor,
+    cand_entropy: torch.Tensor,
+    *,
+    min_std: float = 0.15,
+    pcc_tol: float = 0.95,
+    abs_tol: float = 0.5,
+) -> SoundEntropyVerdict:
+    """Well-conditioned per-step entropy-fidelity diagnostic (#48291).
+
+    This is a per-step DIAGNOSTIC that is well-conditioned where raw per-step
+    entropy PCC is not — it is NOT proposed as a whole-trajectory pass/fail gate
+    for a bf16-vs-fp32 chaotic comparison (see the caveat below).
+
+    Two failure modes are handled together:
+
+    - *Degenerate denominator.* As a denoise step converges, per-token entropy
+      collapses toward a uniform tiny value; its across-position variance -> 0 and
+      Pearson correlation is then dominated by rounding noise (it can even go
+      negative) even when the ABSOLUTE entropy error is negligible. So PCC is only
+      required where the reference entropy profile still carries structure
+      (``std >= min_std``).
+    - *Affine blindness.* PCC is invariant to a constant offset/scale, so a
+      systematic entropy error (wrong log base, missing temperature) would pass
+      PCC ~= 1. So the ABSOLUTE tolerance ``abs_tol`` is enforced on BOTH branches,
+      never dropped on the structured branch.
+
+    ``passed`` iff ``max|Δ| <= abs_tol`` AND (the profile is near-constant OR its
+    shape correlates at ``pcc >= pcc_tol``). ``mode`` records whether PCC was
+    evaluated ("pcc") or the step was near-constant ("abs").
+
+    CAVEAT (do not misread as a reachable gate): under a genuinely chaotic
+    bf16-vs-fp32 comparison, transition steps carry real ~1-3 nat entropy
+    divergence that this metric (correctly) fails — the SAME HF model in fp32 vs
+    bf16 fails it against itself at those steps. That confirms the intrinsic bf16
+    floor; it is not evidence the candidate is defective. Use this to separate the
+    converged-step artifact from genuine divergence, and gate the stage on
+    output quality / fidelity-to-the-fp32-ideal, not on this per-step verdict.
+    """
+    ref = ref_entropy.flatten().float()
+    cand = cand_entropy.flatten().float()
+    max_abs = float((ref - cand).abs().max()) if ref.numel() else 0.0
+    std = float(ref.std()) if ref.numel() > 1 else 0.0
+    abs_ok = max_abs <= abs_tol
+    if std >= min_std:
+        pcc = _pearson(ref, cand)
+        return SoundEntropyVerdict(passed=abs_ok and pcc >= pcc_tol, mode="pcc", std=std, pcc=pcc, max_abs=max_abs)
+    return SoundEntropyVerdict(passed=abs_ok, mode="abs", std=std, pcc=None, max_abs=max_abs)

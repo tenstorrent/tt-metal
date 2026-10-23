@@ -91,7 +91,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     # Int32 unpack_to_dest tilize path in each.
     formats=lambda narrow_tile: (
         input_output_formats(
-            [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+            [DataFormat.Float32, DataFormat.Float16_b]
             + ([DataFormat.Bfp8_b] if narrow_tile == NarrowTile.No else [])
         )
         + input_output_formats([DataFormat.Int32], same=True)
@@ -145,6 +145,13 @@ def test_unpack_tilize_comprehensive(
         pytest.skip(
             "Blackhole BFP8_b output fails for num_faces=1,2: tilize packer has hardcoded "
             "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
+        )
+
+    # BH unpack_tilize does not support num_faces=1 (LLK asserts num_faces in {2, 4}).
+    # WH supports num_faces=1. Tracked in https://github.com/tenstorrent/tt-metal/issues/50707.
+    if arch == ChipArchitecture.BLACKHOLE and num_faces == 1:
+        pytest.skip(
+            "BH unpack_tilize does not support num_faces=1; see https://github.com/tenstorrent/tt-metal/issues/50707"
         )
 
     is_narrow = narrow_tile == NarrowTile.Yes

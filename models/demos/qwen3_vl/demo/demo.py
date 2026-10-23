@@ -63,6 +63,14 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    # NOTE: no warm-ttnn-cache skip here -- this fork always loads the real weights.
+    # The skip was gated on text_only, but every caller builds the vision tower, so the branch was
+    # unreachable and the model never actually saved anything. Enabling it needs the multimodal
+    # weight set identified first: the "a placeholder is safe because the vision path uses a
+    # separate live HF reference" reasoning was disproved on qwen36, where the same comment held and
+    # vision_demo.py still generated token soup from a dataless state_dict (CI run 31503881448) --
+    # the multimodal splice reads weights the placeholder cannot supply. Until the equivalent weight
+    # here is found and sidecarred (as gemma3-vision does), cold-load. (#45400 review)
     state_dict = tt_model_args.load_state_dict()
 
     paged_attention_config = (
@@ -294,7 +302,11 @@ def test_demo(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -622,6 +634,12 @@ def test_demo(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                # Qwen3-VL sampling does not feed the sampled token back into
+                # its traced decode input, so the demo must restage it each step.
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             # Get the next token
@@ -904,16 +922,19 @@ def test_demo(
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        # Also save the avg decode performance for the 128 iterations (excluding the compile time).
+        # With stop_at_eos the last batch can end before 128 iterations; average over the ones that ran.
+        num_iterations_for_avg = min(128, iteration)
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
+            for i in range(1, num_iterations_for_avg)
         )
         benchmark_data.add_measurement(
             profiler,
             0,
             "inference_decode",
             "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
+            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
             step_warm_up_num_iterations=None,
             target=None,
         )

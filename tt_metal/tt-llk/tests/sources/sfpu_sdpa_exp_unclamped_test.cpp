@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sdpa_exp_unclamped, (SFPU_SCALE_EN, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC, SFPU_UNARY_SCALAR);
             }
         }
 

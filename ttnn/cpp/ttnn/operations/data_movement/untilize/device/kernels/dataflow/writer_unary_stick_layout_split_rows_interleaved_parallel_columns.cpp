@@ -8,25 +8,27 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t tile_width_size = get_arg_val<uint32_t>(3);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(4);
-    uint32_t offset_within_stick = get_arg_val<uint32_t>(5);
+    const auto num_sticks = get_arg(args::num_sticks);
+    const auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
+    const auto tile_width_size = get_arg(args::tile_width_size);
+    const auto start_stick_id = get_arg(args::start_stick_id);
+    const auto offset_within_stick = get_arg(args::offset_within_stick);
 
-    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    // stick_size is carried by the host but not used by this kernel; retained as a named arg to
+    // preserve the legacy schema faithfully.
+    constexpr auto stick_size = get_arg(args::stick_size);
+    (void)stick_size;
+
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb_out(dfb_id_out0);
+    DataflowBuffer dfb_out(dfb::out);
 
     uint32_t curr_stick_offset = 0;
     uint32_t row_stick_ids[tile_height];
@@ -52,10 +54,10 @@ void kernel_main() {
 
     uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
+        for (uint32_t j = 0; j < tile_height; j++) {
+            row_stick_ids[j] = stick_id + j;
+        }
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
-            for (uint32_t j = 0; j < tile_height; j++) {
-                row_stick_ids[j] = stick_id + j;
-            }
             curr_stick_offset = curr_offset;
             write_tiles(1, tile_width_size);
             curr_offset += tile_width_size;

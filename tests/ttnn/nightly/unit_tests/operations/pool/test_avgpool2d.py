@@ -13,7 +13,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4,
     COMPUTE_KERNEL_CONFIG_LOFI,
 )
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
 from tests.sweep_framework.sweep_utils.pool2d_common import (
     randomize_tensor,

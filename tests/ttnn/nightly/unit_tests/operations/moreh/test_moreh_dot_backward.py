@@ -7,13 +7,16 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
     get_ttnn_torch_dtype,
 )
+
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
 
 
 def get_tensors(
@@ -178,6 +181,8 @@ def test_moreh_dot_backward_callback(
     requires_grad,
     device,
 ):
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_in_cache = []
     for i in range(2):
         run_moreh_dot_backward(input_shape, requires_grad, device)

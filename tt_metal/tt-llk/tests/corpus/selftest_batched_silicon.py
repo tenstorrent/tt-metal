@@ -136,26 +136,26 @@ check(
 )
 
 # GE-F2 INJECTION (lane GF): the weekly-20260823 silent-data-loss shape —
-# perf_eltwise_binary_sfpu.py's production int test (zone-column schema)
+# perf_eltwise_binary_sfpu_campaign.py's production int test (zone-column schema)
 # co-scheduled with fresh_cpp tests (fresh_cpp_impl schema) under distinct
 # mathop tokens.  WITHOUT the schema-aware grouping fix these share one
 # session (mathop rule alone admits them) -> PerfSchemaError at module
 # teardown -> the whole module writes no perf_data while nodes 'pass'.
 ge_f2 = [
     spec_of(
-        "perf_eltwise_binary_sfpu.py",
+        "perf_eltwise_binary_sfpu_campaign.py",
         "SfpuDivInt32Floor",
         "divint32floor",
         func="test_perf_sfpu_binary_extended_int",
     ),
     spec_of(
-        "perf_eltwise_binary_sfpu.py",
+        "perf_eltwise_binary_sfpu_campaign.py",
         "SfpuElwRightShift",
         "shift",
         func="test_perf_fresh_cpp_right_shift",
     ),
     spec_of(
-        "perf_eltwise_binary_sfpu.py",
+        "perf_eltwise_binary_sfpu_campaign.py",
         "SfpuAtan2",
         "atan2",
         func="test_perf_fresh_cpp_binary_atan2",
@@ -171,13 +171,13 @@ check(
 parts = sweep.partition_perf_legs(
     [
         spec_of(
-            "perf_eltwise_binary_sfpu.py",
+            "perf_eltwise_binary_sfpu_campaign.py",
             "SfpuBinaryFmod",
             "binaryfmod",
             func="test_perf_fresh_cpp_binary_fmod_remainder",
         ),
         spec_of(
-            "perf_eltwise_binary_sfpu.py",
+            "perf_eltwise_binary_sfpu_campaign.py",
             "SfpuBinaryRemainder",
             "binaryremainder",
             func="test_perf_fresh_cpp_binary_fmod_remainder",

@@ -27,11 +27,11 @@ ALWI void process_tile(
     DataflowBuffer dfb_out(cb_out_id);
 
 #if BCAST_INPUT  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
-    DataflowBuffer& dfb_bcast = dfb_in1;
-    DataflowBuffer& dfb_other = dfb_in0;
+    auto& dfb_bcast = dfb_in1;
+    auto& dfb_other = dfb_in0;
 #else  // BCAST_INPUT == 0 : input A (condition tensor)  is broadcasted
-    DataflowBuffer& dfb_bcast = dfb_in0;
-    DataflowBuffer& dfb_other = dfb_in1;
+    auto& dfb_bcast = dfb_in0;
+    auto& dfb_other = dfb_in1;
 #endif
 
     dfb_bcast.wait_front(num_tiles_per_cycle);
@@ -41,11 +41,11 @@ ALWI void process_tile(
         dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(dfb_in0.get_id());
+        copy_init(dfb_in0.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_in0.get_id(), i, i * 3);
         }
-        copy_tile_to_dst_init_short(dfb_in1.get_id());
+        copy_init(dfb_in1.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
@@ -106,7 +106,8 @@ void kernel_main() {
     constexpr auto cb_in1_id = tt::CBIndex::c_1;
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
-    unary_op_init_common(cb_in0_id, cb_out_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_out_id);
+    copy_init(cb_in0_id);
     BINARY_SFPU_INIT
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

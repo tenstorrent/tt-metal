@@ -185,6 +185,12 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "cache_position_modulo/block_size ({}) must be <= max_num_blocks ({})",
                 bounded_blocks_per_seq,
                 cache_tensor.padded_shape()[0]);
+            TT_FATAL(
+                modulo <= effective_block_size * page_table_val.padded_shape()[1],
+                "cache_position_modulo ({}) must fit in max_num_blocks_per_seq ({}) * block_size ({})",
+                modulo,
+                page_table_val.padded_shape()[1],
+                effective_block_size);
         } else {
             TT_FATAL(
                 page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
@@ -293,7 +299,8 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     // Data type validation
     TT_FATAL(
         input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
-        "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16");
+        "Data type of input tensor for paged_update_cache must be FLOAT32 or BFLOAT16; decode update repacks into the "
+        "cache dtype and should not receive low-precision packed input");
 
     TT_FATAL(operation_attributes.batch_offset == 0, "batch_offset must be 0");
 }

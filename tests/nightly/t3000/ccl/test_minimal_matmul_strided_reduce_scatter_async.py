@@ -87,6 +87,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     mm_window_blocks=None,
     fused_concat=False,
     fused_concat_ka=None,
+    pass_counter_buffers=True,
+    counter_row_slots=None,
+    alias_addcmul=False,
+    replace_counters_on_hit=False,
+    check_program_cache=False,
 ):
     torch.manual_seed(0)
 
@@ -110,35 +115,43 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     # Caller-owned MM->RS progress counter array, the same thing CCLManager hands the model
     # (see CCLManager.get_mm_progress_counters_buffer). Passing it exercises the shared-array path;
     # leaving it None makes each compiled program allocate its own, which permanently lowers the
-    # device's L1 floor. One uint32 slot per matmul core, one row per core, L1 HEIGHT_SHARDED so
-    # every RS worker core sees its row at the same local address.
+    # device's L1 floor (the windowed path therefore REQUIRES it — the op validates presence).
+    #
+    # Sizing: uint32, L1 HEIGHT_SHARDED so every reading core sees its row at the same local
+    # address. Each row needs one slot per matmul core (mm_grid.x * mm_grid.y), and the shard grid
+    # must cover the RS worker cores. Rows sized to the FULL compute grid and sharded over it — a
+    # square [num_cores, num_cores] — satisfy any mm_core_grid/RS placement, which is why both this
+    # and CCLManager allocate that shape once and reuse it everywhere.
     _counter_slots = compute_grid_size.x * compute_grid_size.y
-    mm_progress_counters = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([_counter_slots, _counter_slots]),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_device,
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-    )
+
+    def _allocate_counter_array(row_slots=_counter_slots):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([_counter_slots, row_slots]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(all_cores, [1, row_slots], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
 
     # Caller-owned RS->MM window credit array, the CCLManager counterpart of the progress array
-    # above (see CCLManager.get_mm_credit_counters_buffer). One uint32 slot per RS reader, one row
-    # per matmul core; only consumed when mm_window_blocks is set.
-    mm_credit_counters = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([_counter_slots, _counter_slots]),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_device,
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-    )
+    # above (see CCLManager.get_mm_credit_counters_buffer). Only consumed when mm_window_blocks is
+    # set, and required by the op in that case. Each row needs one slot per RS reader
+    # (2 * num_links * num_workers_per_link), and the shard grid must cover the matmul cores; the
+    # same full-grid square shape as the progress array comfortably covers both.
+    if counter_row_slots is not None:
+        # Deliberately mis-sized arrays, for tests that check the op's size validation.
+        mm_progress_counters = _allocate_counter_array(counter_row_slots)
+        mm_credit_counters = _allocate_counter_array(counter_row_slots)
+    else:
+        # pass_counter_buffers: True = both arrays, "progress_only" = progress without credit
+        # (so the credit-specific rejection is reachable — omitting both always fails on the
+        # progress check first), False = neither.
+        mm_progress_counters = _allocate_counter_array() if pass_counter_buffers in (True, "progress_only") else None
+        mm_credit_counters = _allocate_counter_array() if pass_counter_buffers is True else None
 
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
@@ -173,7 +186,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     if addcmul_scalar is not None:
         rs_N = N // num_devices
         torch_addcmul_a = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
-        if broadcast_gate:
+        if alias_addcmul:
+            if broadcast_gate:
+                raise ValueError("alias_addcmul requires a full-shape addcmul gate")
+            torch_addcmul_b = torch_addcmul_a
+        elif broadcast_gate:
             torch_addcmul_b = torch.randn([1, 1, 1, rs_N], dtype=torch.float32)
         else:
             torch_addcmul_b = torch.randn([1, 1, M, rs_N], dtype=torch.float32)
@@ -185,13 +202,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        tt_addcmul_b = ttnn.from_torch(
-            torch_addcmul_b,
-            device=mesh_device,
-            layout=layout,
-            dtype=input_dtype,
-            memory_config=mem_config_input,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        tt_addcmul_b = (
+            tt_addcmul_a
+            if alias_addcmul
+            else ttnn.from_torch(
+                torch_addcmul_b,
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         )
 
     # For non-aligned virtual concat: compute per-device padded K and build zero-padded weight.
@@ -424,7 +445,15 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         signpost("stop")
         logger.info("Done executing trace")
     else:
+        if check_program_cache:
+            mesh_device.enable_program_cache()
+            mesh_device.clear_program_cache()
+        cache_entries_after_miss = None
         for i in range(num_iters):
+            if replace_counters_on_hit and i > 0:
+                mm_progress_counters = _allocate_counter_array()
+                if mm_credit_counters is not None:
+                    mm_credit_counters = _allocate_counter_array()
             ttnn.synchronize_device(mesh_device)
             tt_mm_out, tt_rs_out = run_op(i)
             tt_mm_out_tensor_list.append(tt_mm_out)
@@ -433,6 +462,14 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
+            if check_program_cache:
+                if i == 0:
+                    cache_entries_after_miss = mesh_device.num_program_cache_entries()
+                else:
+                    assert mesh_device.num_program_cache_entries() == cache_entries_after_miss, (
+                        f"cache hit allocated a new program: {mesh_device.num_program_cache_entries()} vs "
+                        f"{cache_entries_after_miss}"
+                    )
 
     ##### Verify results #####
     if not check_correctness:
@@ -788,6 +825,51 @@ def test_minimal_matmul_strided_reduce_scatter_addcmul(mesh_device, broadcast_ga
         cluster_axis=1,
         addcmul_scalar=1.0,
         broadcast_gate=broadcast_gate,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["1x8"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@skip_for_blackhole("t3000 tests are wormhole_b0 only")
+def test_minimal_matmul_strided_reduce_scatter_aliased_addcmul_counter_cache_hit(mesh_device, topology):
+    """Cache hit with aliased full-shape addcmul inputs and a replacement counter allocation."""
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=512,
+        K=256,
+        N=512,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=64,
+        mm_block_k=64,
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=1,
+        num_iters=2,
+        addcmul_scalar=1.0,
+        broadcast_gate=False,
+        alias_addcmul=True,
+        mm_window_blocks=2,
+        replace_counters_on_hit=True,
+        check_program_cache=True,
     )
 
 

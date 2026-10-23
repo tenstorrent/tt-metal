@@ -207,7 +207,7 @@ def main():
         log(f"{len(changed)} tt-llk paths changed since {prev[:12]}")
 
         # (a) mapped test/perf files, FUNCTION level: the shared suites
-        # (perf_eltwise_unary_sfpu.py, test_sfpu_binary.py, ...) host a
+        # (perf_eltwise_unary_sfpu_campaign.py, test_sfpu_binary_campaign.py, ...) host a
         # hundred-plus rows each, so file-level attribution would degenerate
         # into the full surface.  Attribute only rows whose node ids
         # reference a test function whose span actually changed.

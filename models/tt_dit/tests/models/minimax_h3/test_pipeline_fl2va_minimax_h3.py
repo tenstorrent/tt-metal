@@ -16,11 +16,13 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
+from ....pipelines.minimax_h3.packing import prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ..wan2_2.common import check_output_sanity
-from .common import create_fractal_image
+from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -29,8 +31,8 @@ from .common_av import (
     check_spatial_seams,
     check_written_file,
     gate_clip,
+    log_pipeline_perf,
     log_spectral_flatness,
-    log_timing_table,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -42,22 +44,14 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
+PROMPT = CALIBRATED_FOX_PROMPT
 
 # Ring collectives require FABRIC_1D_RING.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 65536},
-        id="4x8",
-    )
-]
+MESHES = GALAXY_MESHES
 
-ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
-
-CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
-
-EXPECTED_TOTAL_S = 400.0  # loose did-something-collapse bar, not a perf target
+# calibrated 2026-08-04, fox prompt, seed 0
+ANCHOR_PCC_FLOOR = 0.95
+CLIP_THRESHOLD = 33.0
 
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
@@ -145,7 +139,7 @@ def _first_frame(path: Path) -> Image.Image:
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_end_to_end(mesh_device, reset_seeds):
     """The `first_and_last` case: both preparation paths and a two-run vision scatter; perf + quality."""
     case = "first_and_last"
@@ -153,9 +147,12 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     image = keyframe
     last_image = keyframe
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights_dir(), vae_output_type="float"
+    )
 
     # Warmup must be fl2va-shaped (keyframes included): programs are keyed on padded length; the helper asserts it.
+    benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -166,27 +163,26 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
+        profiler=benchmark_profiler,
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
     logger.info(
-        f"fl2va[{case}] padded_len={pipeline.last_padded_len} "
+        f"fl2va[{case}] padded_len={pipeline.last_seq_len.padded} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
 
-    num_forwards = NUM_INFERENCE_STEPS - 1
-    video_seconds = expected_frames / output.fps
-    log_timing_table(
-        pipeline,
-        "fl2va",
-        num_forwards=num_forwards,
-        video_seconds=video_seconds,
-        expected_total_s=EXPECTED_TOTAL_S,
-        extra=(
-            f" | {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
-            f"({video_seconds:.2f} s), {num_forwards} forwards, first+last anchors, "
-            f"padded_len {pipeline.last_padded_len}"
-        ),
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="fl2va",
+        pipeline=pipeline,
+        num_forwards=NUM_INFERENCE_STEPS - 1,
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=output.fps,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        extra_lines=("Conditioning: first+last anchors",),
     )
     assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 
@@ -264,11 +260,13 @@ def test_lone_last_keyframe_is_stretched_not_cover_cropped():
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     """Discriminating gate: a fractal keyframe the model would never produce must drive frame 0."""
     fractal = create_fractal_image(WIDTH, HEIGHT)
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights_dir(), vae_output_type="float"
+    )
     output = pipeline(
         PROMPT,
         image=fractal,

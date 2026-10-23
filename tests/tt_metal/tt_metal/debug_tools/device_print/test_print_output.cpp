@@ -75,7 +75,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .unique_id = experimental::KernelSpecName{"dm_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = dm_threads,
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
             .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
         placed.push_back(experimental::KernelSpecName{"dm_print"});
@@ -85,7 +85,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .unique_id = experimental::KernelSpecName{"compute_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = compute_engines,
-            .hw_config = experimental::ComputeGen2Config{},
+            .hw_config = experimental::ComputeHardwareConfig{},
             .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
         placed.push_back(experimental::KernelSpecName{"compute_print"});
@@ -93,6 +93,26 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
 
     spec.work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = placed, .target_nodes = node}};
     return spec;
+}
+
+// A single compute kernel on `node`, portable across generations. Gen1 runs it on TRISC0/1/2; Gen2
+// runs it on one Tensix engine's TRISCs. Both satisfy the tests that only assert on printed strings.
+experimental::ProgramSpec MakeComputePrintSpec(
+    std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
+    experimental::ComputeHardwareConfig hw_config;
+    hw_config = experimental::ComputeHardwareConfig{};
+
+    const experimental::KernelSpecName name{"compute_print"};
+    return experimental::ProgramSpec{
+        .name = "dprint_compute",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = name,
+            .source = std::filesystem::path{kernel_path},
+            .num_threads = 1,
+            .hw_config = hw_config,
+        }},
+        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = node}},
+    };
 }
 
 // Gives every kernel in the spec its iteration count as vararg 0. The node is read back out of the
@@ -117,7 +137,7 @@ public:
     void TestOutput(
         const std::string& kernel_path,
         const std::vector<std::string>& expected_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
             RunProgram(mesh_device, kernel_path, runtime_args);
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
@@ -588,6 +608,21 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
 }
 
+// Type names are extracted from __PRETTY_FUNCTION__ at compile time and resolved from the ELF on the
+// host, same as CTSTR. int/float are used over uint32_t/int8_t, whose spelling is typedef-dependent.
+TEST_F(DevicePrintOutputFixture, PrintTypeName) {
+    std::vector<std::string> messages = {
+        "builtin type: int",
+        "struct type: test::deep::Foo",
+        "enum type: test::deep::Bar",
+        "template type: test::deep::Wrapper<int>",
+        "decltype: float",
+        "with value: float = 1",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintReorder) {
     std::vector<std::string> messages = {
         "u16_1: 16 u16_2: 32 u32_1: 1 u32_2: 2 u32_3: 4 u32_4: 8",
@@ -619,16 +654,9 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp",
-            core,
-            ComputeConfig{});
+        auto spec = MakeComputePrintSpec("tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
+        workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();

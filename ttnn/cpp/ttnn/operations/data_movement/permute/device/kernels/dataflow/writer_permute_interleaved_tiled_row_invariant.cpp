@@ -133,35 +133,44 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 4) Build padded and tiled shapes
     // ------------------------------------------------------------------------
-    uint32_t input_padded_shape[RANK];
+    // Only input_tiled_shape is read (by unflatten_index below); input_padded_shape was never
+    // consumed, so it is not computed here.
     uint32_t input_tiled_shape[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
         if (i < RANK - 2) {
-            input_padded_shape[i] = input_shape[i];
             input_tiled_shape[i] = input_shape[i];
         } else if (i == RANK - 2) {
-            input_padded_shape[i] = H_p;
             input_tiled_shape[i] = H_t;
         } else {
             // i == RANK - 1
-            input_padded_shape[i] = W_p;
             input_tiled_shape[i] = W_t;
         }
     }
 
+    // output_tiled_shape is only read inside the NEEDS_PADDING block (unflatten/flatten of the
+    // padding-tile index below), so its computation is gated the same way to avoid an
+    // unused-but-set-variable warning when padding isn't needed.
     uint32_t output_padded_shape[RANK];
+#ifdef NEEDS_PADDING
     uint32_t output_tiled_shape[RANK];
+#endif
     for (uint32_t i = 0; i < RANK; i++) {
         if (i < RANK - 2) {
             output_padded_shape[i] = output_shape[i];
+#ifdef NEEDS_PADDING
             output_tiled_shape[i] = output_shape[i];
+#endif
         } else if (i == RANK - 2) {
             output_padded_shape[i] = output_H_padded;
+#ifdef NEEDS_PADDING
             output_tiled_shape[i] = output_H_tiled;
+#endif
         } else {
             // i == RANK - 1
             output_padded_shape[i] = W_p;
+#ifdef NEEDS_PADDING
             output_tiled_shape[i] = W_t;
+#endif
         }
     }
 

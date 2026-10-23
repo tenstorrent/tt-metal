@@ -28,11 +28,28 @@ namespace llk_tdma_guard
 {
 // One mask per TRISC (the unpack TRISC owns the unpack copy, the pack TRISC owns the pack copy).
 // Bit d set  => a WAIT armed dfb d and no TDMA has touched dfb d since.
+//
+// The compute TRISCs run as separate threads in the host-threaded emulation. A single shared mask
+// races the arm/disarm read-modify-writes (|= / &=) and lets one TRISC's WAIT/POP see another's bits
+// -- the same shared-mutable-global-across-Neos bug tt-llk#1678 fixed for bfd_state. Give the mask
+// per-TRISC thread_local storage. It is zero-initialized, so it stays in .tbss (no load image) and
+// adds no .tdata/LMA firmware footprint. Mirrors trisc::bfd_state / dest_register_offset: ENV_LLK_INFRA
+// (standalone LLK infra, no firmware TU) uses a plain static; the metal build declares it extern
+// thread_local and defines it in firmware (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
+#ifdef ENV_LLK_INFRA
 inline std::uint32_t& armed_mask()
 {
     static std::uint32_t mask = 0;
     return mask;
 }
+#else
+extern thread_local std::uint32_t tdma_guard_armed_mask; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
+
+inline std::uint32_t& armed_mask()
+{
+    return tdma_guard_armed_mask;
+}
+#endif
 
 inline void note_wait(const std::uint32_t dfb)
 {

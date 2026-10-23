@@ -279,7 +279,11 @@ def run(
         output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
 
     # Vocab-sharded embedding recovery: when the weight is sharded along the
     # vocab dim across mesh-rows, each chip computes a partial lookup over

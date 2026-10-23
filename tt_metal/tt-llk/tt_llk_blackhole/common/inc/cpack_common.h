@@ -315,29 +315,19 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // Channel-1 (L1 output) strides are zero for every pack mode: output placement comes from
+    // L1_Dest_addr and the packer's write pointer. Only the fast-untilize strided pack sets a
+    // channel-1 (Y) stride, in its own init.
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
-
-    if constexpr (pack_mode == PackMode::Tilize)
-    {
-        const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
-        TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
-        TT_SETDMAREG(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-        TTI_NOP;
-        TTI_NOP;
-    }
 }
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // Stall to avoid clobbering current packer configuration
+    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-
-    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
-    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
 }
 
@@ -594,6 +584,14 @@ inline void configure_pack(
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
+    // Drain the packer before any of the configuration below is rewritten, whatever the formats. The raw
+    // cfg[] stores in this function and in set_packer_config are RISC MMIO, which no STALLWAIT can hold
+    // back: the STALLWAIT only keeps new packer instructions out, and tensix_sync() blocks this RISC until
+    // the packer has gone idle, which is what orders those stores behind a pack still in flight. Without
+    // it the pack samples the new format/width mid-tile.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+    tensix_sync();
+
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
@@ -681,11 +679,11 @@ inline void select_packer_dest_registers()
 {
     if constexpr (Dst == DstSync::SyncFull)
     {
-        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     else
     {
-        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     TTI_DMANOP;
     TTI_DMANOP;

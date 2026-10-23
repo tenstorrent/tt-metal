@@ -8,9 +8,9 @@
 namespace ttml::core::distributed {
 
 CCLResources::CCLResources() {
-    auto* device = &ttml::autograd::ctx().get_device();
+    auto& device = ttml::autograd::ctx().get_device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -21,19 +21,18 @@ CCLResources::CCLResources() {
     all_gather_semaphores.reserve(kNumSemaphoresPairs * kNumSemaphoresPerAllGather);
     reduce_scatter_semaphores.reserve(kNumSemaphoresPairs * kNumSemaphoresPerReduceScatterCall);
     for (uint32_t idx = 0; idx < kNumSemaphoresPairs; ++idx) {
-        barrier_semaphores.push_back(
-            tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
+        barrier_semaphores.push_back(tt::tt_metal::GlobalSemaphore(device, core_range_set, /* initial_value */ 0));
         for (uint32_t adx = 0; adx < kNumSemaphoresPerAllGather; ++adx) {
             all_gather_semaphores.push_back(
-                tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
+                tt::tt_metal::GlobalSemaphore(device, core_range_set, /* initial_value */ 0));
         }
         for (uint32_t rdx = 0; rdx < kNumSemaphoresPerReduceScatterCall; ++rdx) {
             reduce_scatter_semaphores.push_back(
-                tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
+                tt::tt_metal::GlobalSemaphore(device, core_range_set, /* initial_value */ 0));
         }
         for (uint32_t rdx = 0; rdx < kNumSemaphoresPerAllReduceBarrierCall; ++rdx) {
             all_reduce_barrier_semaphores.push_back(
-                tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
+                tt::tt_metal::GlobalSemaphore(device, core_range_set, /* initial_value */ 0));
         }
     }
 }

@@ -21,7 +21,14 @@ Imports no device libraries, so it loads without hardware.
 
 from dataclasses import dataclass
 
-from .schema import MEAN, STD, stat_column
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 
 
 @dataclass(frozen=True)
@@ -54,8 +61,8 @@ _TIMING_COLUMNS = [
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters/Quasar, deferred — see #51249): counter/metric and Quasar columns
-# join here as nullable once a counter/Quasar run captures their exact names.
+# Counter metrics are deliberately not here, see DROPPED_COLUMNS below. Quasar has
+# its own published table in wide_schema_quasar.py — do not mix Quasar columns in.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
@@ -64,7 +71,8 @@ DB_SCHEMA = [
     Column("formats.output", "string", True, "formats"),
     Column("formats.register_A", "string", True, "formats"),
     Column("formats.register_B", "string", True, "formats"),
-    Column("formats.sfpu_math", "string", True, "formats"),
+    Column("formats.sfpu_src", "string", True, "formats"),
+    Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("speed_of_light", "bool", True, "flags"),
@@ -73,7 +81,10 @@ DB_SCHEMA = [
     Column("loop_factor", "int64", True, "key"),
     Column("tile_cnt", "int64", True, "key"),
     # configuration
+    Column("acc_to_dest", "bool", True, "configuration"),
+    Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
+    Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),
@@ -82,20 +93,30 @@ DB_SCHEMA = [
     Column("clamp_negative", "bool", True, "configuration"),
     Column("coverage_op", "int64", True, "configuration"),
     Column("coverage_subop", "int64", True, "configuration"),
+    Column("clobber_op", "int64", True, "configuration"),
     Column("ct_dim", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
+    Column("dst_rounding", "string", True, "configuration"),
+    Column("face_c_dim", "int64", True, "configuration"),
+    Column("face_r_dim", "int64", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
     Column("fresh_cpp_impl", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("fused_sort", "string", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
+    Column("in0_face_c_dim", "int64", True, "configuration"),
+    Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in0_r_dim", "int64", True, "configuration"),
     Column("in1_c_dim", "int64", True, "configuration"),
+    Column("in1_face_c_dim", "int64", True, "configuration"),
+    Column("in1_face_r_dim", "int64", True, "configuration"),
     Column("in1_r_dim", "int64", True, "configuration"),
     Column("input_format", "string", True, "configuration"),
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
+    Column("is_reduce_to_one", "bool", True, "configuration"),
     Column("iterations", "int64", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
     Column("l1_acc", "string", True, "configuration"),
@@ -106,17 +127,30 @@ DB_SCHEMA = [
     Column("num_faces", "int64", True, "configuration"),
     Column("num_faces_A", "int64", True, "configuration"),
     Column("num_faces_B", "int64", True, "configuration"),
+    Column("num_faces_c_dim_A", "int64", True, "configuration"),
+    Column("num_faces_c_dim_B", "int64", True, "configuration"),
+    Column("num_faces_r_dim_A", "int64", True, "configuration"),
+    Column("num_faces_r_dim_B", "int64", True, "configuration"),
     Column("num_tiles_in_block", "int64", True, "configuration"),
     Column("output_format", "string", True, "configuration"),
     Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
+    Column("output_tile_cnt", "int64", True, "configuration"),
+    Column("overlap_first_half", "bool", True, "configuration"),
     Column("partial_a", "bool", True, "configuration"),
     Column("partial_b", "bool", True, "configuration"),
     Column("partial_face_math", "bool", True, "configuration"),
     Column("partial_face_pack", "bool", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
+    Column("reduce_block_ct_dim", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
+    Column("reinit_mode", "int64", True, "configuration"),
+    Column("relu_config", "int64", True, "configuration"),
+    Column("respect_trigger", "bool", True, "configuration"),
+    Column("reuse_dest_type", "string", True, "configuration"),
+    Column("sfpu_bcast_dim", "string", True, "configuration"),
+    Column("sign_magnitude", "bool", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
@@ -125,7 +159,9 @@ DB_SCHEMA = [
     Column("tilize", "string", True, "configuration"),
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
+    Column("use_runtime", "bool", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
+    Column("zero_point_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
@@ -134,8 +170,11 @@ DB_SCHEMA = [
     Column("arch", "string", False, "provenance", origin="ci"),
     Column("run_id", "string", False, "provenance", origin="ci"),
     Column("timestamp", "string", False, "provenance", origin="ci"),
-    Column("pipeline", "string", False, "provenance", origin="ci"),  # PR | nightly
-    Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
+    # pr | nightly | baseline
+    Column("pipeline", "string", False, "provenance", origin="ci"),
+    Column(
+        "pr_number", "string", True, "provenance", origin="ci"
+    ),  # NULL for nightly and baseline runs
 ]
 
 # Views onto the one schema, by who fills each column. The converter validates a
@@ -149,11 +188,18 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # Columns a test emits but the published table intentionally drops. The converter
 # removes them instead of failing on an unknown column.
 #   TEXT_SIZE(...)  — per-stage ELF code size; not used by the gate
+#   <RUN_TYPE>_<metric>  — counter-derived metrics, only produced under
+#   --enable-perf-counters, which no pipeline passes
 DROPPED_COLUMNS = {
     "TEXT_SIZE(L1_TO_L1)",
     "TEXT_SIZE(MATH_ISOLATE)",
     "TEXT_SIZE(PACK_ISOLATE)",
     "TEXT_SIZE(UNPACK_ISOLATE)",
+} | {
+    metric_column(run_type, base)
+    for run_type in RUN_TYPE_NAMES
+    for metric in METRIC_BASES
+    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
 }
 
 # Row identity: one test config in one run. The sweep-parameter columns (which

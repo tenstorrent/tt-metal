@@ -8,10 +8,10 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp"
-#include "ring_sdpa_bw_factory_utils.hpp"
 #include "ring_sdpa_bw_q_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_bw::q {
@@ -70,9 +70,11 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
             .attn_mask = std::nullopt,
             .intermediates = intermediates,
             .preallocated_grad_query = grad_query,
-            .preallocated_u_scaler = u_scaler};
+            .preallocated_u_scaler = u_scaler,
+            .gate = std::nullopt,
+            .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler};
+        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardQProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -143,9 +145,11 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
             .attn_mask = std::nullopt,
             .intermediates = intermediates,
             .preallocated_grad_query = grad_query,
-            .preallocated_u_scaler = u_scaler};
+            .preallocated_u_scaler = u_scaler,
+            .gate = std::nullopt,
+            .preallocated_grad_gate = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler};
+        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardQProgramFactory::shared_variables_t sdpa_shared_vars{

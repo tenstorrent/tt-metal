@@ -195,7 +195,7 @@ void kernel_main() {
 #endif
 #ifdef ROW_MAJOR_INDEX
                 uint32_t noc_offset =
-                    ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
+                    (static_cast<uint32_t>((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
 #ifdef HAS_INDEX0
                 if (dim == 0) {
                     dfb_in1_obj.reserve_back(1);

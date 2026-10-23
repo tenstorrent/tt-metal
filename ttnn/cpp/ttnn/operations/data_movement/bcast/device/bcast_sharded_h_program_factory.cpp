@@ -34,14 +34,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& b_mt = b.mesh_tensor();
     const auto& out_mt = output.mesh_tensor();
 
-    const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-    const std::uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
-    const std::uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
-    const std::uint32_t NC = N * C;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;
@@ -91,6 +87,13 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     TT_ASSERT(
         (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
         "Shard shapes must be multiple of TILE_HEIGHT ");
+
+    TT_FATAL(
+        Ht * Wt == num_tile_per_core,
+        "bcast sharded-H tile-count mismatch: reader produces Ht*Wt = {} tiles but compute/output CB "
+        "expect num_tile_per_core = {}",
+        Ht * Wt,
+        num_tile_per_core);
 
     const std::uint32_t aligned_input_tile_nbytes =
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
@@ -154,10 +157,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         // Legacy arg names on the reader side: the kernel reads index 4 as "NC" (fed Ht_per_core) and
         // index 5 as "batch_offset" (fed tile_offset). Names preserve the kernel-side identifiers.
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "offset", "NC", "batch_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source =
@@ -210,7 +213,9 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
             core,
             {{"Ht", Ht}, {"Wt", Wt}, {"offset", offset}, {"NC", Ht_per_core}, {"batch_offset", tile_offset}});
 
-        AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"B", NC}, {"Ht", Ht}, {"Wt", Wt}});
+        // B=1: the reader pushes Ht*Wt tiles per core, so compute must consume exactly Ht*Wt.
+        // Batch is already folded into the per-core shard height Ht.
+        AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", Ht}, {"Wt", Wt}});
     }
 
     ProgramSpec spec{

@@ -37,6 +37,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 # Path the test writes its host-profiler samples to so the wrapper can include
 # them in the final stats summary alongside the tracy-derived numbers.
@@ -92,9 +93,9 @@ def _two_ops_subdevice(mesh_device, x, w, sd_id, core_grid, ckc):
     [
         pytest.param(
             (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric2d_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
+            id="fabric2d-mesh-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],

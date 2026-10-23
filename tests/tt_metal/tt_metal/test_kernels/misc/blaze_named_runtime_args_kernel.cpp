@@ -19,4 +19,9 @@ void kernel_main() {
     // Named compile-time args — plain constexpr from blaze_ct_args:: namespace
     l1_ptr[2] = blaze_ct_args::my_kernel::param_a;
     l1_ptr[3] = blaze_ct_args::my_kernel::param_b;
+
+    // The mixed-channel test requires the legacy lookup header alongside the Blaze header.
+#ifdef TEST_LEGACY_NAMED_CT_ARGS
+    l1_ptr[4] = get_named_compile_time_arg_val("legacy_param");
+#endif
 }

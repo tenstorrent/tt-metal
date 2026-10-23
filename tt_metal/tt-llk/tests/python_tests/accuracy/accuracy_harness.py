@@ -22,6 +22,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
     PerfRunType,
     StableSort,
@@ -42,6 +43,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FUSED_SORT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -177,6 +179,7 @@ def build_sweep_spec(
     in_fmt: DataFormat,
     distribution: DistributionKind = DistributionKind.RAMP,
     seed: Optional[int] = None,
+    approx_mode: Optional[ApproximationMode] = None,
 ) -> StimuliSpec:
     """Build the input sweep over the op's defined domain.
 
@@ -185,8 +188,16 @@ def build_sweep_spec(
 
     *distribution* defaults to RAMP (deterministic, sorted — clean curves).
     Pass *seed* for reproducible random distributions.
+
+    *approx_mode* narrows the exp family to its approximation's accuracy ceiling.
+    This harness measures error rather than asserting a tolerance, so None is a
+    reasonable default — but a sweep run in ApproximationMode.Yes should pass it,
+    otherwise the curve's tail is the approximation's known overshoot rather than a
+    finding.
     """
-    spec = for_op(op, in_fmt, distribution_a=distribution).spec_A
+    spec = for_op(
+        op, in_fmt, distribution_a=distribution, approx_mode=approx_mode
+    ).spec_A
     if seed is not None:
         spec.seed = seed
     return spec
@@ -389,7 +400,7 @@ def run_case(
     # param: 0 when unseeded (reproducible baseline), else the requested seed.
     torch.manual_seed(0 if seed is None else seed)
 
-    spec = build_sweep_spec(op, formats.input_format, distribution, seed)
+    spec = build_sweep_spec(op, formats.input_format, distribution, seed, approx_mode)
     input_dimensions = sweep_input_dimensions(points)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -430,6 +441,7 @@ def run_case(
                 ITERATIONS(iterations),
                 FAST_MODE(fast_mode),
                 STABLE_SORT(StableSort.No),
+                FUSED_SORT(FusedSort.No),
                 CLAMP_NEGATIVE(True),
             ],
             runtimes=[
@@ -460,6 +472,7 @@ def run_case(
                 ITERATIONS(iterations),
                 FAST_MODE(fast_mode),
                 STABLE_SORT(StableSort.No),
+                FUSED_SORT(FusedSort.No),
                 CLAMP_NEGATIVE(True),
             ],
             runtimes=[

@@ -29,13 +29,13 @@ ALWI void process_tile(
 #if BCAST_INPUT
 #define CB_PRE_BCAST cb_pre_rhs_id
 #define CB_PRE_OTHER cb_pre_lhs_id
-    DataflowBuffer& cb_post_bcast = cb_post_rhs;
-    DataflowBuffer& cb_post_other = cb_post_lhs;
+    auto& cb_post_bcast = cb_post_rhs;
+    auto& cb_post_other = cb_post_lhs;
 #else
 #define CB_PRE_BCAST cb_pre_lhs_id
 #define CB_PRE_OTHER cb_pre_rhs_id
-    DataflowBuffer& cb_post_bcast = cb_post_lhs;
-    DataflowBuffer& cb_post_other = cb_post_rhs;
+    auto& cb_post_bcast = cb_post_lhs;
+    auto& cb_post_other = cb_post_rhs;
 #endif
 
     PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
@@ -85,7 +85,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_post_rhs_id, cb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

@@ -21,6 +21,8 @@ std::string AdamWFullPrecision::get_name() const {
 AdamWFullPrecision::AdamWFullPrecision(
     ttml::serialization::NamedParameters parameters, const AdamWFullPrecisionConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    // The model parameters are the bf16 compute copies; the fp32 masters live in this optimizer.
+    require_bf16_parameters(m_parameters, "AdamWFullPrecision");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             // Create fp32 master weights from the initial bf16 weights
@@ -71,22 +73,22 @@ void AdamWFullPrecision::step() {
 
         auto gradients = theta_ptr->get_grad();
 
-        const auto& master_weights = m_master_weights.at(name)->get_value(autograd::PreferredPrecision::FULL);
-        const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::FULL);
-        const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
+        // The fp32 master weights and moments are updated in place: write through their native tensors.
+        auto master_weights = m_master_weights.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
+        auto exp_avg = m_exp_avg.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
+        auto exp_avg_sq = m_exp_avg_sq.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
 
-        std::optional<ttnn::Tensor> max_exp_avg_sq;
+        std::optional<autograd::MutableTensorView> max_exp_avg_sq;
         if (m_config.amsgrad) {
-            max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
+            max_exp_avg_sq.emplace(m_max_exp_avg_sq.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL));
         }
 
-        // Call the metal kernel - updates master_weights, exp_avg, exp_avg_sq in place
         ttml::metal::adamw(
-            master_weights,
+            master_weights.tensor(),
             gradients,
-            exp_avg,
-            exp_avg_sq,
-            max_exp_avg_sq,
+            exp_avg.tensor(),
+            exp_avg_sq.tensor(),
+            autograd::optional_tensor(max_exp_avg_sq),
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -96,7 +98,7 @@ void AdamWFullPrecision::step() {
             m_config.weight_decay);
 
         // Convert updated fp32 master weights back to bf16 visible weights
-        auto updated_bf16_weights = ttnn::typecast(master_weights, tt::tt_metal::DataType::BFLOAT16);
+        auto updated_bf16_weights = ttnn::typecast(master_weights.tensor(), tt::tt_metal::DataType::BFLOAT16);
         theta_ptr->set_value(updated_bf16_weights);
     }
 }
@@ -116,16 +118,18 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
     if (m_config.amsgrad) {
         dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
     }
+    save_initial_lr(dict);
     return dict;
 }
 
 void AdamWFullPrecision::set_state_dict(const serialization::StateDict& dict) {
-    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     set_lr(serialization::get_value_type<float>(dict, "lr"));
-    m_config.beta1 = serialization::get_value_type<float>(dict, "beta1");
-    m_config.beta2 = serialization::get_value_type<float>(dict, "beta2");
+    restore_initial_lr(dict);
+    set_beta1(serialization::get_value_type<float>(dict, "beta1"));
+    set_beta2(serialization::get_value_type<float>(dict, "beta2"));
     m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");
     m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
+    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     m_master_weights = std::get<serialization::NamedParameters>(dict.at("master_weights"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
@@ -163,6 +167,9 @@ float AdamWFullPrecision::get_beta1() const {
 
 void AdamWFullPrecision::set_beta1(float beta1) {
     m_config.beta1 = beta1;
+    // Bias correction uses beta^t with the current beta (PyTorch semantics), so the
+    // beta powers must be rebuilt from the new value; set_steps owns that derivation.
+    set_steps(m_steps);
 }
 
 float AdamWFullPrecision::get_beta2() const {
@@ -171,6 +178,7 @@ float AdamWFullPrecision::get_beta2() const {
 
 void AdamWFullPrecision::set_beta2(float beta2) {
     m_config.beta2 = beta2;
+    set_steps(m_steps);
 }
 
 float AdamWFullPrecision::get_epsilon() const {

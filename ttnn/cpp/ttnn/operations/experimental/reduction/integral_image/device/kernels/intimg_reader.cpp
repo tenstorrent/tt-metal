@@ -9,13 +9,14 @@
 
 namespace {
 
-FORCE_INLINE void zero_buffer(const Noc& noc, const DataflowBuffer& cb, uint32_t bytes) {
+template <typename DFB>
+FORCE_INLINE void zero_buffer(const Noc& noc, const DFB& cb, uint32_t bytes) {
     noc.async_write_zeros(cb, bytes);
     noc.write_zeros_l1_barrier();
 }
 
-template <typename input_number_t>
-FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const DataflowBuffer& cb, uint32_t tile_size) {
+template <typename input_number_t, typename DFB>
+FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const DFB& cb, uint32_t tile_size) {
     WriteCBGuard start_cb_guard{cb.get_id(), ONE_TILE};
 
     zero_buffer(noc, cb, tile_size * sizeof(input_number_t));
@@ -30,7 +31,9 @@ FORCE_INLINE void send_block(
     uint32_t row_chunk_i,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
-    uint32_t block_depth) {
+    uint32_t block_depth,
+    uint32_t generic_block_depth) {
+    // Tile ids use the full block depth, not this partial count.
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -39,7 +42,7 @@ FORCE_INLINE void send_block(
             channels_slice_i,
             row_chunk_i,
             column_block_i,
-            block_depth);
+            generic_block_depth);
         load_from_dram(cb_input, input_addr_gen, read_tile_id);
     }
 }
@@ -78,7 +81,8 @@ void kernel_main() {
                     row_chunk_i,
                     num_blocks_in_column,
                     num_slices_along_channels,
-                    block_depth);
+                    block_depth,
+                    ctas.block_depth);
             }
         }
     }

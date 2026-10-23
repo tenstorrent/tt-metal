@@ -41,7 +41,7 @@
  * `where_tile` checks the condition slot with SFPSETCC's LREG_EQ0 modifier —
  * any nonzero bit pattern is true, all-zero is false — so the raw output of
  * `gt_binary_tile` feeds it directly without conversion. Strict `>` keeps the
- * first matching index on ties, matching PyTorch.
+ * first matching index on ties, matching PyTorch. NaN handling does not match PyTorch.
  */
 void kernel_main() {
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
@@ -64,7 +64,8 @@ void kernel_main() {
     constexpr uint32_t dst_scratch_a = 2;
     constexpr uint32_t dst_scratch_b = 3;
 
-    init_sfpu(dfb_val, dfb_out);
+    compute_kernel_hw_startup(dfb_val, dfb_out);
+    copy_init(dfb_val);
     // SFPU op inits. `where_tile_init` and `binary_max_min_init` BOTH install
     // SFPCONFIG macros 0 and 1 with different semantics, so they cannot be
     // active simultaneously. We sidestep the collision by using `where_tile`

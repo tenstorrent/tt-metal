@@ -11,6 +11,7 @@ inline volatile unsigned long instrn_buffer[1];
 
 void compile_mul_int_llk()
 {
-    ckernel::sfpu::_init_mul_int_<false>();
-    ckernel::sfpu::_mul_int_<false, 1>(0, 1, 2);
+    ckernel::sfpu::_init_mul_int_<false /*APPROXIMATION_MODE*/>();
+    ckernel::sfpu::_mul_int_<false /*APPROXIMATION_MODE*/, 1 /*ITERATIONS*/>(
+        0 /*dst_index_in0*/, 1 /*dst_index_in1*/, 2 /*dst_index_out*/);
 }

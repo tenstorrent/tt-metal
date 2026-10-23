@@ -1,4 +1,8 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTTv2 per-model stacks under ``models.common.models`` (native TTTv2 only)."""
+raise ImportError(
+    "TTTv2 left tt-metal. Import from https://github.com/tenstorrent/tt-transformers "
+    "(models.common.models -> tt_transformers.models). "
+    "Keepers: models.common.{lazy_weight, tt_ccl, moe}."
+)

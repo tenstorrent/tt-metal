@@ -102,11 +102,11 @@ static constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/unif
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
 
-ProgramDescriptor UniformDeviceOperation::create_descriptor(
+ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
-    IDevice* device = output.device();
+    MeshDevice* device = output.device();
     const auto ws = uniform_work_split(output);
     const auto& all_cores = ws.all_cores;
     const auto num_cores_total = ws.cores.size();
@@ -191,7 +191,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     return desc;
 }
 
-void UniformDeviceOperation::override_runtime_arguments(
+void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,

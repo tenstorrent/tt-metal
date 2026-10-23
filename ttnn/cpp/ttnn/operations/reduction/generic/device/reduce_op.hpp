@@ -24,8 +24,8 @@ Tensor reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     bool negate = false,
-    // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
-    // non-fp32/non-AVG.
+    // When false (default), fp32 reduces run on the accurate SFPU path (full fp32); true selects the FPU.
+    // Ignored for non-fp32 inputs.
     bool fast_and_approximate_mode = false,
     // Requested layout of the result; std::nullopt means "whatever the selected path emits":
     // ROW_MAJOR on the dense RM paths, TILE on the tilized ones.

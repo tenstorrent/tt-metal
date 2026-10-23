@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// eltwise_sfpu_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -23,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(cb_input);
     DataflowBuffer dfb_out(cb_output);
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 

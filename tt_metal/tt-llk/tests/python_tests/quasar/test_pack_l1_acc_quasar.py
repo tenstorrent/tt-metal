@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     ReluConfig,
     format_dict,
@@ -24,20 +23,19 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
-    PERF_RUN_TYPE,
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -47,9 +45,6 @@ from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
-# Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
-# input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
-PERF_ONLY_INPUT_DIMENSIONS = [[512, 64]]
 TILE_DIMENSIONS = [32, 32]
 # Complete list of formats that are supported with L1 accumulation as the
 # OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
@@ -62,11 +57,8 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 
 
 def generate_qsr_pack_l1_acc_combinations(
@@ -136,19 +128,6 @@ def pack_l1_acc_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def pack_l1_acc_implied_math_formats(formats_dest_acc, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    formats = formats_dest_acc[0]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
-def pack_l1_acc_input_dimensions(*, is_perf=False):
-    return PERF_ONLY_INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS
-
-
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
     PACK_L1_ACC_FORMATS
 )
@@ -157,17 +136,13 @@ ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
-    implied_math_format=lambda formats_dest_acc: pack_l1_acc_implied_math_formats(
-        formats_dest_acc
-    ),
     dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(lambda: pack_l1_acc_input_dimensions(is_perf=False)),
+    input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_l1_acc_quasar(
     formats_dest_acc,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -177,7 +152,7 @@ def test_pack_l1_acc_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc) = formats_dest_acc
+    formats, dest_acc = formats_dest_acc
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -247,7 +222,6 @@ def test_pack_l1_acc_quasar(
         "test_name": "sources/quasar/pack_l1_acc_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -284,22 +258,17 @@ def test_pack_l1_acc_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
-
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
 
     res_from_L1 = configuration.run().result
 

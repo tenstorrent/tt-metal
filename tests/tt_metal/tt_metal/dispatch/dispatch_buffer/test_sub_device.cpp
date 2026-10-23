@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -12,6 +13,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -28,8 +30,26 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
+
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+// A one-pipe PrefetcherPipeSpace over sender (0,0) and receiver (1,0), 1 KiB ring.
+experimental::PrefetcherPipeSpaceConfig make_pipe_space_config() {
+    return experimental::PrefetcherPipeSpaceConfig{
+        .sender_cores = CoreRangeSet(CoreRange({0, 0})),
+        .receiver_domain = CoreRangeSet(CoreRange({1, 0})),
+        .ring_size = 1024,
+        .max_receivers_per_pipe = 1,
+    };
+}
+
+}  // namespace
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     uint32_t local_l1_size = 3200;
@@ -39,6 +59,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     CoreRangeSet sharded_cores_2 = CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
 
     auto mesh_device = devices_[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, local_l1_size);
     auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -113,7 +134,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
+            device_id, physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
@@ -138,7 +159,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_2_it = input_2.begin();
     for (const auto& physical_core : physical_cores_2) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_3->address(), page_size_2);
+            device_id, physical_core, buffer_3->address(), page_size_2);
         EXPECT_TRUE(std::equal(input_2_it, input_2_it + page_size_2 / sizeof(uint32_t), readback.begin()));
         input_2_it += page_size_2 / sizeof(uint32_t);
     }
@@ -148,6 +169,69 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     local_config_3.sub_device_id = SubDeviceId{0};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get()), std::exception);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePersistentPipe) {
+    constexpr DeviceAddr local_l1_size = 3200;
+    constexpr uint32_t page_size = 32;
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
+    auto mesh_device = devices_[0];
+
+    // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
+    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config());
+    auto pipe = space.create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
+    const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
+
+    SubDevice sub_device(std::array{cores});
+    const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+
+    ShardSpecBuffer shard_spec(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {cores.num_cores(), 1});
+    distributed::ReplicatedBufferConfig local_replicated_config = {
+        cores.num_cores() * page_size,
+    };
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
+        .sub_device_id = SubDeviceId{0},
+    };
+    auto local_buffer = distributed::MeshBuffer::create(local_replicated_config, local_config, mesh_device.get());
+    EXPECT_GE(local_buffer->address(), persistent_end);
+    EXPECT_LT(local_buffer->address(), persistent_end + local_l1_size);
+
+    distributed::ReplicatedBufferConfig global_replicated_config = {
+        page_size,
+    };
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = std::nullopt,
+        .bottom_up = true,
+        .sub_device_id = std::nullopt,
+    };
+    auto global_buffer = distributed::MeshBuffer::create(global_replicated_config, global_config, mesh_device.get());
+    EXPECT_GE(global_buffer->address(), persistent_end + local_l1_size);
+
+    local_buffer->deallocate();
+    global_buffer->deallocate();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(manager);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1UntilRemoved) {
+    constexpr DeviceAddr local_l1_size = 3200;
+    auto mesh_device = devices_[0];
+
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
+    SubDevice sub_device(std::array{cores});
+    const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+
+    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()), std::exception);
+
+    mesh_device->remove_sub_device_manager(manager);
+    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
@@ -166,5 +250,308 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
             mesh_device->allocator(SubDeviceId{0})->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
         EXPECT_EQ(global_bank_id, sub_device_bank_id);
     }
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocators) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    auto mesh_device = devices_[0];
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    ShardSpecBuffer shard_spec(shard_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {shard_cores.num_cores(), 1});
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+        .sub_device_id = SubDeviceId{0}};
+
+    constexpr distributed::MeshTraceId trace_id{0x1234};
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+
+    auto tracked = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    auto tracked_id = tracked->get_backing_buffer()->unique_id();
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                    .contains(tracked_id));
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
+
+    distributed::trace_allocation_tracker::push_corruptible_allocation_scope(mesh_device.get());
+    auto acknowledged = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    distributed::trace_allocation_tracker::pop_corruptible_allocation_scope(mesh_device.get());
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(acknowledged->get_backing_buffer()->unique_id()));
+
+    std::shared_ptr<distributed::MeshBuffer> program_cache_allocation;
+    {
+        AllocationContextGuard guard("program_cache:test");
+        program_cache_allocation = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    }
+    auto program_cache_allocation_id = program_cache_allocation->get_backing_buffer()->unique_id();
+    EXPECT_EQ(
+        distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+            .contains(program_cache_allocation_id),
+        !trace_allocation_skip_program_cache_enabled());
+
+    tracked->deallocate();
+    // Aggregate accounting is not allowed to rely on a per-trace query to
+    // discover and lazily retire the deallocated buffer.
+    if (trace_allocation_diagnostics_enabled()) {
+        EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
+    }
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(tracked_id));
+    if (trace_allocation_diagnostics_enabled()) {
+        const auto pending_ids = distributed::trace_allocation_tracker::drain_pending_traceback_ids();
+        EXPECT_EQ(std::ranges::find(pending_ids, tracked_id), pending_ids.end());
+    }
+
+    auto cross_thread = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    const auto cross_thread_id = cross_thread->get_backing_buffer()->unique_id();
+    std::thread deallocator([cross_thread]() { cross_thread->deallocate(); });
+    deallocator.join();
+    if (trace_allocation_diagnostics_enabled()) {
+        EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(cross_thread_id));
+        // Deallocation from another thread is allowed to leave this thread's
+        // pending ID for live-set reconciliation at its next drain.
+        distributed::trace_allocation_tracker::drain_pending_traceback_ids();
+    }
+
+    program_cache_allocation->deallocate();
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(program_cache_allocation_id));
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRegistrationIsIdempotent) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    constexpr uint32_t page_size = 32;
+    constexpr distributed::MeshTraceId trace_id{0x1236};
+    auto mesh_device = devices_[0];
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM,
+    };
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+
+    auto tracked = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
+    const auto tracked_id = tracked->get_backing_buffer()->unique_id();
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                    .contains(tracked_id));
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id).empty());
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+    tracked->deallocate();
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerManagerRemovalClearsGlobalState) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    constexpr distributed::MeshTraceId trace_id{0x2347};
+    auto mesh_device = devices_[0];
+
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    // Removing the manager destroys its local allocators first. The tracker
+    // must still retire that manager's traces from the surviving global allocator.
+    mesh_device->remove_sub_device_manager(manager);
+
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM,
+    };
+    auto global = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
+    EXPECT_TRUE(mesh_device->impl().get_unsafe_tracked_ids(manager, trace_id).empty());
+    global->deallocate();
+}
+
+// Runs in both tracking modes: registration lifecycle bookkeeping must tolerate
+// unknown and repeated releases, while the same numeric trace id remains
+// independent across sub-device managers.
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerLifecycleToleratesImbalance) {
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    constexpr distributed::MeshTraceId never_registered{0x2345};
+    constexpr distributed::MeshTraceId shared_trace_id{0x2346};
+    auto mesh_device = devices_[0];
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), never_registered);
+
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager_a = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+
+    mesh_device->load_sub_device_manager(manager_a);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    mesh_device->load_sub_device_manager(manager_b);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    // Releasing manager B's trace must not release manager A's trace with the same numeric id.
+    mesh_device->load_sub_device_manager(manager_a);
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM,
+    };
+    auto tracked = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
+    if (trace_allocation_tracking_enabled()) {
+        EXPECT_TRUE(mesh_device->impl()
+                        .get_unsafe_tracked_ids(manager_a, shared_trace_id)
+                        .contains(tracked->get_backing_buffer()->unique_id()));
+    }
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    tracked->deallocate();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(manager_a);
+    mesh_device->remove_sub_device_manager(manager_b);
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRoutesGlobalAndManagerLocalAllocations) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    constexpr distributed::MeshTraceId shared_trace_id{0x1237};
+    auto mesh_device = devices_[0];
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager_a = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    ShardSpecBuffer shard_spec(shard_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+        .sub_device_id = SubDeviceId{0}};
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM,
+    };
+
+    mesh_device->load_sub_device_manager(manager_a);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    mesh_device->load_sub_device_manager(manager_b);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    auto local_b = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    auto global = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
+    const auto local_b_id = local_b->get_backing_buffer()->unique_id();
+    const auto global_id = global->get_backing_buffer()->unique_id();
+
+    auto unsafe_for_a = mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id);
+    auto unsafe_for_b = mesh_device->impl().get_unsafe_tracked_ids(manager_b, shared_trace_id);
+    EXPECT_FALSE(unsafe_for_a.contains(local_b_id));
+    EXPECT_TRUE(unsafe_for_a.contains(global_id));
+    EXPECT_TRUE(unsafe_for_b.contains(local_b_id));
+    EXPECT_TRUE(unsafe_for_b.contains(global_id));
+
+    local_b->deallocate();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->load_sub_device_manager(manager_a);
+    auto local_a = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    const auto local_a_id = local_a->get_backing_buffer()->unique_id();
+
+    unsafe_for_a = mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id);
+    unsafe_for_b = mesh_device->impl().get_unsafe_tracked_ids(manager_b, shared_trace_id);
+    EXPECT_TRUE(unsafe_for_a.contains(local_a_id));
+    EXPECT_TRUE(unsafe_for_a.contains(global_id));
+    EXPECT_FALSE(unsafe_for_b.contains(local_a_id));
+    EXPECT_TRUE(unsafe_for_b.contains(global_id));
+
+    local_a->deallocate();
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->load_sub_device_manager(manager_b);
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), shared_trace_id)
+                    .contains(global_id));
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    global->deallocate();
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffersAtAllocationSite) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    auto mesh_device = devices_[0];
+    auto buffers_before = mesh_device->allocator()->get_allocated_buffers();
+    constexpr distributed::MeshTraceId trace_id{0x1235};
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        CoreCoord{0, 0},
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+
+    auto unsafe = distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id);
+    auto buffers_after = mesh_device->allocator()->get_allocated_buffers();
+    std::vector<Buffer*> ordered_buffers_after(buffers_after.begin(), buffers_after.end());
+    std::ranges::sort(ordered_buffers_after, {}, [](const Buffer* buffer) { return buffer->unique_id(); });
+    std::vector<size_t> new_buffer_ids;
+    for (auto* buffer : ordered_buffers_after) {
+        if (!buffers_before.contains(buffer)) {
+            new_buffer_ids.push_back(buffer->unique_id());
+        }
+    }
+
+    EXPECT_FALSE(new_buffer_ids.empty());
+    if (trace_allocation_skip_program_cache_enabled()) {
+        for (size_t buffer_id : new_buffer_ids) {
+            EXPECT_FALSE(unsafe.contains(buffer_id));
+        }
+    } else {
+        EXPECT_TRUE(std::any_of(new_buffer_ids.begin(), new_buffer_ids.end(), [&](size_t buffer_id) {
+            auto it = unsafe.find(buffer_id);
+            return it != unsafe.end() && it->second == "program_cache: kernel binaries";
+        }));
+    }
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
 }
 }  // namespace tt::tt_metal

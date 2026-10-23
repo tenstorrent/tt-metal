@@ -75,10 +75,11 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
 // `_sfpu_binary_check_`.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
         dst_data_idx,
@@ -87,10 +88,11 @@ ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
         dst_data_idx,
@@ -99,16 +101,168 @@ ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
         dst_data_idx,
         dst_col_vec_idx,
         dst_data_idx,
         VectorMode::None)));
+}
+
+// clang-format off
+/**
+ * Apply `(data - mean) * inv_std` in one SFPU traversal, broadcasting column 0
+ * of each statistics tile across all columns. All operands and the in-place
+ * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
+ * been called since any scalar-broadcast normalisation.
+ *
+ * Return value: None
+ *
+ * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
+ * |---------------------|----------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_idx        | Data tile and in-place output                            | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_mean_col_idx    | Mean tile; column 0 is broadcast                         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_inv_std_col_idx | Inverse-standard-deviation tile; column 0 is broadcast   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
+    MATH(
+        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_mean_col_idx, dst_inv_std_col_idx, dst_mean_col_idx, VectorMode::None),
+         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+             DST_SYNC_MODE,
+             DST_ACCUM_MODE,
+             _calculate_sfpu_normalize_bcast_col_full_tile_,
+             dst_data_idx,
+             dst_mean_col_idx,
+             dst_data_idx,
+             VectorMode::None,
+             dst_inv_std_col_idx)));
+}
+
+// clang-format off
+/**
+ * Apply `(data - mean) * inv_std` to two in-place data tiles while reusing
+ * each column-vector statistics broadcast. All operands and outputs are FP32.
+ * DST must be acquired, and `sfpu_bcast_col_init()` must have been called.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                            | Type     | Valid Range                                           | Required |
+ * |----------------------|--------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_idx         | First data tile and in-place output                    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_second_data_idx  | Second data tile and in-place output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_mean_col_idx     | Mean tile; column 0 is broadcast                       | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_inv_std_col_idx  | Inverse-standard-deviation tile; column 0 is broadcast | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_normalize_bcast_col_two_tiles(
+    uint32_t dst_data_idx, uint32_t dst_second_data_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
+    MATH(
+        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_data_idx, dst_second_data_idx, dst_data_idx, VectorMode::None),
+         ::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_mean_col_idx, dst_inv_std_col_idx, dst_mean_col_idx, VectorMode::None),
+         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+             DST_SYNC_MODE,
+             DST_ACCUM_MODE,
+             _calculate_sfpu_normalize_bcast_col_two_tiles_,
+             dst_data_idx,
+             dst_second_data_idx,
+             dst_data_idx,
+             VectorMode::None,
+             dst_mean_col_idx,
+             dst_inv_std_col_idx)));
+}
+
+// clang-format off
+/**
+ * Apply `(data + residual - mean) * inv_std` in one SFPU traversal,
+ * broadcasting column 0 of each statistics tile. All operands and the in-place
+ * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
+ * been called since any scalar-broadcast normalisation.
+ *
+ * Return value: None
+ *
+ * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
+ * |---------------------|----------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_idx        | Data tile and in-place output                            | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_residual_idx    | Residual tile added to the data                          | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_mean_col_idx    | Mean tile; column 0 is broadcast                         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_inv_std_col_idx | Inverse-standard-deviation tile; column 0 is broadcast   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_residual_normalize_bcast_col(
+    uint32_t dst_data_idx, uint32_t dst_residual_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
+    MATH(
+        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_mean_col_idx, dst_inv_std_col_idx, dst_mean_col_idx, VectorMode::None),
+         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+             DST_SYNC_MODE,
+             DST_ACCUM_MODE,
+             _calculate_sfpu_residual_normalize_bcast_col_full_tile_,
+             dst_data_idx,
+             dst_residual_idx,
+             dst_data_idx,
+             VectorMode::None,
+             dst_mean_col_idx,
+             dst_inv_std_col_idx)));
+}
+
+// clang-format off
+/**
+ * Initialise SFPU state for scalar-broadcast normalisation. Call once before
+ * `sfpu_normalize_bcast_scalar()` and again if an intervening operation changes
+ * the shared SFPU configuration or zero-stride address modifier.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void sfpu_normalize_bcast_scalar_init() {
+    // Scalar broadcast needs the common SFPU config and zero-stride address modifier,
+    // but not the persistent column-broadcast mask or replay program.
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+}
+
+// clang-format off
+/**
+ * Apply `(data - mean) * inv_std` in one SFPU traversal, broadcasting element
+ * zero of each statistics tile across the complete data tile. All operands and
+ * the in-place output are FP32. DST must be acquired, and
+ * `sfpu_normalize_bcast_scalar_init()` must have been called.
+ *
+ * This operation invalidates the persistent column-broadcast mask and clobbers
+ * programmable constant register 2. A later column-broadcast or SFPU operation
+ * that consumes that constant must run its corresponding init first.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                                      | Type     | Valid Range                                           | Required |
+ * |------------------------|--------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_idx           | Data tile and in-place output                    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_mean_scalar_idx    | Mean tile; element zero is broadcast             | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_inv_std_scalar_idx | Inverse-standard-deviation tile; element zero is broadcast | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_normalize_bcast_scalar(
+    uint32_t dst_data_idx, uint32_t dst_mean_scalar_idx, uint32_t dst_inv_std_scalar_idx) {
+    MATH(
+        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_mean_scalar_idx, dst_inv_std_scalar_idx, dst_mean_scalar_idx, VectorMode::None),
+         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+             DST_SYNC_MODE,
+             DST_ACCUM_MODE,
+             _calculate_sfpu_normalize_bcast_scalar_full_tile_,
+             dst_data_idx,
+             dst_mean_scalar_idx,
+             dst_data_idx,
+             VectorMode::None,
+             dst_inv_std_scalar_idx)));
 }
 
 // ============================================================================
@@ -163,10 +317,11 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * | dst_row_vec_idx  | The index of the row-vector tile in DST (row 0 is broadcast)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW),
         dst_data_idx,
@@ -175,10 +330,11 @@ ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
         dst_data_idx,
@@ -187,10 +343,11 @@ ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW),
         dst_data_idx,
@@ -235,7 +392,7 @@ ALWI void sfpu_bcast_init() {
  * are supported.
  */
 // clang-format on
-template <BroadcastType Dim, EltwiseBinaryType Op>
+template <BroadcastType Dim, EltwiseBinaryType Op, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
     static_assert(
         Dim == BroadcastType::COL || Dim == BroadcastType::ROW,
@@ -245,19 +402,19 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         "sfpu_bcast: only EltwiseBinaryType::ELW{ADD,SUB,MUL} are supported");
     if constexpr (Dim == BroadcastType::COL) {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     } else {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     }
 }

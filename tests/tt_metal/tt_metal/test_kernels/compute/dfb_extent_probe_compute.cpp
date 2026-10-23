@@ -28,7 +28,8 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::in);
 
     if constexpr (rotate_tc || drain_producer_rotate_credits || drain_last_tc_credit) {
-        unary_op_init_common(dfb.get_id(), dfb.get_id());
+        compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
+        copy_init(dfb.get_id());
     }
 
     for (uint32_t tc = 0; tc < num_tc_snapshots; ++tc) {

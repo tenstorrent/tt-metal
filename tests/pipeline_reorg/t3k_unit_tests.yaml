@@ -17,6 +17,7 @@
       timeout: 40
   owner_id: U06US5C7M7X # Sean Nijjar
   team: scaleout
+  budget_type: unit
 
 - name: t3k_ttnn_tests
   model-name: t3k_ttnn_tests
@@ -26,6 +27,7 @@
       timeout: 25
   owner_id: U07D5N7QL4U # Joseph Chu
   team: ttnn
+  budget_type: unit
 
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
@@ -34,6 +36,7 @@
       timeout: 15
   owner_id: U0709049XNK # Aditya Saigal
   team: scaleout
+  budget_type: unit
 
 - name: t3k_ttnn_udm_tests
   cmd: run_t3000_ttnn_udm_tests
@@ -42,42 +45,7 @@
       timeout: 5
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: ttnn
-
-- name: t3k_grok_tests
-  cmd: run_t3000_grok_tests
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  model-name: grok
-
-- name: t3k_dits_tests
-  cmd: run_t3000_tt_dit_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: dits
-
-- name: t3k_deepseek_tests
-  cmd: run_t3000_deepseek_tests
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  model-name: deepseek
-
-- name: t3k_tttv2_fast_unit_tests
-  cmd: run_t3000_tttv2_fast_unit_tests
-  skus:
-    wh_llmbox:
-      timeout: 25
-  owner_id: U08JFM3CFA4 # Gongyu Wang
-  team: models
-  model-name: tttv2 modules
+  budget_type: unit
 
 - name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
@@ -86,3 +54,4 @@
       timeout: 5
   owner_id: U09BZ5Q33LK # Piotr Stankiewicz
   team: scaleout
+  budget_type: unit

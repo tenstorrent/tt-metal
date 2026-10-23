@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -21,7 +22,14 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
-from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
+from helpers.sfpu_accuracy_budget import assert_against_contract
+from helpers.sfpu_domains import (
+    _OP_DOMAIN_REGISTRY,
+    Operand,
+    edge_spec,
+    exclude_undefined_pair,
+    for_op,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -32,13 +40,17 @@ from helpers.test_variant_parameters import (
     FRESH_CPP_IMPL,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
     TemplateParameter,
 )
-from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
+
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
+_APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
@@ -60,16 +72,12 @@ def torch_equal_nan(a, b):
 def _ternary_default_specs(mathop, input_format):
     """Per-operand defaults for *mathop*: its registered domain, else the built-in one.
 
-    No ternary op has an _OP_DOMAIN_REGISTRY entry, so every op currently takes the
-    built-in branch. This is the single place a registered domain would take effect, and
-    callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
+    Callers of _run_sfpu_ternary override any operand to reach an edge the defaults
     exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
     """
     if mathop in _OP_DOMAIN_REGISTRY:
-        # OperandSpecs carries only A and B, so a registered ternary op has no third
-        # operand to read; reuse B for C.
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
-        return specs.spec_A, specs.spec_B, specs.spec_B
+        return specs.spec_A, specs.spec_B, specs.spec_C
 
     # addcdiv and snake_beta divide by c, so c is held away from zero.
     divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
@@ -91,9 +99,10 @@ def _run_sfpu_ternary(
     spec_B=None,
     spec_C=None,
     fresh_cpp_impl=0,
+    approx_mode=_APPROX_MODE,
+    clobber_lregs=False,
 ):
-    # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
-    # sitting near its tolerance pass or fail by luck. Same as the binary driver.
+    # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
 
     default_A, default_B, default_C = _ternary_default_specs(
@@ -131,17 +140,20 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        DISABLE_SRC_ZERO_FLAG(True),
+        DEST_SYNC(),
+    ]
+    if clobber_lregs:
+        templates.append(SFPU_CLOBBER_LREGS())
+
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-            FRESH_CPP_IMPL(fresh_cpp_impl),
-        ],
+        templates=templates + [FRESH_CPP_IMPL(fresh_cpp_impl)],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -172,9 +184,13 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # The op's declared accuracy contract for this exact variant, the same gate the
+    # binary driver applies: the whole contract, step budget included, since the ternary
+    # rows were measured over this driver's own variants. The mode the kernel compiled
+    # is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_against_contract(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
+    )
 
 
 @parametrize(
@@ -204,6 +220,109 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
+# (tenstorrent/tt-llk#1701 items 2 and 5).
+_TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuSnakeBeta,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_RECIP_NEWTON_OPS,
+)
+def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
+    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
+            "sfpu_reciprocal_init programs its constants in both modes"
+        )
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode=ApproximationMode.Yes,
+        clobber_lregs=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deliberate edge values on the third operand
+#
+# The random sweep holds c away from zero for the ops that divide by it, so the pole is
+# unreachable by construction; these variants drive it, via each op's registered edge metadata.
+# Only C gets edge values: A and B keep their random domains, since the divisor is the
+# interesting operand and pinning all three would test one point rather than a spread.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TERNARY_EDGE_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuAddcmul,
+    MathOperation.SfpuLerp,
+    MathOperation.SfpuSnakeBeta,
+]
+
+# Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
+# unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
+# form, which the binary suite covers as a class of its own.
+_TERNARY_DIVIDES_BY_C = frozenset(
+    {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
+)
+
+# |x| >= 0.5 on both a and b, keeping both numerators off zero -- addcdiv's is value * b,
+# snake_beta's sin(b*a)^2. Two specs differing only in seed: one spec shared by both operands
+# would make every variant run a == b, hiding a kernel that reads the wrong operand.
+_TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
+_TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_EDGE_OPS,
+)
+def test_sfpu_ternary_edges(formats, dest_acc, mathop):
+    """Drive each ternary op's operand-C pole or knee, where it has one."""
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    spec_C = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        operand=Operand.C,
+        dest_acc=dest_acc,
+    )
+    if spec_C is None:
+        # addcmul: c is a multiplicand, so there is no pole or knee for a probe to reach.
+        pytest.skip(
+            reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
+            "pipeline"
+        )
+
+    # Keep the numerator off zero so the variant asserts the pole, not 0/0.
+    nonzero = mathop in _TERNARY_DIVIDES_BY_C
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_TERNARY_NONZERO_A if nonzero else None,
+        spec_B=_TERNARY_NONZERO_B if nonzero else None,
+        spec_C=spec_C,
+    )
 
 
 @parametrize(
@@ -316,7 +435,6 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
-    # For "mixed" case, use the generated stimuli as-is
 
     # laneJO formal-equivalence witness-check hook (see test_sfpu_binary.py):
     # SFPU_SRC_OVERRIDE holds {"src_A","src_B","src_C"} replayed verbatim.
@@ -338,7 +456,7 @@ def test_ttnn_where(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
             TTNNWhereImplTemplate(ttnn_where_impl),
@@ -536,8 +654,6 @@ def test_ttnn_where_mcw(
     height = 64
     width = 64
 
-    # Generate dtype dynamically based on current input format
-
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
     ) and dest_acc == DestAccumulation.No:
@@ -566,7 +682,7 @@ def test_ttnn_where_mcw(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],

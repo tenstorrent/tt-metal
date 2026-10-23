@@ -48,12 +48,13 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     ring_grid_cols as _ring_grid_cols,
     make_recv_contig_weight as _make_recv_contig_weight,
+    require_tensor_prefetcher,
 )
 
 
@@ -62,11 +63,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip(
-            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
-        )
+    require_tensor_prefetcher(device)
 
 
 def _select_num_dram_banks(available_banks: int) -> int:

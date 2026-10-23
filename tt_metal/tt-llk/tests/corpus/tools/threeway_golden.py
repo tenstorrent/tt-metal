@@ -611,10 +611,17 @@ def _xielu(x):
 
 def _tanh_derivative_lut(x):
     # The LICENSED LUT contract (UnarySFPUGolden._tanh_derivative_lut): 1 - t^2 where t
-    # is the raw 3-region SFPLUT, NOT accurate tanh. This is the kernel's own design
-    # contract (the header documents catastrophic cancellation past |x|~3.4).
+    # is the current six-entry SFPLUTFP32 FP16 table, not accurate tanh.
     a = np.abs(np.asarray(x, dtype=np.float64))
-    t = np.where(a < 1.0, 0.90625 * a, np.where(a < 2.0, 0.09375 * a + 0.8125, 1.0))
+    t = np.select(
+        [a < 0.5, a < 1.0, a < 1.5, a < 2.0, a < 3.0],
+        [0.93701171875 * a,
+         0.5869140625 * a + 0.183837890625,
+         0.277099609375 * a + 0.49365234375,
+         0.11181640625 * a + 0.74169921875,
+         0.03070068359375 * a + 0.90625],
+        default=1.0,
+    )
     return 1.0 - t * t
 
 
@@ -684,7 +691,7 @@ def _lgamma(x):
     # tt_metal/hw/inc/api/compute/eltwise_unary/lgamma.h:24, repeated in the closing
     # comment of the function itself, and completed by lgamma_adjusted_tile in
     # ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/lgamma_kernel.cpp.
-    # The LLK node (test_sfpu_unary.py MathOperation.Lgamma) calls ONLY the stage, so
+    # The LLK node (test_sfpu_unary_campaign.py MathOperation.Lgamma) calls ONLY the stage, so
     # grading it against lgamma(x) on the negative axis grades it against a contract
     # it never made. Note this function has NO poles: for x >= 0.5 lgamma(x) is
     # finite, and for x < 0.5 the argument z = 1-x > 0.5 is too -- so the whole real
@@ -783,7 +790,10 @@ def _elu(x):
 
 
 def _hardsigmoid(x):
-    return _np(torch.nn.functional.hardsigmoid(_t(x)))
+    # Same programmed FP32 slope and threshold-first SFPU clamp as the scalar
+    # harness. IEEE clamp would propagate a NaN instead of returning 1.0.
+    value = np.asarray(x, dtype=np.float64) * float(np.float32(1.0 / 6.0)) + 0.5
+    return _relu_threshold(value, 1.0)
 
 
 def _threshold(x):
@@ -793,10 +803,18 @@ def _threshold(x):
     )
 
 
-def _relu_max(x):
-    # UnarySFPUGolden._relu_max: relu(min(x, RELU_MAX_THRESHOLD)).
+def _relu_threshold(x, threshold):
+    # SFPU threshold-first clamp: +NaN exceeds the threshold, -NaN falls
+    # below zero. Preserve that order and the negative-zero sign-bit test.
     xf = np.asarray(x, dtype=np.float64)
-    return np.maximum(0.0, np.minimum(xf, RELU_MAX_THRESHOLD))
+    clamped = np.where(
+        np.isnan(xf) & ~np.signbit(xf), threshold, np.minimum(xf, threshold)
+    )
+    return np.where(np.signbit(clamped), 0.0, clamped)
+
+
+def _relu_max(x):
+    return _relu_threshold(x, RELU_MAX_THRESHOLD)
 
 
 def _unary_max(x):

@@ -14,13 +14,13 @@
 #include "experimental/kernel_args.h"
 #include "dev_mem_map.h"
 #include "risc_common.h"
-#include "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cache_common.h"
 
 void kernel_main() {
     DataflowBuffer dfb(dfb::out);
     const uint32_t is_active = get_arg(args::is_active);
     const auto mode =
-        static_cast<DfbCacheTestMode>(get_arg(args::test_mode));  // flush-on-release vs invalidate-on-acquire
+        static_cast<ScopedLockCacheMode>(get_arg(args::test_mode));  // flush-on-release vs invalidate-on-acquire
     const uint32_t lock_n = get_arg(args::lock_n);            // entries to lock (held window)
     const uint32_t num_entries = get_arg(args::num_entries);  // total ring entries to drive
     const uint32_t ring_base = get_arg(args::ring_base);      // cacheable L1 byte addr of the DFB ring
@@ -60,7 +60,7 @@ void kernel_main() {
         return;
     }
 
-    if (mode == DfbCacheTestMode::FlushOnRelease) {
+    if (mode == ScopedLockCacheMode::FlushOnRelease) {
         // FLUSH-on-release. A write lock invalidates the held entries on acquire and flushes them on
         // release, so the producer must write the data INSIDE the lock. Release then flushes the
         // HELD entries L2->TL1; non-held stores stay cache-resident -> TL1 stays OLD.

@@ -123,6 +123,7 @@ enum class UnaryOpType {
     HARDSIGMOID,
     HARDSWISH,
     WHERE_TSS,
+    MAC_TSS,
     SOFTSIGN,
     CELU,
     CLAMP_TSS,
@@ -135,6 +136,7 @@ enum class UnaryOpType {
     LGAMMA,
     DIGAMMA,
     POLYGAMMA,
+    SOFTCAP,
 };
 
 enum class VecMode {
@@ -268,6 +270,6 @@ struct ttsl::json::from_json_t<ttnn::operations::unary::BasicUnaryWithParam<T>> 
     auto operator()(const nlohmann::json& json_object) const {
         return ttnn::operations::unary::BasicUnaryWithParam<T>{
             from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
-            from_json<std::vector<T>>(json_object["params"])};
+            from_json<std::vector<T>>(json_object["param"])};
     }
 };

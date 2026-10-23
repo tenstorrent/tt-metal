@@ -31,6 +31,10 @@ struct InterleavedToShardedDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // No compute_program_hash on purpose: the framework default already keys on the full TensorSpec,
+    // which is exactly the strict match this op's TensorParameters require. Overriding it would only
+    // risk drifting from that again.
 };
 
 Tensor interleaved_to_sharded(

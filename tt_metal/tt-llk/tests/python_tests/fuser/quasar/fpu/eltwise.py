@@ -2,20 +2,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.eltwise import eltwise_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.llk_params import BroadcastType, MathOperation
+from fuser.quasar.fpu.common import fidelity_source_formats
+from helpers.llk_params import (
+    BroadcastType,
+    MathOperation,
+)
 
 
 class EltwiseFpu(Fpu):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(eltwise_golden)
 
     def __init__(self, operation: MathOperation):
         if not operation in MathOperation.get_fpu_binary_operations():
@@ -31,19 +36,6 @@ class EltwiseFpu(Fpu):
             "llk_math_eltwise_binary_broadcast.h",
         ]
 
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.eltwise_golden(
-            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
-        )
-
     def init(
         self,
         operation: L1Operation,
@@ -55,13 +47,17 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
             return (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
-                f"({tensor_shape});\n"
+                f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
             )
 
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
@@ -70,7 +66,7 @@ class EltwiseFpu(Fpu):
         return (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {math_fidelity}, {reuse_dest}>"
-            f"({tensor_shape}, {acc_to_dest});\n"
+            f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
         )
 
     def calculate(
@@ -83,15 +79,14 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
 
         if compute_unit.broadcast_type != BroadcastType.None_:
-            return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_block});\n"
+            return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_dest});\n"
 
         tensor_shape = operation.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
-            f"({block.tile_id_block}, {tensor_shape}, {clear_fp32_dst_acc});\n"
+            f"({block.tile_id_dest}, {tensor_shape});\n"
         )
 
     def uninit(

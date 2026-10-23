@@ -7,6 +7,7 @@
 #include <array>
 #include <bitset>
 #include <map>
+#include <unordered_set>
 #include <utility>
 #include <limits>
 #include <tt-metalium/constants.hpp>
@@ -18,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/math.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -151,6 +153,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
+    const bool local_only = num_links == 0;
+    TT_FATAL(
+        !local_only || ((mesh_device->shape().mesh_size() == 1 ||
+                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                        operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill combine requires a singleton communication domain, dispatch_group_size=1, and Linear "
+        "topology");
+    TT_FATAL(
+        !local_only || (operation_attributes.experts_per_chip > 0 &&
+                        expert_token_counts.logical_shape()[-1] == operation_attributes.experts_per_chip),
+        "Local prefill combine requires all routed experts on its only chip");
 
     log_debug(
         tt::LogOp,
@@ -166,16 +179,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         topology,
         num_links);
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        local_only ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{}
+                   : ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
-    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
-    // multicast handshake) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
+    // first-hop direction) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
     // per-direction array connection. Must match the writer kernel's #ifdef FABRIC_2D gating.
     const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    TT_FATAL(
+        !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
+        "FABRIC_2D combine requires cluster_axis 0 or 1; got {}",
+        operation_attributes.axis.value_or(2));
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
@@ -189,7 +207,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     constexpr uint32_t SLOTS_PER_UNTILIZER = 16;
     // Maximum worker cores: one per fabric link.
     constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
+    // Local NoC work still needs a sender group for mailboxes, drains, and sentinels.
+    uint32_t effective_num_links = local_only ? 1 : std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -799,12 +818,14 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    // counter_offset mirrors the constexpr calculation in reader_combine.cpp
+    // A local TP column owns all experts: its count page has no column displacement.
+    // Preserve the existing networked partition calculation.
     uint32_t mesh_row_coord = linearized_mesh_coord / mesh_cols;
     uint32_t mesh_col_coord = linearized_mesh_coord % mesh_cols;
     uint32_t experts_per_dispatch_group = operation_attributes.experts_per_chip * mesh_rows;
-    uint32_t counter_offset =
-        mesh_col_coord * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
+    uint32_t counter_offset = local_only ? 0
+                                         : mesh_col_coord * experts_per_dispatch_group +
+                                               mesh_row_coord * operation_attributes.experts_per_chip;
 
     // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
     // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel
@@ -1269,23 +1290,48 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
 
         if (num_links > 0) {
-            // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            // Fabric nodes used to open sender connections. Fabric2D hybrid routing to all peers in
+            // the logical combine group can require more physical first-hop directions than the two
+            // logical axis neighbors when the group turns through the physical mesh. Open one
+            // connection per physical direction used by any combine-group peer.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-            dst_nodes.reserve(neighbors.size());
-            for (const auto& neighbor_coordinate : neighbors) {
-                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
-                    continue;
+            if (is_2d_fabric) {
+                std::unordered_set<tt::tt_fabric::eth_chan_directions> used_directions;
+                for (const auto& peer_coordinate : ttnn::MeshCoordinateRange(mesh_view.shape())) {
+                    if (peer_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    const bool same_combine_group = operation_attributes.axis.value() == 0
+                                                        ? peer_coordinate[1] == mesh_coordinate[1]
+                                                        : peer_coordinate[0] == mesh_coordinate[0];
+                    if (!same_combine_group) {
+                        continue;
+                    }
+                    const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
+                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    TT_FATAL(
+                        direction.has_value(),
+                        "No Fabric2D forwarding direction from combine source {} to peer {}",
+                        src_fabric_node_id,
+                        peer_node);
+                    if (used_directions.insert(direction.value()).second) {
+                        dst_nodes.push_back(peer_node);
+                    }
                 }
-                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            } else {
+                dst_nodes.reserve(neighbors.size());
+                for (const auto& neighbor_coordinate : neighbors) {
+                    if (neighbor_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+                }
             }
             const uint32_t core_link = core_idx % num_links;
             if (is_2d_fabric) {
-                // Portable RoutingPlaneConnectionManager path: one connection per combine-axis neighbor
-                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
-                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
-                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. Pick a forwarding link valid for each neighbor's own direction (see
-                // compute_per_neighbor_forwarding_links above) rather than broadcasting one {core_link}.
+                // Portable RoutingPlaneConnectionManager path: one connection per physical first-hop
+                // direction used by the combine group, so traffic forwards across MULTIPLE hops. The
+                // writer reads num_connections first, then builds the manager from the appended args.
                 const std::vector<uint32_t> per_conn_links =
                     compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "combine-axis");
                 writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));

@@ -30,8 +30,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out, typename DFB>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -68,7 +68,8 @@ void kernel_main() {
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out0);
 
-    unary_op_init_common(dfb::cb_in0, dfb::cb_out0);
+    compute_kernel_hw_startup(dfb::cb_in0, dfb::cb_out0);
+    copy_init(dfb::cb_in0);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full

@@ -606,7 +606,7 @@ def case_faithful_vehicles():
         ScalarBinopGolden,
         SdpaExpUnclampedGolden,
     )
-    from helpers.llk_params import MathOperation
+    from helpers.llk_params import DestAccumulation, MathOperation
 
     u16 = np.arange(65536, dtype=np.uint32)
     xs = tg._bf16_bits_to_f32(u16)
@@ -620,6 +620,7 @@ def case_faithful_vehicles():
             xt,
             int(np.array([np.float32(tg.BINOP_SCALAR_ADD)]).view(np.uint32)[0]),
             DataFormat.Float16_b,
+            DestAccumulation.No,
         ),
     }
     for op, make in cases.items():
@@ -1161,7 +1162,12 @@ def case_modelling_contracts():
         # policy because a NaN sign is not a numeric quantity.
         ("elu-fresh", 0xFF81, None),
         ("gelu-fresh", 0xFF81, None),
-        ("relu", 0x7F81, None),
+        # Current ReluMax/hardsigmoid use the SFPU threshold-first clamp.
+        # A positive NaN clamps high, a negative NaN clamps to zero.
+        ("relu", 0x7F81, tg.RELU_MAX_THRESHOLD),
+        ("relu", 0xFF81, 0.0),
+        ("hardsigmoid-fresh", 0x7F81, 1.0),
+        ("hardsigmoid-fresh", 0xFF81, 0.0),
         ("sigmoid-fitted", 0x7F81, None),
         ("tanh-fresh", 0x7F81, None),
         ("threshold-fresh", 0xFF81, None),

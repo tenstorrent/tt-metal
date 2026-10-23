@@ -25,8 +25,8 @@ def main():
     assert P.UNARY_32.isdisjoint(P.COMPOSITE_UNARY_PAIRS)
     assert P.UNARY_32.isdisjoint(P.EXACT_BF16_UNARY_PAIRS)
     corpus = {
-        "signbit": record("signbit", "test_sfpu_unary.py::u[formats:Float32->Float32]"),
-        "abs": record("abs", "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Abs]"),
+        "signbit": record("signbit", "test_sfpu_unary_campaign.py::u[formats:Float32->Float32]"),
+        "abs": record("abs", "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp[Abs]"),
         "expm1cw-fresh": record(
             "expm1cw-fresh",
             P.EXACT_BF16_UNARY_PAIRS["expm1cw-fresh"][0],
@@ -42,14 +42,14 @@ def main():
         ),
         "relu": record("relu", P.COMPOSITE_UNARY_PAIRS["relu"][0]),
         "binarypow-fresh": record(
-            "binarypow-fresh", "test_sfpu_binary.py::b[formats:Float16_b->Float16_b]"
+            "binarypow-fresh", "test_sfpu_binary_campaign.py::b[formats:Float16_b->Float16_b]"
         ),
-        "addint": record("addint", "test_sfpu_binary.py::b[formats:Int32->Int32]"),
+        "addint": record("addint", "test_sfpu_binary_campaign.py::b[formats:Int32->Int32]"),
         "where": record(
             "where", "test_sfpu_ternary.py::t[formats:Float16_b->Float16_b]"
         ),
         "welford": record("welford", "test_sfpu_welford_prefix_snapshot.py::w"),
-        "ignored": record("ignored", "test_sfpu_unary.py::u", kind="semantic"),
+        "ignored": record("ignored", "test_sfpu_unary_campaign.py::u", kind="semantic"),
     }
     for op, (_, hand) in {
         **P.EXACT_BF16_UNARY_PAIRS,
@@ -120,7 +120,7 @@ def main():
         tri = (out / "tri-profiles.tsv").read_text()
         assert "\r" not in tri
         assert "a_selected_sem_node" in tri
-        assert "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Abs]" in tri
+        assert "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp[Abs]" in tri
         assert json.loads((out / "plan.json").read_text())["states"] == {
             "COMPLETE": 1,
             "GAP": 4,
@@ -148,7 +148,7 @@ def main():
     stale_composite = {key: value.copy() for key, value in corpus.items()}
     stale_composite["hardshrink-fresh"][
         "sem_corr"
-    ] = "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Hardshrink-fresh_cpp]"
+    ] = "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp[Hardshrink-fresh_cpp]"
     try:
         P.classify("hardshrink-fresh", stale_composite["hardshrink-fresh"])
     except ValueError as error:

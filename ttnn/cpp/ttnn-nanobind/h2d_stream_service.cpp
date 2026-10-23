@@ -40,7 +40,7 @@ void py_module_types(nb::module_& mod) {
                uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                tt::tt_metal::BufferType socket_buffer_type,
-               std::optional<CoreRange> worker_cores,
+               std::optional<tt::tt_metal::CoreRange> worker_cores,
                uint32_t metadata_size_bytes,
                bool parallel_host_push,
                uint32_t host_push_thread_count) {
@@ -148,6 +148,7 @@ void py_module_types(nb::module_& mod) {
             [](tt::tt_metal::H2DStreamService& self, const ttnn::Tensor& host_tensor, const nb::bytes& metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                nb::gil_scoped_release release;  // blocks while the socket FIFOs are full
                 self.forward_to_tensor(host_tensor, meta_span);
             },
             nb::arg("host_tensor"),
@@ -176,6 +177,7 @@ void py_module_types(nb::module_& mod) {
                     reinterpret_cast<const std::byte*>(data.data()), data.nbytes());
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                nb::gil_scoped_release release;  // blocks while the socket FIFOs are full
                 self.forward_to_tensor(bytes, meta_span);
             },
             nb::arg("data"),
@@ -199,7 +201,10 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "barrier",
-            &tt::tt_metal::H2DStreamService::barrier,
+            [](tt::tt_metal::H2DStreamService& self) {
+                nb::gil_scoped_release release;  // blocks until the device has drained every transfer
+                self.barrier();
+            },
             R"doc(
                 Block until every forwarded transfer has fully landed in the backing
                 tensor (committed to DRAM), then return. Safe to read the backing

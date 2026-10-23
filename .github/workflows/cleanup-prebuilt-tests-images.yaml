@@ -1,0 +1,105 @@
+name: "Cleanup prebuilt tests images"
+# Prebuilt tests images are throwaways: one per (commit x build config x base),
+# pushed on every PR update, so without this they accumulate indefinitely.
+#
+# Keeps the newest N and deletes the rest, oldest first.
+#
+# min-versions-to-keep is what protects an in-flight run: it excludes the newest
+# N from deletion, and the action removes oldest-first. The 100-per-run limit
+# only bounds how much backlog one sweep clears, so do not treat it as the
+# safety mechanism. Note that N counts untagged versions too, so tagged
+# retention is lower than the number says.
+#
+# The action deletes at most 100 versions per run, which is why the schedule is
+# every 15 minutes rather than daily. Both gates build four images per run at
+# roughly 600 runs/day each, so ~4,800 versions/day or ~200/hour against
+# 96 x 100 deletions. Every 30 minutes would be exactly break-even.
+#
+# min-versions-to-keep is sized from that RATE, not picked round: retention in
+# hours is roughly N divided by the hourly push rate, so N = 4800 buys about a
+# day at ~200/hour.
+#
+# A day is chosen deliberately, and it defines a SUPPORTED RE-RUN WINDOW of
+# about a day. GitHub allows re-running a job for 30 days, but retaining that
+# long would mean ~144,000 versions, so we do not. Re-running an individual leg
+# after roughly a day fails at container startup, because container.image is
+# resolved before any step runs and there is no fallback at that point. Re-run
+# the whole workflow instead: that rebuilds the image and works at any age.
+#
+# A day is far more than the in-run need. Measured, the gap between an image
+# being pushed and the last consumer pulling it is 9 min in PR Gate and 28 min
+# in Merge Gate, which ~100 versions would cover.
+#
+# Recompute N if the push rate changes: wiring more consumers raises it, and
+# building one image per run instead of two would halve it.
+#
+# One matrix entry per package the producer creates, each with its own N, because
+# their push rates differ. prebuilt-tests-env-image carries a source tree plus
+# build output rather than packages. Sanity runs about 250 times a day and bakes
+# two of these per run, one per (base, profile) its impls need; runtime sanity
+# adds about 20 runs a day with one more. The model tiers bake one each on a cron,
+# seven runs a day between the three unit and three e2e pipelines, and All Model
+# Tests one more per dispatch. The L2 nightly bakes one on one cron, the profiler
+# pipeline one per run at about 8 runs a day, and Blackhole e2e one per run at about
+# 14. So roughly 553 a day, and N=1500 buys just under three days.
+# Recompute if a caller is added, the same way the figure above is derived from a
+# rate.
+#
+# This deletes irreversibly. The package list is fixed in the matrix below and
+# never derives from event context, so this cannot resolve to a package it should
+# not touch, and it never touches a base image.
+
+permissions:
+  packages: write
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      min-versions-to-keep:
+        description: "Override retention for every package. Set very high for a safe no-op run. Empty uses each package's own default."
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  cleanup:
+    name: "Delete aged-out ${{ matrix.package }}"
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    strategy:
+      # One package failing must not stop the others being swept.
+      fail-fast: false
+      matrix:
+        include:
+          - package: tt-metal/prebuilt-tests-image
+            keep: "4800"
+          - package: tt-metal/prebuilt-tests-env-image
+            keep: "1500"
+    steps:
+      - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          owner: tenstorrent
+          package-name: ${{ matrix.package }}
+          package-type: container
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || matrix.keep }}
+
+      # A GC that silently falls behind looks exactly like one that is working.
+      - name: Report what is left
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ inputs.min-versions-to-keep || matrix.keep }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          # The API takes the package name path-encoded.
+          COUNT=$(gh api "/orgs/tenstorrent/packages/container/${PACKAGE//\//%2F}" --jq '.version_count')
+          echo "${PACKAGE}: ${COUNT} versions remaining" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Steady state sits near the retention value, so warn relative to it
+          # rather than at a fixed number. A deliberate high-retention no-op run
+          # would otherwise report falling behind.
+          THRESHOLD=$(( KEEP * 2 ))
+          if [ "${COUNT}" -gt "${THRESHOLD}" ]; then
+            echo "::warning::${PACKAGE}: ${COUNT} versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
+          fi

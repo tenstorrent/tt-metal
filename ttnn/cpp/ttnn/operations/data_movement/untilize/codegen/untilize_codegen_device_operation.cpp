@@ -7,9 +7,13 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "untilize_codegen_supported.hpp"
+#include "untilize_codegen_cb_plan.hpp"
+
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::prim {
 
@@ -32,7 +36,7 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     const auto& logical_shape = input_tensor.logical_shape();
     const bool tile_aligned =
@@ -63,6 +67,18 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
 UntilizeCodegenDeviceOperation::tensor_return_value_t UntilizeCodegenDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
+
+// The CB tier is a function of the L1 that is free right now (choose_codegen_cb_plan samples it on
+// every dispatch), so it is part of the cache key: an occupancy change that crosses a tier is a
+// cache miss that rebuilds with the new depths, not a hit that replays a plan sized for L1 that is
+// no longer free. Only the codegen tiers are ever keyed here -- a case for which no codegen plan
+// fits is routed to the native prim by ttnn::untilize before it reaches this op.
+ttsl::hash::hash_t UntilizeCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto chosen = untilize_codegen_detail::choose_codegen_cb_plan(operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<UntilizeCodegenDeviceOperation>, operation_attributes, tensor_args, chosen.tier);
 }
 
 Tensor untilize_codegen(const Tensor& input, tt::tt_metal::MemoryConfig output_mem_config) {

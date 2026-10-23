@@ -2,7 +2,7 @@
 """laneMK — orchestrator for the sound 2^32 sem-vs-hand streaming sweep (one op).
 
 Drives the certified corpus kernel's persistent-session streamer (the SFPU_STREAM
-hook in test_sfpu_unary.py) over [0, 2^32) in resume-safe bands, one band-leg per
+hook in test_sfpu_unary_campaign.py) over [0, 2^32) in resume-safe bands, one band-leg per
 pytest invocation, on a flocked device. Per band: run sem + hand, compare output SHA.
 Verdict = BIT-EXACT-ALL-INPUTS iff every band's sem_sha == hand_sha (full contiguous
 cover, checked); otherwise DIVERGENT (bands that differ are the witness bands to bisect).

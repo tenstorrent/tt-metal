@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance of NOC transaction ID (TRID) mechanisms during NOC transactions between multiple Tensix cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API enables only fast dispatch mode by default. This provides optimal performance for data movement operations.
 
@@ -74,4 +74,4 @@ The test uses five different kernel implementations:
 All kernels implement the same read-after-write or write-after-read pattern but with different NOC API optimizations suited for different transaction size ranges and performance requirements.
 
 ## Quasar Notes
-`TensixDataMovementTransactionIdReadAfterWrite` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator. Skipped at runtime when the emulator grid has fewer than 3 cores.
+`TensixDataMovementTransactionIdReadAfterWrite` includes a Quasar-specific code path inside `UnitMeshFastDispatchFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator. Skipped at runtime when the emulator grid has fewer than 3 cores.

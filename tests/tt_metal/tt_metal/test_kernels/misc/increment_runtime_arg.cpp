@@ -4,7 +4,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-namespace {
 void kernel_main() {
     // Get configurable number of unique and common runtime args, and increment them all by a fixed value.
     constexpr uint32_t num_unique_rt_args = get_compile_time_arg_val(0);
@@ -27,4 +26,3 @@ void kernel_main() {
         arg_ptr[0] = rt_arg + common_arg_incr_val;
     }
 }
-}  // namespace

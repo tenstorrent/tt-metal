@@ -40,11 +40,11 @@
 //
 // On WH/BH that is a save/restore of the partials CB's fifo_rd_ptr/fifo_wr_ptr. Quasar compute has no
 // cb_interface (it tracks DFB state in g_dfb_interface), so the equivalent position is the DFB ring
-// state: tc_slots[].wr_entry_idx/wr_offset + wr_entry_ptr for the packer, tc_slots[].rd_entry_idx/
-// rd_offset for the unpacker. Those advance only via dfb_advance_slot() on push_back/pop_front, so
+// state: tc_slots[].cursor_entry_idx (plus wr_entry_ptr for the packer); the byte offset is derived
+// from it. Those advance only via dfb_advance_slot() on push_back/pop_front, so
 // snapshotting and restoring them reproduces the rewind exactly. The PARTIALS_* macros below abstract
-// the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(), so the wr_*/rd_*
-// fields they touch only compile on the matching TRISC.
+// the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(); the _WR ones also
+// touch wr_entry_ptr, which only exists on the pack TRISC.
 #ifdef ARCH_QUASAR
 struct QsrDfbRingPos {
     uint16_t entry_idx[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
@@ -56,14 +56,14 @@ using PartialsRingPos = QsrDfbRingPos;
 // Quasar has no evil_set_*; snapshot/restore the DFB ring via get_local_dfb_interface.
 // Macros take a DataflowBuffer so call sites match the WH/BH evil_* path.
 // [#48552] f6b15a widened DFBTCSlot.ring_size to uint32 and REMOVED wr_offset/rd_offset -- the cursor
-// byte-offset is now DERIVED from *_entry_idx (dfb_slot_cursor_offset_units). The partials-rewind
-// snapshot/restore therefore only needs *_entry_idx; restoring it restores the derived offset.
+// byte-offset is now DERIVED from cursor_entry_idx (dfb_slot_cursor_offset_units). The partials-rewind
+// snapshot/restore therefore only needs cursor_entry_idx; restoring it restores the derived offset.
 // (PartialsRingPos.offset[] is now unused.)
 #define QSR_SNAPSHOT_WR(pos, dfb)                                         \
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].wr_entry_idx;        \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].cursor_entry_idx;        \
         }                                                                 \
         (pos).entry_ptr = _qd.wr_entry_ptr;                               \
         (pos).tc_idx = _qd.tc_idx;                                        \
@@ -72,7 +72,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            _qd.tc_slots[_qi].wr_entry_idx = (pos).entry_idx[_qi];        \
+            _qd.tc_slots[_qi].cursor_entry_idx = (pos).entry_idx[_qi];        \
         }                                                                 \
         _qd.wr_entry_ptr = (pos).entry_ptr;                               \
         _qd.tc_idx = (pos).tc_idx;                                        \
@@ -81,7 +81,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].rd_entry_idx;        \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].cursor_entry_idx;        \
         }                                                                 \
         (pos).tc_idx = _qd.tc_idx;                                        \
     } while (0)
@@ -89,7 +89,7 @@ using PartialsRingPos = QsrDfbRingPos;
     do {                                                                  \
         LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
-            _qd.tc_slots[_qi].rd_entry_idx = (pos).entry_idx[_qi];        \
+            _qd.tc_slots[_qi].cursor_entry_idx = (pos).entry_idx[_qi];        \
         }                                                                 \
         _qd.tc_idx = (pos).tc_idx;                                        \
     } while (0)
@@ -153,28 +153,29 @@ void tilize_in(
         remap_mode>(in_num_subblocks);
 }  // tilize_in()
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer& in_cb) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
+inline void tilize_single_block(DFBIn& in_cb) {
     in_cb.wait_front(in_block_w);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
-                     // activation_reuse path, which the resnet conv factories force OFF. Guard the
-                     // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-#endif
     in_cb.pop_front(in_block_w);
 }
 
-template <uint32_t window_reuse_offset>
-inline uint32_t update_in_cb(DataflowBuffer& in_cb, uint32_t in_cb_addr) {
+template <uint32_t window_reuse_offset, typename DFBIn>
+inline uint32_t update_in_cb(DFBIn& in_cb, uint32_t in_cb_addr) {
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     UNPACK((in_cb.evil_set_read_ptr(in_cb_addr)));
 #endif
     return in_cb_addr + window_reuse_offset;
 }
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(
-    DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t& out_cb_addr) {
+template <
+    uint32_t in_cb_id,
+    uint32_t in_block_w,
+    uint32_t out_cb_id,
+    uint32_t tilized_cb_row_offset,
+    typename DFBIn,
+    typename DFBOut>
+inline void tilize_single_block_with_out_cb_update(DFBIn& in_cb, DFBOut& out_cb, uint32_t& out_cb_addr) {
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     PACK((out_cb.evil_set_write_ptr(out_cb_addr)));
 #endif
@@ -193,17 +194,18 @@ template <
     uint32_t window_reuse_offset,
     uint32_t tilized_cb_row_offset,
     uint32_t tilized_cb_second_reader_offset,
-    uint32_t image_width_in_tiles>
+    uint32_t image_width_in_tiles,
+    typename DFBIn1,
+    typename DFBIn2,
+    typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer& in1_cb,
-    DataflowBuffer& in2_cb,
-    DataflowBuffer& out_cb,
+    DFBIn1& in1_cb,
+    DFBIn2& in2_cb,
+    DFBOut& out_cb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
-#endif
 
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
@@ -259,15 +261,13 @@ inline void tilize_in_reuse_split_reader(
     PACK((out_cb.evil_set_write_ptr(out_cb_addr_init)));
 #endif
     out_cb.push_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
-#endif
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DataflowBuffer& interm_cb,
-    DataflowBuffer& out_cb,
+    DFBInterm& interm_cb,
+    DFBOut& out_cb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -440,7 +440,7 @@ void kernel_main() {
             bool enable_reload = false;
 
             if constexpr (pack_relu) {
-                PACK((llk_pack_relu_config(ReluConfig::none())));
+                pack_relu_config(ReluConfig::none());
             }
             if constexpr (partials_cb_uses_output) {
                 UNPACK(RESAVE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
@@ -449,17 +449,11 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
-                // TRISC1) so the LAST BS* line in that file before the 0x19 pins the stall point:
-                //   BSLOOP present but no "mmin0-ok" -> stuck in cb_mm_in0.wait_front (tilized act never
-                //     delivered by the mcast reader / tilize never completed for this K-block).
-                //   "mmin0-ok" but no "in1-ok"       -> stuck in cb_in1.wait_front (weights never delivered
-                //     by the DM3 weights mcast).
-                //   "in1-ok" (+ existing MMBLK/MMMV) then fault -> the matmul MVMULs read missing SrcA/SrcB.
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
                             if (last_inner_dim_block) {
-                                PACK((llk_pack_relu_config(ReluConfig::none())));
+                                pack_relu_config(ReluConfig::none());
                             }
                         }
                         if constexpr (packer_l1_acc) {
@@ -467,14 +461,7 @@ void kernel_main() {
                             pack_reconfig_l1_acc(0);
                         }
 #ifdef ARCH_QUASAR
-                        // [#48552] Re-seed MATH/PACK sync + repoint the pack BD before the block-sharded tilize
-                        // (matmul->tilize). This fixed the tilize side (207 blocks OK). NOTE: the dvalid scrub
-                        // (llk_math_set_dvalid) was tried here AND before the matmul and did NOT help the 0x19 --
-                        // the fault is the SyncFull single-DEST-section datacopy<->pack MOP collision (see
-                        // conv2d_op_sharded_program_factory.cpp #47797 notes), not a stale dvalid.
-                        MATH((llk_math_pack_sync_init()));
-                        PACK((llk_pack_init(tilized_in0_cb_id)));
-                        PACK((llk_pack_dest_init()));
+                        pack_init(tilized_in0_cb_id);
 #endif
                         tilize_in<
                             in0_block_w,
@@ -496,7 +483,7 @@ void kernel_main() {
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
                         if (last_inner_dim_block) {
-                            PACK((llk_pack_relu_config(ReluConfig::none())));
+                            pack_relu_config(ReluConfig::none());
                         }
                     }
                     if constexpr (packer_l1_acc) {
@@ -504,70 +491,8 @@ void kernel_main() {
                         pack_reconfig_l1_acc(0);
                     }
 #ifdef ARCH_QUASAR
-                    // ROOT CAUSE (proven via MMBLK-absent + tile-index>obnt localization): on Quasar the plain
-                    // `tilize_init` (tilize.h:63-69) does ONLY unpack+math init and omits ALL pack config --
-                    // unlike the non-Quasar branch (:106-108), BH (:60-62), which all call llk_pack_hw_configure(ocb) +
-                    // llk_pack_init(ocb). So the tilize's pack BUFFER DESCRIPTOR is never pointed at
-                    // tilized_in0 -- it keeps the stale dfb::out base from compute_kernel_hw_startup, and the
-                    // tilize packs tilized_in0's tiles into the OUT L1 region -> PACR0_TILE_INC / ERROR_TRISC1
-                    // OOB (fires BEFORE the matmul pack). A prior workaround called only llk_pack_init here
-                    // (sets the MOP buf_desc_id) but NOT llk_pack_hw_configure (which programs the BD BASE),
-                    // so the BD base stayed stale. UPDATE (pool cross-check 2026-07-14): re-running
-                    // llk_pack_hw_configure PER K-block is the "hw_configure is one-time" corruption that caused
-                    // an UNPACKER fault in the Quasar pool -- and is the likely cause of the residual t=4
-                    // DEST-bank fault here (state corruption surfacing after a bank rotation, NOT an LLK bug).
-                    // The one-time pack hw_configure already ran pre-loop at compute_kernel_hw_startup. Drop the
-                    // per-block hw_configure; llk_pack_init repoints the pack BD (the per-use-safe call the pool
-                    // relies on per c-block). If this regresses to the earlier t=1 tilize OOB (stale BD base),
-                    // the proper fix is to set the pack BD base ONCE in tilize.h's Quasar tilize_init.
-                    // Quasar-only: re-seed the MATH<->PACK DEST semaphore + dest-bank phase for the tilize.
-                    // Quasar's DEST handshake is a MATH_PACK-semaphore workaround (dest-dvalid gap); the plain
-                    // Quasar tilize_init omits llk_math_pack_sync_init, so the tilize inherits the matmul's
-                    // stale semaphore count / bank phase -> MATH issues its datacopy MOP into a DEST bank out
-                    // of phase with PACK -> Risc IB interrupt (0x19) whose faulting tile/core move with DPRINT
-                    // latency (a timing race, not OOB: TZCUR showed wr_entry_idx=0/nent=448). This is the
-                    // MATH-side partner of the llk_pack_init/llk_pack_dest_init re-issued just below; runs once
-                    // per tilize group, NO per-block hw_configure.
-                    // NB: this seeds the MATH side; a RESIDUAL Quasar DEST-handshake race in the per-tile
-                    // tilize_block datacopy<->pack loop (ERROR_TRISC1 0x19, fault tile/core move with DPRINT
-                    // latency) survives even with correct init -- it is an LLK-team issue, see
-                    // ~/llk_conv_tilize_issue.md.
-                    //
-                    // ROOT CAUSE (LLK hazard audit 2026-07-15): the Quasar MATH<->PACK *semaphore* dest-sync
-                    // scheme never issues a CLEARDVALID, so the HW DEST data-valid bit SET by the preceding
-                    // matmul's terminal MVMUL is never scrubbed. The tilize's MOVA2D datacopy MOP is then
-                    // rejected at issue for targeting a bank whose dvalid is still set -> ERROR_TRISC1 (MATH)
-                    // 0x19. (Standalone tilize passes because no prior op set the dvalid.) All prior fixes
-                    // stalled on PACK, but the dvalid + ZEROACC retire on MATH/FPU, so a PACK stall can't drain
-                    // them -- the fix is a state SCRUB, not a stall. Issue the CLEARDVALID (both banks in
-                    // SyncFull, the active bank in SyncHalf) to clear the matmul's stale math dvalid before the
-                    // tilize. Cheaper than compute_kernel_hw_startup (no hw_configure).
-                    // [#48552] CLEARDVALID scrub REMOVED: llk_math_set_dvalid is static_assert-blocked on Quasar
-                    // (it belongs to the dest-dvalid sync scheme and must not mix with the semaphore scheme
-                    // tt-metal uses) AND it did not resolve the 0x19 in testing. Leaving it here was a hard
-                    // trisc1 compile error once the static_assert was restored. The MATH pack-sync re-seed +
-                    // pack init/dest_init below are the kept fix for the tilize inheriting stale matmul state.
-                    MATH((llk_math_pack_sync_init()));
-                    PACK((llk_pack_init(tilized_in0_cb_id)));
-                    // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
-                    // HELPS (sets up the packer DEST section Quasar tilize_init omits) — keep it. The residual
-                    // fault at t=4 (first DEST bank-0 reuse after a full 4-bank rotation) is the tilize's own
-                    // Quasar DEST bank rotation/release (pack_dest_section_done) not freeing banks — an LLK bug.
-                    PACK((llk_pack_dest_init()));
-                    // [DIAG cursor] Confirm the t=5 tilize pack OOB is the ring cursor: llk_pack writes
-                    // tc_slots[tc_idx].wr_entry_idx + t into ACT_TILIZED (t up to 15). If wr_entry_idx != 0
-                    // (the in-place matmul-partials ring rewind leaves ACT_TILIZED off ring-start) the +t
-                    // overshoots the ring around t=5. Gated to the first tilize so it flushes pre-fault.
-                    if (in0_block_w_i == 0 && in0_block_h_i == 0) {
-                        // [stale-pack-BD confirm] The tilize packs into act_tilized (tilized base). If the
-                        // ERROR_TRISC1 0x19 fault address (~0x37c28) lands in the OUT CB's L1 range instead of
-                        // the tilized CB's range, the packer BD is still pointed at OUT (from hw_startup) --
-                        // the Quasar tilize_init omits the pack hw_configure that would repoint it. esz = entry
-                        // size (bytes); tilized range = [tilized_base, tilized_base + nent*esz).
-                    }
+                    pack_init(tilized_in0_cb_id);
 #endif
-                    // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
-
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
                             in0_num_subblocks_read);
@@ -612,6 +537,11 @@ void kernel_main() {
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
+                    // on the skip_compute path nothing unpacks cb_mm_in0 between the
+                    // wait_front above and this pop_front, so the bare pair would trap the Quasar unpacker
+                    // (POP_TILES races past WAIT_TILES). dummy_unpack() issues an UNPACR_NOP that orders POP
+                    // after WAIT; it reads nothing, no-op on WH/BH.
+                    dummy_unpack(mm_in0_cb_id);
                     cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
@@ -622,7 +552,7 @@ void kernel_main() {
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
-                            PACK((llk_pack_relu_config(ReluConfig::zero())));
+                            pack_relu_config(ReluConfig::zero());
                         }
                         curr_matmul_out_cb = mm_out_cb_id;
                     }
@@ -632,33 +562,7 @@ void kernel_main() {
                     pack_reconfig_data_format(curr_matmul_out_cb);
                 }
 #ifdef ARCH_QUASAR
-                // QSR quirk #1 (buffer descriptors are baked at op init, not recomputed per pack): the pack
-                // BD was last programmed for dfb::out (compute_kernel_hw_startup) and the tilize left it
-                // stale — it is NEVER repointed to the real matmul output CB. pack_block below runs the
-                // init-baked MOP applying matmul_partials' tile *offset* on top of out's L1 *base* -> OOB
-                // write -> PACR0_TILE_INC / ERROR_TRISC1 fault. Repoint the pack BD to the actual output CB
-                // here (once per K-block; the reload path at 539+ doesn't touch pack config). WH/BH don't
-                // need this (they recompute the full L1 addr from fifo_wr_ptr each pack). Mirrors
-                // compute_pool_2d.cpp's llk_pack_init re-init.
-                PACK((llk_pack_init(curr_matmul_out_cb)));
-                // [#48552] Re-seed the MATH<->PACK DEST bank-recycle handshake for the MATMUL — the exact
-                // MIRROR of the PROVEN pre-tilize re-seed (:564-570). Root cause (confirmed by removing the
-                // MVMUL entirely: the hang PERSISTS byte-identical, so it is the acquire/commit/pack/
-                // section_done/recycle HANDSHAKE, NOT compute — drop the earlier FPU-dvalid framing): a plain
-                // matmul kernel runs this identical handshake and passes; the ONLY difference here is the
-                // pretilize (datacopy->DEST->pack, 294 tiles) that ran FIRST on the SAME MATH_PACK semaphore
-                // + DEST bank-parity, then the matmul reuses that machinery. The transition (reconfig /
-                // matmul_block_init / the PACK llk_pack_init above) does NOT reset the MATH-side DEST section
-                // pointer / MATH_PACK sem / bank-parity, so the matmul inherits the pretilize's ending phase.
-                // That is self-consistent for the first two subblocks (banks 0,1 fresh) but DEADLOCKS at the
-                // FIRST bank0 REUSE (out_subblock 2) -> ERROR_TRISC1 0x0119. llk_math_pack_sync_init drains the
-                // pretilize's outstanding packs (cb_mm_in0.wait_front already guaranteed the data), resets
-                // MATH dest parity to bank0 and re-seeds MATH_PACK to its SyncHalf init (max 2); llk_pack_dest_
-                // init resets PACK parity to bank0 + re-selects the packer dest registers. Both threads restart
-                // at a clean bank0/init handshake — the same clean start the standalone matmul gets from its
-                // own init and the tilize gets from :564-570.
-                MATH((llk_math_pack_sync_init()));
-                PACK((llk_pack_dest_init()));
+                pack_init(curr_matmul_out_cb);
 #endif
                 // (flushes) so the LAST marker seen before the PACR0_TILE_INC fault tells whether the faulting
                 // pack is the MATMUL (MMBLK) or the fuse_bias->OUT pack (BIASBLK). base is the current pack
@@ -666,14 +570,8 @@ void kernel_main() {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
-#ifndef ARCH_QUASAR
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
-#else
-                            // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
-                            // two constituent steps (identical reconfig + copy init) on Quasar.
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_tile_to_dst_init_short(matmul_partials_cb);
-#endif
+                            copy_init(matmul_partials_cb);
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
@@ -695,14 +593,6 @@ void kernel_main() {
                         // prints for (i0,i1) but MMMVOK does NOT, the MATH 0x19 is in that subblock's matmul_block.
                         // Gated to the first height block (bsp1 faulted there, ~3 MMPACKs in).
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
-                            // hang is at idx=0 the very first MVMUL of subblock 2 stalls (SrcA/SrcB unpack for
-                            // that DEST section never validated); if idx>0 it stalls mid-K accumulation. Prints
-                            // the mm_in0 / in1 tile indices being read (to check for an OOB read too).
-                            // NEW text => proves the JIT recompiled. On TRISC0 (UNPACK). If "UNPK i0=2 idx=0" prints
-                            // (unpacker delivered SrcA/SrcB for the stalling MVMUL) yet MATH still hangs at MMK i0=2
-                            // idx=0 => the fault is the DEST FPU-dvalid (a) and the per-subblock clear is
-                            // ineffective/misplaced. If the last UNPK is i0=1 idx=2 (unpacker stalled ENTERING
-                            // subblock 2) => it's SrcA/SrcB unpack re-arm (b), fix belongs in the unpack handshake.
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
@@ -729,58 +619,37 @@ void kernel_main() {
 #endif
                         tile_regs_commit();
                         {
-                            DataflowBuffer curr_out_cb =
-                                curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            // reserve; PKgot=PACK got MATH's committed DEST (tile_regs_wait returned); PKdone=PACK
-                            // packed+pushed. If PKrsv i0=0 prints but PKgot i0=0 does NOT -> PACK stuck waiting on
-                            // MATH's subblock-0 commit = MATH<->PACK deadlock. If PKdone i0=0 prints then PKrsv i0=1
-                            // stalls -> PACK is fine and MATH is the sole bottleneck (MATH-internal MVMUL stall).
-                            curr_out_cb.reserve_back(out_subblock_num_tiles);
-                            tile_regs_wait();
+                            auto pack_subblock_to = [&](auto& curr_out_cb) {
+                                curr_out_cb.reserve_back(out_subblock_num_tiles);
+                                tile_regs_wait();
 
-                            if constexpr (packer_l1_acc) {
-                                if (in0_block_w_i == 0) {
-                                    pack_reconfig_l1_acc(0);
-                                } else if (last_inner_dim_block) {
-                                    pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
-                                } else {
-                                    pack_reconfig_l1_acc(1);
+                                if constexpr (packer_l1_acc) {
+                                    if (in0_block_w_i == 0) {
+                                        pack_reconfig_l1_acc(0);
+                                    } else if (last_inner_dim_block) {
+                                        pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
+                                    } else {
+                                        pack_reconfig_l1_acc(1);
+                                    }
                                 }
-                            }
 
-                            uint32_t start_dst_index = 0;
-#ifdef ARCH_QUASAR
-                            // QSR matmul-pack DST addressing fix. The Quasar SEQUENTIAL pack
-                            // (pack_block -> llk_pack_block -> get_output_tile_index<out_of_order=false>)
-                            // computes l1_tile_index = tc_slots[tc_idx].wr_entry_idx + wr_entry_ptr, where
-                            // wr_entry_idx advances per push_back (llk_push_tiles) AND wr_entry_ptr is a
-                            // monotonic per-pack counter that reserve_back/push_back never reset. Those two
-                            // DOUBLE-advance the DST address, so across the no-spill multi-height-block matmul
-                            // (in0_num_blocks_h > 1) the pack drifts ~2x and walks off the OUT/partials tile
-                            // boundary -> PACR0_TILE_INC OOB (ERROR_TRISC1). WH/BH don't hit this because their
-                            // pack recomputes the L1 addr from the CB fifo_wr_ptr each pack. Mirror the WORKING
-                            // Quasar tilize pack: out_of_order with a RELATIVE tile index (0..osnt-1). That path
-                            // (get_output_tile_index<out_of_order=true>) uses ONLY wr_entry_idx + the explicit
-                            // index and never touches wr_entry_ptr, so it single-advances and stays tile-aligned
-                            // -- the portable "reset write ptr after push_back" sequential semantics. Each
-                            // subblock reserve_back(osnt)/push_back(osnt) advances wr_entry_idx by osnt, so the
-                            // relative 0..osnt-1 lands in the correct sequential OUT/partials slot for every
-                            // (height-block, subblock), identical to the pre-Quasar pack_block behavior.
-                            for (uint32_t t = 0; t < out_subblock_num_tiles; ++t) {
-                                pack_tile<true /*out_of_order_output*/>(start_dst_index + t, curr_matmul_out_cb, t);
+                                uint32_t start_dst_index = 0;
+                                pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                                tile_regs_release();
+                                curr_out_cb.push_back(out_subblock_num_tiles);
+                            };
+                            if (curr_matmul_out_cb == matmul_partials_cb) {
+                                pack_subblock_to(cb_matmul_partials);
+                            } else {
+                                pack_subblock_to(cb_mm_out);
                             }
-#else
-                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-#endif
-
-                            tile_regs_release();
-                            curr_out_cb.push_back(out_subblock_num_tiles);
                         }
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
+
                 if (curr_matmul_out_cb == matmul_partials_cb) {
                     if constexpr (!partials_cb_uses_output) {
                         UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
@@ -790,28 +659,13 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
-#ifdef ARCH_QUASAR
-                            // TEN-4746: a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES races
-                            // past WAIT_TILES). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0); NOP/
-                            // TTI_NOP are INSUFFICIENT (LLK-team guidance + abhullar/pop-wait-fix 69014037a).
-                            // Reconfig srcA to partials for the copy, then restore srcA + re-init the matmul.
-                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_tile_to_dst_init_short(matmul_partials_cb);
-#endif
+                            // a bare wait_front->pop_front traps the Quasar unpacker
+                            // (POP_TILES races past WAIT_TILES). dummy_unpack() issues an UNPACR_NOP that orders
+                            // POP after WAIT; it reads nothing and needs no reconfig/re-init (replaces the old
+                            // copy_tile drain idiom). No-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
-                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -820,26 +674,10 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
-#ifdef ARCH_QUASAR
-                            // TEN-4746 (see above): REAL unpack TDMA (dummy copy_tile) between the bare
-                            // wait_front/pop_front; NOP/TTI_NOP insufficient.
-                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_tile_to_dst_init_short(matmul_partials_cb);
-#endif
+                            // dummy_unpack() orders POP after WAIT via an UNPACR_NOP. No-op on WH/BH.
                             cb_matmul_partials.wait_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack(matmul_partials_cb);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
-#ifdef ARCH_QUASAR
-                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
-                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -883,22 +721,17 @@ void kernel_main() {
 #ifdef FUSE_BIAS
             if constexpr (fuse_bias) {
                 if constexpr (pack_relu) {
-                    PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    pack_relu_config(ReluConfig::zero());
                 }
                 pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_l1_acc(0);
                 }
 #ifdef ARCH_QUASAR
-                // QSR quirk #1: pack_reconfig_data_format above sets only the gasket FORMAT, not the pack
-                // buffer descriptor. The pack BD is still pointed at matmul_partials (from the matmul-block
-                // pack_init); pack_tile below targets untilize_mode_out_cb_id -> stale base + new offset ->
-                // OOB PACR0_TILE_INC / ERROR_TRISC1 (this is the fault that surfaced after the matmul-pack
-                // fix, at a higher L1 addr). Repoint the pack BD to the actual pack target CB.
-                PACK((llk_pack_init(untilize_mode_out_cb_id)));
+                pack_init(untilize_mode_out_cb_id);
 #endif
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
 
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
@@ -927,18 +760,7 @@ void kernel_main() {
                         cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-#ifdef ARCH_QUASAR
-                            // Same Quasar sequential-pack double-advance fix as the matmul pack: the default
-                            // pack_tile (out_of_order=false) uses get_output_tile_index<false> =
-                            // wr_entry_idx (advances per push_back) + monotonic wr_entry_ptr, which DOUBLE-
-                            // advances the DST across this multi-subblock / multi-height-block bias->OUT pack
-                            // (fuse_bias, partials aliases OUT) and walks off the tile boundary. Use
-                            // out_of_order with the RELATIVE tile index i (single-advance via wr_entry_idx),
-                            // mirroring the working tilize. WH/BH keep the sequential pack (fifo_wr_ptr path).
-                            pack_tile<true /*out_of_order_output*/>(i, untilize_mode_out_cb_id, i);
-#else
                             pack_tile(i, untilize_mode_out_cb_id);
-#endif
                         }
                         tile_regs_release();
                         cb_untilize_mode_out.push_back(out_subblock_num_tiles);
@@ -958,7 +780,7 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 if constexpr (pack_relu) {
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
                 }
                 if constexpr (!fuse_bias) {
                     reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
@@ -966,7 +788,7 @@ void kernel_main() {
 
                 if constexpr (packer_untilize) {
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(matmul_partials_cb);
+                    copy_init(matmul_partials_cb);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             cb_matmul_partials, cb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
@@ -983,6 +805,12 @@ void kernel_main() {
                         in0_num_subblocks * out_subblock_h);
                 }
             }
+            // out is the borrowed output shard and this kernel is its only producer and consumer (self-loop).
+            // Every path above leaves exactly one output block in it; pop it so the buffer is left balanced
+            // (the data stays in place). dummy_unpack orders the pop after the wait on Quasar.
+            cb_out.wait_front(out_block_num_tiles);
+            dummy_unpack(out_cb_id);
+            cb_out.pop_front(out_block_num_tiles);
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS
                 if constexpr (fuse_bias) {
@@ -1000,4 +828,13 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
+#ifdef FUSE_BIAS
+    if constexpr (fuse_bias) {
+        // The writer pushes the bias row once; it is waited and read by tile offset for every block but
+        // never popped. Pop it so the buffer is left balanced.
+        cb_bias.wait_front(bias_ntiles_w);
+        dummy_unpack(bias_cb_id);
+        cb_bias.pop_front(bias_ntiles_w);
+    }
+#endif
 }  // void kernel_main()

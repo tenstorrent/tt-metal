@@ -8,6 +8,7 @@
 #include "tt-metalium/shape.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <map>
 #include <optional>
@@ -80,7 +81,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     log_debug(tt::LogOp, "MatmulDecode(partial): inputA_tile: {}", inputA_tile);
 
-    IDevice* device = input_tensor_a.device();
+    MeshDevice* device = input_tensor_a.device();
 
     const uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);

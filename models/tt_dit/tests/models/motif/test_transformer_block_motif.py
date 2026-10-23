@@ -17,6 +17,7 @@ from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -39,7 +40,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
     ],
 )
 @pytest.mark.parametrize("is_last_block", [False, True])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_transformer_block_motif(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -109,6 +110,7 @@ def test_transformer_block_motif(
         parallel_config=parallel_config,
         padding_config=padding_config,
         attention_k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
+        attention_exp_approx_mode=MotifTransformer.SDPA_EXP_APPROX_MODE,
     )
     converted_state_dict = dict(torch_model.state_dict())
     convert_motif_transformer_block_state(converted_state_dict, is_last_block=is_last_block)

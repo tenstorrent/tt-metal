@@ -281,6 +281,31 @@ void run_sliced_op(
                     ttnn::Shape(
                         {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
             }
+            // [#48552] Width tile-pad unblock. A DRAM-sliced conv output can arrive flattened as
+            // [1,1,oh*padded_ow,C] where padded_ow is the tile/face-aligned width (e.g. 112 -> 128), while
+            // the target slice region uses the TRUE width (output_slice_width). slice_write asserts
+            // actual_shape.volume() == input.logical_volume(), which then fails (e.g. 401408 vs 458752, an
+            // 8/7 width pad). fix_conv_output_logical_nhw() only strips the trailing height/NHW over-count
+            // and is fed the padded ow, so it cannot see the per-row width pad, and it never runs on this
+            // assembled tensor. Recover the true 4D shape here: logical uses the true width, padded keeps the
+            // tile-padded width, so slice_write does the correct strided copy of the valid columns. No-op
+            // when the flattened logical NHW already equals the true region (the common, already-correct
+            // case, including the per-slice writes above).
+            {
+                const auto& lg = sliced_output_tensor.logical_shape();
+                const uint64_t region_nhw =
+                    static_cast<uint64_t>(batch_size) * output_slice_height * output_slice_width;
+                const uint64_t hw_rows = static_cast<uint64_t>(batch_size) * output_slice_height;
+                if (lg.rank() == 4 && lg[0] == 1 && lg[1] == 1 && static_cast<uint64_t>(lg[2]) > region_nhw &&
+                    hw_rows != 0 && (static_cast<uint64_t>(lg[2]) % hw_rows) == 0) {
+                    const uint32_t padded_ow = static_cast<uint32_t>(static_cast<uint64_t>(lg[2]) / hw_rows);
+                    sliced_output_tensor = ttnn::reshape(
+                        sliced_output_tensor,
+                        ttnn::Shape({batch_size, output_slice_height, output_slice_width, output_channels}),
+                        ttnn::Shape(
+                            {batch_size, output_slice_height, padded_ow, sliced_output_tensor.padded_shape()[3]}));
+                }
+            }
             // Quasar fork: unconditionally use the quasar Metal-2 slice_write.
             ttnn::operations::experimental::quasar::slice_write(
                 sliced_output_tensor,

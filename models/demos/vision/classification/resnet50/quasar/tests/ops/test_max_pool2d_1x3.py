@@ -34,7 +34,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(300)  # a pool-reduce dest-sync hang would otherwise block the suite; cap it
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_max_pool2d_1x3_single_core(mesh_device):
     torch.manual_seed(0)

@@ -67,11 +67,6 @@ def _run(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    # Storm lane S1: the fresh/production selector is a compile define; leave
-    # it off entirely for the swept production-only nodes so their variant
-    # identity is unchanged.
-    extra_templates = [] if fresh_cpp_impl is None else [FRESH_CPP_IMPL(fresh_cpp_impl)]
-
     configuration = PerfConfig(
         "sources/sfpu_binop_scalar_perf.cpp",
         formats,
@@ -79,8 +74,10 @@ def _run(
         # SPEED_OF_LIGHT-style: everything is a compile-time template so the measured
         # kernel has no runtime-parameter reads. These sweep values are single-valued,
         # so making them templates does not expand the build matrix.
-        templates=extra_templates
-        + [
+        # Keep the selector column in both production and semantic reports.
+        # Zero explicitly selects the same production body as the old default.
+        templates=[
+            FRESH_CPP_IMPL(0 if fresh_cpp_impl is None else fresh_cpp_impl),
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(_SCALAR_BITS),
             APPROX_MODE(ApproximationMode.No),

@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <vector>
+
+#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct PrepareChunkRecurrenceParams {
+    uint32_t sequence_parallel_axis;
+    uint32_t num_heads;
+    uint32_t num_chunks;
+    uint32_t key_dim;
+    uint32_t value_dim;
+    uint32_t output_bf16_mask = 0;
+    // Multiplies the per-key log decay before its within-chunk cumulative sum.
+    float gate_scale = 1.0F;
+    // Beta's pre-sigmoid logits are num_heads columns of a token-major BF16 tensor, starting at this column;
+    // preparation reads them in place and applies the sigmoid.
+    uint32_t beta_logits_column_offset = 0;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+};
+
+struct PrepareChunkRecurrenceInputs {
+    Tensor q;
+    Tensor k;
+    Tensor v;
+    Tensor g;
+    Tensor beta;
+    std::optional<Tensor> actual_start;
+    std::optional<Tensor> actual_end;
+};
+
+}  // namespace ttnn::experimental::prim

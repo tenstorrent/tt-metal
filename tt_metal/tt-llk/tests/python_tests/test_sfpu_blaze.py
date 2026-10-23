@@ -76,7 +76,7 @@ _SKF_WITHIN_BANK_MASK = 0x3FF
 _SKF_OUT_SHIFT = 0
 _ZERO_PAD_VALID_ROWS = 24
 
-from test_sfpu_unary import _lanemk_run_fp32_stream  # noqa: E402  (shared streamer)
+from test_sfpu_unary_campaign import _lanemk_run_fp32_stream  # noqa: E402  (shared streamer)
 
 _BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)

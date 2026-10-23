@@ -167,13 +167,11 @@ def run(
             )
         elif "Default" in config_type:
             # Master traces ttnn.rms_norm_pre_all_gather with explicit
-            # LayerNormDefaultProgramConfig — parse legacy flags from the value repr.
+            # LayerNormDefaultProgramConfig — parse legacy reduction and Welford flags from the value repr.
             lr_m = re.search(r"legacy_reduction=(\d+)", config_value)
-            lq_m = re.search(r"legacy_rsqrt=(\d+)", config_value)
             uw_m = re.search(r"use_welford=(\d+)", config_value)
             ttnn_program_config = ttnn.LayerNormDefaultProgramConfig(
                 legacy_reduction=bool(int(lr_m.group(1))) if lr_m else False,
-                legacy_rsqrt=bool(int(lq_m.group(1))) if lq_m else False,
                 use_welford=bool(int(uw_m.group(1))) if uw_m else False,
             )
         elif "compute_with_storage_grid_size" in program_config:

@@ -5,12 +5,13 @@ description: |
   monitored scheduled workflows fail on main, performs root-cause analysis with
   commit-window bisection, and files deduplicated issues in tenstorrent/tt-auto-triage
   under the gh-aw-pilot label. No Slack posting and no auto-fix PRs during the pilot.
+  For "T3K tests" only the e2e suite is in scope; see the scope rule in Phase 2.
 
 on:
   workflow_run:
     workflows:
       - "Blackhole sanity tests"
-      - "(T3K) T3000 e2e tests"
+      - "T3K tests"
       - "(Single-card) Demo tests"
       - "Nightly tt-metal L2 tests"
     types:
@@ -18,11 +19,17 @@ on:
     branches:
       - main
 
-# Only triage failures. NOTE: this raw top-level `if:` is correct while
-# workflow_run is the ONLY trigger. If a workflow_dispatch is ever added (e.g.
-# manual testing), guard it too — a bare conclusion check evaluates false for
-# non-workflow_run events and would silently skip the manual run.
-if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+# Only triage a failed SCHEDULED run. NOTE: this raw top-level `if:` is correct
+# while workflow_run is the ONLY trigger. If a workflow_dispatch is ever added
+# (e.g. manual testing), guard it too — a bare conclusion check evaluates false
+# for non-workflow_run events and would silently skip the manual run.
+#
+# The event check keeps triage off a failed dispatch. The monitored set holds
+# "T3K tests", which people dispatch against main often: the suites it merges
+# took 458 dispatches in the 90 days from 20 June 2026. A failed dispatch is a
+# person trying something, thus it is not a regression on main and it must not
+# file an issue.
+if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'schedule' }}
 
 permissions:
   contents: read
@@ -74,6 +81,7 @@ safe-outputs:
   report-incomplete: false
 
 tools:
+  bash: [] # no shell access needed — triage works entirely through the GitHub MCP toolset
   github:
     # Only the toolsets triage needs: run/job/log access plus issue search.
     toolsets: [actions, repos, issues, search, context]
@@ -127,6 +135,15 @@ system during this pilot, so be rigorous and honest about uncertainty.
 ## Phase 2 — Evidence gathering
 
 1. List the jobs of the failed run and identify every failed job.
+
+   **Scope rule for `T3K tests`.** A `workflow_run` event covers a whole run, and
+   `T3K tests` runs 3 suites in one run. Its job names carry the suite as a prefix:
+   `t3000-unit-tests / `, `t3000-integration-tests / ` and `t3000-e2e-tests / `.
+   Only the e2e suite is triaged. So when `github.event.workflow_run.name` is
+   `T3K tests`, discard every failed job whose name does not start with
+   `t3000-e2e-tests / `. If that leaves no failed job, emit a noop and stop — the
+   run failed outside the triaged scope, and there is nothing to file. Every other
+   monitored workflow is triaged in full.
 2. Retrieve logs of failed jobs only. For each failed job, extract:
    - the failing test name(s) and file paths
    - the **canonical signature**: the essential error text (assertion, exception,

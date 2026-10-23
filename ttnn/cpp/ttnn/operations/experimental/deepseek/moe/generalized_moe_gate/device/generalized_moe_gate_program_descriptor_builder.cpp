@@ -4,10 +4,9 @@
 
 #include "generalized_moe_gate_program_descriptor_builder.hpp"
 
-#include <cstring>
+#include <bit>
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -23,9 +22,8 @@ constexpr const char* kGeneralizedMoeGateKernelPath =
     "generalized_moe_gate_kernel.cpp";
 
 uint32_t float_bits_u32(float value) {
-    uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
+    static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32 bits to pack into a compile-time arg");
+    return std::bit_cast<uint32_t>(value);
 }
 
 void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
@@ -65,11 +63,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
 
-    constexpr uint8_t input_cb = 0;
-    constexpr uint8_t bias_cb = 1;
-    constexpr uint8_t output_cb = 2;
-    constexpr uint8_t input_indices_cb = 3;
-    constexpr uint8_t output_indices_cb = 4;
+    constexpr uint8_t input_cb = kInputCb;
+    constexpr uint8_t bias_cb = kBiasCb;
+    constexpr uint8_t output_cb = kOutputCb;
+    constexpr uint8_t input_indices_cb = kInputIndicesCb;
+    constexpr uint8_t output_indices_cb = kOutputIndicesCb;
     // Intermediate L1 stash CBs for the multi-block combine: each holds num_blocks per-block run tiles
     // for one field (scores/bias bf16, idx uint16). Only used when num_blocks > 1.
     constexpr uint8_t run_scores_cb = 5;
@@ -138,6 +136,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
         {"moe_gate_topk", operation_attrs.topk},
         {"moe_gate_softmax", operation_attrs.output_softmax ? 1u : 0u},
+        {"moe_gate_ungrouped_top8", operation_attrs.grouped ? 0u : 1u},
         {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_run_scores_cb", run_scores_cb},
         {"moe_gate_run_idx_cb", run_idx_cb},
@@ -148,18 +147,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     };
 
     tt::tt_metal::ComputeConfigDescriptor compute_config{};
-    compute_config.math_fidelity = MathFidelity::HiFi4;
+    compute_config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     // Full DEST sync (single 16-tile bank; no double-buffer bank alternation across tile_regs_acquire).
     // The multi-block combine parks block0's run in DEST and reads it back in block1's SEPARATE acquire;
     // that only survives if acquire does not swap banks.
     compute_config.dst_full_sync_en = true;
-
-    // Path-select for the unified kernel, injected as a compile DEFINE (NOT a named CT arg): the compute API
-    // picks ungrouped-vs-grouped with `#if GMG_UNGROUPED_TOP8` at PREPROCESS time, before CT-arg constexprs
-    // exist. =1 → ungrouped global top-k; =0 → DeepSeek grouped gate. Set on ALL THREE kernels: the single
-    // .cpp is compiled for every RISC and includes the compute API header, whose `#error` guard requires the
-    // macro to be defined (so a missing define is a hard compile error, never a silent grouped fallthrough).
-    const KernelDescriptor::Defines gmg_defines = {{"GMG_UNGROUPED_TOP8", operation_attrs.grouped ? "0" : "1"}};
 
     KernelDescriptor reader{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
@@ -194,10 +186,6 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         .named_compile_time_args = std::move(trisc_named),
         .config = compute_config,
     };
-
-    reader.defines = gmg_defines;
-    writer.defines = gmg_defines;
-    compute_k.defines = gmg_defines;
 
     tt::tt_metal::ProgramDescriptor program_desc;
     program_desc.kernels.reserve(3);

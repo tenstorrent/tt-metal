@@ -67,7 +67,7 @@ constexpr AllocatorID BANK1{2};
 using namespace per_core_bank_manager_tests;
 
 // Per-bank allocators are independent: different sizes yield different second-alloc offsets.
-TEST(PerCoreAllocation, BanksAllocateDifferentSizes) {
+TEST(PerCoreAllocation, CPU_BanksAllocateDifferentSizes) {
     auto bm = make_per_core_bank_manager(1024 * 1024, 1024, 2);
 
     auto addr_b0 = alloc(bm, 1024, BANK0);
@@ -82,7 +82,7 @@ TEST(PerCoreAllocation, BanksAllocateDifferentSizes) {
 }
 
 // Lockstep allocation must skip regions occupied by any per-bank allocator.
-TEST(PerCoreAllocation, LockstepAvoidsPerBankRegions) {
+TEST(PerCoreAllocation, CPU_LockstepAvoidsPerBankRegions) {
     auto bm = make_per_core_bank_manager(1024 * 1024, 1024, 2);
 
     alloc(bm, 4096, BANK0);  // [0, 4096)
@@ -94,7 +94,7 @@ TEST(PerCoreAllocation, LockstepAvoidsPerBankRegions) {
 }
 
 // Per-bank allocation must skip regions occupied by the lockstep allocator.
-TEST(PerCoreAllocation, PerBankAvoidsLockstepRegion) {
+TEST(PerCoreAllocation, CPU_PerBankAvoidsLockstepRegion) {
     auto bm = make_per_core_bank_manager(1024 * 1024, 1024, 2);
 
     alloc(bm, 4096, LOCKSTEP);  // [0, 4096) on all banks
@@ -106,7 +106,7 @@ TEST(PerCoreAllocation, PerBankAvoidsLockstepRegion) {
 }
 
 // Deallocating per-bank regions lets lockstep reuse that space.
-TEST(PerCoreAllocation, DeallocatePerBankFreesForLockstep) {
+TEST(PerCoreAllocation, CPU_DeallocatePerBankFreesForLockstep) {
     auto bm = make_per_core_bank_manager(1024 * 1024, 1024, 2);
 
     auto b0 = alloc(bm, 4096, BANK0);
@@ -121,7 +121,7 @@ TEST(PerCoreAllocation, DeallocatePerBankFreesForLockstep) {
 }
 
 // Scale test: 110 banks (realistic Blackhole core count).
-TEST(PerCoreAllocation, HundredTenBanksScaling) {
+TEST(PerCoreAllocation, CPU_HundredTenBanksScaling) {
     constexpr uint32_t NUM_BANKS = 110;
     auto deps = make_per_core_dependencies(NUM_BANKS);
     EXPECT_EQ(deps.num_allocators(), NUM_BANKS + 1);

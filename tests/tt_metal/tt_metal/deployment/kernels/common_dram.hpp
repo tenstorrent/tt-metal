@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _DRAM_COMMON_H
-#define _DRAM_COMMON_H
+#ifndef DRAM_COMMON_H
+#define DRAM_COMMON_H
 
 #include <stdint.h>
 
@@ -290,4 +290,4 @@ static inline void dram_signal_job_done(uint32_t /*unused*/) {}
 
 #endif
 
-#endif /* _DRAM_COMMON_H */
+#endif /* DRAM_COMMON_H */

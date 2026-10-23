@@ -14,7 +14,7 @@ from helpers.llk_params import (
     MathOperation,
 )
 from helpers.stimuli_config import StimuliConfig
-from test_sfpu_unary import eltwise_unary_sfpu
+from test_sfpu_unary_campaign import eltwise_unary_sfpu
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 4], ids=["production", "licensed_cpp"])

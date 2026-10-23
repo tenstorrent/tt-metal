@@ -12,63 +12,12 @@ mesh_descriptors {
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
+# --- Pinnings (single 4x4 -> Middle column; corners->asic 3, chip 1 -> tray 1 asic 7) --------
 pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 3
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 2
-  }
+  logical_fabric_node_id { mesh_id: 0 chip_id_regex: "0,3,12,15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
 }
 pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 12
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 2
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 13
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 6
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 0
-  }
-  physical_asic_position {
-    tray_id: 1
-    asic_location: 3
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 15
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 3
-  }
-}
-pinnings {
-  logical_fabric_node_id {
-    mesh_id: 0
-    chip_id: 14
-  }
-  physical_asic_position {
-    tray_id: 4
-    asic_location: 7
-  }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
 }

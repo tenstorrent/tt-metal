@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -67,8 +69,11 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             self.tt_ccl,
         )
 
+        # The gates are learned constants, so their tanh is taken once here on the host in fp32
+        # (then rounded to bf16) instead of on the device with the approximate SFPU tanh on every
+        # forward. The device result depends on the tanh approximation in use; the host result does not.
         self.gate_attn = ttnn.as_tensor(
-            state_dict[f"{state_dict_prefix}gate_attn"].unsqueeze(0).expand(1, self.hidden_size),
+            torch.tanh(state_dict[f"{state_dict_prefix}gate_attn"].float()).unsqueeze(0).expand(1, self.hidden_size),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -104,7 +109,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         )
 
         self.gate_ffwd = ttnn.as_tensor(
-            state_dict[f"{state_dict_prefix}gate_ffwd"].unsqueeze(0).expand(1, self.hidden_size),
+            torch.tanh(state_dict[f"{state_dict_prefix}gate_ffwd"].float()).unsqueeze(0).expand(1, self.hidden_size),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -144,7 +149,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         )
         # FIXME: DRAM workaround for No circular buffer with id error
         attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn, fast_and_approximate_mode=True))
+        attn_out = ttnn.mul(attn_out, self.gate_attn)
 
         res = ttnn.add(x_11SH, attn_out)
         mlp_out = self.feed_forward(
@@ -154,6 +159,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         mlp_out = ttnn.to_memory_config(mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
-        mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd, fast_and_approximate_mode=True))
+        mlp_out = ttnn.mul(mlp_out, self.gate_ffwd)
         out = ttnn.add(res, mlp_out)
         return out

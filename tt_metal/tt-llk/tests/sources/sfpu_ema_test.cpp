@@ -63,6 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
+#include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu/llk_math_ema_sfpu_entry.h"
 
@@ -116,6 +117,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             EMA_INPUT_DST_INDEX, formats.math, formats.math);
 
+        if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
+        {
+            _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(
+                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* acc_to_dest */);
+        }
+
         // EMA reads dst tile 0, writes dst tile 1, updates the carry.
         {
             // Isolated device-profile zone (test_sfpu_ema_device_profile):
@@ -131,6 +138,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             sfpu::_calculate_ema_fresh_tile_<EMA_IMPL>(ema_state);
             _llk_math_eltwise_sfpu_done_();
 #endif
+        }
+
+        if constexpr (EMA_BINARY_INIT_BEFORE_EMA)
+        {
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+                TILE_NUM_FACES, formats.math);
         }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

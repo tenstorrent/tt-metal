@@ -3,18 +3,20 @@
 
 
 import pytest
+from conftest import skip_for_blackhole
+from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
-    PerfRunType,
     StableSort,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
@@ -22,7 +24,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
-    FRESH_CPP_IMPL,
+    FUSED_SORT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -68,17 +70,34 @@ _OPS_WITH_STABLE_SORT = {
     MathOperation.TopKRebuild,
 }
 
+# The defuse sweep belongs to the fused engine only.
+_OPS_FUSED_ONLY = {MathOperation.TopKDefuse}
 
-def _get_dest_acc_modes(mathop):
+
+def _get_dest_acc_modes(mathop, formats):
+    if mathop in _OPS_FUSED_ONLY:
+        return [DestAccumulation.Yes]
     if mathop in _OPS_WITHOUT_DEST_ACC:
         return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
+    # for both would record two rows with an identical key (the same kernel twice).
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.Yes, DestAccumulation.No]
+    )
 
 
 def _get_fast_modes(mathop):
     if mathop in _OPS_WITH_FAST_MODE:
         return [FastMode.Yes, FastMode.No]
     return [FastMode.No]
+
+
+def _get_fused_sort_modes(mathop):
+    if mathop in _OPS_FUSED_ONLY:
+        return [FusedSort.Yes]
+    if mathop in _OPS_WITH_STABLE_SORT:
+        return [FusedSort.Yes, FusedSort.No]
+    return [FusedSort.No]
 
 
 def _get_stable_sort_modes(mathop):
@@ -88,18 +107,19 @@ def _get_stable_sort_modes(mathop):
 
 
 # Every op with a unary SFPU kernel, taken from the same registry the correctness sweep
-# in test_sfpu_unary.py drives, so an op cannot be added there and silently skip perf.
+# in test_eltwise_unary_sfpu.py drives, so an op cannot be added there and silently skip perf.
 # _UNARY_OPS_NOT_SWEPT is deliberately *not* subtracted: those ops (the topk halves) are
 # exempt from the correctness sweep precisely because they are perf-only, so they belong
 # here. Sorted so the parametrize ids are stable across runs.
 PERF_SWEEP_OPS = sorted(sfpu_unary_ops(), key=lambda op: op.name)
 
-# Five PerfRunTypes per variant, so all 97 registry ops against all 16 format pairs is
-# ~30k ELF builds and profiled runs on llk_perf_tests.yaml's five shards, against ~6.4k
-# before the reroute -- and it buys little, since an SFPU kernel's math cost is its
-# instruction sequence while the format pair moves unpack/pack cycles, which these ops
-# already characterise. So every op is still swept (with its own dest_acc / fast_mode /
-# stable_sort / approx_mode), but only the pre-reroute set carries the full 16-pair matrix.
+# Five PerfRunTypes per variant, so every registry op against every _FULL_FORMAT_PAIRS pair
+# would multiply the ELF builds and profiled runs on llk_perf_tests.yaml's five shards
+# (97 ops x 16 pairs was ~30k, against ~6.4k before the reroute) -- and it buys little,
+# since an SFPU kernel's math cost is its instruction sequence while the format pair moves
+# unpack/pack cycles, which these ops already characterise. So every op is still swept
+# (with its own dest_acc / fast_mode / stable_sort / approx_mode), but only the pre-reroute
+# set carries the full _FULL_FORMAT_PAIRS matrix.
 _FULL_FORMAT_MATRIX_OPS = frozenset(
     {
         MathOperation.Reciprocal,
@@ -117,7 +137,6 @@ _FULL_FORMAT_MATRIX_OPS = frozenset(
 
 _FULL_FORMATS = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -146,7 +165,30 @@ def _get_formats(mathop):
     return _REPRESENTATIVE_FORMAT_PAIRS
 
 
-def _run(
+@pytest.mark.perf
+@parametrize(
+    formats=lambda mathop: _get_formats(mathop),
+    approx_mode=[
+        ApproximationMode.Yes,
+        ApproximationMode.No,
+    ],
+    mathop=PERF_SWEEP_OPS,
+    dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
+    loop_factor=[
+        16,
+    ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
+    iterations=[
+        32,
+    ],  # Number of SFPU iterations
+    fast_mode=lambda mathop: _get_fast_modes(mathop),
+    stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
+    fused_sort=lambda mathop: _get_fused_sort_modes(mathop),
+    input_dimensions=[
+        [128, 64],  # tile_cnt: 8
+    ],  # Specifying different input sizes to cover different tile counts
+)
+def test_perf_eltwise_unary_sfpu(
+    perf_report,
     formats,
     mathop,
     approx_mode,
@@ -155,9 +197,21 @@ def _run(
     iterations,
     fast_mode,
     stable_sort,
+    fused_sort,
     input_dimensions,
-    fresh_cpp_impl=0,
 ):
+    if fused_sort == FusedSort.Yes and (
+        stable_sort == StableSort.Yes
+        or dest_acc == DestAccumulation.No
+        or formats.input_format != DataFormat.Float16_b
+        or formats.output_format != DataFormat.Float16_b
+    ):
+        # Fused keys: bf16-only, 32-bit DEST, and mutually exclusive with the comparator-stable
+        # mode -- only the (Float16_b -> Float16_b, dest_acc=Yes) rows are meaningful.
+        pytest.skip(
+            "fused sort requires bf16 formats, dest_acc=Yes, and stable_sort=No"
+        )
+
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -173,21 +227,15 @@ def _run(
     configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
+            FUSED_SORT(fused_sort),
             CLAMP_NEGATIVE(False),
-            FRESH_CPP_IMPL(fresh_cpp_impl),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
@@ -210,404 +258,151 @@ def _run(
         dest_acc=dest_acc,
     )
 
-    return configuration
+    configuration.run(perf_report)
+
+
+# Extra slices for formats the main sweep does not cover. They must use
+# ALL_PERF_RUN_TYPES so this module's single CSV has one column schema.
+_EXTRA_SLICE_DIMS = [[128, 64]]  # tile_cnt: 8
+
+# AddInt32/SubInt32 are perf-only until the int32-unary functional sweep is
+# unblocked (tt-llk #495); integer add/sub is covered via the binary path.
+_INT32_UNARY_OPS = [
+    MathOperation.AddInt32,
+    MathOperation.SubInt32,
+    MathOperation.AbsInt32,
+    MathOperation.ReluMin,
+    MathOperation.BitwiseNot,
+    MathOperation.LogicalNot,
+    MathOperation.Fill,
+]
+
+# uint16 (calculate_comp_uint16) and uint32 (calculate_eqz/nez_uint32) only support
+# equality against zero.
+_UINT_COMP_OPS = [
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+]
+
+
+def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
+    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+    return PerfConfig(
+        "sources/eltwise_unary_sfpu_perf.cpp",
+        formats,
+        run_types=ALL_PERF_RUN_TYPES,
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+            FAST_MODE(FastMode.No),
+            STABLE_SORT(StableSort.No),
+            FUSED_SORT(FusedSort.No),
+            CLAMP_NEGATIVE(False),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count_A),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count_A,
+            tile_count_B=tile_count_B,
+            tile_count_res=tile_count_A,
+        ),
+        unpack_to_dest=unpack_to_dest,
+        dest_acc=dest_acc,
+    )
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=lambda mathop: _get_formats(mathop),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
-    mathop=PERF_SWEEP_OPS,
-    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
-    loop_factor=[
-        16,
-    ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
-    iterations=[
-        32,
-    ],  # Number of SFPU iterations
-    fast_mode=lambda mathop: _get_fast_modes(mathop),
-    stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=_INT32_UNARY_OPS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
-def test_perf_eltwise_unary_sfpu(
-    perf_report,
-    formats,
-    mathop,
-    approx_mode,
-    dest_acc,
-    loop_factor,
-    iterations,
-    fast_mode,
-    stable_sort,
-    input_dimensions,
-):
-    _run(
+def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
+    _extra_slice_config(
         formats,
         mathop,
-        approx_mode,
+        DestAccumulation.No,
+        formats.input_format.is_32_bit(),
+        input_dimensions,
+    ).run(perf_report)
+
+
+def _comp_dest_acc(formats):
+    # 32-bit inputs (UInt32) are unpacked straight into DEST and the uint32 kernels do
+    # full-word DataLayout::U32 accesses, so they require a 32-bit DEST. Mirror the
+    # correctness test (test_eltwise_unary_sfpu_int) and constraints.py, which force
+    # dest_acc=Yes for 32-bit formats; hardcoding No here would measure an unsupported config.
+    if formats.input_format.is_32_bit():
+        return DestAccumulation.Yes
+    return DestAccumulation.No
+
+
+@skip_for_blackhole
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.UInt16], same=True),
+    mathop=_UINT_COMP_OPS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_comp_uint16(
+    perf_report, formats, mathop, input_dimensions
+):
+    dest_acc = _comp_dest_acc(formats)
+    _extra_slice_config(
+        formats,
+        mathop,
         dest_acc,
-        loop_factor,
-        iterations,
-        fast_mode,
-        stable_sort,
+        formats.input_format.is_32_bit(),
+        input_dimensions,
+    ).run(perf_report)
+
+
+@skip_for_blackhole
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.UInt32], same=True),
+    mathop=_UINT_COMP_OPS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_comp_uint32(
+    perf_report, formats, mathop, input_dimensions
+):
+    dest_acc = _comp_dest_acc(formats)
+    _extra_slice_config(
+        formats,
+        mathop,
+        dest_acc,
+        formats.input_format.is_32_bit(),
         input_dimensions,
     ).run(perf_report)
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    fresh_cpp_impl=[0, 1],
-)
-def test_perf_exp_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    fresh_cpp_impl,
-):
-    _run(
-        formats,
-        MathOperation.Exp,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    # 0 = production, 1 = fresh semantic cubic, 2 = fresh semantic 3-range
-    # magnitude dispatch tree (the LUT-eligible shape).
-    fresh_cpp_impl=[0, 1, 2],
-)
-def test_perf_sigmoid_appx_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    fresh_cpp_impl,
-):
-    _run(
-        formats,
-        MathOperation.SigmoidAppx,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    mathop=[MathOperation.UnaryMax, MathOperation.UnaryMin],
-    fresh_cpp_impl=[0, 1],
-)
-def test_perf_unary_max_min_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    mathop,
-    fresh_cpp_impl,
-):
-    _run(
-        formats,
-        mathop,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-# Lane BR causal-tier lift perf vehicles: fresh typed-C++ semantic selectors
-# (impl 1) A/B'd against the hand-shaped production bodies (impl 0) on the
-# same node family — identical stimuli, marker, and metric.  Formats mirror
-# each op's measured sweep-row perf leg (Float16_b, dest_acc No — the corr
-# axis stays on the row's corr format, the expm1 corr/perf-format precedent).
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    mathop=[
-        MathOperation.Ceil,
-        MathOperation.EqualZero,
-        MathOperation.Clamp,
-        MathOperation.Hardtanh,
-        MathOperation.Tanh,
-        MathOperation.TanhDerivativeLut,
-        MathOperation.Silu,
-        # Batch 2 (Lane BR): remaining causal-tier lifts.
-        MathOperation.Fmod,
-        MathOperation.Remainder,
-        MathOperation.Xielu,
-        MathOperation.UnaryPower,
-        MathOperation.Expm1,
-        MathOperation.Log,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        # Batch 3 (Lane BR).
-        MathOperation.Sigmoid,
-        MathOperation.Cbrt,
-        MathOperation.Softplus,
-        MathOperation.Hardsigmoid,
-        MathOperation.Gelu,
-        MathOperation.Expm1Cw,
-        MathOperation.I1,
-        # Storm S4 (fresh bodies in fresh_cpp/<op>.h).
-        MathOperation.Rdiv,
-        MathOperation.Rpow,
-        MathOperation.Selu,
-        MathOperation.Sign,
-        MathOperation.ReluMax,
-        MathOperation.Floor,
-        MathOperation.Trunc,
-        MathOperation.Frac,
-        # Storm lane S3 (fresh_cpp/ per-op headers).
-        MathOperation.Log1p,
-        # Storm lane S1 (fresh_cpp/<op>.h bodies).
-        MathOperation.Abs,
-        MathOperation.Add1,
-        MathOperation.CastFp32ToFp16a,
-        MathOperation.Celu,
-        # Storm S2 (agent/storm-s2, fresh_cpp/<op>.h canonical bodies).
-        MathOperation.Erf,
-        MathOperation.Erfc,
-        MathOperation.Erfinv,
-        MathOperation.Digamma,
-        MathOperation.Hardmish,
-        MathOperation.Hardshrink,
-        MathOperation.Heaviside,
-        MathOperation.Elu,
-        MathOperation.Exp2,
-        MathOperation.Fill,
-        # Storm S5.
-        MathOperation.Softshrink,
-        MathOperation.Softsign,
-        MathOperation.Square,
-        MathOperation.Tanhshrink,
-        MathOperation.Threshold,
-        MathOperation.UnaryGe,
-        MathOperation.Acosh,
-        # laneED sem-only audit: NotEqualZero's production float body is the
-        # all-raw-TTI calculate_comp hand kernel; GeluAppx's is the 6-segment
-        # SFPLUTFP32 hand kernel.  impl 1 = the new fresh semantic arms.
-        MathOperation.NotEqualZero,
-        MathOperation.GeluAppx,
-    ],
-    fresh_cpp_impl=[0, 1],
-)
-def test_perf_causal_lift_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    mathop,
-    fresh_cpp_impl,
-):
-    _run(
-        formats,
-        mathop,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-# laneED sem-only audit: hand-LUT-variant pairs.  impl 3 = the byte-untouched
-# hand LUT kernel (Tanh: production calculate_tanh<APPROXIMATION_MODE=true>,
-# reached by building the impl-3 leg with approx mode ON — no cpp branch;
-# Sigmoid: the legacy tt-llk 6-segment SFPLUTFP32 _calculate_sigmoid_, wired
-# by the impl-3 selector + init override in eltwise_unary_sfpu_perf.cpp).
-# impl 1 = the fresh semantic body (same bodies the causal-lift family
-# measures; separate node ids so each LUT row owns its cells).
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    mathop=[
-        MathOperation.Tanh,
-        MathOperation.Sigmoid,
-        # Lane GI (owner ratification 2026-08-24 item 2): GeluAppx joins so
-        # the licensed impl-4 sem arm gets a perf node in this family (its
-        # hand perf node stays test_perf_causal_lift_fresh_cpp impl 0,
-        # byte-untouched).  impl 3 for GeluAppx falls through to the
-        # production dispatch (hand-equivalent, unswept).
-        MathOperation.GeluAppx,
-        # Lane GI gelu-255: impl 4 = the licensed slim body
-        # (fresh_cpp/gelu_255_licensed.h); impl 3 falls through to the
-        # production typed gelu (hand-equivalent, unswept).
-        MathOperation.Gelu,
-    ],
-    # impl 4 = the lane-GI LICENSED semantic arms (fresh_cpp/*_licensed.h).
-    fresh_cpp_impl=[1, 3, 4],
-)
-def test_perf_lut_variant_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    mathop,
-    fresh_cpp_impl,
-):
-    approx = (
-        ApproximationMode.Yes
-        if (fresh_cpp_impl == 3 and mathop == MathOperation.Tanh)
-        else ApproximationMode.No
-    )
-    _run(
-        formats,
-        mathop,
-        approx,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-# Lane CM fitted-kernel placeholders (tt-polynomial-fitter frontier
-# selections, PLACEHOLDER-PENDING-UPSTREAM-MERGE; provenance headers in
-# fresh_cpp/*_fitted.h).  Dedicated perf family, all-new node ids: impl 2 =
-# fitted body (sem arm), impl 0 = production hand kernel (hand arm).
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    mathop=[
-        MathOperation.Tanh,
-        MathOperation.Sigmoid,
-        MathOperation.Gelu,
-        MathOperation.TanhDerivative,
-        # Lane CR wave 2 (same contract; provenance in fresh_cpp/*_fitted.h).
-        MathOperation.Digamma,
-        MathOperation.Lgamma,
-        MathOperation.Polygamma,
-        MathOperation.I0,
-        MathOperation.I1,
-        MathOperation.Mish,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Exp,
-        MathOperation.Rsqrt,
-        MathOperation.Celu,
-        MathOperation.Elu,
-        MathOperation.Selu,
-        # Lane CW wave 3 (rlibm rounding-interval refits of the CR wave-2
-        # honest-outs; provenance in fresh_cpp/*_fitted.h).
-        MathOperation.Threshold,
-        MathOperation.Expm1,
-        MathOperation.Acosh,
-    ],
-    fresh_cpp_impl=[0, 2],
-)
-def test_perf_fitted_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    mathop,
-    fresh_cpp_impl,
-):
-    _run(
-        formats,
-        mathop,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
-    ).run(perf_report)
-
-
-# Perf vehicle for the corr-only isinf/isnan corpus row (Lane BK measurement-
-# gap close): the comp-class predicate ops live outside the sfpu_unary_ops()
-# domain registry (their functional sweep is the dedicated
-# test_eltwise_unary_sfpu_isinf_isnan with specials-injecting stimuli), so
-# PERF_SWEEP_OPS never picks them up. One MATH_ISOLATE node per predicate at
-# the representative Float16_b pair (the corr axis stays F32 — the expm1
-# corr/perf-format precedent).
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    dest_acc=[DestAccumulation.No],
-    mathop=[
-        MathOperation.Isinf,
-        MathOperation.Isposinf,
-        MathOperation.Isneginf,
-        MathOperation.Isnan,
-        MathOperation.Isfinite,
-    ],
-)
-def test_perf_isinf_isnan(
-    perf_report,
-    formats,
-    dest_acc,
-    mathop,
-):
-    _run(
-        formats,
-        mathop,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-    ).run(perf_report)
-
-
-@pytest.mark.perf
-@parametrize(
     formats=input_output_formats([DataFormat.Float32]),
-    dest_acc=[DestAccumulation.No],
-    fresh_cpp_impl=[0, 1],
+    mathop=[MathOperation.Erfinv],
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
-def test_perf_signbit_fresh_cpp(
-    perf_report,
-    formats,
-    dest_acc,
-    fresh_cpp_impl,
+def test_perf_eltwise_unary_sfpu_erfinv_fp32(
+    perf_report, formats, mathop, input_dimensions
 ):
-    _run(
-        formats,
-        MathOperation.Signbit,
-        ApproximationMode.No,
-        dest_acc,
-        16,
-        32,
-        FastMode.No,
-        StableSort.No,
-        [128, 64],
-        fresh_cpp_impl,
+    dest_acc = DestAccumulation.Yes
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+    _extra_slice_config(
+        formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)

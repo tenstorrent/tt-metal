@@ -7,9 +7,19 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/eltwise_unary/mac.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
+
+// Operands in c_0's formats share its copy init, which leaves the SFPU state the op init set, so the inits run once.
+#if !defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
+constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<std::uint32_t>(DataFormat::Float16_b) &&
+                           copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+#else
+constexpr bool init_once = false;
+#endif
 
 ALWI void process_tile(
     uint32_t predicate_cb_id,
@@ -53,18 +63,24 @@ ALWI void process_tile(
 
         tile_regs_acquire();
 
-        // Copy all 3 inputs to destination registers
-        copy_tile_init(predicate_dfb.get_id());
+        // Copy all 3 inputs to destination registers.
+        // copy_init does not reconfigure the unpacker data format, and the operands may differ in dtype.
+        reconfig_data_format_srca(false_dfb.get_id(), predicate_dfb.get_id());
+        copy_init_unless<init_once>(predicate_dfb.get_id());
         copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_tile_init(true_dfb.get_id());
+        reconfig_data_format_srca(predicate_dfb.get_id(), true_dfb.get_id());
+        copy_init_unless<init_once>(true_dfb.get_id());
         copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_tile_init(false_dfb.get_id());
+        reconfig_data_format_srca(true_dfb.get_id(), false_dfb.get_id());
+        copy_init_unless<init_once>(false_dfb.get_id());
         copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
-        TERNARY_SFPU_OP_INIT();
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
@@ -116,7 +132,11 @@ void kernel_main() {
     constexpr auto false_cb_id = tt::CBIndex::c_2;
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
-    unary_op_init_common(predicate_cb_id, cb_out_id);
+    compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
+    copy_init(predicate_cb_id);
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

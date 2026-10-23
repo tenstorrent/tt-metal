@@ -5,7 +5,7 @@ import ast
 import copy
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parents[2] / "python_tests" / "test_sfpu_unary.py"
+SOURCE = Path(__file__).resolve().parents[2] / "python_tests" / "test_sfpu_unary_campaign.py"
 
 
 def function(tree: ast.Module, name: str) -> ast.FunctionDef:

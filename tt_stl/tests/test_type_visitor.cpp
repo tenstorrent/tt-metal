@@ -45,7 +45,7 @@ using test_types::TargetType;
 // update_object_of_type tests
 // =============================================================================
 
-TEST(UpdateObjectOfTypeTest, DirectTypeMatch) {
+TEST(UpdateObjectOfTypeTest, CPU_DirectTypeMatch) {
     TargetType target{42};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 2; }, target);
@@ -53,12 +53,12 @@ TEST(UpdateObjectOfTypeTest, DirectTypeMatch) {
     EXPECT_EQ(target.value, 84);
 }
 
-TEST(UpdateObjectOfTypeTest, NonMatchingTypeThrows) {
+TEST(UpdateObjectOfTypeTest, CPU_NonMatchingTypeThrows) {
     int non_target = 123;
     EXPECT_THROW(update_object_of_type<TargetType>([](TargetType&) {}, non_target), std::runtime_error);
 }
 
-TEST(UpdateObjectOfTypeTest, OptionalWithValue) {
+TEST(UpdateObjectOfTypeTest, CPU_OptionalWithValue) {
     std::optional<TargetType> opt_target = TargetType{50};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value += 10; }, opt_target);
@@ -67,7 +67,7 @@ TEST(UpdateObjectOfTypeTest, OptionalWithValue) {
     EXPECT_EQ(opt_target->value, 60);
 }
 
-TEST(UpdateObjectOfTypeTest, OptionalWithoutValue) {
+TEST(UpdateObjectOfTypeTest, CPU_OptionalWithoutValue) {
     std::optional<TargetType> opt_target = std::nullopt;
     bool callback_called = false;
 
@@ -77,7 +77,7 @@ TEST(UpdateObjectOfTypeTest, OptionalWithoutValue) {
     EXPECT_FALSE(opt_target.has_value());
 }
 
-TEST(UpdateObjectOfTypeTest, VectorOfTargetType) {
+TEST(UpdateObjectOfTypeTest, CPU_VectorOfTargetType) {
     std::vector<TargetType> targets{{1}, {2}, {3}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 10; }, targets);
@@ -88,7 +88,7 @@ TEST(UpdateObjectOfTypeTest, VectorOfTargetType) {
     EXPECT_EQ(targets[2].value, 30);
 }
 
-TEST(UpdateObjectOfTypeTest, ArrayOfTargetType) {
+TEST(UpdateObjectOfTypeTest, CPU_ArrayOfTargetType) {
     std::array<TargetType, 3> targets{{{5}, {10}, {15}}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value += 100; }, targets);
@@ -98,7 +98,7 @@ TEST(UpdateObjectOfTypeTest, ArrayOfTargetType) {
     EXPECT_EQ(targets[2].value, 115);
 }
 
-TEST(UpdateObjectOfTypeTest, TupleOfTargetTypes) {
+TEST(UpdateObjectOfTypeTest, CPU_TupleOfTargetTypes) {
     std::tuple<TargetType, TargetType, TargetType> tuple{TargetType{10}, TargetType{20}, TargetType{30}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 2; }, tuple);
@@ -108,7 +108,7 @@ TEST(UpdateObjectOfTypeTest, TupleOfTargetTypes) {
     EXPECT_EQ(std::get<2>(tuple).value, 60);
 }
 
-TEST(UpdateObjectOfTypeTest, NestedOptionalInVector) {
+TEST(UpdateObjectOfTypeTest, CPU_NestedOptionalInVector) {
     std::vector<std::optional<TargetType>> targets{TargetType{1}, std::nullopt, TargetType{3}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 100; }, targets);
@@ -121,7 +121,7 @@ TEST(UpdateObjectOfTypeTest, NestedOptionalInVector) {
     EXPECT_EQ(targets[2]->value, 300);
 }
 
-TEST(UpdateObjectOfTypeTest, NestedVectorInVector) {
+TEST(UpdateObjectOfTypeTest, CPU_NestedVectorInVector) {
     std::vector<std::vector<TargetType>> nested{{{1}, {2}}, {{3}, {4}, {5}}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value += 10; }, nested);
@@ -136,7 +136,7 @@ TEST(UpdateObjectOfTypeTest, NestedVectorInVector) {
     EXPECT_EQ(nested[1][2].value, 15);
 }
 
-TEST(UpdateObjectOfTypeTest, ArrayOfOptionals) {
+TEST(UpdateObjectOfTypeTest, CPU_ArrayOfOptionals) {
     std::array<std::optional<TargetType>, 3> targets{TargetType{10}, std::nullopt, TargetType{30}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value = -t.value; }, targets);
@@ -148,7 +148,7 @@ TEST(UpdateObjectOfTypeTest, ArrayOfOptionals) {
     EXPECT_EQ(targets[2]->value, -30);
 }
 
-TEST(UpdateObjectOfTypeTest, EmptyVector) {
+TEST(UpdateObjectOfTypeTest, CPU_EmptyVector) {
     std::vector<TargetType> empty_targets;
     bool callback_called = false;
 
@@ -158,7 +158,7 @@ TEST(UpdateObjectOfTypeTest, EmptyVector) {
     EXPECT_TRUE(empty_targets.empty());
 }
 
-TEST(UpdateObjectOfTypeTest, CountingCallback) {
+TEST(UpdateObjectOfTypeTest, CPU_CountingCallback) {
     std::vector<TargetType> targets{{1}, {2}, {3}, {4}, {5}};
     int call_count = 0;
 
@@ -167,7 +167,7 @@ TEST(UpdateObjectOfTypeTest, CountingCallback) {
     EXPECT_EQ(call_count, 5);
 }
 
-TEST(UpdateObjectOfTypeTest, TupleOfVectors) {
+TEST(UpdateObjectOfTypeTest, CPU_TupleOfVectors) {
     std::tuple<std::vector<TargetType>, std::vector<TargetType>> tuple{
         std::vector<TargetType>{{1}, {2}}, std::vector<TargetType>{{3}, {4}, {5}}};
 
@@ -192,7 +192,7 @@ using test_types::ContainerHolder;
 using test_types::NestedHolder;
 using test_types::PairOfTargets;
 
-TEST(UpdateObjectOfTypeTest, ReflectableWithTargetMembers) {
+TEST(UpdateObjectOfTypeTest, CPU_ReflectableWithTargetMembers) {
     PairOfTargets pair{TargetType{10}, TargetType{20}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 3; }, pair);
@@ -201,7 +201,7 @@ TEST(UpdateObjectOfTypeTest, ReflectableWithTargetMembers) {
     EXPECT_EQ(pair.second.value, 60);
 }
 
-TEST(UpdateObjectOfTypeTest, ReflectableWithContainerMembers) {
+TEST(UpdateObjectOfTypeTest, CPU_ReflectableWithContainerMembers) {
     ContainerHolder holder{.targets = {{1}, {2}, {3}}, .maybe_target = TargetType{100}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value += 10; }, holder);
@@ -214,7 +214,7 @@ TEST(UpdateObjectOfTypeTest, ReflectableWithContainerMembers) {
     EXPECT_EQ(holder.maybe_target->value, 110);
 }
 
-TEST(UpdateObjectOfTypeTest, ReflectableWithEmptyOptionalMember) {
+TEST(UpdateObjectOfTypeTest, CPU_ReflectableWithEmptyOptionalMember) {
     ContainerHolder holder{.targets = {{5}}, .maybe_target = std::nullopt};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 2; }, holder);
@@ -224,7 +224,7 @@ TEST(UpdateObjectOfTypeTest, ReflectableWithEmptyOptionalMember) {
     EXPECT_FALSE(holder.maybe_target.has_value());
 }
 
-TEST(UpdateObjectOfTypeTest, NestedReflectableStructs) {
+TEST(UpdateObjectOfTypeTest, CPU_NestedReflectableStructs) {
     NestedHolder nested{.pair = {TargetType{1}, TargetType{2}}, .single = TargetType{3}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value *= 100; }, nested);
@@ -234,7 +234,7 @@ TEST(UpdateObjectOfTypeTest, NestedReflectableStructs) {
     EXPECT_EQ(nested.single.value, 300);
 }
 
-TEST(UpdateObjectOfTypeTest, VectorOfReflectable) {
+TEST(UpdateObjectOfTypeTest, CPU_VectorOfReflectable) {
     std::vector<PairOfTargets> pairs{{TargetType{1}, TargetType{2}}, {TargetType{3}, TargetType{4}}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value += 100; }, pairs);
@@ -246,7 +246,7 @@ TEST(UpdateObjectOfTypeTest, VectorOfReflectable) {
     EXPECT_EQ(pairs[1].second.value, 104);
 }
 
-TEST(UpdateObjectOfTypeTest, OptionalReflectable) {
+TEST(UpdateObjectOfTypeTest, CPU_OptionalReflectable) {
     std::optional<PairOfTargets> opt_pair = PairOfTargets{TargetType{7}, TargetType{8}};
 
     update_object_of_type<TargetType>([](TargetType& t) { t.value = -t.value; }, opt_pair);

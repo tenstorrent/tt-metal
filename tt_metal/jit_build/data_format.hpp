@@ -7,7 +7,7 @@
 #include <vector>
 #include <span>
 #include <tt-metalium/tt_backend_api_types.hpp>     // for DataFormat
-#include <umd/device/types/arch.hpp>                // for ARCH
+#include <tt-umd/types/arch.hpp>                // for ARCH
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;
@@ -35,8 +35,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    bool int_fpu_en = false,
-    bool enable_2x_src_format = false);
+    bool int_fpu_en = false);
 
 // True if any data-flow buffer is configured to unpack directly to Dest (i.e. any entry is not
 // UnpackToDestMode::Default). Used to derive the (Quasar-only) kernel-wide UnpackToDestEn sync

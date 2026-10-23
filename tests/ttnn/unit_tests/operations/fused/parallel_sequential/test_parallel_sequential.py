@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -732,7 +732,14 @@ class TestMatmulFusion:
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
     @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
-    @pytest.mark.parametrize("num_rms", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "num_rms",
+        [
+            2,
+            3,
+            pytest.param(4, marks=skip_with_llk_assert("Program too large for kernel config buffer. Will not fix.")),
+        ],
+    )
     @stress_test_program_cache
     def test_matmul_followed_by_n_rms(self, device, num_rms):
         """MM then N consecutive RMS norms."""

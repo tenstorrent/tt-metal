@@ -54,13 +54,19 @@ void kernel_main() {
     for (std::uint32_t i = 0; i < rows; i++) {
         tile_regs_acquire();
         // Runtime reduce path (matches SDPA reduce_c_row_group's inner call).
-        reduce_block_max_row_init_runtime(out_max_cb, cols, /*respect_trigger=*/false, num_faces);
+        reduce_block_max_row_init_runtime(out_max_cb, cols, qk_im_cb, scale_cb, /*respect_trigger=*/false, num_faces);
         reduce_block_max_row_runtime(
-            qk_im_cb, scale_cb, i * cols, reduce_dst_idx, /*respect_trigger=*/false, /*overlap_first_half=*/false, num_faces);
+            qk_im_cb,
+            scale_cb,
+            i * cols,
+            reduce_dst_idx,
+            /*respect_trigger=*/false,
+            /*overlap_first_half=*/false,
+            num_faces);
         reduce_block_max_row_uninit_runtime(qk_im_cb);
 
         if (do_eltwise) {
-            copy_tile_to_dst_init_short(prev_max_cb);
+            copy_init(prev_max_cb);
             copy_tile(prev_max_cb, i, prev_max_dst_idx);
             binary_max_tile_init();
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);

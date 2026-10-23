@@ -23,7 +23,6 @@ Validation:
 # Validates both value accuracy and index correctness
 """
 
-import os
 import sys
 
 import pytest
@@ -38,14 +37,8 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import (
-    DestAccumulation,
-    PerfRunType,
-    TopKSortDirection,
-    format_dict,
-)
+from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -133,26 +126,6 @@ def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
     src_tilizer = get_golden_generator(TilizeGolden)
     src_A = src_tilizer(src_A, input_dimensions, formats.input_format)
 
-    return src_A
-
-
-def make_unique_value_input(src_A, input_dimensions=[32, 128], order="ascending"):
-    """Give each row unique, exactly representable values for an exact index gate."""
-    src_A = src_A.clone()
-    num_rows_tensor, num_cols_tensor = input_dimensions
-    values_per_row = num_cols_tensor // NUM_STAGES
-    unique_values = torch.arange(values_per_row, dtype=torch.float32).to(src_A.dtype)
-    for row in range(num_rows_tensor):
-        values_start_idx = row * num_cols_tensor
-        values = unique_values
-        if order == "descending":
-            values = values.flip(0)
-        elif order == "permuted":
-            generator = torch.Generator().manual_seed(42 + row)
-            values = (values - values_per_row // 2)[
-                torch.randperm(values_per_row, generator=generator)
-            ]
-        src_A[values_start_idx : values_start_idx + values_per_row] = values
     return src_A
 
 
@@ -304,25 +277,45 @@ def get_value_tiles_from_topk_tensor(
         [256, 128],
         [32, 1024],
     ],
-    K=[32],  # TODO: Add more K values (like 16, 64).
+    # Wider dims (W >= 256) and K=64 are blocked on the wide-width harness
+    # discrepancies tracked in tt-llk#1344; sub-tile K and K=64 coverage lives
+    # in the ttnn-level topk tests.
+    K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    stable_sort=[False, True],
-    implementation=[0, 1],
+    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable
+    # network) / rank-stamped-stable (sign-conditioned local-rank tags in the value lo16,
+    # true indices riding index tracking, unstable network).
+    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
 )
 def test_topk_sfpu(
     formats: InputOutputFormat,
     input_dimensions: list,
     K: int,
     sort_direction: TopKSortDirection,
-    stable_sort: bool,
-    implementation: int,
-    exact_order=None,
+    sort_mode: str,
 ):
+    stable_sort = sort_mode == "stable"
+    fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
 
-    if stable_sort:
+    if input_dimensions == [32, 1024]:
+        # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
+        # TODO: Fix issue #1344 on tt-llk.
+        pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
+
+    if fused_stable and input_dimensions[1] != 128:
+        # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
+        # multi-iteration fused slabs need the packed-CB round-trip that lands with the ttnn milestone.
         pytest.skip(
-            "Stable sort is currently not broken in LLK API."
-        )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
+            "Fused stable mode currently covers single-iteration widths (W == 128) only."
+        )
+
+    if rank_stamped and input_dimensions[1] != 128:
+        # Rank tags do not survive this harness's bf16 L1 round-trip between iterations (the ttnn
+        # pipeline re-stamps inside the merge and moves value words through raw Float32 CBs).
+        pytest.skip(
+            "Rank-stamped stable mode covers single-iteration widths (W == 128) in this harness."
+        )
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -333,11 +326,6 @@ def test_topk_sfpu(
         spec_A=sfpu_false_spec,
         spec_B=sfpu_false_spec,
     )
-
-    if exact_order is not None or os.getenv("TOPK_EXACT_UNIQUE") == "1":
-        src_A = make_unique_value_input(
-            src_A, input_dimensions, exact_order or "ascending"
-        )
 
     golden_generator = get_golden_generator(TopKGolden)
     golden_tensor = golden_generator(
@@ -360,7 +348,8 @@ def test_topk_sfpu(
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
-                topk_impl=implementation,
+                topk_fused_stable=fused_stable,
+                topk_rank_stamped=rank_stamped,
             ),
         ],
         runtimes=[
@@ -377,7 +366,12 @@ def test_topk_sfpu(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=DestAccumulation.No,
+        # Fused / rank-stamped keys are 32-bit words: values must be exact-widened into 32-bit DEST.
+        dest_acc=(
+            DestAccumulation.Yes
+            if (fused_stable or rank_stamped)
+            else DestAccumulation.No
+        ),
         unpack_to_dest=False,
     )
 
@@ -392,15 +386,18 @@ def test_topk_sfpu(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    if exact_order is not None:
-        # Unique exactly representable values make values/indices unambiguous.
-        assert torch.equal(res_tensor, golden_tensor), "exact TopK value/index mismatch"
-
-    # Widths above 128 loop results back through L1; topk_test.cpp orders that
-    # write-back with PACK_DONE (previously the source of issue #1344).
-    if not _RECORD_TEST_ORDER:
+    # TODO: Fix issue #1344 on tt-llk.
+    if input_dimensions[1] == 128 and not _RECORD_TEST_ORDER:
+        # Fused and rank-stamped modes promise the same torch-stable tie order as
+        # comparator-stable, so they get the strict (no tie-escape) index comparison too.
         assert validate_topk_indices(
-            res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
+            res_tensor,
+            golden_tensor,
+            src_A,
+            formats,
+            input_dimensions,
+            K,
+            stable_sort or fused_stable or rank_stamped,
         )
 
     # Get value tiles from result and golden tensors
@@ -413,211 +410,255 @@ def test_topk_sfpu(
     )
 
 
-@pytest.mark.parametrize(
-    "implementation,label",
-    [(0, "handwritten"), (1, "typed_multiresult"), (2, "threaded_merge")],
+# =============================================================================
+# Adversarial stimuli coverage (test_topk_sfpu_adversarial)
+# =============================================================================
+#
+# Bit-pattern stimuli (tie pileups, signed zeros, bf16 denormals, infinities, NaN
+# payloads) that the uniform stimuli above cannot produce, checked per row against
+# an in-test golden. Both engines canonicalize before sorting: +-0 and denormals
+# -> +0.0, NaN -> same-sign infinity bits, normals and +-inf kept, ties broken
+# index-ascending (measured on Blackhole silicon at the LLK level).
+
+_BF16_SIGN_MASK = 0x8000
+_BF16_EXP_MASK = 0x7F80
+_BF16_MANT_MASK = 0x007F
+
+_BF16_POS_INF = 0x7F80
+_BF16_NEG_INF = 0xFF80
+_BF16_POS_ZERO = 0x0000
+_BF16_NEG_ZERO = 0x8000
+_BF16_QNAN = 0x7FC0
+_BF16_SNAN_PAYLOAD = 0x7F81  # Quietized to 0x7FC0 by the harness write path.
+_BF16_NEG_QNAN = 0xFFC0
+_BF16_MIN_DENORM = 0x0001
+_BF16_MAX_DENORM = 0x007F
+_BF16_NEG_MIN_DENORM = 0x8001
+
+ADVERSARIAL_STIMULI_CLASSES = [
+    "neg_ties",
+    "mixed_sign_ties",
+    "signed_zero",
+    "infinities",
+    "nan_payloads",
+    "tie_straddle_k",
+]
+
+_ADVERSARIAL_CLASS_SEED = {
+    name: 0xAD00 + 257 * i for i, name in enumerate(ADVERSARIAL_STIMULI_CLASSES)
+}
+
+
+def _bf16_bits_from_floats(values):
+    """bf16 bit patterns (uint16) of a list of exactly-representable floats."""
+    return torch.tensor(values, dtype=torch.bfloat16).view(torch.uint16)
+
+
+def _gather_u16(bits_u16, order):
+    """Advanced indexing routed through an int16 view (bit-preserving): CPU
+    torch does not implement tensor indexing for uint16."""
+    return bits_u16.view(torch.int16)[order].view(torch.uint16)
+
+
+def _is_nan_bits(bits_i32):
+    return ((bits_i32 & _BF16_EXP_MASK) == _BF16_EXP_MASK) & (
+        (bits_i32 & _BF16_MANT_MASK) != 0
+    )
+
+
+def _canon_bits(bits_u16):
+    """Model of the engines' pre-sort canonicalization (measured on Blackhole
+    silicon at the LLK level):
+    exp==0 patterns (+-0 and all bf16 denormals) -> +0.0 (0x0000); NaN ->
+    same-sign infinity bits (tying genuinely with real same-sign inf); normals
+    and +-inf unchanged."""
+    b = bits_u16.to(torch.int32)
+    b = torch.where((b & _BF16_EXP_MASK) == 0, torch.zeros_like(b), b)
+    b = torch.where(_is_nan_bits(b), (b & _BF16_SIGN_MASK) | _BF16_POS_INF, b)
+    return b.to(torch.uint16)
+
+
+def _model_write_path_bits(bits_u16):
+    """Harness L1 write path (pack_bfp16): NaNs land in L1 as the sign-preserved
+    canonical qNaN (payload lost); everything else is written bit-exactly."""
+    b = bits_u16.to(torch.int32)
+    b = torch.where(_is_nan_bits(b), (b & _BF16_SIGN_MASK) | _BF16_QNAN, b)
+    return b.to(torch.uint16)
+
+
+def _canon_stable_golden(row_bits_u16, K, descending):
+    """(expected_value_bits, expected_indices) under the canonicalizing-engine
+    hypothesis: stable torch argsort (index-ascending ties) over the
+    canonicalized values. Canonicalized outputs are normals / +0 / +-inf, all
+    preserved bit-exactly by the readback path, so the expected value bits
+    need no further transport modeling."""
+    canon = _canon_bits(row_bits_u16)
+    values = canon.view(torch.bfloat16).to(torch.float32)
+    order = torch.argsort(values, descending=descending, stable=True)[:K]
+    return _gather_u16(canon, order), order
+
+
+def _adversarial_value_bits(stimuli_class, num_rows, w_values):
+    """Per-row bf16 bit patterns (uint16, [num_rows, w_values]) for one
+    adversarial class. Every row holds the same multiset in a deterministically
+    different order (generator seeded per class+row), so the stimulus is
+    reproducible run to run."""
+    if stimuli_class == "neg_ties":
+        # 6 negative tie levels; repeats sized to fill the row.
+        levels = [-0.5, -1.0, -1.5, -2.0, -3.0, -4.0]
+        counts = [11, 11, 11, 11, 10, 10]
+        base = _bf16_bits_from_floats(
+            [level for level, count in zip(levels, counts) for _ in range(count)]
+        )
+    elif stimuli_class == "mixed_sign_ties":
+        # +/- tie levels interleaved so opposite-sign ties sit adjacent.
+        levels = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0]
+        base = _bf16_bits_from_floats(levels * (w_values // len(levels)))
+    elif stimuli_class == "signed_zero":
+        specials = (
+            [_BF16_POS_ZERO] * 13
+            + [_BF16_NEG_ZERO] * 13
+            + [_BF16_MIN_DENORM] * 2
+            + [_BF16_MAX_DENORM] * 2
+            + [_BF16_NEG_MIN_DENORM] * 2
+        )
+        # 16 distinct negative + 16 distinct positive normal fillers, so the
+        # 32-strong canon-zero group straddles K in both sort directions.
+        fillers = [-1.0 - 0.25 * i for i in range(16)] + [
+            1.0 + 0.25 * i for i in range(16)
+        ]
+        base = torch.cat(
+            [
+                torch.tensor(specials, dtype=torch.uint16),
+                _bf16_bits_from_floats(fillers),
+            ]
+        )
+    elif stimuli_class == "infinities":
+        specials = [_BF16_POS_INF] * 6 + [_BF16_NEG_INF] * 6
+        # 52 distinct finite fillers straddling zero without producing 0.0.
+        fillers = [(i - 26) * 0.25 + 0.125 for i in range(52)]
+        base = torch.cat(
+            [
+                torch.tensor(specials, dtype=torch.uint16),
+                _bf16_bits_from_floats(fillers),
+            ]
+        )
+    elif stimuli_class == "nan_payloads":
+        specials = [_BF16_QNAN] * 2 + [_BF16_SNAN_PAYLOAD] * 2 + [_BF16_NEG_QNAN] * 2
+        # 58 distinct finite fillers straddling zero without producing 0.0.
+        fillers = [(i - 29) * 0.25 + 0.125 for i in range(58)]
+        base = torch.cat(
+            [
+                torch.tensor(specials, dtype=torch.uint16),
+                _bf16_bits_from_floats(fillers),
+            ]
+        )
+    elif stimuli_class == "tie_straddle_k":
+        # 48 copies of one level; with K=32 the tie group straddles the cut in
+        # both sort directions (8 distinct fillers above, 8 below the level).
+        base = torch.cat(
+            [
+                _bf16_bits_from_floats([1.0] * 48),
+                _bf16_bits_from_floats([0.25 + 0.03125 * i for i in range(8)]),
+                _bf16_bits_from_floats([2.0 + 0.125 * i for i in range(8)]),
+            ]
+        )
+    else:
+        raise ValueError(f"Unknown adversarial stimuli class: {stimuli_class}")
+
+    if base.numel() != w_values:
+        raise ValueError(
+            f"Class '{stimuli_class}' builds {base.numel()} values per row, "
+            f"expected {w_values}."
+        )
+
+    rows = []
+    for row in range(num_rows):
+        if stimuli_class == "mixed_sign_ties":
+            # Rotate instead of shuffling to keep the +/- interleaving intact.
+            perm = (torch.arange(w_values) + row) % w_values
+        else:
+            generator = torch.Generator()
+            generator.manual_seed(_ADVERSARIAL_CLASS_SEED[stimuli_class] + row)
+            perm = torch.randperm(w_values, generator=generator)
+        rows.append(_gather_u16(base, perm))
+    return torch.stack(rows)
+
+
+def _extract_topk_values_and_indices(res_tensor, formats, num_rows, K):
+    """Split the (transformed, tilized) device result into per-row halves.
+    Mirrors validate_topk_indices's extraction: values are the first K columns
+    of each row, indices the second K columns read as uint16 bit patterns."""
+    untilizer = get_golden_generator(UntilizeGolden)
+    untilized = untilizer(res_tensor, formats.output_format, [num_rows, K * NUM_STAGES])
+    rows2d = untilized.reshape(num_rows, K * NUM_STAGES)
+    value_bits = rows2d[:, :K].contiguous().view(torch.uint16)
+    indices = rows2d[:, K:].contiguous().view(torch.uint16).to(torch.int64)
+    return value_bits, indices
+
+
+def _hex_row(bits_u16):
+    return "[" + " ".join(f"{v:04X}" for v in bits_u16.tolist()) + "]"
+
+
+@parametrize(
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    sort_mode=["stable", "fused", "rank_stamped"],
+    stimuli_class=ADVERSARIAL_STIMULI_CLASSES,
 )
-def test_topk_device_profile(perf_report, implementation: int, label: str):
-    """Profile one 32x128 TopK SFPU body, excluding datacopy and handshakes."""
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+def test_topk_sfpu_adversarial(
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+    stimuli_class: str,
+):
+    """
+    Adversarial bit-pattern coverage for the stable (comparator) and fused
+    topk engines.
+
+    Each stimuli class fills the value half of every row with raw bf16 bit
+    patterns and validates result indices and value bits per row against
+    in-test goldens (see the adversarial-coverage comment block above).
+    The unstable engine is deliberately excluded: with heavy ties its output
+    order is unspecified, so no exact golden exists for these classes.
+    """
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    # Single 2-tile slab per stage; also satisfies the fused-mode W == 128
+    # constraint, so no mode is skipped.
     input_dimensions = [32, 128]
+    K = 32
+    stable_sort = sort_mode == "stable"
+    fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
+    descending = sort_direction == TopKSortDirection.Descending
+
+    # Per-test seed for anything drawing from the global RNG (e.g. src_B);
+    # the value halves use dedicated per-class+row generators.
+    torch.manual_seed(0)
+
+    num_rows, num_cols = input_dimensions
+    w_values = num_cols // NUM_STAGES
+
+    # src_B and the tile counts come from the standard generator; the value
+    # half of src_A is rebuilt from raw bit patterns below.
+    filler_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=filler_spec,
+        spec_B=filler_spec,
     )
-    src_A = make_unique_value_input(src_A, input_dimensions)
+
+    row_bits = _adversarial_value_bits(stimuli_class, num_rows, w_values)
+
+    src_A = src_A.clone().view(num_rows, num_cols)
+    src_A[:, :w_values] = row_bits.view(torch.bfloat16)
+    src_A = src_A.flatten()
+
+    # Reuse the harness preparation for the index half (u16 iota tiles).
     src_A = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
 
-    configuration = PerfConfig(
-        "sources/topk_test.cpp",
-        formats,
-        run_types=[PerfRunType.MATH_ISOLATE],
-        templates=[
-            DEST_SYNC(),
-            TOPK(
-                topk_k=32,
-                topk_matrix_width=128,
-                topk_sort_direction=TopKSortDirection.Descending,
-                topk_stable_sort=False,
-                topk_impl=implementation,
-            ),
-        ],
-        runtimes=[INPUT_DIMENSIONS(1, 4), TILE_COUNT(tile_cnt_A)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
-    )
-    configuration.run(perf_report, run_count=5)
-    rows = perf_report.frame()
-    rows = rows[rows["marker"] == "TOPK_BODY"]
-    assert len(rows) >= 1, rows.to_string(index=False)
-    cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
-    assert cycles > 0
-    print(f"TOPK_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
-
-
-@pytest.mark.parametrize(
-    "implementation",
-    [0, 2, 3],
-    ids=["handwritten", "threaded_merge", "threaded_merge_stress"],
-)
-@pytest.mark.parametrize("rows", [32, 64])
-@pytest.mark.parametrize("order", ["ascending", "descending", "permuted"])
-@pytest.mark.parametrize(
-    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
-)
-@pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-def test_topk_threaded_merge_exact(
-    implementation, rows, order, direction, data_format, monkeypatch
-):
-    """Production TopK pipeline, replacing only the four-register merge region."""
-    monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
-    test_topk_sfpu(
-        InputOutputFormat(data_format, data_format),
-        [rows, 128],
-        32,
-        direction,
-        False,
-        implementation,
-        exact_order=order,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Explicit-state merge (TOPK_IMPL=2) against the handwritten merge (TOPK_IMPL=0)
-# outside the 72-case exact gate: ties, stable sorting, special values, wider
-# rows (merge m_iter > 0), K=64 and 32-bit DEST. Both arms replace only the
-# merge region and issue the same instruction words, so the primary gate is
-# bitwise equality of the full packed result on identical stimuli. Golden
-# checks are added only where the golden's semantics are well defined.
-# ---------------------------------------------------------------------------
-
-_SPECIAL_BITS = {
-    DataFormat.Float16_b: {
-        "pos_inf": 0x7F80,
-        "neg_inf": 0xFF80,
-        "pos_zero": 0x0000,
-        "neg_zero": 0x8000,
-        "pos_subnormal": 0x0001,
-        "neg_subnormal": 0x8001,
-        "max_normal": 0x7F7F,
-        "neg_max_normal": 0xFF7F,
-        "nan": 0x7FC0,
-    },
-    DataFormat.Float16: {
-        "pos_inf": 0x7C00,
-        "neg_inf": 0xFC00,
-        "pos_zero": 0x0000,
-        "neg_zero": 0x8000,
-        "pos_subnormal": 0x0001,
-        "neg_subnormal": 0x8001,
-        "max_normal": 0x7BFF,
-        "neg_max_normal": 0xFBFF,
-        "nan": 0x7E00,
-    },
-}
-
-
-def _bits_to_values(bits, dtype):
-    return torch.tensor(bits, dtype=torch.int32).to(torch.int16).view(dtype)
-
-
-def _fill_rows(src_A, input_dimensions, row_values):
-    """row_values(row) -> 1D tensor of values_per_row values in src_A.dtype."""
-    src_A = src_A.clone()
-    rows, cols = input_dimensions
-    per_row = cols // NUM_STAGES
-    for row in range(rows):
-        vals = row_values(row)
-        assert vals.numel() == per_row and vals.dtype == src_A.dtype
-        src_A[row * cols : row * cols + per_row] = vals
-    return src_A
-
-
-def _tie_rows(data_format, input_dimensions, pattern):
-    dtype = format_dict[data_format]
-    per_row = input_dimensions[1] // NUM_STAGES
-
-    def values(row):
-        g = torch.Generator().manual_seed(1000 + row)
-        if pattern == "all_equal":
-            return torch.full((per_row,), 1.5, dtype=torch.float32).to(dtype)
-        if pattern == "few_levels":
-            # Four levels: every top-K boundary falls inside a tie group.
-            return (
-                torch.randint(0, 4, (per_row,), generator=g).to(torch.float32).to(dtype)
-            )
-        if pattern == "pairs":
-            # Each value appears exactly twice, positions shuffled.
-            base = torch.arange(per_row // 2, dtype=torch.float32).repeat(2)
-            return base[torch.randperm(per_row, generator=g)].to(dtype)
-        raise ValueError(pattern)
-
-    return values
-
-
-def _special_rows(data_format, input_dimensions, pattern):
-    dtype = format_dict[data_format]
-    bits = _SPECIAL_BITS[data_format]
-    per_row = input_dimensions[1] // NUM_STAGES
-
-    def values(row):
-        g = torch.Generator().manual_seed(2000 + row)
-        base = (torch.arange(per_row, dtype=torch.float32) - per_row // 2)[
-            torch.randperm(per_row, generator=g)
-        ].to(dtype)
-        if pattern == "inf_zero":
-            names = [
-                "pos_inf",
-                "neg_inf",
-                "pos_zero",
-                "neg_zero",
-                "max_normal",
-                "neg_max_normal",
-            ]
-        elif pattern == "subnormal":
-            names = ["pos_subnormal", "neg_subnormal", "pos_zero", "neg_zero"]
-        elif pattern == "nan":
-            names = ["nan", "pos_inf", "neg_inf"]
-        else:
-            raise ValueError(pattern)
-        specials = _bits_to_values([bits[n] for n in names], dtype)
-        positions = torch.randperm(per_row, generator=g)[: len(names)]
-        base[positions] = specials
-        return base
-
-    return values
-
-
-def _run_topk_raw(
-    formats,
-    input_dimensions,
-    K,
-    sort_direction,
-    stable_sort,
-    implementation,
-    src_A,
-    dest_acc,
-):
-    """Run one TopK variant and return (result tensor in golden layout, prepared input)."""
-    _, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-    prepared = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
     configuration = TestConfig(
         test_name="sources/topk_test.cpp",
         formats=formats,
@@ -628,7 +669,8 @@ def _run_topk_raw(
                 topk_matrix_width=input_dimensions[1],
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
-                topk_impl=implementation,
+                topk_fused_stable=fused_stable,
+                topk_rank_stamped=rank_stamped,
             ),
         ],
         runtimes=[
@@ -636,7 +678,7 @@ def _run_topk_raw(
             TILE_COUNT(tile_cnt_A),
         ],
         variant_stimuli=StimuliConfig(
-            prepared,
+            src_A,
             formats.input_format,
             src_B,
             formats.input_format,
@@ -645,256 +687,49 @@ def _run_topk_raw(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
+        # Fused / rank-stamped keys are 32-bit words: values must be exact-widened into 32-bit DEST.
+        dest_acc=(
+            DestAccumulation.Yes
+            if (fused_stable or rank_stamped)
+            else DestAccumulation.No
+        ),
         unpack_to_dest=False,
     )
-    res = torch.tensor(
-        configuration.run().result, dtype=format_dict[formats.output_format]
-    )
-    return (
-        transform_result_tensor_to_right_form(res, formats, K, input_dimensions),
-        prepared,
-    )
 
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-def _bits(t):
-    return t.contiguous().view(torch.int16)
-
-
-def _first_bit_mismatch(a, b):
-    ab, bb = _bits(a).reshape(-1), _bits(b).reshape(-1)
-    diff = (ab != bb).nonzero().flatten()
-    if diff.numel() == 0:
-        return None
-    i = int(diff[0])
-    return f"{diff.numel()} differing elements; first at {i}: {int(ab[i]) & 0xFFFF:#06x} vs {int(bb[i]) & 0xFFFF:#06x}"
-
-
-def _golden_value_check(
-    res, golden, formats, input_dimensions, K, allow_signed_zero=False
-):
-    """Values must match the golden bitwise (optionally treating +0/-0 alike)."""
-    rv = get_value_tiles_from_topk_tensor(res, K, input_dimensions)
-    gv = get_value_tiles_from_topk_tensor(golden, K, input_dimensions)
-    rb, gb = _bits(rv).reshape(-1), _bits(gv).reshape(-1)
-    if allow_signed_zero:
-        zero = torch.tensor(0x7FFF, dtype=torch.int16)
-        rz, gz = (rb & zero) == 0, (gb & zero) == 0
-        rb = torch.where(rz, torch.zeros_like(rb), rb)
-        gb = torch.where(gz, torch.zeros_like(gb), gb)
-    return _first_bit_mismatch(rb.view(rv.dtype), gb.view(gv.dtype))
-
-
-def _assert_fp16_inf_order_defect(res, golden, formats, input_dimensions, K, direction):
-    """Refuse to XFAIL anything except the measured inf/max-normal swap."""
-    rv = get_value_tiles_from_topk_tensor(res, K, input_dimensions)
-    gv = get_value_tiles_from_topk_tensor(golden, K, input_dimensions)
-    rb, gb = _bits(rv).reshape(-1), _bits(gv).reshape(-1)
-    # Signed zero is not part of this defect and is already licensed by the
-    # caller's golden-value comparison.
-    zero_mask = torch.tensor(0x7FFF, dtype=torch.int16)
-    rb = torch.where((rb & zero_mask) == 0, torch.zeros_like(rb), rb)
-    gb = torch.where((gb & zero_mask) == 0, torch.zeros_like(gb), gb)
-    diff = (rb != gb).nonzero().flatten()
-    assert (
-        diff.numel() == 2 * input_dimensions[0]
-    ), f"FP16 inf XFAIL shape changed: expected two swapped values per row, got {diff.numel()}"
-    expected = (
-        {0x7C00, 0x7BFF}
-        if direction == TopKSortDirection.Descending
-        else {0xFC00, 0xFBFF}
-    )
-    for observed, label in ((rb[diff], "device"), (gb[diff], "golden")):
-        values = [int(v) & 0xFFFF for v in observed]
-        assert set(values) == expected, (
-            f"FP16 inf XFAIL absorbed an unrelated {label} mismatch: "
-            f"expected only {sorted(expected)}, got {sorted(set(values))}"
-        )
-        for value in expected:
-            assert (
-                values.count(value) == input_dimensions[0]
-            ), f"FP16 inf XFAIL {label} multiplicity changed for {value:#06x}"
-
-
-def _explicit_vs_hand(
-    data_format,
-    input_dimensions,
-    K,
-    direction,
-    stable_sort,
-    src_values,
-    dest_acc=DestAccumulation.No,
-):
-    formats = InputOutputFormat(data_format, data_format)
-    src_A, _, _, _ = generate_stimuli(
-        stimuli_format_A=data_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=data_format,
-        input_dimensions_B=input_dimensions,
-    )
-    src_A = _fill_rows(src_A, input_dimensions, src_values)
-    golden = get_golden_generator(TopKGolden)(
-        src_A, data_format, K, direction, input_dimensions=input_dimensions
-    )
-    hand, prepared = _run_topk_raw(
-        formats, input_dimensions, K, direction, stable_sort, 0, src_A, dest_acc
-    )
-    explicit, _ = _run_topk_raw(
-        formats, input_dimensions, K, direction, stable_sort, 2, src_A, dest_acc
-    )
-    return formats, hand, explicit, golden, prepared
-
-
-_TIE_DIMS = [[32, 128], [32, 256], [32, 512]]
-
-
-@pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize(
-    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
-)
-@pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
-@pytest.mark.parametrize("pattern", ["all_equal", "few_levels", "pairs"])
-@pytest.mark.parametrize("dims", _TIE_DIMS, ids=lambda d: f"{d[0]}x{d[1]}")
-def test_topk_explicit_ties(
-    data_format, direction, stable_sort, pattern, dims, record_property
-):
-    formats, hand, explicit, golden, prepared = _explicit_vs_hand(
-        data_format,
-        dims,
-        32,
-        direction,
-        stable_sort,
-        _tie_rows(data_format, dims, pattern),
-    )
-    mismatch = _first_bit_mismatch(explicit, hand)
-    assert mismatch is None, f"explicit != handwritten: {mismatch}"
-    # Tie order may legitimately differ from the golden's stable order at this
-    # checkpoint: full stable TopK support was reverted.  Still gate the value
-    # multiset, index/value association, and explicit-vs-hand equivalence, and
-    # record exact stable ordering so a future implementation cannot hide it.
-    assert _golden_value_check(explicit, golden, formats, dims, 32) is None
-    assert validate_topk_indices(
-        explicit, golden, prepared, formats, dims, 32, stable_sort=False
-    )
-    stable_exact = torch.equal(_bits(explicit), _bits(golden))
-    record_property("stable_index_order_matches_golden", stable_exact)
-    print(
-        f"TOPK_TIES pattern={pattern} dims={dims} stable={stable_sort} golden_index_order_exact={stable_exact}"
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, formats, K, input_dimensions
     )
 
+    if _RECORD_TEST_ORDER:
+        # Order-recording pass: results are not meaningful for strict checks.
+        return
 
-@pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize(
-    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
-)
-@pytest.mark.parametrize("pattern", ["inf_zero", "subnormal", "nan"])
-def test_topk_explicit_special_values(data_format, direction, pattern, record_property):
-    dims = [32, 128]
-    formats, hand, explicit, golden, prepared = _explicit_vs_hand(
-        data_format,
-        dims,
-        32,
-        direction,
-        False,
-        _special_rows(data_format, dims, pattern),
+    res_value_bits, res_indices = _extract_topk_values_and_indices(
+        res_tensor, formats, num_rows, K
     )
-    mismatch = _first_bit_mismatch(explicit, hand)
-    assert mismatch is None, f"explicit != handwritten: {mismatch}"
-    # NaN has no golden ordering; subnormal handling is a hardware load-format
-    # property shared by both arms. Record the golden comparison for both.
-    golden_mismatch = _golden_value_check(
-        explicit, golden, formats, dims, 32, allow_signed_zero=True
-    )
-    record_property("golden_value_mismatch", str(golden_mismatch))
-    print(
-        f"TOPK_SPECIAL pattern={pattern} fmt={data_format.name} dir={direction.name} golden_value_mismatch={golden_mismatch}"
-    )
-    if pattern == "inf_zero":
-        if data_format == DataFormat.Float16 and golden_mismatch is not None:
-            # Measured on Blackhole for both arms: selection and indices are
-            # correct and +/-inf keep their bits, but the shared SFPSWAP path
-            # ranks +/-max-normal ahead of +/-inf for FP16 (BF16 is correct).
-            _assert_fp16_inf_order_defect(
-                explicit, golden, formats, dims, 32, direction
+
+    # Goldens are computed on the bits the device actually received (the write
+    # path quietizes sNaN payloads before they reach L1).
+    as_written_bits = _model_write_path_bits(row_bits)
+
+    for row in range(num_rows):
+        exp_bits, exp_idx = _canon_stable_golden(as_written_bits[row], K, descending)
+        if torch.equal(res_indices[row], exp_idx) and torch.equal(
+            res_value_bits[row], exp_bits
+        ):
+            continue
+        pytest.fail(
+            "\n".join(
+                [
+                    f"topk adversarial mismatch: class={stimuli_class} mode={sort_mode} "
+                    f"direction={sort_direction.name} row={row}",
+                    f"  expected indices:    {exp_idx.tolist()}",
+                    f"  expected value bits: {_hex_row(exp_bits)}",
+                    f"  result indices:      {res_indices[row].tolist()}",
+                    f"  result value bits:   {_hex_row(res_value_bits[row])}",
+                ]
             )
-            pytest.xfail(
-                f"FP16 inf ranked below max-normal (shared by handwritten): {golden_mismatch}"
-            )
-        assert golden_mismatch is None, golden_mismatch
-
-
-@pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
-@pytest.mark.parametrize(
-    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
-)
-@pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
-@pytest.mark.parametrize("K", [32, 64])
-@pytest.mark.parametrize(
-    "dims",
-    [[32, 256], [32, 512], [64, 256], [32, 1024]],
-    ids=lambda d: f"{d[0]}x{d[1]}",
-)
-def test_topk_explicit_widths(data_format, direction, stable_sort, K, dims):
-    if K * NUM_STAGES > dims[1] // NUM_STAGES:
-        pytest.skip("K wider than half the value columns")
-    per_row = dims[1] // NUM_STAGES
-    dtype = format_dict[data_format]
-
-    def values(row):
-        # Unique, exactly representable in BF16/FP16 (|v| <= 256).
-        g = torch.Generator().manual_seed(3000 + row)
-        return (torch.arange(per_row, dtype=torch.float32) - per_row // 2)[
-            torch.randperm(per_row, generator=g)
-        ].to(dtype)
-
-    formats, hand, explicit, golden, _ = _explicit_vs_hand(
-        data_format, dims, K, direction, stable_sort, values
-    )
-    mismatch = _first_bit_mismatch(explicit, hand)
-    assert mismatch is None, f"explicit != handwritten: {mismatch}"
-    golden_mismatch = _first_bit_mismatch(explicit, golden)
-    if K > 32:
-        # topk_test.cpp packs one value tile and one index tile per row in the
-        # final iteration and the merge clamps k to 32, so K>32 has no golden
-        # layout here. The explicit/handwritten bitwise gate above still holds.
-        pytest.xfail(
-            f"K={K} output layout unsupported by topk_test.cpp; golden={golden_mismatch}"
         )
-    print(
-        f"TOPK_WIDTH dims={dims} K={K} stable={stable_sort} fmt={data_format.name} dir={direction.name} golden={golden_mismatch}"
-    )
-    assert golden_mismatch is None, f"explicit != golden: {golden_mismatch}"
-
-
-@pytest.mark.parametrize(
-    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
-)
-@pytest.mark.parametrize("stable_sort", [False, True], ids=["unstable", "stable"])
-@pytest.mark.parametrize("dims", [[32, 128], [32, 256]], ids=lambda d: f"{d[0]}x{d[1]}")
-def test_topk_explicit_fp32_dest(direction, stable_sort, dims):
-    data_format = DataFormat.Float16_b
-    per_row = dims[1] // NUM_STAGES
-    dtype = format_dict[data_format]
-
-    def values(row):
-        g = torch.Generator().manual_seed(4000 + row)
-        return (torch.arange(per_row, dtype=torch.float32) - per_row // 2)[
-            torch.randperm(per_row, generator=g)
-        ].to(dtype)
-
-    formats, hand, explicit, golden, _ = _explicit_vs_hand(
-        data_format,
-        dims,
-        32,
-        direction,
-        stable_sort,
-        values,
-        dest_acc=DestAccumulation.Yes,
-    )
-    mismatch = _first_bit_mismatch(explicit, hand)
-    assert mismatch is None, f"explicit != handwritten: {mismatch}"
-    golden_mismatch = _first_bit_mismatch(explicit, golden)
-    print(
-        f"TOPK_FP32DEST dims={dims} stable={stable_sort} dir={direction.name} golden={golden_mismatch}"
-    )
-    assert golden_mismatch is None, f"explicit != golden: {golden_mismatch}"

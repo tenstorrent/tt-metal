@@ -32,19 +32,19 @@ void kernel_main() {
 
 // Effective CBs chosen at compile-time depending on broadcast flags
 #if BCAST_A
-    DataflowBuffer& dfb_eff_a = dfb_llk_a;
+    auto& dfb_eff_a = dfb_llk_a;
 #else
-    DataflowBuffer& dfb_eff_a = dfb_in0;
+    auto& dfb_eff_a = dfb_in0;
 #endif
 #if BCAST_B
-    DataflowBuffer& dfb_eff_b = dfb_llk_b;
+    auto& dfb_eff_b = dfb_llk_b;
 #else
-    DataflowBuffer& dfb_eff_b = dfb_in1;
+    auto& dfb_eff_b = dfb_in1;
 #endif
 #if BCAST_C
-    DataflowBuffer& dfb_eff_c = dfb_llk_c;
+    auto& dfb_eff_c = dfb_llk_c;
 #else
-    DataflowBuffer& dfb_eff_c = dfb_in2;
+    auto& dfb_eff_c = dfb_in2;
 #endif
 
     // Initialize binary unit for B*C path; output packer initialized with dfb_out
@@ -110,13 +110,13 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(dfb_eff_a.get_id());
+        copy_init(dfb_eff_a.get_id());
         copy_tile(dfb_eff_a.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_b.get_id());
+        copy_init(dfb_eff_b.get_id());
         copy_tile(dfb_eff_b.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_c.get_id());
+        copy_init(dfb_eff_c.get_id());
         copy_tile(dfb_eff_c.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         TERNARY_SFPU_OP_INIT();

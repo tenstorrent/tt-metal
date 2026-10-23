@@ -187,11 +187,11 @@ def test_quasar_conv2d_layer3_hs(mesh_device, cfg):
     # as the model does). On WH the fused kernel hits the fast_tilize->matmul cadence race (kRaceGuardSpin family;
     # MATH MWDD in matmul_block, PACK in program_packer_destination, SyncHalf, cb stuck; genuine, asserts-on) --
     # here even at act_block_h=32 (K=72), confirming it's inherent to the tilize<->matmul interleave, not abh.
-    # Same family as relu_now_sfpu/stem_7x7. The 1x1 cases use the mm_conv (matmul-only) path -> left to run.
+    # Same family as relu/stem_7x7. The 1x1 cases use the mm_conv (matmul-only) path -> left to run.
     if tuple(k) == (3, 3) and is_wormhole_b0():
         pytest.xfail(
             "WH fused conv_bmm_tilize fast_tilize->matmul cadence race (kRaceGuardSpin family) on layer3 3x3 HS "
-            "(no split env -> fused path). Same family as relu_now_sfpu/stem_7x7; not the WH model path."
+            "(no split env -> fused path). Same family as relu/stem_7x7; not the WH model path."
         )
     _run_conv(
         mesh_device,

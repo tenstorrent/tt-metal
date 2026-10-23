@@ -19,6 +19,10 @@
 #endif
 static_assert(LIVE_REGS == 2 || LIVE_REGS == 4 || LIVE_REGS == 7 || LIVE_REGS == 8);
 static_assert(SCHEME == 2 || SCHEME == 3);
+#if SCHEME == 2
+#define TT_LLK_REQUIRE_RAW_LREG_METADATA
+#endif
+#include "../../common/ckernel_lreg_metadata.h"
 
 template <unsigned Word>
 __attribute__((always_inline)) inline void issue_word(volatile unsigned *issue)
@@ -36,7 +40,7 @@ __attribute__((always_inline)) inline auto produce(volatile unsigned *issue)
     // SFPLOADI Register, FLOATB, a distinct finite immediate per register.
     issue_word<0x71000000u | (Register << 20) | (0x3f80u + Register * 0x80u)>(issue);
     if constexpr (SCHEME == 2) {
-        __builtin_rvtt_sfprawlreg_effect(1u << Register, 1u << Register);
+        TT_LLK_SFPRAWLREG_EFFECT(1u << Register, 1u << Register);
         return 0; // No additional fixed-register reads in the effects arm.
     } else {
         return __builtin_rvtt_sfpreadlreg(Register);
@@ -51,7 +55,7 @@ __attribute__((always_inline)) inline void consume(volatile unsigned *issue, Val
     // SFPSTORE Register, SRCB, address-mod 7, distinct destination row.
     issue_word<0x72000000u | (Register << 20) | (7u << 13) | (64u + 2u * Register)>(issue);
     if constexpr (SCHEME == 2)
-        __builtin_rvtt_sfprawlreg_effect(1u << Register, 0);
+        TT_LLK_SFPRAWLREG_EFFECT(1u << Register, 0);
 }
 
 void raw_lreg_threading_pressure(volatile unsigned *issue)

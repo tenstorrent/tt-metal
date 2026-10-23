@@ -123,6 +123,10 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Skip on Blackhole with 1x2 mesh: causes device hang/timeout, refs #52428
+    if ttnn.device.is_blackhole(device) and hasattr(device, "shape") and tuple(device.shape) == (1, 2):
+        return [(True, "Skipped: nlp_create_qkv_heads_decode hangs on Blackhole 1x2 mesh, refs #52428"), 0.0]
+
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     # Parse memory_config dicts from validation vectors into ttnn.MemoryConfig
@@ -222,9 +226,17 @@ def run(
     )
     # nlp_create_qkv_heads_decode returns a tuple of tensors (q_heads, k_heads, v_heads)
     if isinstance(output_result, tuple):
-        output_tensor = mesh_tensor_to_torch(output_result[0], device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result[0],
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     else:
-        output_tensor = mesh_tensor_to_torch(output_result, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using proper torch reference from unit test

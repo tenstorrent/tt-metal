@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "tt_metal.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 namespace tt::tt_metal {
 
 /**
@@ -100,7 +101,6 @@ static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_
  */
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -131,7 +131,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    slow_dispatch::ReadFromL1(*mesh_device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
@@ -142,7 +142,6 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
  */
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
     auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -180,7 +179,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    slow_dispatch::ReadFromL1(*mesh_device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
@@ -206,7 +205,6 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     static constexpr DataT SUCCESS_TOKEN = 0xC0FFEE;
 
     auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -242,7 +240,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
 
     // distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    slow_dispatch::ReadFromL1(*mesh_device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Reader should have detected that the CB is full.";
 }
 
@@ -261,7 +259,6 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     static constexpr DataT SUCCESS_TOKEN = 0xBABE;
 
     auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -296,7 +293,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
 
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    slow_dispatch::ReadFromL1(*mesh_device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Writer should have detected that the CB is full.";
 }
 

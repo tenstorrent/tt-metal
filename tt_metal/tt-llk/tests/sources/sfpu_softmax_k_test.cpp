@@ -143,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #elif BLAZE_IMPL == 4
     ckernel::sfpu::semantic::crosslane::_init_semantic_softmax_k_();
 #else
-    ckernel::sfpu::_init_softmax_k_();
+    ckernel::sfpu::_init_softmax_k_<is_fp32_dest_acc_en>();
 #endif
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
@@ -159,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // profiler-only L1 bookkeeping, compiles away in functional builds.
             START_PERF_MEASURE("SOFTMAX_K_BODY")
 #if BLAZE_IMPL == 2
-            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::_semantic_softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::_semantic_softmax_k_, (SOFTMAX_K, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC_custom);
 #elif BLAZE_IMPL == 4
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, semantic::crosslane::_semantic_softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
 #else

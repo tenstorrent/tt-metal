@@ -3,7 +3,7 @@
 
 The laneMK single-operand sweep (fp32_stream_sweep.py) widened by one dimension: drives
 the certified binary kernel's persistent-session streamer (the SFPU_STREAM_BINARY hook
-in test_sfpu_binary.py) over the joint bf16 x bf16 space [0, 2^32) in resume-safe bands,
+in test_sfpu_binary_campaign.py) over the joint bf16 x bf16 space [0, 2^32) in resume-safe bands,
 one band-leg per pytest invocation, on a flocked device. Per band: run sem + hand,
 compare output SHA. Verdict = BIT-EXACT-ALL-INPUTS iff every band's sem_sha == hand_sha
 (full contiguous cover, checked); otherwise DIVERGENT (the DIFF bands are the witness

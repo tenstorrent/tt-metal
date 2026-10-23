@@ -2395,7 +2395,7 @@ KERNEL_MARKER = "KERNEL"
 # further device work.  Overridable via SWEEP_FLUSH_SH /
 # SWEEP_FLUSH_VERIFY_NODE (sweep_2x2.conf exports them).
 FLUSH_VERIFY_NODE = (
-    "test_sfpu_unary.py::test_eltwise_unary_sfpu"
+    "test_sfpu_unary_campaign.py::test_eltwise_unary_sfpu"
     "[formats:Float32->Float32-approx_mode:No-mathop:Expm1-fast_mode:No"
     "-dest_acc:No-input_dimensions:[64, 64]]"
 )
@@ -2743,7 +2743,7 @@ def partition_perf_legs(specs):
     the column set derives from the parameter classes each test FUNCTION
     passes (helpers/perf/schema.py PerfSchemaError otherwise).  Two
     same-file legs from DIFFERENT test functions co-scheduled in one
-    session can stack two schemas (perf_eltwise_binary_sfpu.py: production
+    session can stack two schemas (perf_eltwise_binary_sfpu_campaign.py: production
     int test's zone columns vs the fresh_cpp functions' fresh_cpp_impl) ->
     PerfSchemaError at module teardown -> the whole module writes NO
     perf_data while every node reports 'passed'.  The FM one-schema
@@ -4685,7 +4685,7 @@ exit $RC
         set derives from the parameter classes a test function passes to
         PerfConfig, and the FM one-schema contract holds per FUNCTION (one
         parametrize list, homogeneous columns) — but NOT across functions
-        of one module file (perf_eltwise_binary_sfpu.py: the production int
+        of one module file (perf_eltwise_binary_sfpu_campaign.py: the production int
         test emits zone columns the fresh_cpp functions do not).  Two
         same-file nodes from DIFFERENT functions co-scheduled in one pytest
         session stack >=2 schemas into the module-scoped combined CSV ->

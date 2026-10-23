@@ -213,7 +213,7 @@ inline void pack_tiles_to_output(const uint32_t cb_source, const uint32_t cb_out
     pack_reconfig_data_format(cb_output);
     reconfig_data_format(cb_source, cb_source);
 
-    copy_tile_init(cb_source);
+    copy_init(cb_source);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         tile_regs_acquire();
         copy_tile(cb_source, tile_idx, /* register idx */ 0);

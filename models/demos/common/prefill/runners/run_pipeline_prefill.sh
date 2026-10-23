@@ -1,74 +1,115 @@
 #!/usr/bin/env bash
-# Thin launcher for the pipeline-parallel prefill runner under tt-run.
-#
-# All real config (mesh, layer split, chunk count, transport, PCC, PREFILL_* env) lives in the
-# rank-binding YAML's global_env — ttrun does NOT auto-propagate PREFILL_* from the shell, so
-# per-run knobs belong there, not here. This script only captures the launch boilerplate: env
-# exports, the host list / TCP interface, the activation-handoff dir cleanup, and the ttrun call.
-#
-# Usage:
-#   run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]
-#
-#   <rank_binding.yaml>  path (relative to TT_METAL_HOME or absolute) to the tt-run rank binding.
-#   [host_list]          mpirun --host value. Default: bh-glx-d03u02:1,bh-glx-d03u08:1 (2 galaxies).
-#                        For a single-rank/one-galaxy binding pass e.g. bh-glx-d03u02:1.
-#   [tcp_iface]          NIC for MPI TCP. Default: ens5f0np0 (the 10.32.24.x cluster net here).
-#
-# This launcher is model-agnostic (it only execs the common prefill_runner entry point). The
-# rank-binding YAMLs + mesh-graph descriptors are topology config (model-agnostic; the model is
-# selected by the binding's PREFILL_MANIFEST) and live at
-# models/demos/common/prefill/runners/topology_configuration/. Pass your binding as $1.
-#
-# Examples (drive each with prefill_producer.py on the launch host). The request_* bindings are
-# model-agnostic and carry no PREFILL_MANIFEST, so they run the default model; set PREFILL_MANIFEST in
-# the binding's global_env to select another (e.g. deepseek_v3_d_p/.../manifests/kimi26.json for Kimi-2.6):
-#   # 2-galaxy D2D pipeline (connected MGD, FABRIC_2D):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
-#
-#   # 4-galaxy D2D pipeline (ring-chain host order — see the 4-galaxy connected MGD):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
-#
-#   # single-galaxy 1-rank full-model de-risk:
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml bh-glx-d07u02:1
 set -euo pipefail
 
 RANK_BINDING="${1:?usage: run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]}"
 HOST_LIST="${2:-bh-glx-d03u02:1,bh-glx-d03u08:1}"
 TCP_IFACE="${3:-ens5f0np0}"
 
-# TT_METAL_HOME = the tt-metal tree this script lives in
-# (models/demos/common/prefill/runners -> 5 levels up).
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
-# ttrun.py runs on THIS (launch) host and must use the venv interpreter (loguru etc.); peer ranks get
-# it via -x PATH below. Activate here so callers don't have to remember to source the venv first.
 [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$TT_METAL_HOME/python_env/bin/activate" ] && source "$TT_METAL_HOME/python_env/bin/activate"
-# Per-host LOCAL JIT cache. A shared (NFS) TT_METAL_CACHE makes both hosts write the same generated
-# kernel files (defines_generated.h, ...) concurrently on a cold cache -> "Stale file handle" compile
-# failures. /tmp is per-host, so each rank compiles into its own dir. ttrun auto-propagates TT_* vars.
 export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
 
-# Optional shell-selected model, SINGLE-HOST ONLY: forward PREFILL_MANIFEST / PREFILL_MODEL when set, so
-# a GENERIC binding (one that does not set the model in its global_env) can run any model without a
-# per-model binding, e.g.
-#   PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-#     ./run_pipeline_prefill.sh <generic_binding.yaml> <host_list>
-# Use this with a binding that leaves the model unset; don't also set it in that binding's global_env.
-# Multi-host: -x reaches only the launch-host rank, so remote ranks silently take the default model and
-# disagree on the chunk plan — put PREFILL_MANIFEST (ABSOLUTE path) in the binding's global_env instead.
+TOPO_DIR="models/demos/common/prefill/runners/topology_configuration"
+
+# Both styles stay supported: a binding that pins rank_bindings/mesh_graph_desc_path goes to tt-run
+# untouched; either key it omits is derived from the host list (rank r -> mesh_id r, default descriptor).
+default_mgd_for_ranks() {
+  case "$1" in
+    1) echo "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
+    2) echo "$TOPO_DIR/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto" ;;
+    4) echo "$TOPO_DIR/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto" ;;
+    8) echo "$TOPO_DIR/pipeline_prefill_8galaxy_connected_mesh_graph_descriptor.textproto" ;;
+    *) return 1 ;;
+  esac
+}
+
+# "hostA:1,hostB" -> 2. One slot per host: a derived rank owns a whole mesh; splitting a galaxy must be pinned.
+ranks_in_host_list() {
+  local total=0 entry slots
+  local IFS=','
+  for entry in $1; do
+    [ -n "$entry" ] || continue
+    slots="${entry##*:}"
+    [ "$slots" != "$entry" ] || slots=1
+    case "$slots" in
+      1) ;;
+      '' | *[!0-9]*)
+        echo "run_pipeline_prefill.sh: host list entry '$entry' has a non-numeric slot count" >&2
+        return 1
+        ;;
+      *)
+        echo "run_pipeline_prefill.sh: host list entry '$entry' puts $slots ranks on one host." >&2
+        echo "  Derived bindings are one rank per whole mesh, so they need exactly one slot per host." >&2
+        echo "  For several ranks inside one galaxy, pin rank_bindings/mesh_graph_desc_path in the" >&2
+        echo "  binding instead (see pipeline_prefill_request_intragalaxy_2rank.yaml)." >&2
+        return 1
+        ;;
+    esac
+    total=$((total + 1))
+  done
+  [ "$total" -gt 0 ] || { echo "run_pipeline_prefill.sh: host list '$1' names no ranks" >&2; return 1; }
+  echo "$total"
+}
+
+has_key() { grep -qE "^[[:space:]]*$1[[:space:]]*:" "$RANK_BINDING"; }
+
+NEED_BINDINGS=1; ! has_key rank_bindings || NEED_BINDINGS=0
+NEED_MGD=1; ! has_key mesh_graph_desc_path || NEED_MGD=0
+
+if [ "$NEED_BINDINGS" -eq 1 ] || [ "$NEED_MGD" -eq 1 ]; then
+  NUM_RANKS="$(ranks_in_host_list "$HOST_LIST")"
+
+  MGD=""
+  if [ "$NEED_MGD" -eq 1 ]; then
+    if [ -n "${PREFILL_MGD:-}" ]; then
+      MGD="$PREFILL_MGD"
+    elif MGD="$(default_mgd_for_ranks "$NUM_RANKS")"; then
+      :
+    else
+      echo "run_pipeline_prefill.sh: no default mesh graph descriptor for $NUM_RANKS rank(s)." >&2
+      echo "  Set PREFILL_MGD=<descriptor>, add a default_mgd_for_ranks case, or pin" >&2
+      echo "  mesh_graph_desc_path in $RANK_BINDING." >&2
+      exit 1
+    fi
+    [ -f "$MGD" ] || { echo "run_pipeline_prefill.sh: mesh graph descriptor not found: $MGD (relative paths resolve against $TT_METAL_HOME)" >&2; exit 1; }
+  fi
+
+  # mktemp, not a fixed name: concurrent launches would clobber each other. Left behind for inspection.
+  BINDING_OUT_DIR="${PP_BINDING_OUT_DIR:-${TMPDIR:-/tmp}}"
+  mkdir -p "$BINDING_OUT_DIR"
+  GENERATED="$(mktemp "$BINDING_OUT_DIR/pp_binding.$(basename "$RANK_BINDING" .yaml).${NUM_RANKS}rank.XXXXXX.yaml")"
+  {
+    echo "# GENERATED by run_pipeline_prefill.sh -- one file per launch, do not edit."
+    echo "# Source binding: $RANK_BINDING; host list: $HOST_LIST ($NUM_RANKS rank(s))."
+    if [ "$NEED_BINDINGS" -eq 1 ]; then
+      echo "rank_bindings:"
+      for ((r = 0; r < NUM_RANKS; r++)); do
+        echo "  - {rank: $r, mesh_id: $r, mesh_host_rank: 0, env_overrides: {}}"
+      done
+    fi
+    if [ "$NEED_MGD" -eq 1 ]; then
+      echo "mesh_graph_desc_path: $MGD"
+    fi
+    cat "$RANK_BINDING"
+  } >"$GENERATED"
+
+  echo "run_pipeline_prefill.sh: derived $NUM_RANKS-rank binding -> $GENERATED" >&2
+  RANK_BINDING="$GENERATED"
+fi
+
+# PP_DRY_RUN=1 prints the binding tt-run would get and stops -- no MPI, no devices. Drives the tests.
+if [ "${PP_DRY_RUN:-0}" != "0" ]; then
+  echo "rank-binding: $RANK_BINDING"
+  cat "$RANK_BINDING"
+  exit 0
+fi
+
 FWD_ENV=""
 [ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
 [ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
-# The KV-PCC read-back gate needs the runner to publish its chunk table; forward the flag when set so a
-# single-host accuracy run can enable it from the shell (multi-host: same -x caveat as the model above).
-[ -n "${PREFILL_MOCK_MIGRATION:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MOCK_MIGRATION"
 
-# -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
-# would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
-# host's PATH works only because every host's venv sits at the identical clone path.
-# `--` terminates ttrun's own option parsing: ttrun's -m short flag (--mesh-graph-descriptor) otherwise
-# swallows the target's `python3 -m <module>` and trips the mesh-graph/rank-binding mutual-exclusion check.
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \

@@ -74,6 +74,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -135,7 +136,7 @@ inline void bcast_col_to_reg(const uint32_t cb_src, const uint32_t reg_dst) {
 
 // Copy a tile at index tile_idx from a CB into a DEST register (init + copy).
 inline void copy_tile_to_reg(const uint32_t cb_src, const uint32_t tile_idx, const uint32_t reg_dst) {
-    copy_tile_init(cb_src);
+    copy_init(cb_src);
     copy_tile(cb_src, tile_idx, reg_dst);
 }
 
@@ -158,7 +159,7 @@ inline bool use_one_block_precision_path() {
 // register for use across the current Pass-2 tile.
 inline void load_alpha_tile(const uint32_t cb_alpha, const uint32_t reg_dst) {
     reconfig_data_format(cb_alpha, cb_alpha);
-    copy_tile_to_dst_init_short(cb_alpha);
+    copy_init(cb_alpha);
     copy_tile(cb_alpha, 0U, reg_dst);
 }
 
@@ -192,10 +193,15 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
+    // PolyNorm only reduces on first column (32 elements).
+    // Instead of processing the whole tile, we use `sqrt_tile_first_column()` and `recip_tile` with `VectorMode::C`,
+    // which only processes the first columns of the tile.
+    // TODO(#42980): revisit in a separate change with lane-level accuracy tests, ideally by
+    // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
-    sqrt_tile(reg_acc);
-    recip_tile_init<false>();
-    recip_tile<false>(reg_acc);
+    sqrt_tile_first_column(reg_acc);
+    recip_tile_init();
+    recip_tile(reg_acc, VectorMode::C);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);
@@ -548,9 +554,8 @@ void kernel_main() {
     cb_wait_front(cb_w1, onetile);
     cb_wait_front(cb_w2, onetile);
 
-    init_sfpu(cb_x, cb_output);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_x, cb_x, cb_output);
+    copy_init(cb_x);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

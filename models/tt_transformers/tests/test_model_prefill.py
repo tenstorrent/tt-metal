@@ -200,6 +200,15 @@ def test_model_inference(
     # Load reference model
     if run_ref_pt:
         logger.info("Loading reference model...")
+        # On a warm ttnn cache, create_tt_model defers the HF load and returns a dataless
+        # placeholder state_dict. The host reference embedding below still needs the REAL weights,
+        # so reload them here when the state_dict is a warm-cache placeholder (either flavor) or
+        # genuinely empty. Branch on is_placeholder, NOT truthiness: tt_transformers'
+        # _PlaceholderStateDict is falsy but the shared CachedStateDict is truthy, so `if not
+        # state_dict` alone would silently stop reloading -- and build this torch reference from
+        # torch.empty garbage -- if the loaders are ever collapsed onto the shared class. (#45400)
+        if getattr(state_dict, "is_placeholder", False) or not state_dict:
+            state_dict = model_args.load_state_dict()
         state_dict_prefix = model_args.get_state_dict_prefix("", None)
         reference_model = model_args.reference_transformer(load_checkpoint=True)
         # Embedding on host

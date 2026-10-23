@@ -11,15 +11,18 @@
 #include <set>
 #include <unordered_map>
 
+#include <tt-metalium/experimental/pinned_memory.hpp>
+
+namespace tt {
+class Cluster;
+}
+
 namespace tt::tt_metal {
 class HostBuffer;
 namespace distributed {
 class MeshDevice;
 class MeshCoordinateRangeSet;
 }  // namespace distributed
-namespace experimental {
-class PinnedMemory;
-}  // namespace experimental
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental {
@@ -70,7 +73,8 @@ public:
         distributed::MeshDevice& mesh_device,
         const distributed::MeshCoordinateRangeSet& coordinate_range_set,
         HostBuffer& host_buffer,
-        bool map_to_noc = false);
+        bool map_to_noc = false,
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
     /**
      * @brief Release all cache entries whose host address matches `host_address`.
@@ -102,6 +106,7 @@ private:
         std::set<int> device_ids;
         std::set<int> mmio_device_ids;
         bool map_to_noc = false;
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite;
     };
 
     // Compute the set of chip IDs covered by the requested mesh coordinate range.
@@ -109,7 +114,7 @@ private:
         distributed::MeshDevice& mesh_device, const distributed::MeshCoordinateRangeSet& coordinate_range_set);
 
     // Compute the set of MMIO chip IDs that back the requested device IDs.
-    std::set<int> compute_mmio_device_ids(const std::set<int>& device_ids);
+    std::set<int> compute_mmio_device_ids(const tt::Cluster& cluster, const std::set<int>& device_ids);
 
     // Erase the entry pointed to by `it` from both lru_entries_ and address_map_.
     void erase_entry(std::list<CacheEntry>::iterator it);

@@ -24,7 +24,7 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp";
 
-ProgramDescriptor MorehAdamOperation::create_descriptor(
+ProgramDescriptor MorehAdamOperation::MorehAdamProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -57,7 +57,7 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = param_in.device();
+    MeshDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
@@ -314,7 +314,7 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     return desc;
 }
 
-void MorehAdamOperation::override_runtime_arguments(
+void MorehAdamOperation::MorehAdamProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

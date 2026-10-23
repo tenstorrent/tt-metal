@@ -19,6 +19,7 @@ import gc
 
 import pytest
 import torch
+from huggingface_hub.constants import HF_HUB_CACHE
 from loguru import logger
 from safetensors.torch import load_file
 
@@ -56,9 +57,9 @@ def _gemma_path() -> str:
     explicit = os.environ.get("GEMMA_PATH")
     if explicit:
         return explicit
-    cands = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
+    # HF_HUB_CACHE resolves HF_HUB_CACHE / HF_HOME / the default. Hardcoding ~/.cache/huggingface
+    # here made this unfindable in CI, which points HF_HUB_CACHE at the shared weights mount.
+    cands = glob.glob(os.path.join(HF_HUB_CACHE, "models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/"))
     if cands:
         return cands[0].rstrip("/")
     return "google/gemma-3-12b-it-qat-q4_0-unquantized"
@@ -67,9 +68,9 @@ def _gemma_path() -> str:
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
 def test_gemma_layers_individually(*, mesh_device):
+    # _gemma_path falls back to the bare repo id, which from_pretrained resolves cache-then-hub.
+    # Gating an os.path.isdir on it made that fallback dead and skipped before any HF call.
     gemma_path = _gemma_path()
-    if not os.path.isdir(gemma_path):
-        pytest.skip(f"Gemma not found: {gemma_path}")
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 

@@ -75,6 +75,7 @@ void ConfigureDevicePrintForCoord(
     rtopts.set_feature_prepend_device_core_risc(kDprint, true);
     rtopts.set_feature_mesh_coords(kDprint, {{row, col}});
     rtopts.set_feature_all_chips(kDprint, false);
+    rtopts.resolve_mesh_coords_to_chip_ids(MetalContext::instance().get_system_mesh());
 }
 
 // Builds a MeshWorkload where each device DEVICE_PRINTs its global mesh coordinate (row, col).
@@ -82,17 +83,27 @@ void ConfigureDevicePrintForCoord(
 // so the DEVICE_PRINT output directly matches what was configured in the DEVICE_PRINT filter.
 distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
-    constexpr CoreCoord kCore = {0, 0};
+    constexpr experimental::NodeCoord kNode = {0, 0};
+    const experimental::KernelSpecName kKernel{"mesh_coord_print"};
+
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
-        Program program;
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp",
-            kCore,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {row, col}});
-        workload.add_program(distributed::MeshCoordinateRange(coord, coord), std::move(program));
+
+        experimental::ProgramSpec spec{
+            .name = "dprint_mesh_coord",
+            .kernels = {experimental::KernelSpec{
+                .unique_id = kKernel,
+                .source =
+                    std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp"},
+                .num_threads = 1,
+                .compile_time_args = {{"row", row}, {"col", col}},
+                .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device->arch()),
+            }},
+            .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
+        };
+
+        workload.add_program(
+            distributed::MeshCoordinateRange(coord, coord), experimental::MakeProgramFromSpec(*mesh_device, spec));
     }
     return workload;
 }
@@ -115,7 +126,7 @@ void RunFilteringTest(
         << log;
 
     for (const auto& mesh_device : all_devices) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_devices()[0]->id());
+        auto [row, col] = GetGlobalCoord(mesh_device->get_device_ids()[0]);
         if (std::make_pair(row, col) == fixture->target_coord) {
             continue;
         }
@@ -130,7 +141,7 @@ void RunFilteringTest(
 void RunAllChipsVerificationTest(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr auto kDprint = tt::llrt::RunTimeDebugFeatureDprint;
-    ChipId chip_id = mesh_device->get_devices()[0]->id();
+    ChipId chip_id = mesh_device->get_device_ids()[0];
     auto [row, col] = GetGlobalCoord(chip_id);
 
     auto workload = BuildMeshCoordWorkload(mesh_device);
@@ -158,15 +169,11 @@ void RunAllChipsVerificationTest(
 }  // namespace
 
 void DevicePrintMeshCoordsFixture::ExtraSetUp() {
-    // Teardown forces MetalContext to re-initialize (including resolve_mesh_coords_to_chip_ids)
-    // when devices are opened by DebugToolsMeshFixture::SetUp().  Re-apply rtoptions afterwards
-    // because ParseAllFeatureEnv resets them to defaults on re-initialization.
-    MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDevicePrintForCoord(
         MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
-void DevicePrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
+void DevicePrintMeshCoordsFixture::ExtraTearDown() {}
 
 // Test 1: Only the device at mesh coord (0,0) should produce DEVICE_PRINT output.
 TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsFiltersCorrectDevice) {

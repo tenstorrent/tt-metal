@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -97,30 +98,18 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
 
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    // The gathered mesh axis becomes Replicate; the other axes keep their placements even when they shard the
+    // gathered tensor dim (their pieces are still distinct after the gather). Without a cluster_axis the gather
+    // spans the whole mesh and every placement becomes Replicate. The helper expands a collapsed 1-D label to one
+    // placement per mesh axis first and compares Shard dims normalised, treating an out-of-range dim left behind by
+    // a rank-changing op (#52331) as matching nothing. `dim_from_end` is negative by construction; the helper
+    // normalises it. No honest label (nullopt, already
+    // reported): the output keeps the input's label. Returning {} would instead hand the framework the union over
+    // every tensor argument, the persistent output tensor's label included.
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_topology = input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    // For each distribution dimension, if sharded on the gather dim, make it replicated
-    const auto& logical_shape = input_tensor.logical_shape();
-    const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
-    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
-    for (auto& output_placement : output_placements) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
-            // Temp workaround for #52331:
-            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
-            if (shard->dim >= rank || shard->dim < -rank) {
-                continue;
-            }
-            // Shard::dim is always unnormalized by construction, so normalize here
-            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
-                output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
-        }
-    }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, args.cluster_axis, args.dim_from_end);
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
@@ -227,18 +216,20 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    // Heuristics to pick the kernel algorithm.
-    // Multicast supports all Fabric topologies, unicast only supports (effectively) 1D topologies.
-    // Unicast is empirically found to be faster for large tensors.
+    // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
     if (args.is_true_2d()) {
-        // Unicast algorithm currently does not support true Fabric 2D topologies
+        // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
+        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
+    } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
+        // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
+        use_unicast = true;
     } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
-        // NeighborExchange only permits 1-hop unicast
+        // Limitation: NeighborExchange only permits 1-hop unicast
         use_unicast = true;
     } else {
-        // Decide between multicast or unicast algorithm
+        // Heuristics: Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
@@ -317,6 +308,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::array<bool, 2> axis_is_straight{true, true};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
     std::array<uint32_t, 2> axis_num_links{0u, 0u};
     for (uint32_t axis = 0; axis < 2; ++axis) {
@@ -325,6 +317,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             continue;
         }
         axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        axis_is_straight[axis] = ::ttnn::ccl::is_axis_straight(*mesh_device, axis);
         axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
@@ -352,6 +345,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             cluster_axis,
             fabric_config,
             axis_topology,
+            axis_is_straight,
             axis_num_devices,
             axis_num_links,
             num_devices,

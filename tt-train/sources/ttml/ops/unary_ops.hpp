@@ -5,11 +5,15 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttml::ops {
 
+// Map to ttnn.GeluVariant.
+using GeluVariant = ttnn::operations::unary::GeluVariant;
+
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor);
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor);
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant = GeluVariant::ACCURATE);
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = false);
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor);
 // autograd::TensorPtr sum(const autograd::TensorPtr& tensor);

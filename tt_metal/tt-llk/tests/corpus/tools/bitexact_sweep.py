@@ -11,7 +11,7 @@ row's format can deliver through L1.
 Method (per row):
   probe     one sim run per leg (sem/hand) on the row's REGISTERED corr node
             and stimuli, dumping the raw L1 input/result bytes
-            (SFPU_DUMP hook in test_sfpu_unary.py + helpers/stimuli_config.py).
+            (SFPU_DUMP hook in test_sfpu_unary_campaign.py + helpers/stimuli_config.py).
   anchor    the same two nodes run on SILICON with the same dump hook —
             the device-golden truth anchors (device use = validation only).
   validate  the executor (pinned craq-sim libttsim, in-process harness) must
@@ -95,11 +95,11 @@ FMT_BYTES = {
 FMT_SPACE = {2: 1 << 16, 4: 1 << 32}
 
 # Arity / harness classification by the sem corr node's test file.  Only
-# test_sfpu_unary.py rows are instrumented (the SFPU_DUMP/SFPU_RAW_A hooks); everything
+# test_sfpu_unary_campaign.py rows are instrumented (the SFPU_DUMP/SFPU_RAW_A hooks); everything
 # else is refused with a per-class reason, never silently dropped.
-UNARY_HOOKED_FILES = {"test_sfpu_unary.py"}
+UNARY_HOOKED_FILES = {"test_sfpu_unary_campaign.py"}
 FILE_CLASS = {
-    "test_sfpu_unary.py": ("unary", None),
+    "test_sfpu_unary_campaign.py": ("unary", None),
     "test_eltwise_unary_typecast.py": ("unary", None),
     "test_sfpu_binop_scalar.py": ("unary", None),  # tensor x registered scalar
     "test_sfpu_coverage.py": (
@@ -107,7 +107,7 @@ FILE_CLASS = {
         "coverage-census row; separate harness not instrumented with the "
         "dump hooks this run",
     ),
-    "test_sfpu_binary.py": (
+    "test_sfpu_binary_campaign.py": (
         "binary",
         "two independent tensor operands: input space 2^64 — NOT exhaustible; "
         "structured-sampling stub: stratify per exponent-pair (256x256 "

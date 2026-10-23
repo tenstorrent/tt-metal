@@ -42,12 +42,12 @@
 //   is_receiver_core && act_mcast_num_cores == 0: local self-write (mcast loopback hangs with 0 destinations)
 //   !is_receiver_core:                            standard mcast EXCLUDE_SRC (even when act_mcast_num_cores == 0,
 //                                                 because the sender still needs to send to the output core)
-template <uint32_t act_mcast_num_cores>
+template <uint32_t act_mcast_num_cores, typename SrcDFB>
 void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    DataflowBuffer src_cb,
+    SrcDFB src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
@@ -85,13 +85,15 @@ template <
     uint32_t act_mcast_num_dest_cores,
     uint32_t mcast_noc_burst_size,
     uint32_t block_tile_count,
-    uint32_t tile_size>
+    uint32_t tile_size,
+    typename SrcDFB,
+    typename DstDFB>
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    DataflowBuffer src_cb_obj,
+    SrcDFB src_cb_obj,
     bool is_receiver_core,
-    DataflowBuffer dst_cb_obj,
+    DstDFB dst_cb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts
@@ -223,7 +225,7 @@ void kernel_main() {
     }
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+        noc_address_backend::extract_local_address(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
     (void)dram_config_reader_index;
 #endif
 
@@ -240,7 +242,7 @@ void kernel_main() {
 
     // Fully create act matrix and tilize it before mcast. The resident activation shard is reached by
     // L1 base address from a local TensorAccessor (tensor::act_sharded), not a borrowed self-loop CB.
-    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
+    uint32_t act_l1_read_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 

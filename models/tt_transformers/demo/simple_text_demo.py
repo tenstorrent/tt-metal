@@ -31,9 +31,6 @@ from models.tt_transformers.tt.generator import Generator, SamplingParams, creat
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
-# Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-models_not_supported_for_device_sampling = ["Mistral-7B"]
-
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -309,6 +306,16 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, local_data_parallel, local_submesh_indices
 
 
+def hf_max_context_len():
+    hf_model = os.getenv("HF_MODEL")
+    if not hf_model:
+        return None
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true").to_dict()
+    return config.get("max_position_embeddings", config.get("text_config", {}).get("max_position_embeddings"))
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -402,7 +409,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
+        pytest.param(  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -420,8 +427,9 @@ def prepare_generator_args(
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
-        (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
+        pytest.param(  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -439,6 +447,7 @@ def prepare_generator_args(
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -459,7 +468,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # reasoning-1 - single user, small prompt, long thinking time
+        pytest.param(  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -480,6 +489,7 @@ def prepare_generator_args(
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
+            marks=pytest.mark.timeout(1800),
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -922,7 +932,11 @@ def test_demo_text(
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
@@ -1009,6 +1023,13 @@ def test_demo_text(
 
     is_seqlen_sweep = "seqlen-sweep" in test_id
 
+    # Skip before the model and its max_seq_len KV cache are built.
+    max_context_len = None if is_seqlen_sweep else hf_max_context_len()
+    if max_context_len is not None and max_context_len < max_seq_len:
+        pytest.skip(
+            f"Max seq len {max_seq_len} not supported by model {os.getenv('HF_MODEL')}. The model's max context len is {max_context_len}"
+        )
+
     # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
     # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full 128k-capacity
     # pool and OOM. Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only
@@ -1050,6 +1071,11 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
+    # Time the model build. On a cold cache this includes the host HF weight load; on a warm
+    # ttnn cache that load is skipped (see create_tt_model / weight_cache_is_complete), so the
+    # cold-vs-warm delta of this segment is the host time saved per run. Flows through
+    # create_benchmark_data into the models-ci dashboard.
+    profiler.start("load_weights")
     (
         model_args,
         model,
@@ -1073,6 +1099,8 @@ def test_demo_text(
         use_prefetcher=use_prefetcher,
         use_hf_rope=use_hf_rope,
     )
+    profiler.end("load_weights")
+    logger.info(f"Model build (load_weights) took {profiler.get_duration('load_weights'):.2f}s")
 
     global_batch_size = batch_size * local_data_parallel
     input_prompts = select_local_data_parallel_items(input_prompts, batch_size, data_parallel, local_submesh_indices)
@@ -1170,15 +1198,14 @@ def test_demo_text(
             ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-
-        if batch_idx != 0:
+        # Clear K/V between requests, and compile the in-place reset on the first
+        # batch too. Its program-cache buffers must exist before trace capture.
+        if repeat_batches > 1:
             for i in range(len(model)):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
-            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
         # Use device sampling for all cases when supported (prefill + decode)
@@ -1203,16 +1230,12 @@ def test_demo_text(
             else None
         )
 
-        # Override the sampling params for some models
-        # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
-        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
-            device_sampling_params = None
-
         if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
             # host sampling only supports single sample param for all users in a batch
             sampling_params["temperature"] = sampling_params["temperature"][0]
             sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+            if "enable_log_probs" in sampling_params:
+                sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
 
         prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
@@ -1301,16 +1324,20 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
+            reload_decode_inputs = iteration == 0 or not enable_trace or device_sampling_params is None
             logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
+                reload_inputs=reload_decode_inputs,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             # Get the next token
@@ -1566,6 +1593,18 @@ def test_demo_text(
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+        # Model-build time (cold = incl. host HF weight load; warm ttnn cache = load skipped).
+        # The cold-vs-warm delta of this KPI is the host time saved by the warm-cache skip (#45400).
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "load_weights",
+            "time(s)",
+            profiler.get_duration("load_weights"),
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
 
         if not token_accuracy:
             # Save the decode performance of every iteration for plotting in superset

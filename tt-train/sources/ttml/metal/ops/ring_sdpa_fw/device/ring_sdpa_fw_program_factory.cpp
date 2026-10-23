@@ -8,56 +8,13 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp"
 #include "ring_sdpa_fw_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-using ttml::metal::AttentionMaskType;
-
-namespace {
-
-using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
-
-// Determine if device should execute at this step and which mask type to use
-// Returns: (should_execute, mask_type_to_use)
-std::pair<bool, AttentionMaskType> get_device_execution_info(
-    uint32_t device_ring_id,
-    uint32_t step,
-    uint32_t ring_size,
-    AttentionMaskType mask_type,
-    RingDirection ring_direction) {
-    if (mask_type != AttentionMaskType::Causal) {
-        // Non-causal: all devices execute with no mask (full attention)
-        return {true, AttentionMaskType::None};
-    }
-
-    // Causal masking logic for ring attention:
-    // At step s, device d processes K/V from source device based on ring direction
-    // - Backward direction: src = (d + s) % ring_size
-    // - Forward direction: src = (d - s + ring_size) % ring_size
-    // Then apply causal logic:
-    // - If src == device_id: diagonal chunk, use causal mask
-    // - If src < device_id: earlier chunk, use full attention (no mask)
-    // - If src > device_id: later chunk, skip (all positions masked)
-    uint32_t src_device;
-    if (ring_direction == RingDirection::Backward) {
-        src_device = (device_ring_id + step) % ring_size;
-    } else {
-        src_device = (device_ring_id - step + ring_size) % ring_size;
-    }
-
-    if (src_device == device_ring_id) {
-        return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
-    } else if (src_device < device_ring_id) {
-        return {true, AttentionMaskType::None};  // Earlier: full attention (no mask)
-    } else {
-        return {false, AttentionMaskType::None};  // Later: skip
-    }
-}
-
-}  // namespace
 
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -110,7 +67,8 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             .value = value,
             .mask = std::nullopt,  // No explicit mask - use mask_type
             .preallocated_intermediate = intermediates,
-            .preallocated_output = output};
+            .preallocated_output = output,
+            .gate = std::nullopt};
 
         sdpa_fw::device::tensor_return_value_t sdpa_return_value{output, intermediates};
 
@@ -175,6 +133,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
 
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
+        std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
             .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
@@ -184,7 +143,8 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .value = value,
             .mask = mask_opt,
             .preallocated_intermediate = intermediates,
-            .preallocated_output = output};
+            .preallocated_output = output,
+            .gate = gate_opt};
 
         sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
 

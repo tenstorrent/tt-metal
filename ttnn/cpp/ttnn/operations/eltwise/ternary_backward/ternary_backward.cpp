@@ -23,6 +23,8 @@ std::vector<Tensor> addcmul_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // output[0] keeps grad's own memory config rather than output_mem_config.
     grad_tensor.emplace_back(grad);
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
@@ -43,11 +45,18 @@ std::vector<Tensor> addcdiv_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // output[0] keeps grad's own memory config rather than output_mem_config.
     grad_tensor.emplace_back(grad);
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
+    // tensor2 is inverted once and reused for both gradients. The second gradient used to
+    // form tensor2^2 and invert that, which loses the answer at both ends of the range --
+    // infinity below |tensor2| = 1.0842e-19, zero above 2^63 (see the note in rdiv_bw).
+    // Sharing the reciprocal is also one op cheaper than squaring and inverting.
+    Tensor recip_tensor2 = ttnn::reciprocal(tensor2, output_mem_config);
     Tensor grad_a = ttnn::multiply(
-        ttnn::multiply(grad, value, std::nullopt, output_mem_config), ttnn::reciprocal(tensor2, output_mem_config));
+        ttnn::multiply(grad, value, std::nullopt, output_mem_config), recip_tensor2, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
         ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, t_inf, output_mem_config),
@@ -59,10 +68,11 @@ std::vector<Tensor> addcdiv_bw(
         std::nullopt,
         output_mem_config);
     Tensor grad_b = ttnn::multiply(
-        tmp,
-        ttnn::reciprocal(ttnn::square(tensor2, output_mem_config), output_mem_config),
+        ttnn::multiply(tmp, recip_tensor2, std::nullopt, output_mem_config),
+        recip_tensor2,
         std::nullopt,
         output_mem_config);
+    recip_tensor2.deallocate();
     grad_tensor.emplace_back(ttnn::where(
         ttnn::eqz(tensor2, output_mem_config),
         ttnn::where(ttnn::eqz(grad, output_mem_config), t_nan, -t_inf, output_mem_config),

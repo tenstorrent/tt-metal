@@ -64,7 +64,7 @@ from conftest import skip_for_wormhole
 import os as _os
 
 from helpers.format_config import DataFormat, InputOutputFormat
-from test_sfpu_unary import _lanemk_run_fp32_stream  # shared streamer
+from test_sfpu_unary_campaign import _lanemk_run_fp32_stream  # shared streamer
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     SdpaExpUnclampedGolden,

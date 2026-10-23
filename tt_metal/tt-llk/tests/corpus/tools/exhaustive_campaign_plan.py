@@ -8,7 +8,7 @@ exhaustive coverage.  ``COMPLETE`` is only a count/space planning status; it is
 not source-bound correctness admission.
 
 The current unary nodes omit their format from several pytest ids.  The
-32-bit set below mirrors the format choices in test_sfpu_unary.py; every other
+32-bit set below mirrors the format choices in test_sfpu_unary_campaign.py; every other
 single-variant paired node in that file is Float16_b.  Rewired exact-format
 and composite admission nodes are bound to their exact sem/hand selectors
 below so a future selector change fails visibly instead of silently claiming
@@ -26,7 +26,7 @@ from pathlib import Path
 TWO16 = 1 << 16
 TWO32 = 1 << 32
 
-# Float32, Int32 and UInt32 pointwise unary rows in test_sfpu_unary.py.
+# Float32, Int32 and UInt32 pointwise unary rows in test_sfpu_unary_campaign.py.
 UNARY_32 = frozenset(
     """absint32 add1 bitwisenot castfp32tofp16a cbrt-fresh clamp-fresh comp
     digamma-fresh eqz-fresh erf-fresh erfc-fresh erfinv-fresh expm1-fresh
@@ -42,12 +42,12 @@ UNARY_32 = frozenset(
 # rebound while the other still exercises a different format or body.
 EXACT_BF16_UNARY_PAIRS = {
     "expm1cw-fresh": (
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-fresh_cpp]",
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-production]",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-fresh_cpp]",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp_bf16_exact_path[Expm1Cw-production]",
     ),
     "i1-fresh": (
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-fresh_cpp]",
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-production]",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-fresh_cpp]",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp_bf16_exact_path[I1-production]",
     ),
 }
 
@@ -58,16 +58,16 @@ EXACT_BF16_UNARY_PAIRS = {
 # proof.
 COMPOSITE_UNARY_PAIRS = {
     "geluappx-fresh": (
-        "test_sfpu_unary.py::test_gelu_appx_licensed_cpp[licensed_cpp]",
-        "test_sfpu_unary.py::test_gelu_appx_licensed_cpp[production]",
+        "test_sfpu_unary_campaign.py::test_gelu_appx_licensed_cpp[licensed_cpp]",
+        "test_sfpu_unary_campaign.py::test_gelu_appx_licensed_cpp[production]",
     ),
     "hardshrink-fresh": (
-        "test_sfpu_unary.py::test_hardshrink_fresh_cpp_admission[fresh_cpp]",
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Hardshrink-production]",
+        "test_sfpu_unary_campaign.py::test_hardshrink_fresh_cpp_admission[fresh_cpp]",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp[Hardshrink-production]",
     ),
     "relu": (
-        "test_sfpu_unary.py::test_relu_fresh_cpp_admission",
-        "test_sfpu_unary.py::test_causal_lift_fresh_cpp[ReluMax-production]",
+        "test_sfpu_unary_campaign.py::test_relu_fresh_cpp_admission",
+        "test_sfpu_unary_campaign.py::test_causal_lift_fresh_cpp[ReluMax-production]",
     ),
 }
 
@@ -124,7 +124,7 @@ def classify(op: str, row: dict[str, str]) -> tuple[str, str, int, int | None, s
     """Return category, format, arity, full-space, reason."""
     node = row["sem_corr"]
     test_file = node.split("::", 1)[0]
-    if test_file == "test_sfpu_unary.py":
+    if test_file == "test_sfpu_unary_campaign.py":
         if op in EXACT_BF16_UNARY_PAIRS:
             require_exact_pair(op, row, EXACT_BF16_UNARY_PAIRS[op])
             return (
@@ -146,7 +146,7 @@ def classify(op: str, row: dict[str, str]) -> tuple[str, str, int, int | None, s
         if op in UNARY_32:
             return "unary_32_exhaustive", "32-bit", 1, TWO32, "fp32 streamer"
         return "unary_bf16_exhaustive", "Float16_b", 1, TWO16, "fp32 streamer"
-    if test_file == "test_sfpu_binary.py":
+    if test_file == "test_sfpu_binary_campaign.py":
         if "formats:Float16_b->" in node and "bcast_dim:" not in node:
             return (
                 "binary_bf16_pair_exhaustive",

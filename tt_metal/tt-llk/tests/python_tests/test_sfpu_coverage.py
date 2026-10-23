@@ -49,7 +49,7 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
 )
 from helpers.utils import passed_test
-from test_sfpu_unary import _lanemk_run_fp32_stream  # shared streamer, not a copy
+from test_sfpu_unary_campaign import _lanemk_run_fp32_stream  # shared streamer, not a copy
 
 
 def _bits(value: float) -> int:

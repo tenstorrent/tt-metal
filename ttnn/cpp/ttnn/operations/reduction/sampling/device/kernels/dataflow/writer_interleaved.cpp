@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
@@ -30,7 +31,7 @@ constexpr uint32_t FACE_HEIGHT = 16;
 // Widen bf16 to float32 — exact since bf16 is a subset of float32.
 // Uses soft-float on the data-movement RISC-V core.
 FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
-    uint32_t bits = (uint32_t)bf16 << 16;
+    uint32_t bits = static_cast<uint32_t>(bf16) << 16;
     float result;
     __builtin_memcpy(&result, &bits, sizeof(float));
     return result;
@@ -58,73 +59,85 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<dfb::scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
-    Noc noc;
-    DataflowBuffer dfb_k(dfb::k);
-    DataflowBuffer dfb_p(dfb::p);
+    const Noc noc;
+    const Scratchpad<volatile uint32_t> k_chunk(scratch::k);
+    const Scratchpad<volatile uint16_t> p_chunk(scratch::p);
     DataflowBuffer dfb_temp(dfb::temp);
     DataflowBuffer dfb_rand(dfb::rand);
     DataflowBuffer dfb_final_indices(dfb::final_indices);
     DataflowBuffer dfb_local_values(dfb::local_values);
     DataflowBuffer dfb_local_indices(dfb::local_indices);
-    DataflowBuffer dfb_out(dfb::out);
+    const Scratchpad<volatile uint32_t> index_out(scratch::out);
 
     const auto addrg_k = TensorAccessor(tensor::k);
-    dfb_k.reserve_back(1);
-    uint32_t dfb_k_ptr = dfb_k.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc.async_read(addrg_k, dfb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(addrg_k, k_chunk, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    dfb_k.push_back(1);
-    CoreLocalMem<volatile uint32_t> k_ptr(dfb_k_ptr);
     // Index into the chunk to get this core's value
-    uint32_t k = k_ptr[core_id];
+    uint32_t k;
+    {
+        const auto k_lock = k_chunk.scoped_lock(core_id, 1);
+        k = k_chunk[core_id];
+    }
 
     const auto addrg_p = TensorAccessor(tensor::p);
-    dfb_p.reserve_back(1);
-    uint32_t dfb_p_ptr = dfb_p.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc.async_read(addrg_p, dfb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(addrg_p, p_chunk, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    dfb_p.push_back(1);
-    CoreLocalMem<volatile uint16_t> p_ptr(dfb_p_ptr);
     // Index into the chunk to get this core's value
-    uint32_t p = p_ptr[core_id];
+    uint32_t p;
+    {
+        const auto p_lock = p_chunk.scoped_lock(core_id, 1);
+        p = p_chunk[core_id];
+    }
 
     const auto addrg_temp = TensorAccessor(tensor::temp);
     // dfb_temp.reserve_back(1);
-    uint32_t dfb_temp_ptr = dfb_temp.get_write_ptr();
+    const uint32_t dfb_temp_ptr = dfb_temp.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
     noc.async_read(addrg_temp, dfb_temp, temp_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     // dfb_temp.push_back(1);
 
-    CoreLocalMem<volatile uint16_t> temp_ptr(dfb_temp_ptr);
+    const CoreLocalMem<volatile uint16_t> temp_ptr(dfb_temp_ptr);
     // Index into the chunk to get this core's value
-    uint16_t temp = temp_ptr[core_id];
-    uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
+    const uint16_t temp = temp_ptr[core_id];
+    const uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
     generate_bcast_unary_scalar(dfb_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<dfb::mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
     dfb_rand.wait_front(1);
-    CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    uint16_t rand = rand_values[0];
+    const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
+    // Two elements of the random tile are independent integer digits in [0, 256] (floored on the
+    // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
+    // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
+    // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
+    // The low digit is read from element 2, not 1: on Wormhole only the even columns of face 0
+    // of this kernel's random tile carry draws (element 1 reads back as 0 in 63969 of 64000
+    // draws, which would collapse the threshold to hi / 256 and bring the 1/256 tail cutoff
+    // back); element 2 is the next lane's draw on every arch (Blackhole fills every element).
+    constexpr uint32_t RAND_HI_ELEMENT = 0;
+    constexpr uint32_t RAND_LO_ELEMENT = 2;
+    constexpr float RAND_DIGIT_MAX = 255.0f;
+    constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
+    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
+    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
+    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
+    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
     dfb_local_indices.wait_front(1);
     // Read producer-written compute outputs from these buffers in SRAM.
-    CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
+    const CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
 
     using local_index_t = std::conditional_t<use_32bit_index, uint32_t, uint16_t>;
-    CoreLocalMem<volatile local_index_t> local_indices(dfb_local_indices.get_read_ptr());
+    const CoreLocalMem<volatile local_index_t> local_indices(dfb_local_indices.get_read_ptr());
 
-    CoreLocalMem<volatile uint32_t> final_indices(
-        dfb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
-
-    uint32_t out_addr = dfb_out.get_write_ptr();
-    CoreLocalMem<volatile uint32_t> index_out(out_addr);
+    const CoreLocalMem<volatile uint32_t> final_indices(
+        dfb_final_indices.get_read_ptr() + (core_id * final_indices_stick_size));
 
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
@@ -134,7 +147,7 @@ void kernel_main() {
         start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
     }
     uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
-    uint32_t start_id_local_phase_1 = FACE_WIDTH * FACE_HEIGHT + start_id_local_phase_0;
+    uint32_t start_id_local_phase_1 = (FACE_WIDTH * FACE_HEIGHT) + start_id_local_phase_0;
     uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
     if (k <= FACE_WIDTH) {
         end_id_local_phase_0 = start_id_local_phase_0 + k;
@@ -143,7 +156,7 @@ void kernel_main() {
     }
 
     // Top-p filtering in float32 for precision
-    float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+    const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
     float cum_prob_f = 0.0f;
     uint32_t kept_tokens = 0;
     bool cutoff_found_in_phase_0 = false;
@@ -185,15 +198,15 @@ void kernel_main() {
     }
 
     // Stochastic sampling in float32
-    float rand_f = bf16_to_f32(rand);
+    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
     float cum_sum_f = 0.0f;
-    index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
+    uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;
 
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
         if (cum_sum_f > rand_f) {
-            index_out[core_id] = final_indices[local_indices[i]];
+            sampled_index = final_indices[local_indices[i]];
             index_found = true;
             break;
         }
@@ -202,11 +215,14 @@ void kernel_main() {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
             if (cum_sum_f > rand_f) {
-                index_out[core_id] = final_indices[local_indices[i]];
-                index_found = true;
+                sampled_index = final_indices[local_indices[i]];
                 break;
             }
         }
+    }
+    {
+        const auto out_lock = index_out.scoped_lock(core_id, 1);
+        index_out[core_id] = sampled_index;
     }
 
     // Release consumed buffers
@@ -217,10 +233,6 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(tensor::output);
     // Write individual core result - output buffer should handle alignment
-    // Treat `output` as a plain SRAM window, not a FIFO: do not add reserve_back / push_back /
-    // pop_front. The fill above writes at get_write_ptr() and this send reads from get_read_ptr();
-    // they are the same address only while both cursors sit at the buffer base. A pop_front moves
-    // the read cursor, so this send would transmit the wrong bytes instead of the sampled index.
-    noc.async_write(dfb_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
+    noc.async_write(index_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
 }

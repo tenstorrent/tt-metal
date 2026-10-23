@@ -10,9 +10,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 
 
-# Regression test for #41631: integer dtypes must not round-trip through bf16.
-@pytest.mark.parametrize("repeats", [2, 4, 32])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, -1])
+# dim/repeats genericity is already swept in full (with bfloat16/uint16) by the
+# post-commit tests/ttnn/unit_tests/operations/data_movement/test_repeat_interleave.py
+# on every PR, so only 2 representative values of each are kept here;
+@pytest.mark.parametrize("repeats", [2, 32])
+@pytest.mark.parametrize("dim", [0, -1])
 @pytest.mark.parametrize(
     "dtype, torch_dtype, lo, hi",
     [
@@ -31,9 +33,8 @@ def test_repeat_interleave_preserves_integer_values(device, repeats, dim, dtype,
     assert_equal(torch_result, output)
 
 
-# Regression test for #41631: fp32 must not round-trip through bf16.
-@pytest.mark.parametrize("repeats", [2, 4, 32])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, -1])
+@pytest.mark.parametrize("repeats", [2, 32])
+@pytest.mark.parametrize("dim", [0, -1])
 def test_repeat_interleave_preserves_fp32_precision(device, repeats, dim):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(1, 1, 32, 32, dtype=torch.float32) * 1000.0

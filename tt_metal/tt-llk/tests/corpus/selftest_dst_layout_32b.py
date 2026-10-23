@@ -50,7 +50,7 @@ def check(name, cond, detail=""):
 FLAG = sweep.DST_LAYOUT_32B_FLAG
 CONSUMER = "-mtt-tensix-optimize-lreg-alloc"
 NODE_32B = (
-    "test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-"
+    "test_sfpu_unary_campaign.py::test_eltwise_unary_sfpu[formats:Float32->Float32-"
     "approx_mode:No-mathop:SfpuElwsqrt-fast_mode:No-dest_acc:Yes-"
     "input_dimensions:[64, 64]]"
 )

@@ -105,7 +105,7 @@ def test_clip_text_embeddings(
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_embeddings_output = tt_embedding(tt_prompt, encoder_submesh)
+    tt_embeddings_output = tt_embedding(tt_prompt)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 

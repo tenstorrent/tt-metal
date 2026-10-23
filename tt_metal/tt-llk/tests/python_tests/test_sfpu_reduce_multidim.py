@@ -8,11 +8,11 @@ pass under a SINGLE shared ``init_reduce`` (see ``sources/sfpu_reduce_multidim_t
 mirrors how a multi-axis reduce (e.g. ``ttir.max`` ``dim=[1,2]``) is lowered to two ``sfpu_reduce``
 calls sharing one ``sfpu_reduce_init``.
 
-This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path runs first
-(``INT32_2S_COMP``, and its own ``init_reduce_max_min_int32`` that flips the SFPSWAP-direction config
-bit), then the row path runs trusting state established by the shared init. Because the row stage
-inherited the column stage's inverted comparator direction, it misordered values and returned wrong
-results once negatives/extremes were present. The single-axis ``test_sfpu_reduce`` suite only
+This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path ran first and
+left the SFPSWAP-direction config bit inverted, then the row path ran trusting state established by the
+shared init. Because the row stage inherited the column stage's inverted comparator direction, it
+misordered values and returned wrong results once negatives/extremes were present. Every MAX/MIN
+calculate now sets the direction on entry. The single-axis ``test_sfpu_reduce`` suite only
 exercises one path per init (with its matching init) and therefore could not catch it.
 
 Pool coverage is MAX, SUM, MIN (all formats) and AVG (float formats only): the kernel's ``REDUCE_ROW``
@@ -24,6 +24,13 @@ full 32x32 tile: the column pass writes each column's mean (over 32 rows) into r
 averages those 32 column-means (over 32 columns) into element [0][0], which equals the overall tile
 mean. It stays float-only because integer row AVG is unsupported (the row divisor is the runtime column
 count, divided exactly only by the float reciprocal-multiply).
+
+MAX/MIN additionally run row-then-column and column-row-column under the same single init (``REDUCE_ORDER``,
+``ReduceOrder``), so a column reduce that follows a row reduce is covered too. That order breaks if the row
+path writes the replay slots holding the column path's window, or if a column path trusts the SFPSWAP
+direction its init wrote: the manual column paths (UInt16, signed Int32, every format under
+``DISABLE_SFPLOADMACRO``) read the opposite SFPSWAP operand from the row path and so need the opposite
+direction for the same pool type.
 """
 
 import pytest
@@ -35,6 +42,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    ReduceOrder,
     ReducePool,
     format_dict,
 )
@@ -45,6 +53,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    REDUCE_ORDER,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
@@ -75,14 +84,32 @@ def get_multidim_pools(formats: InputOutputFormat) -> list[ReducePool]:
 
 
 # Formats exercised. Int32 is the regression target (its column path flips the SFPSWAP-direction
-# config and uses two's-complement); the others are baselines that should pass on both buggy and
-# fixed kernels and guard the shared-init chain for non-Int32 paths.
+# config and uses two's-complement); the others take the LOADMACRO column path and guard the shared-init
+# chain for it. UInt16 is absent on purpose: its row MAX/MIN in a 32-bit dest is unsupported (the Int32
+# row path does not mask the garbage high bits; see the skip in test_sfpu_reduce), so no chain that
+# includes a row pass over raw UInt16 data is well-defined. Its manual column path,
+# calculate_reduce_max_min_uint16, is still covered here after a row pass: under DISABLE_SFPLOADMACRO
+# every non-Int32 format's column MAX/MIN goes through it.
 MULTIDIM_FORMATS = [
     DataFormat.Int32,
     DataFormat.Float32,
     DataFormat.UInt32,
     DataFormat.Float16_b,
 ]
+
+
+def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
+    """Pass orders (REDUCE_ORDER in the kernel) under the single shared init. RowCol and ColRowCol are
+    MAX/MIN only -- there every order leaves the tile extreme at [0][0] -- and put a column reduce after
+    a row reduce, which is what breaks if the row path writes the replay slots holding the column path's
+    LOADMACRO window (float) or if a column path trusts the SFPSWAP direction its init wrote: the
+    manual column paths (signed Int32, and every non-Int32 format under DISABLE_SFPLOADMACRO, which
+    routes them through the UInt16 column reducer) need the opposite direction from the row path for the
+    same pool type.
+    """
+    if reduce_pool in (ReducePool.Max, ReducePool.Min):
+        return [ReduceOrder.ColRow, ReduceOrder.RowCol, ReduceOrder.ColRowCol]
+    return [ReduceOrder.ColRow]
 
 
 def get_multidim_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
@@ -149,6 +176,7 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
 @parametrize(
     formats=[InputOutputFormat(fmt, fmt) for fmt in MULTIDIM_FORMATS],
     reduce_pool=lambda formats: get_multidim_pools(formats),
+    reduce_order=lambda reduce_pool: get_multidim_reduce_orders(reduce_pool),
     num_row_tiles=ROW_TILE_COUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_bounds=lambda formats: get_multidim_input_bounds(formats),
@@ -156,6 +184,7 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
 def test_sfpu_reduce_multidim(
     formats,
     reduce_pool,
+    reduce_order,
     num_row_tiles,
     dest_acc,
     input_bounds,
@@ -214,6 +243,7 @@ def test_sfpu_reduce_multidim(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
             REDUCE_POOL_TYPE(reduce_pool),
+            REDUCE_ORDER(reduce_order),
         ],
         runtimes=[
             NUM_BLOCKS(num_blocks),

@@ -26,6 +26,7 @@
 
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -38,8 +39,8 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     auto all_cores = sender_cores.merge(receiver_cores);
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
-    auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -89,12 +90,14 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
 
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         auto sender_noc_coords = mesh_device->worker_core_from_logical_core(sender_core);
+        // Row-wise, to match how the GCB itself flattens each sender's receivers: a receiver's index
+        // in this vector is its credit slot, which orders the sender's NOC XY table.
+        const auto& receiver_cores_vec =
+            corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, /*row_wise=*/true);
         std::vector<CoreCoord> receiver_noc_coords;
-        for (const auto& receiver_core_range : receiver_cores.ranges()) {
-            const auto& receiver_cores_vec = corerange_to_cores(receiver_core_range);
-            for (const auto& receiver_core : receiver_cores_vec) {
-                receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
-            }
+        receiver_noc_coords.reserve(receiver_cores_vec.size());
+        for (const auto& receiver_core : receiver_cores_vec) {
+            receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
         }
         std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
@@ -152,7 +155,6 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     constexpr tt::DataFormat tile_format = tt::DataFormat::Float16_b;
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -165,8 +167,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     // Run a rectangular kernel grid with a remote CB on only one receiver. Dispatch must overwrite stale config on
     // idle_core with the zero sentinel that setup_remote_cb_interfaces() skips.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
-    auto sparse_global_cb =
-        experimental::CreateGlobalCircularBuffer(mesh_device.get(), sparse_mapping, 3200, BufferType::L1);
+    auto sparse_global_cb = experimental::GlobalCircularBuffer(*mesh_device, sparse_mapping, 3200, BufferType::L1);
     distributed::MeshWorkload sparse_workload;
     Program sparse_program = CreateProgram();
     experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);
@@ -185,7 +186,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     ASSERT_GT(poison_size, 0);
     ASSERT_EQ(poison_size % sizeof(uint32_t), 0);
     std::vector<uint32_t> poison(poison_size / sizeof(uint32_t), 0xffffffff);
-    detail::WriteToDeviceL1(device, idle_core, poison_base, poison);
+    slow_dispatch::WriteToL1(*mesh_device, idle_core, poison_base, poison);
 
     this->RunProgram(mesh_device, sparse_workload);
 
@@ -193,8 +194,8 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
         sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
         sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
     std::vector<uint32_t> remote_config;
-    detail::ReadFromDeviceL1(
-        device,
+    slow_dispatch::ReadFromL1(
+        *mesh_device,
         idle_core,
         remote_config_address,
         UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),

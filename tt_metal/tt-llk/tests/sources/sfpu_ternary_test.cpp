@@ -225,6 +225,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             // Ternary SFPU: out(tile 0) = f(a=0, b=1, c=2). VectorMode::RC drives 4 faces
             // (8 rows each) so the per-call ITERATIONS is 8, matching the production APIs.
+#ifdef SFPU_CLOBBER_LREGS
+            ckernel::sfpu::clobber_sfpu_lregs();
+#endif
             static_assert(TTNN_WHERE_IMPL <= 1, "Unknown TTNNWhere implementation selector");
             if constexpr (TTNN_WHERE_IMPL == 0)
             {

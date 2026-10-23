@@ -54,13 +54,16 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/float8.hpp>
 
 using namespace tt::tt_metal;
 
@@ -391,7 +394,12 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
         // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
         // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
         // while holding GIL.
-        tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
+        // May drop without the GIL; reacquire to decref.
+        tt::tt_metal::MemoryPin pydata_pin(std::shared_ptr<nb::ndarray<nb::array_api>>(
+            new nb::ndarray<nb::array_api>(contiguous_py_tensor), [](nb::ndarray<nb::array_api>* pinned) {
+                nb::gil_scoped_acquire gil;
+                delete pinned;
+            }));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
         return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
     };
@@ -709,14 +717,19 @@ void pytensor_module(nb::module_& mod) {
                     (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
+                const auto shape = CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor);
+                const auto memory_config = mem_config.value_or(MemoryConfig());
+                // Tile, pack and place without the GIL.
+                nb::gil_scoped_release release;
                 new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
-                    CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor),
+                    shape,
                     dst_dtype,
                     layout_,
                     tile,
-                    mem_config.value_or(MemoryConfig()),
+                    memory_config,
                     src_dtype,
                     [&](DataType dtype) -> HostBuffer {
+                        nb::gil_scoped_acquire gil;
                         return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(dlpack_tensor, dtype);
                     },
                     device,
@@ -1470,6 +1483,28 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "is_range_lockstep_allocated",
+            [](const Tensor& self) -> bool {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return false;
+                }
+                return experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                    self.mesh_buffer().device_local_config().sharding_args);
+            },
+            R"doc(
+            Returns True if this tensor was allocated with experimental range lockstep allocation.
+
+            The tensor still has one address, as with ordinary lockstep; the allocator only kept
+            that address clear of per-core allocations on the cores the tensor occupies, rather
+            than on every core. Reads the args the buffer was created with, so it reports what
+            reached the allocator rather than what the memory config asked for.
+
+            .. code-block:: python
+
+                assert tensor.is_range_lockstep_allocated()
+
+        )doc")
+        .def(
             "buffer_page_size",
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
@@ -1523,6 +1558,25 @@ void pytensor_module(nb::module_& mod) {
 
             Returns:
                 int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
+            "buffer_unique_id",
+            [](const Tensor& self) -> std::optional<size_t> {
+                if (!is_device_tensor(self) || !self.is_allocated() ||
+                    !self.device_storage().is_root_allocated()) {
+                    return std::nullopt;
+                }
+                auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
+                if (!backing) {
+                    return std::nullopt;
+                }
+                return backing->unique_id();
+            },
+            R"doc(
+            Get the unique ID of this tensor's root backing device buffer, or
+            None if the tensor is not on device / not allocated. Views return
+            the ID of the buffer that owns their device memory. This ID matches
+            the IDs reported by the unsafe-allocation tracker.
         )doc")
         .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(

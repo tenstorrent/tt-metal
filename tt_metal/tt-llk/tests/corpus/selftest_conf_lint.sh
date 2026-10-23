@@ -191,10 +191,10 @@ grep -q "duplicate witness" "$TMP/out15.log" || { echo "SELFTEST FAIL: dup-row R
 
 # R10 fixtures (wave-9 quarantine): the quarantined table is optional; when
 # present its flags must NOT be in the real sweep_2x2.py ON set and must not
-# duplicate a reviewed-table row.  int-abs is a real non-ON-set flag
-# (pin-14 knob-leg-only, deliberately outside the reviewed ON set);
-# ccmask is a real ON-set flag.  (crosscall-hoist served as the fixture
-# quarantined flag until the pin-14 lift returned it to the ON set.)
+# duplicate a reviewed-table row. Use a synthetic well-formed flag for the
+# non-ON case: this checks table policy and never invokes a compiler, and a real
+# optimization (previously int-abs) may legitimately be promoted into ON_FLAGS.
+# ccmask is a real ON-set flag for the refusal case.
 add_quarantine() { # add_quarantine <src> <dst> <flag>
   cp "$1" "$2"
   cat >> "$2" <<EOF
@@ -205,7 +205,7 @@ EOF
 }
 
 # 16. (R10) quarantined table whose flag is outside the ON set -> GREEN
-add_quarantine "$TMP/ok.conf" "$TMP/q-ok.conf" "-mtt-tensix-optimize-int-abs"
+add_quarantine "$TMP/ok.conf" "$TMP/q-ok.conf" "-mtt-tensix-optimize-quarantine-fixture"
 "$LINT" "$TMP/q-ok.conf" "$TMP/ok.tsv" > "$TMP/out16.log" 2>&1
 check "R10 quarantined non-ON-set flag lints GREEN" 0 $?
 

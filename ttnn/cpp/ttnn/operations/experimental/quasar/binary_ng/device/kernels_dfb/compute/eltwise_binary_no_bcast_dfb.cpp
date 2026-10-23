@@ -49,7 +49,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
@@ -59,13 +59,20 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, n);
         dfb_post_lhs.wait_front(n);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, n);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, n);
         dfb_post_rhs.wait_front(n);
 
         dfb_out.reserve_back(n);

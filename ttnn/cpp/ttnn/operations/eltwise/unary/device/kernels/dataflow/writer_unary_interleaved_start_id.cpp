@@ -6,6 +6,9 @@
 // writer_unary_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
 // serves the consumers still on the legacy API. Until the last of them migrates and this file is
 // retired, changes here likely belong in the fork too.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -27,7 +30,10 @@ void kernel_main() {
     DataflowBuffer dfb(cb_id_out);
 
 #ifdef OUT_SHARDED
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the DFB balanced.
     dfb.wait_front(num_pages);
+    dfb.pop_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)

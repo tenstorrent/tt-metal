@@ -24,10 +24,10 @@ void bind_to_device(nb::module_& mod) {
             Args:
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
-                memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`, DRAM_MEMORY_CONFIG will be used.
 
-            Kwargs:
-                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `null`.
+            Keyword Args:
+                queue_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: the tensor copied to device.

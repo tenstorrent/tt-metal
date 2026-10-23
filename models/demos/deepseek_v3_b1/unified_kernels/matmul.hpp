@@ -13,7 +13,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK

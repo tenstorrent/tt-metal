@@ -18,11 +18,10 @@ Two facts drive the plumbing:
   the batch axis so no statistic ever mixes across frames.
 
 The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
-group) statistics itself. Measured alternatives all lose: ``ttnn.group_norm`` with T as
-batch is 2.7x slower and bf16-only, which makes every norm a bf16 island in an otherwise
-fp32 encoder; a fused distributed GroupNorm device op is 1.6x slower per frame (~30 GB/s
-against the stats norm's ~112); carrying the resnet chain in TILE to avoid the round trip
-is a wash. Do not re-derive them.
+group) statistics itself. Three alternatives were tried and all lose, so do not re-derive
+them: ``ttnn.group_norm`` with T as batch is 2.7x slower and bf16-only, making every norm a
+bf16 island in an otherwise fp32 encoder; a fused distributed GroupNorm device op is 1.6x
+slower per frame; carrying the resnet chain in TILE to avoid the round trip is a wash.
 
 Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
 the *global* element count per (frame, group) and only the constructor knows the mesh factor.
@@ -485,6 +484,7 @@ class MiniMaxH3Encoder3d(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         parallel_config=None,
         ccl_manager=None,
+        pixel_norm: tuple[tuple[float, ...], tuple[float, ...]] | None = None,
     ) -> None:
         super().__init__()
         self.temporal_taps = temporal_taps
@@ -504,7 +504,7 @@ class MiniMaxH3Encoder3d(Module):
             ccl_manager=ccl_manager,
         )
         self.conv_in = MiniMaxH3CausalConv3d(
-            in_channels, block_out_channels[0], kernel_size=3, spatial_padding=1, **conv_kwargs
+            in_channels, block_out_channels[0], kernel_size=3, spatial_padding=1, pixel_norm=pixel_norm, **conv_kwargs
         )
 
         block_in_channels = (block_out_channels[0],) + tuple(block_out_channels[:-1])

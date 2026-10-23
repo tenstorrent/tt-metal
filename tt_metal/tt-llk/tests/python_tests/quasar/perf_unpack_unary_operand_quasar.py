@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_unpack_unary_operand_quasar import (
     PERF_UNPACK_UNARY_OPERAND_COMBINATIONS,
@@ -17,7 +17,7 @@ from quasar.test_unpack_unary_operand_quasar import (
 @parametrize(
     formats_dest_acc_sync_transpose_unpack_sel_dims=PERF_UNPACK_UNARY_OPERAND_COMBINATIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_unpack_unary_operand_quasar(

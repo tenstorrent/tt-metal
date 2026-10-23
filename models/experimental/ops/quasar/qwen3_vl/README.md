@@ -1,0 +1,40 @@
+# Qwen3-VL (Quasar)
+
+> Quasar-specific fork of `models/demos/qwen3_vl`, kept separate so it can be adapted to
+> the emulator's compute-grid and SRAM constraints. All module paths are rooted at
+> `models.experimental.ops.quasar.qwen3_vl`. Do not run pytest over both this tree and
+> `models/demos/qwen3_vl` in a single session: their `demo/conftest.py` files register the
+> same command-line options and pytest will error on the duplicates.
+
+## Introduction
+This codebase includes the Qwen3 family of models and currently supports the model variants:
+- Qwen3-VL-32B: [Qwen/Qwen3-VL-32B](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)
+
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- Install additional python dependencies:
+
+```
+pip install -r models/experimental/ops/quasar/qwen3_vl/requirements.txt
+```
+
+## How to Run
+For a single user example:
+```
+MESH_DEVICE=<device_name> HF_MODEL=<model_name> pytest models/experimental/ops/quasar/qwen3_vl/demo/demo.py -k 'batch-1'
+```
+
+**Notes:**
+- `<model_name>` is the HuggingFace model repo string, e.g. `Qwen/Qwen3-VL-3B-Instruct`
+- `<device_name>` is the TT device string, e.g. `N150`, `N300`, `T3K`
+- `-k` is the pytest filter; to run a specific test, use `-k <test_name>`; additional test names are listed in `models/experimental/ops/quasar/qwen3_vl/demo/demo.py`
+- different model variants are supported on different devices:
+
+| Model Variant      | `<model_name>` (HF_MODEL)                   | `<device_name>` (MESH_DEVICE) |
+|--------------------|---------------------------------------------|-------------------------------|
+| Qwen3-VL-32B     | Qwen/Qwen3-VL-32B-Instruct                | `T3K`                         |
+
+## Details
+- On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
+These cache files only need to be created once for each model and each weight (i.e. new finetuned weights will need to be cached) and will be stored accordingly to the machine you are running the models.

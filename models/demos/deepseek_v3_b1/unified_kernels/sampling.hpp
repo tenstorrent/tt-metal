@@ -8,7 +8,7 @@
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
 #ifdef TRISC_MATH
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sampling.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -130,15 +130,16 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/experimental/rmsnorm.h"
 
 #if defined(TRISC_UNPACK)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
 #if defined(TRISC_MATH)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
-#include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
-template <bool legacy_compat = true>
+#include "experimental/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
+    // Restore generic SFPU state and scalar constants, without programming full-tile LOADMACRO/replay state.
+    ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::sampling_recip_init);
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (DST_ACCUM_MODE), idst, VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
@@ -188,8 +189,15 @@ ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_first_column,
+        (ckernel::sfpu::SamplingBinaryOp::add),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 #endif
 
@@ -325,7 +333,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
         reduce_uninit();
         // Step 6: Compute DST[0, 0, 0] = 1/sum(exp(x_i - max(x_i, dim=0))), sum(exp(x_i - max(x_i, dim=0))) comes from
         // DST in Step 5
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
         // Step 7: Compute DST[0] = exp(x_i - max(x_i, dim=0)) * 1/sum(exp(x_i - max(x_i, dim=0))).
     }
@@ -359,7 +366,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
         // Step 9: DST[0] = T(probs), re-loaded from probs_cb (bf16).
-        copy_tile_to_dst_init_short(probs_cb);
+        copy_init(probs_cb);
         copy_tile(probs_cb, 0, 0);
     }
     {
@@ -371,7 +378,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         cumsum_tile(0, /*first=*/true);
     }
     // Step 11: DST[1] = p (column-0 broadcast staged by BRISC).
-    copy_tile_to_dst_init_short(p_cb);
+    copy_init(p_cb);
     copy_tile(p_cb, 0, 1);
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-9");
@@ -414,7 +421,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-12");
-        copy_tile_to_dst_init_short(exp_cb);
+        copy_init(exp_cb);
         copy_tile(exp_cb, 0, 0);
         sfpu_reduce_init<PoolType::MIN, DataFormat::Float32>();
         sfpu_reduce<PoolType::MIN, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
@@ -425,7 +432,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
         constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         // Step 18: Compute DST[0] = 1/cum_kept
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
     // Step 18.5: Compute DST[3] = probs * 1/cum_kept = rescaled (renormalized) PMF.
@@ -446,14 +452,13 @@ void trisc_fused_softmax_top_p_sampling_block() {
     // Step 18.75: Recompute 1/cum_kept into DST[0] for Step 19 to consume.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13c");
-        copy_tile_to_dst_init_short(exp_cb);
+        copy_init(exp_cb);
         copy_tile(exp_cb, 0, 0);
         sfpu_reduce_init<PoolType::MIN, DataFormat::Float32>();
         sfpu_reduce<PoolType::MIN, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
         // Same clamp as Step 17.5: see comment above.
         constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
-        recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
     // Step 19: Compute DST[2] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
@@ -473,7 +478,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
             /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);
     }
     // Step 20: DST[1] = rand (column-0 broadcast staged by BRISC into rand_bcast_cb).
-    copy_tile_to_dst_init_short(rand_bcast_cb);
+    copy_init(rand_bcast_cb);
     copy_tile(rand_bcast_cb, 0, 1);
     // Step 21: DST[2] = (rescaled_cumsum >= rand) ? 1.0 : 0.0.
     {
@@ -711,7 +716,12 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_push_back(out_indices_cb, 1);
 }
 
-template <uint32_t in_scores_cb, uint32_t in_indices_cb, uint32_t out_scores_cb, uint32_t out_indices_cb>
+template <
+    uint32_t in_scores_cb,
+    uint32_t in_indices_cb,
+    uint32_t out_scores_cb,
+    uint32_t out_indices_cb,
+    bool restore_face_geometry = true>
 void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_tiles, uint32_t phase_number) {
     constexpr uint32_t value_offset_tiles = 0;
     constexpr uint32_t index_offset_tiles = 2;
@@ -880,6 +890,13 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
+    // top32_rm init in the trailing chunk changes the face geometry, so restore it.
+    if constexpr (restore_face_geometry) {
+        UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
+            FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
+        UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
+            canonical_unpA_y_stride(unpack_dst_format[get_operand_id(in_scores_cb)]))));
+    }
 
     tile_regs_release();
 
@@ -1133,6 +1150,7 @@ struct TopKSampling {
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
         static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
+        static_assert(EnableMetadata <= 1 && MaskAliasesScaler <= 1, "a compute compile-time argument is out of place");
     };
 
     struct ReaderArgs {
@@ -1968,11 +1986,13 @@ struct TopKSampling {
             if constexpr (IsFinalCore && CTArgs::topk_k <= 32) {
                 {
                     DeviceZoneScopedN("SP-PHASE2LLK");
+                    // k 1 selects the top value whatever the softmax reads, so it skips the restore.
                     run_top32_llk_presorted_1024_opt<
                         CTArgs::topk_in_scores_cb,
                         CTArgs::topk_in_indices_cb,
                         CTArgs::topk_out_scores_cb,
-                        CTArgs::topk_out_indices_cb>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles, 2);
+                        CTArgs::topk_out_indices_cb,
+                        (CTArgs::topk_k > 1)>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles, 2);
                 }
             }
 
@@ -2018,7 +2038,8 @@ struct TopKSampling {
                     /*num_tiles=*/1,
                     CTArgs::enable_metadata,
                     CTArgs::metadata_output_l1_addr,
-                    CTArgs::inv_temp_bf16>();
+                    // k 1 draws the top value at any temperature.
+                    (CTArgs::topk_k > 1 ? CTArgs::inv_temp_bf16 : 0)>();
             }
 #endif
         }

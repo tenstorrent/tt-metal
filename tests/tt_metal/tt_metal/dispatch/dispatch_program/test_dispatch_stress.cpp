@@ -25,6 +25,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -57,9 +58,11 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
+    const auto device_id = mesh_device->get_device_ids()[0];
     auto get_first_arg =
-        [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
-            return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
+        [device_id](
+            const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/, CoreCoord& core, uint32_t multiplier) {
+            return (uint32_t)device_id + ((uint32_t)core.x * 10 * multiplier);
         };
     auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
                              CoreCoord& core,
@@ -82,16 +85,15 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
-        auto* device = mesh_device->get_devices()[0];
-        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
+        slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
-        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
+        slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
         uint32_t expected_result = get_first_arg(mesh_device, core, 1) + get_second_arg(mesh_device, core, 1);
         if (expected_result != brisc_result[0]) {
             log_warning(
                 LogTest,
                 "Device {}, Core {}, BRISC result was incorrect. Expected {} but got {}",
-                device->id(),
+                device_id,
                 core.str(),
                 expected_result,
                 brisc_result[0]);
@@ -102,7 +104,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             log_warning(
                 LogTest,
                 "Device {}, Core {}, NCRISC result was incorrect. Expected {} but got {}",
-                device->id(),
+                device_id,
                 core.str(),
                 expected_result,
                 ncrisc_result[0]);

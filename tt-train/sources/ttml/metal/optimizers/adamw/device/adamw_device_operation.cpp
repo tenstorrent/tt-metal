@@ -7,52 +7,44 @@
 #include <enchantum/enchantum.hpp>
 
 #include "adamw_program_factory.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::adamw::device {
 
 void AdamWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           const tt::tt_metal::Layout required_layout,
-                           const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "AdamW optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
+    const auto& param = tensor_args.param;
+    auto check_tensor = [&param](
+                            const ttnn::Tensor& tensor,
+                            const std::string& name,
+                            const tt::tt_metal::Layout required_layout,
+                            const tt::tt_metal::DataType required_dtype) {
+        check_device_tensor(
+            tensor,
+            "AdamW",
             name,
-            enchantum::to_string(tensor.storage_type()));
+            {.dtypes = {required_dtype}, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
 
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
-
+        // Logical shapes must match for element-for-element correspondence with the parameter;
+        // padding alone cannot tell apart tensors that round up to the same tile extent.
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
+            tensor.logical_shape() == param.logical_shape(),
+            "Tensor '{}' must match the parameter's logical shape. Expected {}, got {}",
             name,
-            enchantum::to_string(tensor.buffer()->buffer_type()));
+            param.logical_shape(),
+            tensor.logical_shape());
 
+        // Tile counts and reader/writer extents are derived solely from the parameter tensor, so any
+        // smaller companion tensor would be read or written past its allocation.
         TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
+            tensor.padded_shape() == param.padded_shape(),
+            "Tensor '{}' must match the parameter's padded shape. Expected {}, got {}",
             name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
+            param.padded_shape(),
+            tensor.padded_shape());
     };
 
-    const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
     const auto& exp_avg = tensor_args.exp_avg;
     const auto& exp_avg_sq = tensor_args.exp_avg_sq;
@@ -97,6 +89,11 @@ AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_s
 AdamWDeviceOperation::tensor_return_value_t AdamWDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param;
+}
+
+std::vector<tt::tt_metal::TensorTopology> AdamWDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    return {tensor_args.param.tensor_topology()};
 }
 
 ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(

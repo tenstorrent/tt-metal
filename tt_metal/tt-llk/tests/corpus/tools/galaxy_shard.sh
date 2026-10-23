@@ -88,8 +88,8 @@ case "${GOLDEN:-1}" in 0|1) ;; *) echo "FATAL: GOLDEN must be 0 or 1, got '${GOL
 # Certified binarypow defaults: the pinned SfpuElwpow pair and the two build
 # variants their .text hashes came from.  Any other op must supply its own,
 # directly or through OPS_TSV/IDMAP.
-DEF_SEM='test_sfpu_binary.py::test_fresh_cpp_binary_pow[formats:Float16_b->Float16_b-mathop:SfpuElwpow-dest_acc:No-fresh_cpp_impl:1]'
-DEF_HAND='test_sfpu_binary.py::test_fresh_cpp_binary_pow[formats:Float16_b->Float16_b-mathop:SfpuElwpow-dest_acc:No-fresh_cpp_impl:3]'
+DEF_SEM='test_sfpu_binary_campaign.py::test_fresh_cpp_binary_pow[formats:Float16_b->Float16_b-mathop:SfpuElwpow-dest_acc:No-fresh_cpp_impl:1]'
+DEF_HAND='test_sfpu_binary_campaign.py::test_fresh_cpp_binary_pow[formats:Float16_b->Float16_b-mathop:SfpuElwpow-dest_acc:No-fresh_cpp_impl:3]'
 DEF_SEM_VARIANT=f7bbba208acd05cf64bc2d3c84915c479dc8478fdbb9212c4cf5837c22128de3
 DEF_HAND_VARIANT=4fdf2260eb2f4fd8ca80509ea5a57ef9e191ec7b2c74f05c10d952925e42154a
 

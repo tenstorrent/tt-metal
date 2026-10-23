@@ -161,9 +161,8 @@ inline void calculate_digamma() {
             sfpi::vFloat bern = sfpi::vConstFloatPrgm2 - inv_x2 * sfpi::vFloat(0.0083333333f);
             result = _calculate_log_body_no_init_(x) - head - inv_x2 * bern;
             // digamma(+inf) = +inf; the log approximation clamps inf to a finite value, so
-            // restore it explicitly. The enclosing ordered comparison excludes
-            // NaNs, so a biased all-ones exponent uniquely identifies +inf.
-            v_if(sfpi::exexp(x, sfpi::ExponentMode::Biased) == 255) { result = std::numeric_limits<float>::infinity(); }
+            // restore it explicitly.
+            v_if(sfpi::is_inf(x)) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }
         v_endif;

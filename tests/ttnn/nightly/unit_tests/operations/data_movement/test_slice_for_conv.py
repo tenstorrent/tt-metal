@@ -71,23 +71,18 @@ def num_to_core_range_set(x):
     )
 
 
-@pytest.mark.parametrize(
-    "dims, slice_size, cores",
-    [
-        [[2, 256, 300, 64], 128, 22],
-        [[2, 256, 128, 32], 64, 8],
-        [[2, 256, 256, 128], 64, 64],
-        [[2, 256, 256, 9], 64, 64],
-        [[2, 256, 256, 17], 64, 64],
-        [[2, 1024, 1024, 3], 64, 64],
-        [[2, 313, 71, 32], 32, 7],
-    ],
-)
-@pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation, dtype):
+_HEIGHT_SHARDED_DIMS = [
+    [[2, 256, 300, 64], 128, 22],
+    [[2, 256, 128, 32], 64, 8],
+    [[2, 256, 256, 128], 64, 64],
+    [[2, 256, 256, 9], 64, 64],
+    [[2, 256, 256, 17], 64, 64],
+    [[2, 1024, 1024, 3], 64, 64],
+    [[2, 313, 71, 32], 32, 7],
+]
+
+
+def _slice_write_height_sharded_body(device, dims, slice_dim, slice_size, cores, layout, orientation, dtype):
     core_grid = device.compute_with_storage_grid_size()
 
     if core_grid.x * core_grid.y < cores:
@@ -146,19 +141,39 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     assert_with_pcc(torch_input, output, 0.9999)
 
 
+@pytest.mark.parametrize("dims, slice_size, cores", _HEIGHT_SHARDED_DIMS)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, layout):
+    _slice_write_height_sharded_body(
+        device, dims, slice_dim, slice_size, cores, layout, ttnn.ShardOrientation.ROW_MAJOR, ttnn.bfloat16
+    )
+
+
+# orientation/dtype crossing is spot-checked here (instead of fully crossing them with
+# dims x slice_dim x layout above) to avoid a 7*2*2*2*2=224-case product; this covers each
+# remaining (orientation, dtype) pair at least once against a representative subset of dims.
 @pytest.mark.parametrize(
-    "dims, slice_size, cores",
+    "orientation, dtype",
     [
-        [[2, 64, 64, 2048], 32, 64],
-        [[2, 48, 48, 2944], 32, 46],
-        [[2, 48, 48, 2904], 32, 46],
+        (ttnn.ShardOrientation.ROW_MAJOR, ttnn.float32),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.bfloat16),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.float32),
     ],
 )
-@pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation, dtype):
+@pytest.mark.parametrize("dims, slice_size, cores", _HEIGHT_SHARDED_DIMS[::2])
+def test_slice_write_height_sharded_orientation_dtype_coverage(device, orientation, dtype, dims, slice_size, cores):
+    _slice_write_height_sharded_body(device, dims, 1, slice_size, cores, ttnn.TILE_LAYOUT, orientation, dtype)
+
+
+_WIDTH_SHARDED_DIMS = [
+    [[2, 64, 64, 2048], 32, 64],
+    [[2, 48, 48, 2944], 32, 46],
+    [[2, 48, 48, 2904], 32, 46],
+]
+
+
+def _slice_write_width_sharded_body(device, dims, slice_dim, slice_size, cores, layout, orientation, dtype):
     core_grid = device.compute_with_storage_grid_size()
 
     if core_grid.x * core_grid.y < cores:
@@ -215,6 +230,28 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
+
+
+@pytest.mark.parametrize("dims, slice_size, cores", _WIDTH_SHARDED_DIMS)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores):
+    _slice_write_width_sharded_body(
+        device, dims, slice_dim, slice_size, cores, ttnn.TILE_LAYOUT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.bfloat16
+    )
+
+
+# orientation/dtype crossing spot-checked separately to avoid a 3*2*1*2*2=24-case product.
+@pytest.mark.parametrize(
+    "orientation, dtype",
+    [
+        (ttnn.ShardOrientation.ROW_MAJOR, ttnn.float32),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.bfloat16),
+        (ttnn.ShardOrientation.COL_MAJOR, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("dims, slice_size, cores", _WIDTH_SHARDED_DIMS)
+def test_slice_write_width_sharded_orientation_dtype_coverage(device, orientation, dtype, dims, slice_size, cores):
+    _slice_write_width_sharded_body(device, dims, 1, slice_size, cores, ttnn.TILE_LAYOUT, orientation, dtype)
 
 
 @pytest.mark.parametrize(
@@ -287,28 +324,23 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
     assert_with_pcc(torch_input, output, 0.9999)
 
 
-@pytest.mark.parametrize(
-    "dims, slice_size, cores",
-    [
-        [[2, 100, 100, 32], 50, 64],
-        [[2, 512, 256, 32], 128, 64],
-        [[2, 256, 128, 64], 32, 8],
-        [[2, 67, 35, 64], 14, 8],
-        [[2, 256, 256, 37], 64, 64],
-        [[2, 312, 489, 100], 53, 64],
-        [[2, 255, 255, 63], 37, 64],
-        [[2, 299, 299, 99], 99, 64],
-        [[2, 8, 8, 32], 2, 4],
-        [[2, 8, 16, 2], 2, 8],
-        [[2, 981, 39, 63], 63, 41],
-        [[1, 1024, 1024, 128], 37, 64],
-    ],
-)
-@pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [8, 16, 32])
-def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
+_HEIGHT_CONV2D_DIMS = [
+    [[2, 100, 100, 32], 50, 64],
+    [[2, 512, 256, 32], 128, 64],
+    [[2, 256, 128, 64], 32, 8],
+    [[2, 67, 35, 64], 14, 8],
+    [[2, 256, 256, 37], 64, 64],
+    [[2, 312, 489, 100], 53, 64],
+    [[2, 255, 255, 63], 37, 64],
+    [[2, 299, 299, 99], 99, 64],
+    [[2, 8, 8, 32], 2, 4],
+    [[2, 8, 16, 2], 2, 8],
+    [[2, 981, 39, 63], 63, 41],
+    [[1, 1024, 1024, 128], 37, 64],
+]
+
+
+def _slice_height_sharded_for_conv2d_body(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
@@ -354,25 +386,48 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize(
-    "dims, slice_size, core_y, core_x",
-    [
-        [[2, 64, 64, 256], 32, 4, 4],
-        [[2, 64, 64, 512], 16, 4, 4],
-        [[2, 16, 16, 1024], 4, 4, 4],
-        [[2, 128, 128, 256], 32, 8, 4],
-        [[2, 128, 128, 63], 32, 8, 2],
-        [[2, 128, 128, 528], 96, 8, 6],
-        [[2, 128, 128, 96], 96, 8, 3],
-        [[2, 1024, 1024, 256], 33, 10, 11],
-        [[1, 64, 128, 256], 65, 4, 5],
-    ],
-)
+@pytest.mark.parametrize("dims, slice_size, cores", _HEIGHT_CONV2D_DIMS)
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [8, 32])
-def test_slice_block_sharded_for_conv2d(
+def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout):
+    _slice_height_sharded_for_conv2d_body(device, dims, slice_dim, slice_size, cores, layout, ttnn.bfloat16, 32)
+
+
+# input_dtype/pad_value crossing is spot-checked here (instead of fully crossing them with
+# dims x slice_dim x layout above) to avoid a 12*2*2*3*3=432-case product; this covers every
+# remaining (input_dtype, pad_value) pair at least once against a representative subset of dims.
+@pytest.mark.parametrize(
+    "input_dtype, pad_value",
+    [
+        (ttnn.bfloat8_b, 8),
+        (ttnn.bfloat8_b, 16),
+        (ttnn.bfloat8_b, 32),
+        (ttnn.bfloat16, 8),
+        (ttnn.bfloat16, 16),
+        (ttnn.float32, 8),
+        (ttnn.float32, 16),
+        (ttnn.float32, 32),
+    ],
+)
+@pytest.mark.parametrize("dims, slice_size, cores", _HEIGHT_CONV2D_DIMS[::3])
+def test_slice_height_sharded_for_conv2d_dtype_pad_coverage(device, input_dtype, pad_value, dims, slice_size, cores):
+    _slice_height_sharded_for_conv2d_body(device, dims, 1, slice_size, cores, ttnn.TILE_LAYOUT, input_dtype, pad_value)
+
+
+_BLOCK_CONV2D_DIMS = [
+    [[2, 64, 64, 256], 32, 4, 4],
+    [[2, 64, 64, 512], 16, 4, 4],
+    [[2, 16, 16, 1024], 4, 4, 4],
+    [[2, 128, 128, 256], 32, 8, 4],
+    [[2, 128, 128, 63], 32, 8, 2],
+    [[2, 128, 128, 528], 96, 8, 6],
+    [[2, 128, 128, 96], 96, 8, 3],
+    [[2, 1024, 1024, 256], 33, 10, 11],
+    [[1, 64, 128, 256], 65, 4, 5],
+]
+
+
+def _slice_block_sharded_for_conv2d_body(
     device, dims, slice_dim, slice_size, core_x, core_y, layout, input_dtype, pad_value
 ):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -429,20 +484,44 @@ def test_slice_block_sharded_for_conv2d(
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
 
-@pytest.mark.parametrize(
-    "dims, slice_size, cores",
-    [
-        [[1, 32, 32, 1024], 16, 32],
-        [[1, 29, 29, 999], 16, 32],
-        [[1, 29, 29, 510], 16, 16],
-        [[1, 6, 58, 2048], 3, 64],
-    ],
-)
+@pytest.mark.parametrize("dims, slice_size, core_y, core_x", _BLOCK_CONV2D_DIMS)
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [8, 32])
-def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
+def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, core_x, core_y, layout):
+    _slice_block_sharded_for_conv2d_body(device, dims, slice_dim, slice_size, core_x, core_y, layout, ttnn.bfloat16, 32)
+
+
+# input_dtype/pad_value crossing is spot-checked here (instead of fully crossing them with
+# dims x slice_dim x layout above) to avoid a 9*2*2*3*2=216-case product; this covers every
+# remaining (input_dtype, pad_value) pair at least once against a representative subset of dims.
+@pytest.mark.parametrize(
+    "input_dtype, pad_value",
+    [
+        (ttnn.bfloat8_b, 8),
+        (ttnn.bfloat8_b, 32),
+        (ttnn.bfloat16, 8),
+        (ttnn.float32, 8),
+        (ttnn.float32, 32),
+    ],
+)
+@pytest.mark.parametrize("dims, slice_size, core_y, core_x", _BLOCK_CONV2D_DIMS[::3])
+def test_slice_block_sharded_for_conv2d_dtype_pad_coverage(
+    device, input_dtype, pad_value, dims, slice_size, core_x, core_y
+):
+    _slice_block_sharded_for_conv2d_body(
+        device, dims, 1, slice_size, core_x, core_y, ttnn.TILE_LAYOUT, input_dtype, pad_value
+    )
+
+
+_WIDTH_CONV2D_DIMS = [
+    [[1, 32, 32, 1024], 16, 32],
+    [[1, 29, 29, 999], 16, 32],
+    [[1, 29, 29, 510], 16, 16],
+    [[1, 6, 58, 2048], 3, 64],
+]
+
+
+def _slice_width_sharded_for_conv2d_body(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
@@ -491,3 +570,28 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         output = torch.reshape(output, this_torch_output.shape)
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("dims, slice_size, cores", _WIDTH_CONV2D_DIMS)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout):
+    _slice_width_sharded_for_conv2d_body(device, dims, slice_dim, slice_size, cores, layout, ttnn.bfloat16, 32)
+
+
+# input_dtype/pad_value crossing is spot-checked here (instead of fully crossing them with
+# dims x slice_dim x layout above) to avoid a 4*2*2*3*2=96-case product; this covers every
+# remaining (input_dtype, pad_value) pair at least once against all (small) dims.
+@pytest.mark.parametrize(
+    "input_dtype, pad_value",
+    [
+        (ttnn.bfloat8_b, 8),
+        (ttnn.bfloat8_b, 32),
+        (ttnn.bfloat16, 8),
+        (ttnn.float32, 8),
+        (ttnn.float32, 32),
+    ],
+)
+@pytest.mark.parametrize("dims, slice_size, cores", _WIDTH_CONV2D_DIMS)
+def test_slice_width_sharded_for_conv2d_dtype_pad_coverage(device, input_dtype, pad_value, dims, slice_size, cores):
+    _slice_width_sharded_for_conv2d_body(device, dims, 1, slice_size, cores, ttnn.TILE_LAYOUT, input_dtype, pad_value)

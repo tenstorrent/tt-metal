@@ -16,7 +16,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    unary_op_init_common(dfb::in, dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -27,7 +28,7 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         tile_regs_acquire();
-        copy_tile_init(dfb::in);
+        copy_init(dfb::in);
         copy_tile(dfb::in, 0, 0);
 
         transpose_dest_init<DST_ACCUM_MODE, true /* transpose_of_faces */>(dfb::in);

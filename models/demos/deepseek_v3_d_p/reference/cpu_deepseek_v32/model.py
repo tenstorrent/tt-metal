@@ -18,8 +18,7 @@ Contains:
     paths.
 
 This module is architecture only. CPU kernel equivalents and RoPE helpers live
-in ``utils.py``; weight init + pretrained HF loading live in ``weights.py``; the
-test harness in ``test_model.py``.
+in ``utils.py``; weight init + pretrained HF loading live in ``weights.py``.
 """
 
 import math
@@ -75,7 +74,7 @@ class ModelArgs:
     index_head_dim: int = 128
     index_topk: int = 2048
     # Indexer RoPE convention: DeepSeek-V3.2 = non-interleaved (rotate_half);
-    # GLM-5.1 = interleaved. (MLA RoPE is always interleaved.)
+    # GLM-5.3 = interleaved. (MLA RoPE is always interleaved.)
     index_rope_interleave: bool = False
 
     @property

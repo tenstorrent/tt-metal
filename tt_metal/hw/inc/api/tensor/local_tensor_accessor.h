@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <tuple>
 
 #include "api/core_local_mem.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
@@ -63,13 +66,23 @@ public:
         // ADDR_CRTA_OFFSET is a byte offset; dividing recovers the word index
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+        // Op-to-op R/W inference: this hands the kernel the tensor's local memory (CPU loads/stores, LLK operands, raw
+        // NoC addresses), none of which carries the binding. Note it as both read and written; the slot is the binding
+        // id a TensorAccessor built from the same token uses.
+        tt_buf_rw::note_read_write<ADDR_CRTA_OFFSET>();
     }
+
+    // Construct from the "binding not present" token.
+    // Meant to be used with `get_token_if_present` to make the token-not-exist branch compile.
+    // This will never be run in runtime & NullTensorBindingToken is not constructible.
+    [[nodiscard]] explicit LocalTensorAccessor(const tensor_accessor::NullTensorBindingToken&) noexcept :
+        LocalTensorAccessor(uint32_t{0}) {}
 
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
     [[nodiscard]] explicit LocalTensorAccessor(uint32_t bank_base_address) noexcept :
         mem_(static_cast<uintptr_t>(bank_base_address)) {
-        ASSERT(mem_.get_address() % alignof(T) == 0);
+        ASSERT(bank_base_address % alignof(T) == 0);
     }
 
     /** @brief Access the element at the given index (read or write).
@@ -82,22 +95,32 @@ public:
      */
     [[nodiscard]] T& operator[](uint32_t index) const { return mem_[index]; }
 
-    /** @brief L1 base address of the local region, as a raw uint32_t byte address.
+#if defined(COMPILE_FOR_TRISC)
+    // Returns the LLKOperand pointing to the base address of the local tensor accessor
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<tensor::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand operand() const noexcept {
+        return Operand{(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem_)) >> 4) - 1};
+    }
+#endif
+
+    /** @brief Lock num_elements elements starting at element `offset`.
      *
-     * This is the form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...).
-     *
-     * @return the local region's L1 base address (as uint32_t).
+     * @param offset       Index of the first element to lock.
+     * @param num_elements Number of T elements to lock.
      */
-    [[nodiscard]] uint32_t get_bank_base_address() const noexcept {
-        // static_cast narrows to uint32_t (uintptr_t is 64-bit on Gen2); an L1 address always fits.
-        return static_cast<uint32_t>(mem_.get_address());
+    [[nodiscard]] auto scoped_lock(uint32_t offset, uint32_t num_elements) const {
+        return (mem_ + offset).scoped_lock(num_elements);
     }
 
     /** @brief The underlying typed L1 view, for callers wanting the full CoreLocalMem<T> surface
-     * (pointer arithmetic, scoped_lock, comparisons, ...).
+     * (pointer arithmetic, comparisons, ...).
      *
-     * For element access, prefer operator[]; use this only when you need the raw underlying handle
-     * (e.g. local_mem().get_unsafe_ptr()).
+     * For element access, prefer operator[] within a scoped_lock() scope. Use this only when you
+     * need the underlying handle (e.g. pointer arithmetic, or a helper's CoreLocalMem overload).
      */
     // Returned by value: CoreLocalMem<T> is trivially copyable and pointer-sized.
     [[nodiscard]] CoreLocalMem<T> local_mem() const noexcept { return mem_; }
@@ -105,3 +128,37 @@ public:
 private:
     CoreLocalMem<T> mem_;
 };
+
+// A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC transaction (DM
+// kernels only): see internal/local_mem/noc_traits.h.
+#include "internal/local_mem/noc_traits.h"
+
+/**
+ * @brief Map a tensor sequence (tuple of TensorBindingToken) to an array of LocalTensorAccessor.
+ *
+ * A tuple of TensorBindingTokens is obtained from a TensorBindingSequence: host codegen emits
+ * `tensor::<sequence_name>` as `std::tuple` of the named binding tokens. This helper
+ * maps that sequence into a std::array of LocalTensorAccessors, one per token, in the same order.
+ * LocalTensorAccessor is only templated on the element type T, so all entries share one type.
+ *
+ * All tokens must refer to L1-resident tensors; a DRAM token fails at compile time. For DRAM or
+ * NOC address generation, use make_tensor_accessors instead (DM kernels only).
+ *
+ * Usage:
+ *   auto local_accessors = make_local_tensor_accessors<uint32_t>(tensor::inputs);
+ *   auto& acc = local_accessors[i];  // i-th LocalTensorAccessor in the sequence
+ *   auto& elem = acc[0];            // element in that accessor's local L1 region
+ *
+ * @tparam T Element type stored in each local region.
+ * @param tokens constexpr tuple of TensorBindingTokens from a TensorBindingSequence
+ *               (tensor::<sequence_name>).
+ * @return std::array<LocalTensorAccessor<T>, N>, one per token, in sequence order.
+ */
+template <typename T, typename... Tokens>
+std::array<LocalTensorAccessor<T>, sizeof...(Tokens)> make_local_tensor_accessors(const std::tuple<Tokens...>& tokens) {
+    return std::apply(
+        [](const auto&... toks) {
+            return std::array<LocalTensorAccessor<T>, sizeof...(Tokens)>{LocalTensorAccessor<T>(toks)...};
+        },
+        tokens);
+}

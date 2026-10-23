@@ -15,6 +15,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -48,10 +49,11 @@ void kernel_main() {
     constexpr uint32_t out_shard_size_bytes = get_compile_time_arg_val(9);           // full output shard size
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t in3_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t in3_num_pages = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t in3_page_size = get_compile_time_arg_val(10);
+    [[maybe_unused]] constexpr uint32_t in3_num_pages = get_compile_time_arg_val(11);
     constexpr uint32_t in3_block_tiles = get_compile_time_arg_val(12);  // K tiles for bias
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr auto bias_args = TensorAccessorArgs<13>();
 #endif
 
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
@@ -70,6 +72,17 @@ void kernel_main() {
     UnicastEndpoint remote;
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
+    const auto s3 = TensorAccessor(bias_args, static_cast<size_t>(in3_tensor_addr));
+    const uint32_t bias_tile_bytes = get_tile_size(cb_id_in3);
+    cb_in3.reserve_back(in3_block_tiles);
+    uint32_t in3_write_offset = 0;
+    for (uint32_t t = 0; t < in3_block_tiles; ++t) {
+        noc.async_read(
+            s3, cb_in3, bias_tile_bytes, {.page_id = t}, {.offset_bytes = in3_write_offset});
+        in3_write_offset += bias_tile_bytes;
+    }
+    noc.async_read_barrier();
+    cb_in3.push_back(in3_block_tiles);
 #endif
 
     // Process each batch
@@ -103,19 +116,6 @@ void kernel_main() {
             cb_in1.push_back(in1_block_num_tiles);
             l1_read_addr_in1 += in1_block_size_bytes;
         }
-
-#ifdef FUSE_BIAS
-        // Read bias for this batch (if fused)
-        cb_in3.reserve_back(in3_block_tiles);
-        noc.async_read(
-            dram_bank,
-            cb_in3,
-            in3_block_tiles * get_tile_size(cb_id_in3),
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_in3.push_back(in3_block_tiles);
-#endif
 
         // Wait for compute to finish this batch
         cb_out.wait_front(out_block_num_tiles);

@@ -62,7 +62,7 @@ namespace ckernel {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_init(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
@@ -78,7 +78,7 @@ ALWI void reduce_init(
     state_configure(icb, icb_scaler, ocb, call_line);
 #endif
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler)));
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
@@ -98,15 +98,21 @@ ALWI void reduce_init(
  */
 // clang-format on
 ALWI void reduce_uninit(std::uint32_t icb = 0) {
-#ifndef ARCH_QUASAR
-#ifdef ARCH_BLACKHOLE
+#ifdef ARCH_QUASAR
+    // (Quasar) A column reduce over an MxFp4 operand overrides that operand's unpacker OUT_DATA_FORMAT
+    // and ALU src format to MxFp4_2x_B in reduce_init, diverging from the op-agnostic
+    // unpack_dst_format[] table. That override persists (non-reduce inits never restore OUT_DATA_FORMAT,
+    // and reconfig_data_format is skipped for a same-format operand), so restore it here before the
+    // next op. No-op unless icb is an MxFp4 operand.
+    UNPACK((llk_unpack_AB_reduce_uninit(icb)));
+    MATH((llk_math_reduce_uninit(icb)));
+#elif defined(ARCH_BLACKHOLE)
     MATH((llk_math_reduce_uninit()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
     // See _llk_math_reduce_init_ for more details
     MATH((llk_math_reduce_uninit(icb)));
-#endif
 #endif
     PACK((llk_pack_reduce_mask_clear()));
 }
@@ -145,11 +151,11 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
@@ -186,7 +192,7 @@ ALWI void reduce_tile(
  * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
@@ -195,7 +201,8 @@ ALWI void reduce_block(
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        reduce_tile<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
     }
 }
 
@@ -226,7 +233,7 @@ ALWI void reduce_block(
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
@@ -235,7 +242,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(1) : MAX_NUM_FACES_R_DIM,
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, tensor_shape)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
 #endif
@@ -253,10 +260,10 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
  * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, tensor_shape)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
 #endif

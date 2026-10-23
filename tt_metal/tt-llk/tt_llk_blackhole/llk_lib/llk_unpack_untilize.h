@@ -17,7 +17,6 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -81,18 +80,6 @@ inline void _llk_unpack_untilize_mop_config_()
  */
 inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    llk::san::unpack_operand_check(
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        unpack_dst_format,
-        llk::san::IGNORE,
-        face_r_dim,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
-
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
@@ -184,8 +171,6 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
 template <bool first_pass = true>
 inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const std::uint32_t block_tile_cols)
 {
-    llk::san::operation_check<llk::san::Operation::UnpackUntilize>();
-
     std::uint32_t rem_blocks_in_row = block_tile_cols;
 
     // Program srcA and srcB base addresses
@@ -227,7 +212,7 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
                 // Run MOP
                 TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
-                TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;

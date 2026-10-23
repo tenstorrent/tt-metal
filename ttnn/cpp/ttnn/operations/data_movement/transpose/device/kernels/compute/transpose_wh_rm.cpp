@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+// A Metal 2.0 port of this kernel's non-sharded path exists alongside it as
+// transpose_wh_rm_metal2.cpp. Ops still on the legacy host API bind this copy (the sharded
+// path below is compiled only from here); ops on Metal 2.0 bind the fork. Keep the two in
+// sync when changing the shared compute logic.
+
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -18,8 +23,9 @@ template <
     uint32_t row_size,
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
-    uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+    uint32_t dfb_out,
+    typename DFB>
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DFB& dfb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -64,8 +70,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t dfb_out, typename DFB>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& dfb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -135,7 +141,8 @@ void kernel_main() {
     DataflowBuffer dfb_tilize_buf(cb_tilize);
     DataflowBuffer dfb_out(cb_out_idx);
 
-    unary_op_init_common(cb_in, cb_out_idx);
+    compute_kernel_hw_startup(cb_in, cb_out_idx);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full

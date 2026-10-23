@@ -48,6 +48,7 @@ from tqdm.auto import tqdm
 import ttml
 import ttnn
 
+from ttml.common.utils import no_grad
 from ttml.models.qwen3.kv_cache import KVCache
 from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
@@ -75,13 +76,17 @@ def _causal_mask(seq_len, device):
 create_causal_mask_tensor = _causal_mask  # public alias used by gradients.py
 
 
-def _sample_logits_mask(orig_vocab, padded_vocab, device):
-    """Mask for padded vocabulary entries (subtractive: 0=valid, 1e4=padding)."""
+def _sample_logits_mask(orig_vocab, padded_vocab, device, dtype=ttnn.bfloat16):
+    """Mask for padded vocabulary entries (subtractive: 0=valid, 1e4=padding).
+
+    ``dtype`` should match the logits the mask is applied to -- the fused sampler typecasts a
+    mismatched mask on every call. Pass the dtype of the actual logits tensor to skip that.
+    """
     if orig_vocab >= padded_vocab:
         return None
-    mask = torch.zeros((1, 1, 1, padded_vocab), dtype=torch.bfloat16)
+    mask = torch.zeros((1, 1, 1, padded_vocab), dtype=torch.float32)
     mask[:, :, :, orig_vocab:] = 1e4
-    return _to_device_tiled(mask, device)
+    return _to_device_tiled(mask, device, dtype)
 
 
 # =====================================================================
@@ -254,6 +259,7 @@ def generate_hf(hf_model, tokenizer, all_prompt_tokens, max_tokens, temperature=
 # =====================================================================
 
 
+@no_grad()
 def generate_ttml(
     model,
     config,
@@ -277,7 +283,6 @@ def generate_ttml(
     them to full vocab before sampling or collection — this is simpler and
     avoids the distributed argmax+Gumbel approximation.
     """
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
 
     if isinstance(all_prompt_tokens[0], int):
@@ -339,8 +344,9 @@ def generate_ttml(
             )
         else:
             if step == 0:
-                # logits is post-all_gather here, so dim 3 is the full padded vocab.
-                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device)
+                # logits is post-all_gather here, so dim 3 is the full padded vocab, and its
+                # dtype is the one the mask should be built in.
+                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device, logits.get_value().dtype)
             tokens = _sample_on_device(
                 logits,
                 pred_positions,
