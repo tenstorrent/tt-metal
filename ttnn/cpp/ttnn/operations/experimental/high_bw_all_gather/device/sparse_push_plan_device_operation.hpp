@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -29,8 +30,8 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 //   [32, 32 + num_devices)   rows this requester needs from each owner
 //   [64, 64 + num_devices)   of those, rows in blocks before the split block (the chunk start): the prefix part
 //   [128, 128 + W)           bitmap of needed rows, W = max_rows / 32
-//   prefix_off               one byte per bitmap word: set bits before it within its block
-//   counts_off               set bits per block, num_blocks = max_rows / stripe_chunk
+// It holds only what the owners' push reads, since every chip all-gathers every table. The plan op's own image of it
+// carries the block counts after the bitmap (counts_off), which stay on chip.
 struct SparsePushPlanLayout {
     static constexpr uint32_t kMagic = 0x5350504Cu;
     static constexpr uint32_t kOwnerOff = 32;
@@ -40,8 +41,8 @@ struct SparsePushPlanLayout {
 
     uint32_t bitmap_words = 0;
     uint32_t num_blocks = 0;
-    uint32_t prefix_off = 0;
-    uint32_t counts_off = 0;
+    uint32_t counts_off = 0;   // words, in the plan op's image only
+    uint32_t image_words = 0;  // the plan op's image: table words, then the block counts
     uint32_t pages = 0;
 
     static SparsePushPlanLayout make(uint32_t max_rows, uint32_t stripe_chunk) {
@@ -49,9 +50,9 @@ struct SparsePushPlanLayout {
         SparsePushPlanLayout l;
         l.bitmap_words = max_rows / 32;
         l.num_blocks = max_rows / stripe_chunk;
-        l.prefix_off = round_up(kBitmapOff + l.bitmap_words, 16);
-        l.counts_off = round_up(l.prefix_off + (l.bitmap_words + 3) / 4, 16);
-        l.pages = round_up(l.counts_off + l.num_blocks, kPageWords) / kPageWords;
+        l.pages = round_up(kBitmapOff + l.bitmap_words, kPageWords) / kPageWords;
+        l.counts_off = round_up(kBitmapOff + l.bitmap_words, 16);
+        l.image_words = std::max(l.pages * kPageWords, l.counts_off + l.num_blocks);
         return l;
     }
 };

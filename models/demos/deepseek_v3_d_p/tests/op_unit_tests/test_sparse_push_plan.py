@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """ttnn.experimental.sparse_push_plan: the on-device sparse KV push plan must rewrite the indices to the compact slots
-a host reference computes, bit-for-bit, and its table must hold the bitmap and counts the owners read."""
+a host reference computes, bit-for-bit, and its table must hold the bitmap and per-owner counts the owners read."""
 
 from pathlib import Path
 
@@ -20,11 +20,9 @@ OWNER_OFF, OWNER_PREFIX_OFF, BITMAP_OFF, PAGE_WORDS = 32, 64, 128, 1024
 
 
 def _layout(max_rows, sc):
+    """(bitmap words, blocks, table pages): the table holds the header and the bitmap."""
     w = max_rows // 32
-    nb = max_rows // sc
-    prefix_off = -(-(BITMAP_OFF + w) // 16) * 16
-    counts_off = -(-(prefix_off + (w + 3) // 4) // 16) * 16
-    return w, nb, prefix_off, counts_off
+    return w, max_rows // sc, -(-(BITMAP_OFF + w) // PAGE_WORDS)
 
 
 def _compact_reference(indices, num_devices, stripe_chunk, pages_per_packet, banks):
@@ -122,7 +120,8 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
 
     got_compact = host(compact).reshape(n_dev, rows, topk).astype(np.int64)
     tbl = host(table).reshape(n_dev, -1)
-    w, nb, prefix_off, counts_off = _layout(max_rows, sc)
+    w, nb, pages = _layout(max_rows, sc)
+    assert tuple(table.shape) == (1, 1, pages, PAGE_WORDS), f"table shape {table.shape}"
     bad = []
     for d in range(n_dev):
         need = np.zeros(max_rows, dtype=bool)
@@ -142,7 +141,6 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
             "owner_prefix": tbl[d, 4] == sb
             and np.array_equal(tbl[d, OWNER_PREFIX_OFF : OWNER_PREFIX_OFF + n_dev], want_before),
             "bitmap": np.array_equal(tbl[d, BITMAP_OFF : BITMAP_OFF + aw], want_bits[:aw].astype(np.uint32)),
-            "counts": np.array_equal(tbl[d, counts_off : counts_off + ab], want_counts[:ab]),
             "compact": np.array_equal(got_compact[d], want_compact[d]),
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
