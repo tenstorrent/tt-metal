@@ -789,9 +789,8 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
     return src_format == DataFormat.UInt16 and dst_format == DataFormat.Float32
 
 
-# The uint16 endpoints and the bit-15 boundary. 32768 and 65535 are the ones that separate
-# an unsigned load from a signed one: Quasar's signed 16-bit format is sign-magnitude, so a
-# signed read gives -0.0 for 32768 and -32767 for 65535.
+# 32768 and 65535 catch a signed load: Quasar's signed 16-bit format is sign-magnitude,
+# so a signed read gives -0.0 and -32767 instead.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 
 
@@ -1577,11 +1576,7 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
 
 
 def _uint16_to_fp32_tile() -> tuple:
-    """Repeat the uint16 boundary seeds across one tile, with the fp32 oracle.
-
-    32768 and 65535 stay positive only if the load is unsigned. Quasar's signed 16-bit
-    format is sign-magnitude, so a signed read gives -0.0 for 32768 and -32767 for 65535.
-    """
+    """Repeat the uint16 boundary seeds across one tile, with the fp32 oracle."""
     element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
     repeats = math.ceil(element_count / len(_UINT16_TO_FP32_SEEDS))
     inputs = list(_UINT16_TO_FP32_SEEDS) * repeats
