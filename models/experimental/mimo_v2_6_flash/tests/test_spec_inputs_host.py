@@ -138,8 +138,8 @@ def test_verify_packed_passes(seed):
         check_verify(tokens, positions)
 
 
-def test_verify_rejects_positions_below_idle():
-    with pytest.raises(AssertionError):
+def test_verify_rejects_positions_below_idle(expect_error):
+    with expect_error(AssertionError, "positions are >= -1"):
         pack_verify(torch.zeros(B, dtype=torch.int32), torch.full((B,), -2, dtype=torch.int32))
 
 

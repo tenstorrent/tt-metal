@@ -526,4 +526,3 @@ Expected per step: the 2.4 ms logits readback and the 6.1 ms host walk go, and t
 fills the plugin's [16, 4, 152k] logits buffer; the accept trace adds the sampler head per pass (the decode head takes
 0.164 ms) and a 128-byte read. Roughly 40 -> 30-32 ms per step, TPOT ~11.5-12 ms at 2.6 accepted tokens: about a
 greedy MTP step plus the accept head. The MTP draft (8.2 ms) and the gap (3.2 ms) are unchanged.
-

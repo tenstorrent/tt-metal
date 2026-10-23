@@ -5,8 +5,8 @@
 the layouts and the host mirror of kernels/mtp_history.cpp).
 
 MtpHistory keeps, per decode slot that may speculate, the target's final normed hidden of its last HISTORY_ROWS
-positions with their positions and input tokens: persistent buffers (made in TtMiMoMTP.setup_cache, before any
-capture) written by one-core steps of kernels/mtp_history.cpp:
+positions (the MTP window and a verify pass) with their positions and input tokens: persistent buffers (made in
+TtMiMoMTP.setup_cache, before any capture) written by one-core steps of kernels/mtp_history.cpp:
 
 * ``stage`` + ``decode``: in the decode traces (TtMiMoModel.capture_decode_trace), a copy of the step's input tokens
   at its start, then the slots' final norm rows (untilized) at its end;
@@ -22,7 +22,7 @@ the whole ring by one paged_fill_cache each (TtMiMoAttention.fill_kv_rows): no a
 Cost: per decode step one 8-row copy and an untilize of the final norm's tile ([32, 4096] bf16) and one kernel
 (~10-20 us against a ~13 ms step); per verify pass one kernel; per prefill chunk a final norm and untilize of its
 rows and one kernel; per backfill (once per transition) 3 x (256-row eh_proj, qkv projection, RoPE and 2 fills), about
-1 ms on device (to measure). Memory per chip: SPEC_SLOTS x HISTORY_ROWS x hidden bf16 rows (4 MB), a 4 KB page, the
+1 ms on device (to measure). Memory per chip: SPEC_SLOTS x HISTORY_ROWS x hidden bf16 rows (4.3 MB), a 4 KB page, the
 backfill's inputs (~6 KB) and the 2 x 256-row cos / sin tails with compact RoPE tables.
 """
 
@@ -35,6 +35,7 @@ from ..reference.mtp_backfill import (
     BLOCK,
     HIST_WORDS,
     HISTORY_ROWS,
+    MTP_WINDOW,
     TABLE_WORDS,
     backfill_row,
     pack_writes,
@@ -115,6 +116,7 @@ class MtpHistory:
             CHAIN_HSLOTS,
             TABLE_WORDS,
             CB_SCRATCH,
+            MTP_WINDOW,
         ]
         scratch = _align64(HIST_WORDS * 4) + _align64(self.row_bytes) + extra
         kernel = _kernel("mtp_history.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())

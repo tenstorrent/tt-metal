@@ -111,6 +111,8 @@ def check_semantics(logits, vp, spec_sampling, out):
         slots = sorted((c, s) for s, r, c in vp.answers if r == row)
         n = len(slots) - 1
         t, k, p = (float(spec_sampling[x][row]) for x in ("temperature", "top_k", "top_p"))
+        # The plugin's [B, K + 2] uniforms: column 0 the bonus, 1..n the request's accept draws, K + 1 the correction
+        # (K = MAX_DRAFTS, the block's draft columns, whatever the request's n).
         u = [float(x) for x in spec_sampling["uniforms"][row]]
         drafts = [vp.tokens[s] for _, s in slots[1:]]
         want, want_tokens, near = ref_walk(
@@ -120,7 +122,7 @@ def check_semantics(logits, vp, spec_sampling, out):
             bool(spec_sampling["greedy"][row]),
             q24(u[0]),
             [q24(x) for x in u[1 : 1 + n]],
-            q24(u[n + 1]),
+            q24(u[MAX_DRAFTS + 1]),
         )
         if near:
             near_edges += 1
