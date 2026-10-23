@@ -47,7 +47,13 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     autograd::GradFunction grad = [tensor, gamma, out, rms_a]() {
         auto dL_dout = out->get_grad();
 
-        auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout);
+        auto grads = ttml::metal::rmsnorm_bw(
+            tensor->get_value(),
+            gamma->get_value(),
+            rms_a,
+            dL_dout,
+            tensor->get_requires_grad(),
+            gamma->get_requires_grad());
 
         if (grads.size() != 2U) {
             throw std::runtime_error("rmsnorm_bw returned unexpected number of gradients");

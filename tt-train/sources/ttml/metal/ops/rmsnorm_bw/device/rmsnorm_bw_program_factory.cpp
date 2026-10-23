@@ -58,6 +58,8 @@ constexpr uint32_t kNumZeroTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
+const std::string kComputeGradGammaDefineKey = "COMPUTE_GRAD_GAMMA";
+const std::string kComputeGradInputDefineKey = "COMPUTE_GRAD_INPUT";
 
 }  // namespace
 
@@ -75,7 +77,9 @@ bool fits_in_l1_check(
     const uint32_t block_size,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
-    ttnn::IDevice* device) {
+    ttnn::IDevice* device,
+    const bool compute_grad_input,
+    const bool compute_grad_gamma) {
     const uint32_t twice_block_size = 2U * block_size;
 
     // Move the memory check to a separate function. And just return boolean whether it fits in L1 or not.
@@ -86,15 +90,18 @@ bool fits_in_l1_check(
     const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
     const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
+    // Gamma is only used for dL_da.
+    const uint64_t gamma_memory = compute_grad_input ? Wt * bfloat16_single_tile_size_bytes : 0U;
     const uint64_t rms_a_memory = kNumRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
     const uint64_t zero_memory = kNumZeroTiles * bfloat16_single_tile_size_bytes;
     // Memory for output tensors. Both output CBs are drained block-by-block by the writer, so they are
     // double-buffered (twice_block_size), independent of Wt.
-    const uint64_t dL_da_memory = twice_block_size * bfloat16_single_tile_size_bytes;
-    const uint64_t dL_dgamma_components_memory = twice_block_size * bfloat16_single_tile_size_bytes;
+    // An output CB is only created when its grad is requested.
+    const uint64_t dL_da_memory = compute_grad_input ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
+    const uint64_t dL_dgamma_components_memory =
+        compute_grad_gamma ? twice_block_size * bfloat16_single_tile_size_bytes : 0U;
     // Memory for intermediate computations
     const uint64_t recip_rms_a_bcasted_memory = kNumRecipRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t scale_memory = kNumScaleTiles * float32_single_tile_size_bytes;
@@ -179,8 +186,17 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    const bool everything_fits_in_l1 =
-        fits_in_l1_check(Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device);
+    const bool compute_grad_input = args.compute_grad_input;
+    const bool compute_grad_gamma = args.compute_grad_gamma;
+
+    const bool everything_fits_in_l1 = fits_in_l1_check(
+        Wt,
+        block_size,
+        bfloat16_single_tile_size_bytes,
+        float32_single_tile_size_bytes,
+        device,
+        compute_grad_input,
+        compute_grad_gamma);
 
     const uint32_t num_input_tiles =
         (everything_fits_in_l1) ? Wt : twice_block_size;  // If everything fits in L1, read Wt tiles, else read 2x block
@@ -194,8 +210,11 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    // Gamma is only read for dL_da.
+    if (compute_grad_input) {
+        [[maybe_unused]] auto cb_gamma = create_circular_buffer(
+            program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    }
     [[maybe_unused]] auto cb_rms_a = create_circular_buffer(
         program, all_cores, kRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsATiles);
     [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
@@ -207,10 +226,20 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     // Output CBs are produced and drained one block at a time (see writer: "interleave the writes to avoid waiting
     // for the entire Wt tiles at once"), so they only need double-buffering, not a full row. Sizing them to
     // num_input_tiles (= Wt on the fits-in-L1 path) overflows L1 for large hidden dims (e.g. 32B, Wt=160).
-    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
-        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
-        program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    // An output CB is only created when its grad is requested.
+    if (compute_grad_input) {
+        [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
+            program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    }
+    if (compute_grad_gamma) {
+        [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
+            program,
+            all_cores,
+            kDLdgammaComponentsCbIndex,
+            data_format,
+            bfloat16_single_tile_size_bytes,
+            twice_block_size);
+    }
     [[maybe_unused]] auto cb_recip_rms_a_bcasted = create_circular_buffer(
         program, all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles);
     [[maybe_unused]] auto cb_scale = create_circular_buffer(
@@ -243,17 +272,24 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
         enchantum::to_string(dLdout_buffer->buffer_type()));
 
-    auto* dL_da_buffer = output[0].buffer();
-    TT_FATAL(
-        dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        enchantum::to_string(dL_da_buffer->buffer_type()));
+    // An output is nullopt when its grad is not requested.
+    tt::tt_metal::Buffer* dL_da_buffer = nullptr;
+    if (compute_grad_input) {
+        dL_da_buffer = output[0].value().buffer();
+        TT_FATAL(
+            dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "dL_da buffer must be in DRAM. dL_da buffer of type {}",
+            enchantum::to_string(dL_da_buffer->buffer_type()));
+    }
 
-    auto* dL_dgamma_components_buffer = output[1].buffer();
-    TT_FATAL(
-        dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
-        enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
+    tt::tt_metal::Buffer* dL_dgamma_components_buffer = nullptr;
+    if (compute_grad_gamma) {
+        dL_dgamma_components_buffer = output[1].value().buffer();
+        TT_FATAL(
+            dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
+            enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
+    }
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -261,6 +297,12 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     }
     if (everything_fits_in_l1) {
         defines[kEverythingFitsInL1DefineKey] = "1";
+    }
+    if (compute_grad_input) {
+        defines[kComputeGradInputDefineKey] = "1";
+    }
+    if (compute_grad_gamma) {
+        defines[kComputeGradGammaDefineKey] = "1";
     }
 
     RMSNormBackwardKernels kernels;
@@ -272,8 +314,17 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
+    // A skipped output gets placeholder args so the writer's accessor offsets do not depend on the flags.
+    if (compute_grad_input) {
+        tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+    }
+    if (compute_grad_gamma) {
+        tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+    }
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -326,12 +377,15 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
                  dLdout_buffer->address(),
                  num_rows,
                  start_row});
-            // Writer kernel: (da_addr, dgamma_addr, num_rows, offset)
+            // Writer kernel: (da_addr, dgamma_addr, num_rows, offset). A skipped output's address is 0.
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {dL_da_buffer->address(), dL_dgamma_components_buffer->address(), num_rows, start_row});
+                {dL_da_buffer != nullptr ? dL_da_buffer->address() : 0U,
+                 dL_dgamma_components_buffer != nullptr ? dL_dgamma_components_buffer->address() : 0U,
+                 num_rows,
+                 start_row});
         });
 
     // -------------------------------------------------------------------------
@@ -367,8 +421,9 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
     auto* rms_buffer = tensor_args.rms.buffer();
     auto* dLdout_buffer = tensor_args.dL_dout.buffer();
 
-    auto* da_buffer = output[0].buffer();
-    auto* dgamma_buffer = output[1].buffer();
+    // An output is nullopt when its grad is not requested.
+    auto* da_buffer = operation_attributes.compute_grad_input ? output[0].value().buffer() : nullptr;
+    auto* dgamma_buffer = operation_attributes.compute_grad_gamma ? output[1].value().buffer() : nullptr;
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, rmsnorm_bw_reader_kernel_id);
@@ -387,8 +442,12 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
         // Update output buffers for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDaBufferIdx] = da_buffer->address();
-            runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
+            if (da_buffer != nullptr) {
+                runtime_args[kDaBufferIdx] = da_buffer->address();
+            }
+            if (dgamma_buffer != nullptr) {
+                runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
+            }
         }
     });
 }
