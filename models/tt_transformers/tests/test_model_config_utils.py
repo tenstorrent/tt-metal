@@ -241,7 +241,9 @@ def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n
 
 @pytest.mark.parametrize("num_chunks", [1, 2, 3, 4])
 @pytest.mark.parametrize("num_devices", [1, 2, 4, 8])
-@pytest.mark.parametrize(("grid_x", "grid_y", "wormhole"), [(8, 8, True), (11, 10, False), (12, 10, False)])
+@pytest.mark.parametrize(
+    ("grid_x", "grid_y", "wormhole"), [(8, 8, True), (11, 10, False), (12, 10, False), (13, 10, False)]
+)
 def test_xattn_kv_prefill_mem_cfg_fits_the_device_grid(monkeypatch, grid_x, grid_y, wormhole, num_devices, num_chunks):
     monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: wormhole)
     args = SimpleNamespace(
@@ -249,7 +251,7 @@ def test_xattn_kv_prefill_mem_cfg_fits_the_device_grid(monkeypatch, grid_x, grid
     )
     args.find_grid = MethodType(ModelArgs.find_grid, args)
     seq_len = num_chunks * 1632  # Llama-3.2-11B-Vision: nearest_32(1601) tokens per chunk
-    mem_cfg = ModelArgs.get_xattn_kv_prefill_mem_cfg(args, seq_len)
+    mem_cfg = ModelArgs.get_xattn_kv_prefill_mem_config(args, seq_len)
     shard_spec = mem_cfg.shard_spec
     size = shard_spec.grid.bounding_box().grid_size()
     assert size.x <= grid_x and size.y <= grid_y

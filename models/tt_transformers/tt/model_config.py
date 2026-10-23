@@ -1189,7 +1189,7 @@ class ModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = self.get_xattn_kv_prefill_mem_cfg
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = self.get_xattn_kv_prefill_mem_config
 
             if self.is_multimodal:
                 self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
@@ -3823,7 +3823,7 @@ class ModelArgs:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
-    def get_xattn_kv_prefill_mem_cfg(self, seq_len):
+    def get_xattn_kv_prefill_mem_config(self, seq_len):
         # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
         # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
         M = max(1, self.n_kv_heads // self.num_devices) * seq_len
