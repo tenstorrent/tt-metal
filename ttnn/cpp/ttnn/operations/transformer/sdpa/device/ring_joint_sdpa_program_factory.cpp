@@ -1055,12 +1055,11 @@ struct RingJointQWorkPlan {
     std::vector<CoreWork> core_work;
     std::vector<std::vector<HeadSegmentRef>> head_segments;  // per query head; empty without a head chain
     std::vector<ChainConfig> head_chain_configs;             // per core; empty without a head chain
-    bool has_multi_core_head_chains = false;
     bool head_mcast_eligible = false;  // every multi-core head chain is one row, gap-free, uniform q count
     bool head_mcast_enabled = false;   // the row-wide multicast configuration was applied
 };
 
-enum class HeadMcastPolicy { IfEligible, Never, Required };
+enum class HeadMcastPolicy { IfEligible, Never };
 
 // Describe a core's flat Q range for K/V chain construction.
 void append_head_work(
@@ -1381,19 +1380,7 @@ RingJointQWorkPlan build_q_work_plan(
 
         const auto candidates = head_chain_mcast_candidates(plan);
         plan.head_mcast_eligible = candidates.has_value() && !candidates->empty();
-        plan.has_multi_core_head_chains = !candidates.has_value() || !candidates->empty();
-        bool apply_mcast = false;
-        switch (mcast_policy) {
-            case HeadMcastPolicy::IfEligible: apply_mcast = plan.head_mcast_eligible; break;
-            case HeadMcastPolicy::Never: apply_mcast = false; break;
-            case HeadMcastPolicy::Required:
-                TT_FATAL(
-                    plan.head_mcast_eligible || !plan.has_multi_core_head_chains,
-                    "ring_joint head multicast was pinned on but the split at {} Q chunks per head is ineligible",
-                    num_q_chunks);
-                apply_mcast = plan.head_mcast_eligible;
-                break;
-        }
+        const bool apply_mcast = mcast_policy == HeadMcastPolicy::IfEligible && plan.head_mcast_eligible;
         if (apply_mcast) {
             apply_head_chain_mcast(plan, *candidates);
             plan.head_mcast_enabled = true;
@@ -1405,36 +1392,6 @@ RingJointQWorkPlan build_q_work_plan(
             candidates.has_value() ? candidates->size() : 0u);
     }
     return plan;
-}
-
-// dynamic_local_n: the reader's multicast flag is compile-time, so one value must hold for every length the
-// program can serve. Pinned on only when the split at every chunk count up to the gather capacity is eligible.
-bool head_mcast_uniform_over_capacity(
-    const std::vector<CoreCoord>& physical_cores,
-    uint32_t B,
-    uint32_t NH,
-    uint32_t capacity_num_q_chunks,
-    bool enable_kv_chains,
-    bool use_head_chain,
-    bool build_kv_chains) {
-    bool any_chains = false;
-    for (uint32_t num_q_chunks = 1; num_q_chunks <= capacity_num_q_chunks; ++num_q_chunks) {
-        const auto plan = build_q_work_plan(
-            physical_cores,
-            B,
-            NH,
-            num_q_chunks,
-            /*enable_zigzag_balancing=*/false,
-            enable_kv_chains,
-            use_head_chain,
-            build_kv_chains,
-            HeadMcastPolicy::Never);
-        if (plan.has_multi_core_head_chains && !plan.head_mcast_eligible) {
-            return false;
-        }
-        any_chains = any_chains || plan.has_multi_core_head_chains;
-    }
-    return any_chains;
 }
 
 std::vector<CoreCoord> sdpa_physical_cores(MeshDevice* device, CoreCoord grid_size) {
@@ -2680,18 +2637,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     auto* const joint_out_buf = joint_output_tensor.buffer();
     auto* const stats_buf = stats_output_tensor.buffer();
 
-    /**
-     * Per-core Q work split and the per-head store-and-forward chains (build_q_work_plan). The multicast
-     * flag the reader compiles in follows the split; with dynamic_local_n it is pinned for every length first.
-     */
+    // Per-core Q work split and the per-head store-and-forward chains (build_q_work_plan). The reader's multicast
+    // flag is compile-time, so dynamic_local_n keeps the chains unicast at every length it serves.
     const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(device, grid_size);
-    HeadMcastPolicy head_mcast_policy = HeadMcastPolicy::IfEligible;
-    if (dynamic_local_n) {
-        head_mcast_policy = head_mcast_uniform_over_capacity(
-                                physical_cores, B, NH, capacity_num_q_chunks, enable_kv_chains, use_head_chain, build_kv_chains)
-                                ? HeadMcastPolicy::Required
-                                : HeadMcastPolicy::Never;
-    }
+    const HeadMcastPolicy head_mcast_policy = dynamic_local_n ? HeadMcastPolicy::Never : HeadMcastPolicy::IfEligible;
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
     RingJointQWorkPlan q_work_plan;
     if (ksplit_count > 1) {
@@ -3920,16 +3869,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 // dynamic_local_n cache hit: the per-core words that follow the per-chip length are rebuilt only when it
 // differs from the length the program last ran at (the memo is the reader's common runtime word).
 void apply_dynamic_local_n_runtime_args(
-    Program& program,
-    const RingJointSDPAParams& args,
-    const RingJointSDPAInputs& tensor_args,
-    std::optional<bool>& head_mcast_pin) {
+    Program& program, const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const uint32_t n_local_tiles = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
     const bool has_logical_length_tensor = tensor_args.has_logical_n_tensor() || tensor_args.has_logical_l_tensor();
     const uint32_t reader_slot = ring_joint::dynamic_local_n_reader_common_arg(
         tensor_args.has_metadata(), has_logical_length_tensor, tensor_args.has_kv_valid_end());
     const uint32_t writer_slot = ring_joint::dynamic_local_n_writer_common_arg(
-        tensor_args.kv_pad_from_metadata(args.kv_stripe_split), has_logical_length_tensor, tensor_args.has_kv_valid_end());
+        tensor_args.kv_pad_from_metadata(args.kv_stripe_split),
+        has_logical_length_tensor,
+        tensor_args.has_kv_valid_end());
     auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelIndex);
     TT_FATAL(reader_slot < reader_common.size(), "RingJoint dynamic_local_n common arg missing on the reader");
     if (reader_common[reader_slot] == n_local_tiles) {
@@ -3947,21 +3895,13 @@ void apply_dynamic_local_n_runtime_args(
     const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const bool build_kv_chains = enable_kv_chains && B == 1;
+    // The shared-K batch chain (one K head per chip) is host-built per length and is not rewritten here.
+    TT_FATAL(
+        !(build_kv_chains && ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK)),
+        "dynamic_local_n cannot serve a new length through the shared-K batch chain (one K head per chip)");
     const uint32_t Sq_chunk_t = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
-    const uint32_t capacity_local_Nt =
-        tensor_args.gathered_k.padded_shape()[2] / tt::constants::TILE_HEIGHT / args.ring_size;
     const uint32_t num_q_chunks = tt::div_up(n_local_tiles, Sq_chunk_t);  // no joint chunks on this path
     const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(tensor_args.input_q.device(), layout.grid_size);
-    if (!head_mcast_pin.has_value()) {
-        head_mcast_pin = head_mcast_uniform_over_capacity(
-            physical_cores,
-            B,
-            NH,
-            tt::div_up(capacity_local_Nt, Sq_chunk_t),
-            enable_kv_chains,
-            use_head_chain,
-            build_kv_chains);
-    }
     const RingJointQWorkPlan plan = build_q_work_plan(
         physical_cores,
         B,
@@ -3971,7 +3911,7 @@ void apply_dynamic_local_n_runtime_args(
         enable_kv_chains,
         use_head_chain,
         build_kv_chains,
-        *head_mcast_pin ? HeadMcastPolicy::Required : HeadMcastPolicy::Never);
+        HeadMcastPolicy::Never);  // the reader was compiled unicast
 
     auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
     auto& writer_grid_args = GetRuntimeArgs(program, kWriterKernelIndex);
@@ -4004,7 +3944,8 @@ void apply_dynamic_local_n_runtime_args(
         auto& compute_args = compute_grid_args[core.x][core.y];
         write_runtime_arg(compute_args, 0, work.global_q_start, "compute.global_q_start");
         write_runtime_arg(compute_args, 1, global_q_end, "compute.global_q_end");
-        write_runtime_arg(compute_args, compute_static_mcast_q_count, work.global_q_count, "compute.static_mcast_q_count");
+        write_runtime_arg(
+            compute_args, compute_static_mcast_q_count, work.global_q_count, "compute.static_mcast_q_count");
     }
 
     // The gather's per-input slab height and page count: words 1 and 6 of every worker's tensor descriptor.
@@ -4075,7 +4016,6 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
-    std::optional<bool> head_mcast_pin;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -4086,7 +4026,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
         apply_all_gather_semaphore_addresses(program, args);
         if (args.dynamic_local_n) {
-            apply_dynamic_local_n_runtime_args(program, args, tensor_args, head_mcast_pin);
+            apply_dynamic_local_n_runtime_args(program, args, tensor_args);
         }
     }
 }
