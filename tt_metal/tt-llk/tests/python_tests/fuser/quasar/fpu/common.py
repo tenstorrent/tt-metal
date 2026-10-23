@@ -37,11 +37,18 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
-    math_fmt = new_math.cpp_enum_value
+    # Quasar matches tt-metal: each FPU op init programs the ALU itself via math_alu_cfg_init,
+    # so the sentinel only tracks the format here and emits nothing.
+    return ""
+
+
+def configure_alu_cfg(config: "GlobalConfig", cfg_type: str) -> str:
+    """Emit the ALU format config an FPU op init owns, as every metal llk_api op init does."""
+    math_fmt = config.sentinel._math_format.cpp_enum_value
+    dest_acc = config.dest_acc.cpp_enum_value
     return (
-        f"_configure_alu_formats_<{dest_acc}>(\n"
-        f"    {math_fmt}, {math_fmt},\n"
-        f"    _is_src_fmt_int32_dest_compatible_({math_fmt}) && {dest_acc}, DataFormat::Invalid\n"
+        f"_configure_alu_cfg_<{cfg_type}, {dest_acc}>(\n"
+        f"    {math_fmt}, {math_fmt}\n"
         f");\n"
     )
 

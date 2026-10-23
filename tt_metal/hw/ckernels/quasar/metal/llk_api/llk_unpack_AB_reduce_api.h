@@ -66,7 +66,6 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
  * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
  *
  * Both reduce operands of an MxFp4 reduce use operandA's table format, so both unpackers are restored from it.
- * Pair with @ref llk_math_reduce_uninit.
  */
 inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);

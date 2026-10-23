@@ -94,7 +94,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
  * (should_reconfig_src_reg_df keys on the generated table, which never saw the 2x override).
  *
  * @note Call after all matmuls, before initializing the next op, whenever an MxFp4 matmul operand is
- * reused by a non-matmul op in the same kernel. Pair with @ref llk_math_matmul_uninit (via mm_uninit).
+ * reused by a non-matmul op in the same kernel.
  * Same UNP mapping as init: In0(operandA)->SrcB->UNP_B, In1(operandB)->SrcA->UNP_A.
  */
 inline void llk_unpack_AB_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
