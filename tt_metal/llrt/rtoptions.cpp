@@ -768,7 +768,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Do not halt a Blackhole Tensix BRISC on an L1 ECC error.
         // Default: false (halt enabled on Blackhole silicon)
         // Usage: export TT_METAL_DISABLE_L1_ECC_HALT=1
-        case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = true; break;
+        case EnvVarID::TT_METAL_DISABLE_L1_ECC_HALT: this->disable_l1_ecc_halt = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_GATHERING
         // Enable data gathering on Blackhole.
