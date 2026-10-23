@@ -1526,7 +1526,9 @@ class Model:
                     if not part:
                         return None
                     active, lens = torch.zeros(rows * Up, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
-                    tok = torch.zeros(rows * Up, C, dtype=torch.long)
+                    tok = self._filler_tokens(
+                        rows * Up, C
+                    ).clone()  # diverse filler (a constant token routes every filler row to the same experts: see _filler_tokens)
                     slot_b = [None] * (rows * Up)
                     s0v = [0] * (rows * Up)
                     for it in part:

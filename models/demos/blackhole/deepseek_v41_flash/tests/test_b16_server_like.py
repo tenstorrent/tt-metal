@@ -25,7 +25,9 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.model_args import CKPT
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IDS = os.environ.get("ISO_IDS", "/mnt/tt-data/ssinghal/dsv4-logs/evals_gpqa_tau3/probe_t22_k3_ids.json")
+IDS = os.environ.get(
+    "ISO_IDS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "probe_t22_k3_ids.json")
+)
 GOOD = "omar_rossi_1241"
 
 
@@ -196,6 +198,8 @@ class Sim:
 )
 @pytest.mark.timeout(14400)
 def test_server_like(mesh_device, device_params):
+    if "ISO_CMD_DIR" not in os.environ:
+        pytest.skip("interactive harness: set ISO_CMD_DIR (see the module docstring)")
     from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
 
     _stub_plugin()
