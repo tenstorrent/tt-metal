@@ -294,3 +294,22 @@ def test_a_record_made_under_the_byte_key_stays_valid_on_an_identical_tree(tmp_p
     assert _kept(dict(rec, under_test="SEM"), ("SEM", "BYTES"), "c", {}, {}, True)
     assert not _kept(dict(rec, under_test="OTHER"), ("SEM", "BYTES"), "c", {}, {}, True)
     assert _kept(dict(rec, under_test="SEM"), "SEM", "c", {}, {}, True)
+
+
+def test_the_store_finds_the_same_test_filed_by_another_task(tmp_path):
+    """F177: DeepSeek-V4.1 X.3: four picks share one frozen test set (`P.17#swa`, `P.22#swa`, ...); a unit's record was
+    looked up only under its own task's name, so the identical test on the identical code (same stamp id) ran again
+    for every pick. The store now falls back to the same test filed by another task, outputs included."""
+    from models.demos.common.bringup.core.stamps import Store
+
+    st = Store(tmp_path)
+    out = tmp_path / "P.17_profile.json"
+    out.write_text("{}")
+    st.put("P.17#swa", "SID", {"verdict": "PASS", "metrics": {"err": 0.1}}, [out], "P.17")
+    rec = st.get("P.22#swa", "SID")
+    assert rec and rec["verdict"] == "PASS" and rec["_from"] == "P.17#swa"
+    assert st.get("P.22#swa", "OTHER") is None and st.get("P.22#swa_engram", "SID") is None
+    res = tmp_path / "results"
+    res.mkdir()
+    st.restore("P.22#swa", "SID", rec, res, "P.22")
+    assert list(res.iterdir())
