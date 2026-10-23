@@ -58,8 +58,15 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     Excludes the LM head and sampling (a host LM head would not be device time). Needs a stack that starts at layer 0
     with no gaps: the full model, or a prefix subset such as MiMo's 0-5 of 48 (F42; the final norm only when the stack
     ends at the last layer, and prefill_layers records how many layers were timed)."""
-    if not layers or layers != list(range(len(layers))):
-        return None
+    # F178: a subset with gaps (a partial bring-up's representative layers) is timed back to back, as the device runs
+    # them, when every layer's state sources (a KV / index source) are in it; anything else fails loudly (DeepSeek-V4.1
+    # X.3: layers 0-3, 14, 20, 21, 24 returned None and the "warm full prefill" was silently skipped)
+    if not layers:
+        raise ValueError("full prefill: no layers")
+    missing = sorted({src for i in layers for src in s.state_sources(i) if src not in layers})
+    if missing:
+        raise ValueError(f"full prefill: layers {layers} read state from layers {missing} outside the timed stack")
+    gapped = layers != list(range(len(layers)))
     full_stack = len(layers) == s.num_layers
     seq, chunk = rung["seq"], rung["chunk"]
     n = seq // chunk
@@ -93,6 +100,7 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     metrics.record("prefill_chunk", chunk)
     metrics.record("prefill_tok_s", round(seq / total, 1))
     metrics.record("prefill_layers", len(layers))
+    metrics.record("prefill_gapped", int(gapped))  # F178: the subset back to back (no golden feed between the layers)
     t = once(sync_each=True)
     per = [round((b - a) * 1e3, 1) for a, b in zip(t[:-2], t[1:-1])]
     for c, ms in enumerate(per):
