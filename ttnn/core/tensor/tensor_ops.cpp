@@ -56,6 +56,11 @@ namespace {
 // The label of a tensor allocated across the mesh without a mapper, one shard per device: Replicate along every mesh
 // axis, over every coordinate. create_device_tensor and allocate_tensor_on_host label their tensors alike.
 TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    // TODO (#25340): Implement correct logic and add test for this
+    // River: why are we constructing the topology here like this instead of using the
+    // TensorTopology::create_fully_replicated_tensor_topology function?
+    //
+    // Use Replicate as default value for placements in MeshMapperConfig
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
         mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
     std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
