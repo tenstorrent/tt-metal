@@ -2935,7 +2935,6 @@ class ModelArgs:
             self.rope_scaling = None
             self.use_global_nope = True
             # Sliding layers can't do chunked prefill and 3 of every 4 layers slide.
-            self.max_prefill_chunk_size_override = math.ceil((self.max_context_len or 8192) / 1024) * 1024
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
