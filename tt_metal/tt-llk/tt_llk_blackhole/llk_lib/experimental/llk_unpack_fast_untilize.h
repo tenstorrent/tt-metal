@@ -179,23 +179,39 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
 
 // Face-pair passes (dense input, 16-bit DEST): pass 0 unpacks F0 and F1 of every tile, pass 1 F2 and F3. The second
 // UNPACR of a pair steps Z by 3, to the same face pair of the next tile.
+template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_fast_untilize_pass_mop_config_(const std::uint32_t unit_dim)
 {
-    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(
+        unit_dim >= 2 && unit_dim <= (is_fp32_dest_acc_en ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST : FAST_UNTILIZE_MAX_PASS_UNIT_DIM),
+        "fast_untilize face passes support unit_dim 2 to 16 (2 to 8 at 32 bit)");
 
     static constexpr std::uint32_t unpack_first_face  = TT_OP_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_second_face = TT_OP_UNPACR(SrcA, 0b11, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    ckernel_template tmp(unit_dim, 1, unpack_first_face, unpack_second_face);
-    tmp.program();
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // The ELWADD copy of a 32-bit DEST takes a zero SrcB face with each real SrcA face.
+        static constexpr std::uint32_t unpack_srcb_set_dvalid =
+            TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        ckernel_template tmp(unit_dim, 1, unpack_first_face, unpack_srcb_set_dvalid);
+        tmp.set_end_ops(unpack_second_face, unpack_srcb_set_dvalid);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(unit_dim, 1, unpack_first_face, unpack_second_face);
+        tmp.program();
+    }
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_fast_untilize_pass_init_(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
 {
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
-    _llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+    _llk_unpack_fast_untilize_pass_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
 }
 
 inline void _llk_unpack_fast_untilize_set_pass_face_(const std::uint32_t pass)

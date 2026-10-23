@@ -48,6 +48,23 @@ constexpr bool fast_untilize_face_passes()
     return !is_fp32_dest_acc_en && full_ct_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
+// A 32-bit DEST half holds the face pairs of eight tiles, so dense input at a 32-bit DEST takes face-pair passes of up to eight tiles:
+// a row of 5 to 8 tiles is two passes and one L1 stream per pass, a wider row units of up to eight tiles (a rest of 9 splits 5 + 4).
+constexpr std::uint32_t FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT = FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en, bool block_float_input = false>
+constexpr bool fast_untilize_row_passes_32bit()
+{
+    return is_fp32_dest_acc_en && !block_float_input && full_ct_dim >= 5;
+}
+
+constexpr std::uint32_t fast_untilize_next_pass_row_unit_32bit(const std::uint32_t remaining_tiles)
+{
+    return remaining_tiles > FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT + 1    ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT
+           : remaining_tiles == FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT + 1 ? (FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT + 2) / 2
+                                                                          : remaining_tiles;
+}
+
 // Sixteen-tile pass units; a rest of 2 to 8 goes first as a chunk (too few tiles to repay a second DEST hand-off) and a
 // rest of 9 to 15 last as a pass unit. 17 left take a chunk of 8 first, so no unit of 1 remains.
 constexpr std::uint32_t fast_untilize_next_pass_row_unit(const std::uint32_t remaining_tiles)

@@ -20,16 +20,16 @@ inline void llk_pack_fast_untilize_init_with_formats(
     ckernel::_llk_pack_fast_untilize_init_mop_<block_ct_dim, full_ct_dim>();
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, std::uint32_t pass_unit_cap = block_ct_dim>
 inline void llk_pack_fast_untilize_init(const std::uint32_t output) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
     LLK_ASSERT(
         get_output_num_faces(output_id) == ckernel::FAST_UNTILIZE_NUM_FACES,
         "fast_untilize pack requires 4-face output");
-    ckernel::_llk_pack_fast_untilize_init_<block_ct_dim, full_ct_dim>(
+    ckernel::_llk_pack_fast_untilize_init_<block_ct_dim, full_ct_dim, pass_unit_cap>(
         pack_src_format[output_id], pack_dst_format[output_id]);
-    ckernel::_llk_pack_fast_untilize_init_mop_<block_ct_dim, full_ct_dim>();
+    ckernel::_llk_pack_fast_untilize_init_mop_<block_ct_dim, full_ct_dim, pass_unit_cap>();
 }
 
 template <std::uint32_t block_ct_dim>
@@ -73,7 +73,7 @@ inline void llk_pack_fast_untilize_block_strided(
 }
 
 // One face-pair pass of the unit starting tile_offset tiles into the output row; full_ct_dim is the row's width.
-template <std::uint32_t full_ct_dim>
+template <std::uint32_t full_ct_dim, std::uint32_t pass_unit_cap = ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM>
 inline void llk_pack_fast_untilize_pass_block(
     const std::uint32_t output,
     const std::uint32_t output_tile_index,
@@ -86,7 +86,7 @@ inline void llk_pack_fast_untilize_pass_block(
     const std::uint32_t output_row_address =
         get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
     const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format[output_id], full_ct_dim * TILE_C_DIM) / 16;
-    if constexpr (full_ct_dim > ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM) {
+    if constexpr (full_ct_dim > pass_unit_cap) {
         const std::uint32_t chunk_offset = SCALE_DATUM_SIZE(pack_dst_format[output_id], tile_offset * TILE_C_DIM) / 16;
         ckernel::_llk_pack_fast_untilize_pass_block_strided_(
             output_row_address + chunk_offset, unit_dim, pass, prev_unit_dim, output_row_stride);

@@ -69,14 +69,18 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
-    constexpr bool face_passes =
-        allow_face_passes && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr bool row_passes_32bit =
+        allow_face_passes && !four_tile_chunks &&
+        fast_untilize_row_passes_32bit<full_ct_dim, is_fp32_dest_acc_en, block_float_input>();
+    constexpr bool face_passes = row_passes_32bit || (allow_face_passes && !four_tile_chunks &&
+                                                      fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>());
     constexpr std::uint32_t max_unit_dim = face_passes ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
                                            : four_tile_chunks
                                                ? FAST_UNTILIZE_MAX_UNIT_DIM
                                                : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
-    constexpr std::uint32_t first_unit_dim = face_passes ? fast_untilize_first_pass_unit(full_ct_dim)
-                                                         : fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
+    constexpr std::uint32_t first_unit_dim = row_passes_32bit ? fast_untilize_next_pass_row_unit_32bit(full_ct_dim)
+                                             : face_passes    ? fast_untilize_first_pass_unit(full_ct_dim)
+                                                              : fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
 
     // Fast-untilize can run immediately after other LLKs (for example matmul
     // bias pack_tile into the same CB). Re-enter a known math/pack sync
@@ -85,7 +89,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     MATH((_llk_math_pack_sync_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     PACK((_llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     if constexpr (face_passes) {
-        UNPACK((llk_unpack_fast_untilize_pass_init<block_float_input>(icb, first_unit_dim)));
+        UNPACK((llk_unpack_fast_untilize_pass_init<block_float_input, is_fp32_dest_acc_en>(icb, first_unit_dim)));
     } else {
         UNPACK((llk_unpack_fast_untilize_init<is_fp32_dest_acc_en, bank_per_tile>(icb, first_unit_dim)));
     }
@@ -95,7 +99,10 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
         MATH((llk_math_fast_untilize_init_skip_remap()));
     }
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_fast_untilize_init<max_unit_dim, full_ct_dim>(ocb)));
+    PACK((llk_pack_fast_untilize_init<
+          max_unit_dim,
+          full_ct_dim,
+          row_passes_32bit ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT : max_unit_dim>(ocb)));
     PACK((_llk_init_packer_dest_offset_registers_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
 #else
     if constexpr (configure_remap) {
@@ -165,6 +172,36 @@ ALWI void fast_untilize_block(
         four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
 
     if constexpr (
+        allow_face_passes && !four_tile_chunks &&
+        fast_untilize_row_passes_32bit<full_ct_dim, is_fp32_dest_acc_en, block_float_input>()) {
+        // One unit of up to eight tiles fills a 32-bit DEST half with two face-pair passes; a row of one unit is one L1 stream per pass.
+        constexpr std::uint32_t first_unit_dim = fast_untilize_next_pass_row_unit_32bit(full_ct_dim);
+        [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
+        [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
+        PACK((prev_pack_unit_dim = ckernel::pack_fast_untilize_mop_key));
+
+        for (std::uint32_t tiles_done = 0; tiles_done < full_ct_dim;) {
+            const std::uint32_t unit_dim = fast_untilize_next_pass_row_unit_32bit(full_ct_dim - tiles_done);
+            for (std::uint32_t pass = 0; pass < 2; ++pass) {
+                MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
+                UNPACK((llk_unpack_fast_untilize_pass_block<false, is_fp32_dest_acc_en>(
+                    icb, input_tile_index + tiles_done, unit_dim, pass, prev_unpack_unit_dim)));
+                MATH((llk_math_fast_untilize_pass_block<is_fp32_dest_acc_en>(0, unit_dim)));
+                MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+
+                PACK((llk_packer_wait_for_math_done()));
+                PACK((llk_pack_fast_untilize_pass_block<full_ct_dim, FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT>(
+                    ocb, output_tile_index, tiles_done, unit_dim, pass, prev_pack_unit_dim)));
+                PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en, true, true>()));
+            }
+            tiles_done += unit_dim;
+        }
+
+        UNPACK((
+            llk_unpack_fast_untilize_pass_restore_unit_dim<is_fp32_dest_acc_en>(first_unit_dim, prev_unpack_unit_dim)));
+        PACK((ckernel::pack_fast_untilize_mop_key = prev_pack_unit_dim));
+        return;
+    } else if constexpr (
         allow_face_passes && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>()) {
         constexpr std::uint32_t first_unit_dim = fast_untilize_first_pass_unit(full_ct_dim);
         [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;

@@ -107,18 +107,18 @@ inline void llk_unpack_fast_untilize_restore_unit_dim(
 }
 
 // Face-pair passes: dense input unpacks a whole pass with one MOP, block-float input tile by tile.
-template <bool block_float_input>
+template <bool block_float_input, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_fast_untilize_pass_init(const std::uint32_t operand, const std::uint32_t init_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     LLK_ASSERT(
         llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) == block_float_input,
         "fast_untilize block_float_input must match the input format");
-    ckernel::_llk_unpack_fast_untilize_pass_init_(
+    ckernel::_llk_unpack_fast_untilize_pass_init_<is_fp32_dest_acc_en>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
 }
 
-template <bool block_float_input>
+template <bool block_float_input, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_fast_untilize_pass_block(
     const std::uint32_t operand,
     const std::uint32_t tile_index,
@@ -135,7 +135,7 @@ inline void llk_unpack_fast_untilize_pass_block(
             pass);
     } else {
         if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim) {
-            ckernel::_llk_unpack_fast_untilize_pass_mop_config_(unit_dim);
+            ckernel::_llk_unpack_fast_untilize_pass_mop_config_<is_fp32_dest_acc_en>(unit_dim);
             prev_unit_dim = unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
         }
         ckernel::_llk_unpack_fast_untilize_pass_block_(
@@ -159,11 +159,12 @@ inline void llk_unpack_fast_untilize_rest_block(
     }
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_fast_untilize_pass_restore_unit_dim(
     const std::uint32_t init_unit_dim, const std::uint32_t prev_unit_dim) {
     SAN_HOOK(unsupported());
     if (prev_unit_dim != (init_unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY)) {
-        ckernel::_llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+        ckernel::_llk_unpack_fast_untilize_pass_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
     }
 }
 
