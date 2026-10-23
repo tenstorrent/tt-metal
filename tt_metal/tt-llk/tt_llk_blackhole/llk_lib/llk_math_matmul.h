@@ -700,19 +700,23 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     matmul_rows_dest_stride = dest_stride;
 }
 
-// Whether the row form serves the in0 tiles of at most 16 rows by 32 columns: one MOP per reuse row, the body of
-// @ref matmul_configure_mop without its phase end, which the MOP issues (the phase end of every phase, the tile end on the last).
+// Whether the row form serves the in0 tiles of at most 16 rows by 32 columns, and the in1 32x16 bodies: one MOP per
+// reuse row, the body of @ref matmul_configure_mop without its phase end, which the MOP issues (the phase end of every
+// phase, the tile end on the last). The 8 MVMUL in1 32x16 body keeps the DEST carriage return at the tile base only in
+// its alternating order (in1_order 1); the default order moves it to row 16 half way, so it keeps the tile MOP.
 inline bool matmul_tiny_rows_supported(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
     const std::uint32_t in1_tile_r_dim,
     const std::uint32_t in1_tile_c_dim,
     const std::uint32_t transpose,
-    const bool allow_16_rows)
+    const bool allow_16_rows,
+    const int in1_order = 0)
 {
     const bool is_in0_16x32 = (in0_tile_r_dim <= (allow_16_rows ? FACE_R_DIM : FACE_R_DIM / 2)) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
-    return is_in0_16x32 && !is_in1_32x16 && !transpose;
+    const bool is_in0_32x32 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+    return !transpose && ((is_in0_16x32 && !is_in1_32x16) || (is_in1_32x16 && (is_in0_16x32 || (is_in0_32x32 && in1_order == 1))));
 }
 
 template <MathFidelity math_fidelity, int in1_order = 0>
@@ -741,11 +745,14 @@ inline void matmul_configure_mop_rows_tiny(
     matmul_set_row_tile_end_dest(dest_stride);
 
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+    const bool is_in1_32x16             = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+    const bool is_in0_32x32             = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+    const std::uint32_t replay_words    = is_in1_32x16 ? (is_in0_32x32 ? 7 : 3) : (partial_face ? 3 : 7);
     const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
     ckernel_template tmp(
         reuse_a ? ct_dim : rt_dim,
         inner_loops,
-        lltt::replay_insn(ckernel::math::replay_buf_offset, partial_face ? 3 : 7),
+        lltt::replay_insn(ckernel::math::replay_buf_offset, replay_words),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
     tmp.set_last_outer_loop_instr(tile_end);
@@ -1114,7 +1121,7 @@ inline void _llk_math_matmul_init_(
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
             matmul_configure_mop_rows<math_fidelity>(ct_dim, rt_dim);
         }
-        else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows))
+        else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows, in1_order))
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
