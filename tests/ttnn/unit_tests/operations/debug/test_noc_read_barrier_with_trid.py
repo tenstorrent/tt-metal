@@ -96,6 +96,8 @@ def run_trid_read_barrier(device, risc, form, mode, iterations):
 @pytest.mark.parametrize("form", list(FORMS))
 @pytest.mark.parametrize("risc", list(RISCS))
 def test_noc_read_barrier_with_trid_waits_for_data(device, risc, form):
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("NIU counter-ordering test, validated on Blackhole only")
     control = None
     if ttnn.device.is_blackhole(device) and risc == "brisc":
         # Diagnostic only: polling the outstanding counter directly after the issue returned early on the

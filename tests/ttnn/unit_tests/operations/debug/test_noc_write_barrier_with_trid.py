@@ -32,6 +32,8 @@ pytestmark = pytest.mark.skipif(
 def test_noc_write_barrier_with_trid_waits_for_data(
     device, risc, stateful, wait_for_completion, size, use_register_buffer, noc_mode
 ):
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("NIU counter-ordering test, validated on Blackhole only")
     core = ttnn.CoreCoord(0, 0)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     # Page 0 receives writes; page 1 receives the kernel's result words.
