@@ -27,7 +27,7 @@ Kernels construct a `DataflowBuffer` from a `DFBBindingToken` — a named bindin
   - [C3. Remapper](#c3-remapper)
   - [C4. Explicit vs implicit sync](#c4-explicit-vs-implicit-sync-txn-ids-isrs)
   - [C5. Device initialization](#c5-device-initialization--constructor-sync)
-  - [C6.](#c6-finish-and-barrier-apis) `finish()` [and barriers](#c6-finish-and-barrier-apis)
+  - [C6. Kernel-exit finish and barriers](#c6-kernel-exit-finish-and-barriers)
   - [C7. Intra-tensix DFBs](#c7-intra-tensix-dfbs)
   - [C8. wait→pop TDMA hazard (TEN-4746)](#c8-quasar-waitpop-tdma-hazard-ten-4746)
 - [Part D — Common debugging](#part-d--common-debugging)
@@ -69,15 +69,14 @@ for (...) {
     noc.async_read_barrier();
     dfb.push_back(N);
 }
-dfb.finish();
 
 // Consumer (e.g. DM writer)
 for (...) {
     dfb.wait_front(N);
     // read L1 of dfb / issue NOC transaction out of it
+    noc.async_write_barrier();
     dfb.pop_front(N);
 }
-dfb.finish();
 ```
 
 
@@ -101,7 +100,6 @@ for (...) {
     // copy_tile(...) / read L1 at get_read_ptr()  (need real unpack TDMA before pop — TEN-4746)
     dfb.pop_front(1);
 }
-dfb.finish();
 ```
 
 
@@ -121,22 +119,24 @@ const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 for (...) {
     noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
 }
-dfb.finish();
 
 // Consumer: DFB → DRAM/tensor
 DataflowBuffer dfb_in(dfb::in);
 for (...) {
     noc.async_write<NocOptions::TXN_ID>(dfb_in, tensor_accessor, {}, {.page_id = page_id});
 }
-dfb_in.finish();
- // This is backwards compatabile with Gen1 but will always issue a full global barrier. It can be skipped if the kernel wants to issue
- // a noc.async_writer_barrier(); at the end of the kernel.
-dfb_in.write_barrier(noc);
 ```
 
 Each such call issues **one NOC transaction**, this is one entry on a STRIDED or ALL side and one whole block on a BLOCKED side. Credits are posted/acked by the **DM0 ISR** when that transaction’s threshold is hit.
 
-Always call `finish()` so partial batches below the ISR threshold still exchange credits and all tile counters drain.
+### When the kernel returns
+
+Firmware finishes every DFB once `kernel_main` returns ([C6](#c6-kernel-exit-finish-and-barriers)). On Quasar it credits implicit-sync batches that never reached the ISR threshold, waits for implicit-sync writes to land, and waits until every tile counter has drained. Kernels therefore:
+
+- **must** keep reserve/push and wait/pop balanced. An unbalanced DFB hangs at kernel exit (`AAW`).
+- **need not** call `finish()`. It is a deprecated no-op on every arch.
+- **may** copy a `DataflowBuffer`, build temporaries from the same binding, or pass it into helpers by value. Implicit-sync progress is kept per DFB per DM, not per object.
+- **must** barrier their own explicit writes out of a DFB (`noc.async_write_barrier()` before `pop_front`), as on WH/BH. Firmware only waits for implicit-sync writes.
 
 ### Choosing an access pattern
 
@@ -152,7 +152,7 @@ Always call `finish()` so partial batches below the ISR threshold still exchange
 
 ### You do not manage hardware sync resources
 
- Runtime assigns tile counters, remapper pairs, and DFB transaction IDs. You never pick them and do not need to reason about them for correct kernels—only about producer/consumer counts, patterns, balanced reserve/push and wait/pop operations, and calling `finish()` on every endpoint.
+ Runtime assigns tile counters, remapper pairs, and DFB transaction IDs. You never pick them and do not need to reason about them for correct kernels—only about producer/consumer counts, patterns, and balanced reserve/push and wait/pop operations.
 
 For hangs and faults, see [Part D](#part-d--common-debugging).
 
@@ -197,7 +197,7 @@ On WH/BH, DFB APIs largely wrap CB-style interfaces; Quasar is where tile counte
 - Tiles available / space available (live occupancy views)
 - Trap / debug signals on under/overflow
 
-**Compute (TRISC) read oddity:** through the Tensix `tile_counters[]` interface, the fields named `posted` / `acked` are **not** the cumulative totals. On pack/unpack they expose the **live** views — `posted` ≈ tiles available (occupancy), `acked` ≈ space available. The **cumulative** posted/acked totals live on the **DM overlay** path (`fast_llk_intf_read_posted` / `read_acked`). That is why `finish()` drains differently: TRISC waits until `tile_counters[].posted == 0` (empty occupancy); DM waits until overlay `read_posted == read_acked`.
+**Compute (TRISC) read oddity:** through the Tensix `tile_counters[]` interface, the fields named `posted` / `acked` are **not** the cumulative totals. On pack/unpack they expose the **live** views — `posted` ≈ tiles available (occupancy), `acked` ≈ space available. The **cumulative** posted/acked totals live on the **DM overlay** path (`fast_llk_intf_read_posted` / `read_acked`). That is why the kernel-exit drain differs: TRISC waits until `tile_counters[].posted == 0` (empty occupancy); DM waits until overlay `read_posted == read_acked`.
 
 Per Neo Tensix there are **32** TCs:
 
@@ -523,31 +523,9 @@ sequenceDiagram
 - Threshold / `per_txn` / `per_txn_per_tc` as above — programmed so each TC gets the **same** increment per ISR fire
 - **ALL consumer:** threshold scales by `#consumers` so the IRQ waits for the full collective batch
 - Each `async_read` / `async_write` with `NocOptions::TXN_ID` still issues **one** NOC transaction: one entry on a STRIDED or ALL side and one whole block on a BLOCKED side
-- Partial last batches that never hit the ISR threshold are flushed by `handle_final_credits` inside `finish()` (below)
+- Partial last batches that never hit the ISR threshold are credited by DM0 at kernel exit, once every DM issuing on that DFB side has returned ([C6](#c6-kernel-exit-finish-and-barriers))
 
 
-
-#### `handle_final_credits` (DM implicit sync, called from `finish()`)
-
-The ISR only fires when a txn id’s tiles-to-process counter reaches the programmed **threshold**. If the last batch is smaller than that (or the count never reaches the collective threshold), credits would stall forever unless software manually clears them.
-
-producer = POSTED / TR_ACK path; consumer = ACKED / WR_SENT path:
-
-1. **Pick the tail txn id.** Kernels rotate transaction ids as they issue. If `transactions_issued` lands exactly on a per-txn boundary, the index has already wrapped to the *next* id — step back one slot.
-2. **Compute expected credits on TC slot 0 (progress sentinel).** Entries round-robin across `N = num_tcs_to_rr` TCs with remainder going to the **lowest** indices first (`expected[i] = issued/N + (i < issued%N ? 1 : 0)`). So **slot 0 always has the max (or tied) expected count**. The wait/early-exit loops only poll that one TC as a cheap proxy for “ISR caught up”: the ISR credits **all** descriptor TCs by the same amount each fire, so once the busiest slot reaches its expected value, every other slot has too. Checking a lower-remainder slot instead could look “done” while slot 0 is still short.
-3. **Wait until the NoC has completed the tail batch (or the ISR already caught up).** Poll overlay posted/acked vs `expected_slot0`. Also watch cmdbuf state for the tail txn id:
-  - `TR_ACK`/`WR_SENT` outstanding == 0 and `tiles_to_process` == 0 → not dispatched yet
-  - `TR_ACK`/`WR_SENT` outstanding > 0 → in flight
-  - `TR_ACK`/`WR_SENT` outstanding == 0 and `tiles_to_process` > 0 → completed into tiles-to-process → break
-   Early exit if ISR already brought slot 0 to `expected_slot0`.
-4. **Unconditional** `sync_threads`. Every participating DM on that side must have issued its tail ops and seen NOC pickup before anyone inspects the collective `tiles_to_process`. Skipping the barrier when “already caught up” is racy (ISR can fire between threads’ checks). The producer and consumer sides are separate kernels, and firmware gives each kernel its own barrier slot, so they cannot deadlock against each other when their thread counts differ.
-5. **If ISR already posted/acked to expectation → return.** Nothing left to do.
-6. **Else wait until the tail is a genuine partial** (`0 < tiles_to_process < global_threshold`). The ISR will never fire for that remainder.
-7. **Manual credit top-up.** For each of this DM’s RR TCs, compute that slot’s expected count from `transactions_issued` and `inc_posted` / `inc_acked` by `(expected - actual)`.
-
-After that, `finish()` continues to the normal drain loop (`posted == acked` on DM).
-
-Note: Note: Instead of manually topping up credits, an alternative implementation could make DM0 reprogram the transaction-ID thresholds and update the transaction-ID descriptor.
 
 ### C5. Device initialization + constructor sync
 
@@ -586,17 +564,48 @@ sequenceDiagram
 
 
 
-### C6. `finish()`
+### C6. Kernel-exit finish and barriers
 
-1. If implicit sync was used, [`handle_final_credits`](#handle_final_credits-dm-implicit-sync-called-from-finish) handles any producer/consumer partial batches that never hit the ISR threshold.
-2. Spin until all TCs drained: DM `posted == acked`; TRISC unpack/pack occupancy `posted == 0` since TRISC side does not track cumulative posted/acks.
+When a kernel returns, firmware **finishes** every DFB the hart is bound to. Finishing a DFB means:
 
-`write_barrier(noc)`
+1. **Credit the last implicit-sync batch.** The ISR credits a txn id's batch only when its tiles-to-process count reaches the threshold. The last batch is usually smaller, so without this step its tiles are never posted (producer side) or its space never acked (consumer side).
+2. **Wait for implicit-sync writes to land.** Implicit sync acks a write once its data has left L1, so nothing else waits for the data to reach its destination.
+3. **Drain.** Wait until every tile counter the hart uses for the DFB is balanced: on DM, `posted == acked`; on pack/unpack, occupancy `posted == 0`. A DFB that never drains means the kernels pushed and popped different amounts.
 
-- No DFB txn ids → full `noc.async_write_barrier()`
-- Else barrier per DFB txn id used by this buffer
+Several DMs can share a txn id's batch, so a DM's own share can be complete while the batch never fills. Step 1 therefore needs every DM issuing on that DFB side to have finished, and DM0 does it.
 
+**Per-hart progress.** Each kernel DM keeps one `DFBImplicitProgress` per DFB in TLS (`g_dfb_progress`). Every object built from the same DFB on that DM updates it:
 
+| Field | Meaning |
+| --- | --- |
+| `loop` | how many full txn-id batches this DM has issued on the DFB. A batch is `num_entries_per_txn_id` entries; after each one the DM moves to the next txn id. |
+| `pos` | entries issued into the current, unfinished batch |
+| `share` | entries per op |
+| `txn_idx` | index into `txn_ids[]` of the current batch |
+| `share_pos` | STRIDED side: entries of the current op issued so far |
+
+The host only accepts batches that cover whole round-robin rounds of a DM's counters, so every batch starts back at counter 0. `loop` and `pos` therefore fix what each of the DM's counters is owed (`dfb_implicit_expected_for_slot`).
+
+**Kernel DM (DM2–7), `dfb_dm_kernel_exit`.** The DFBs it is bound to come from `g_dfb_bound_mask`.
+
+1. For each implicit-sync DFB, wait until its reads and writes on the DFB's txn ids have completed (`TR_ACK` and `WR_SENT` 0 on every txn id), so tiles-to-process counts all of them. Then zero the progress for the next launch.
+2. Write `loop`/`pos`/`share` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`), then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_FINISHING`.
+3. Wait for its implicit-sync writes to land, per DFB txn id.
+4. Drain.
+
+`DFB_FINISHING` is separate from `DONE` because the drain in step 4 can depend on DM0's flush. For example, a producer's drain waits for its consumer to pop everything, and that consumer can be waiting for the producer's last batch, which DM0 credits only once the producer has reached `DFB_FINISHING`.
+
+**DM0, `wait_subordinates_and_finish_dfbs`.** While it waits for all harts, DM0 reads the DMs' run states (the `subordinate_sync` word it already polls). It flushes each implicit-sync DFB side once every DM issuing on it has reached `DFB_FINISHING` or `DONE`. The side's issuing DMs come from the txn descriptor. A side is flushed as soon as its own issuers are ready.
+
+By then every issuer's transactions have completed, so each txn id's last batch is final: a full one has raised its interrupt-pending bit, and a partial one never will. `dfb_dm0_flush_side`:
+
+1. masks the ISR. If any of the side's pending bits is set, it unmasks so the ISR credits that batch, then checks again.
+2. tops up each issuer's counters to `expected − actual`. `expected` comes from the exit record; `actual` is the live counter, which already includes every batch the ISR credited.
+3. clears the side's tiles-to-process counts so the ISR can never credit them again, then unmasks.
+
+**Compute TRISC (pack/unpack), `dfb_trisc_kernel_exit`.** Drains every DFB the Neo is bound to. Unpack skips counters another TRISC of the Neo owns.
+
+On Quasar, firmware already does this for implicit-sync writes at kernel exit. Kernels barrier their own explicit writes.
 
 ### C7. Intra-tensix DFBs
 
@@ -637,7 +646,8 @@ See [Part D](#part-d--common-debugging).
 | `RBW` / `RBD`   | `reserve_back`       | Waiting for / got producer space                    |
 | `DFW` / `DFD`   | `dfb_ensure_ready`   | Constructor sync (producer signals / DM0 ISR ready) |
 | `UPTW` / `UPTD` | unpack tilize/reduce | Unpack stalled on tiles / done                      |
-| `AAW` / `AAD`   | `finish()`           | Draining until posted==acked                        |
+| `AAW` / `AAD`   | firmware, kernel exit | Draining until posted==acked                       |
+| `DXW` / `DXD`   | DM firmware, kernel exit | Waiting for implicit-sync traffic, then handing progress to DM0 |
 | `NTW`           | DM firmware          | Early FW wait (often idle / pre-kernel)             |
 
 
@@ -654,9 +664,9 @@ See [Part D](#part-d--common-debugging).
 3. **Hang in ctor (**`DFW`**)**
   Missing producer-ready signal; ClientL not valid yet; `dm0_isr_ready` never set when ISR expected.
    Check: which harts are producers; DM0/DM1 setup blobs ran.
-4. **Hang in** `finish()` **(**`AAW`**)**
-  Partial implicit batch not flushed; one RR TC never drained; ALL consumer still holding occupancy.
-   Check: every endpoint called `finish()`; entry-count divisibility vs txn ids / TCs.
+4. **Hang at kernel exit (**`AAW`**)**
+  Unbalanced kernel: a producer pushed more than its consumers popped (or the reverse); one RR TC never drained; ALL consumer still holding occupancy. DM0 posts partial implicit batches only once every DM issuing on that DFB side has returned, so also check that no issuer is stuck before `DXD`.
+   Check: reserve/push vs wait/pop counts per endpoint; entry-count divisibility vs txn ids / TCs.
 5. **TILE_COUNTERS fault / index** `0x00010000`
   Often TEN-4746 (pop without TDMA after wait), or post/ack past capacity / wrong TC.
    Check: bare wait→pop on unpack; `TT_METAL_LLK_ASSERTS=1`; watcher TC dump.
@@ -686,6 +696,7 @@ See [Part D](#part-d--common-debugging).
 - [dataflow_buffer_config.h](../../hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h) — constants
 - [dataflow_buffer_init.h](../../hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h) — device init
 - [dataflow_buffer_isr.h](../../hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h) — DM0 ISR
+- [dataflow_buffer_finish.h](../../hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_finish.h) — kernel-exit finish
 - [dataflow_buffer.inl](../../hw/inc/internal/tt-2xx/dataflow_buffer.inl) — kernel API impl
 - `[rocc_instructions.hpp](../../hw/inc/internal/tt-2xx/quasar/overlay/rocc_instructions.hpp)` — txn-id ISRs
 - Remapper: `tt_metal/hw/inc/internal/tt-2xx/quasar/overlay/remapper_*.hpp`
