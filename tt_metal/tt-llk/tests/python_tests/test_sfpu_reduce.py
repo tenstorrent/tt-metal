@@ -724,6 +724,14 @@ SIGN_BOUNDARY_ROWS = [
 
 
 def _sign_boundary_block(block: IntegerReduceBlock) -> torch.Tensor:
+    # A column reduce gets the same lines running down its columns, so every column is decided the same way.
+    if block.mathop == MathOperation.ReduceColumn:
+        return _sign_boundary_block(
+            IntegerReduceBlock(
+                MathOperation.ReduceRow, block.tile_cols, block.tile_rows
+            )
+        ).T.contiguous()
+
     rows, cols = block.shape
     values = torch.empty(rows, cols, dtype=torch.int64)
     for row in range(rows):
