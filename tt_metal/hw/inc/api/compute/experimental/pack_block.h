@@ -50,7 +50,7 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  * The DEST register buffer must be in acquired state via *acquire_dst*.
  *
  * This call is blocking and is only available on the compute engine
- * (Blackhole and quasar only).
+ * (Blackhole and Quasar only).
  *
  * Operates in tandem with functions cb_reserve_back and cb_push_back.
  *

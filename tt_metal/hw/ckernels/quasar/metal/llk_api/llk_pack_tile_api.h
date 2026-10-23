@@ -142,6 +142,9 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
  *
  * Packs ntiles tiles starting at start_tile_index from the destination register into the L1
  * output buffer identified by pack_output starting from output_tile_index
+ *
+ * @note start_tile_index + ntiles must fit in the current DEST section for the sync mode, DEST width and tile shape
+ * (asserted).
  */
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, std::uint32_t ntiles) {
     if (ntiles == 0) {
@@ -155,7 +158,9 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
 
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     constexpr std::uint32_t dest_rows =
-        (DST_SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE : DEST_REGISTER_FULL_SIZE) >> DST_ACCUM_MODE;
+        (DST_SYNC_MODE == DstSync::SyncHalf ? ckernel::trisc::DEST_REGISTER_HALF_SIZE
+                                            : ckernel::trisc::DEST_REGISTER_FULL_SIZE) >>
+        DST_ACCUM_MODE;
     const std::uint32_t rows_per_tile =
         tensor_shape.face_r_dim * tensor_shape.total_num_faces() * ckernel::tiny_face_stride(tensor_shape);
     const std::uint32_t capacity = dest_rows / rows_per_tile;
@@ -163,7 +168,9 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
         start_tile_index < capacity && ntiles <= capacity - start_tile_index,
         "Pack block exceeds the current DEST section capacity");
     if (local_dfb_interface.stride_size_tiles == 1) {
-        const std::uint32_t l1_tile_index = get_output_tile_index<false, false>(output_id, 0);
+        const std::uint32_t l1_tile_index =
+            get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
+                output_id, 0 /* output_tile_index */);
         // get_output_tile_index already advanced by one entry.
         local_dfb_interface.wr_entry_ptr += ntiles - 1;
         _llk_pack_(start_tile_index, l1_tile_index, tensor_shape, ntiles);
