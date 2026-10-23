@@ -71,3 +71,29 @@ def test_short_prefill_stash_skipped_only_in_the_traced_bounded_short_bucket(mon
     assert not gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
     monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "1024")
     assert gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
+
+
+def test_batched_prefill_trace_buckets_off_by_default(monkeypatch):
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, raising=False)
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, raising=False)
+    assert gt.batched_prefill_trace_buckets() == set()
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 128)
+
+
+def test_batched_prefill_trace_buckets_opt_in(monkeypatch):
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, "1")
+    monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, raising=False)
+    assert gt.batched_prefill_trace_buckets() == {(32, 128)}  # the QB2 32-user ramp bucket
+    # a 31-user cold call at 128 tokens pads to 32 (batched_prefill_padded_batch) -> replays the bucket
+    assert gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 128)
+    assert gt.batched_prefill_trace_bucket(32, None, 32, 128)
+    # slots spanning the top of the batch pad to 32 as well
+    assert gt.batched_prefill_trace_bucket(2, [0, 31], 32, 128)
+    # other shapes keep the sequential single-user replays
+    assert not gt.batched_prefill_trace_bucket(2, [0, 1], 32, 128)
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 1024)
+    assert not gt.batched_prefill_trace_bucket(1, [0], 32, 128)
+    assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, None)
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, "32x128, 16x512,8x4096,3x128,32x100")
+    # 8 x 4096 = 32768 virtual tokens is a legal bucket; 3 is not a padded batch, 100 is not a trace ISL
+    assert gt.batched_prefill_trace_buckets() == {(32, 128), (16, 512), (8, 4096)}

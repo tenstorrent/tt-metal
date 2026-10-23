@@ -42,6 +42,7 @@ from models.demos.gemma4.tt.generator import (
     vision_state_dict_for,
 )
 from models.demos.gemma4.tt.generator_trace import (
+    batched_prefill_trace_bucket,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
     resolve_gemma4_prefill_chunk_size,
@@ -2338,7 +2339,17 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # (see GEMMA4_MAX_BATCHED_PREFILL_USERS / GEMMA4_TAIL_POOL_SLOTS).
             # GEMMA4_PACKED_PREFILL=1 takes the same per-layer-table scatter/install (rows by physical slot)
             # and then runs the packed forward from the wrapper's prefill_forward_text.
-            and (os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1" or gemma4_packed_prefill_enabled())
+            and (
+                os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+                or gemma4_packed_prefill_enabled()
+                # GEMMA4_TRACE_BATCHED_PREFILL=1: a call that pads to a boot-captured batched bucket replays it
+                or batched_prefill_trace_bucket(
+                    batch_size,
+                    kwargs.get("empty_slots"),
+                    self.model_args[0].max_batch_size,
+                    prefill_seq_lens_plan[0] if prefill_seq_lens_plan else None,
+                )
+            )
         )
         use_sequential = batch_size > 1 and not will_batch
 

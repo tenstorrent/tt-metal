@@ -53,6 +53,73 @@ def short_prefill_stash_skipped(seq_len, batch_size, *, bounded: bool, trace_mod
     return bool(trace_mode) and bool(bounded) and int(batch_size) == 1 and int(seq_len) <= trace_short_prefill_max()
 
 
+# GEMMA4_TRACE_BATCHED_PREFILL=1 (opt-in): capture the batched prefill trace of the listed (padded batch x kernel
+# length) buckets at boot and replay it for the stock batched path. Without it the served multi-user prefill runs
+# one single-user replay per user (QB2 26B, 2026-10-23: a 31-user 128-token ramp = 31 x ~95 ms = 2.9 s; a traced
+# 4096-token single-user prefill on the same engine takes 0.58 s), because the vLLM bridge only batches with
+# G4_FORCE_BATCH_PREFILL=1, which also makes the warmup capture every batch size at every trace ISL.
+# GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS lists the buckets ("32x128,16x256"; default "32x128").
+GEMMA4_TRACE_BATCHED_PREFILL_ENV = "GEMMA4_TRACE_BATCHED_PREFILL"
+GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV = "GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS"
+
+
+def batched_prefill_trace_buckets() -> set:
+    """``{(padded_batch, kernel_len), ...}`` of the opt-in batched prefill trace buckets (empty when off). A bucket
+    must be a supported padded batch above 1, a trace ISL, and under the batched kernel token limit."""
+    if os.environ.get(GEMMA4_TRACE_BATCHED_PREFILL_ENV, "0") != "1":
+        return set()
+    raw = os.environ.get(GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, "32x128")
+    buckets = set()
+    for token in raw.split(","):
+        token = token.strip().lower()
+        if not token:
+            continue
+        batch, length = (int(x) for x in token.split("x"))
+        if (
+            batch > 1
+            and batch in SUPPORTED_PREFILL_BATCH_SIZES
+            and length in GEMMA4_TRACE_PREFILL_SEQ_LENS
+            and batch * length < MAX_BATCHED_PREFILL_SEQ_LEN
+        ):
+            buckets.add((batch, length))
+    return buckets
+
+
+def batched_prefill_trace_bucket(batch_size, empty_slots, max_batch_size, prefill_seq_len) -> bool:
+    """True when a cold batched call of ``batch_size`` users (device slots ``empty_slots``) whose prompts pad to
+    ``prefill_seq_len`` pads to a configured traced bucket, i.e. the stock batched path will replay a trace."""
+    buckets = batched_prefill_trace_buckets()
+    if not buckets or prefill_seq_len is None or int(batch_size) <= 1:
+        return False
+    padded = batched_prefill_padded_batch(int(batch_size), empty_slots, int(max_batch_size))
+    return (int(padded), int(prefill_seq_len)) in buckets
+
+
+def _record_batched_bucket_traces(generator) -> None:
+    """Record the prepared batched buckets of ``batched_prefill_trace_buckets`` right after the warmup's single-user
+    recordings (the shared recorder keeps batched preparations for a first-use capture; a capture after boot runs
+    beside the live decode traces, so the bucket is recorded here, inside the boot window)."""
+    buckets = batched_prefill_trace_buckets()
+    prepared_all = getattr(generator, "_prepared_prefill_traces", None)
+    if not buckets or not prepared_all:
+        return
+    for key in list(prepared_all):
+        parts = key.split("_")  # f"{kernel_len}_{model_id}_{batch}_{sp0|sp1}"
+        if len(parts) != 4 or parts[3] != "sp0":
+            continue
+        kernel_len, batch = int(parts[0]), int(parts[2])
+        if (batch, kernel_len) not in buckets:
+            continue
+        prepared = prepared_all.pop(key)
+        trace_id, tt_out_trace, *device_inputs = generator._record_trace_prefill(prepared)
+        generator.trace_id_prefill[key] = trace_id
+        generator.trace_inputs_prefill[key] = device_inputs
+        generator.trace_output_prefill[key] = tt_out_trace
+        logger.info(
+            "Gemma4: recorded the batched prefill trace bucket {} (batch {} x {} tokens)", key, batch, kernel_len
+        )
+
+
 # Kernel sequence lengths that may capture/replay prefill device traces (MoE only).
 #
 # Each bucket is captured as a *separate resident prefill trace* at warmup, and
@@ -964,6 +1031,7 @@ def warmup_gemma4_batched_prefill_traces(
         )
         generator._defer_prefill_recording = False
         generator._record_pending_prefill_traces()
+        _record_batched_bucket_traces(generator)
     except BaseException:
         generator.already_warmed_up_prefill = False
         raise
@@ -1033,6 +1101,17 @@ def _warmup_gemma4_prefill_sweep(
             user_cap,
         )
 
+    # GEMMA4_TRACE_BATCHED_PREFILL buckets: their batch size joins the sweep at their ISL only (batched_prefill_trace_buckets)
+    bucket_batches: dict = {}
+    for bucket_batch, bucket_len in batched_prefill_trace_buckets():
+        if bucket_batch <= max_batch_size and bucket_batch <= user_cap:
+            bucket_batches.setdefault(bucket_len, set()).add(bucket_batch)
+    if bucket_batches:
+        logger.info(
+            "Gemma4 traced prefill warmup: batched buckets {} captured at boot (GEMMA4_TRACE_BATCHED_PREFILL)",
+            sorted((b, l) for l, bs in bucket_batches.items() for b in bs),
+        )
+
     skip_sequence_lengths = False
     sampling_parameters_sweeped = False
 
@@ -1043,7 +1122,10 @@ def _warmup_gemma4_prefill_sweep(
             if model_id != 0 and (supported_length not in trace_isls or not enable_trace):
                 continue
 
-            for batch_size in warmup_batch_sizes:
+            batch_sizes_for_length = list(warmup_batch_sizes) + sorted(
+                b for b in bucket_batches.get(supported_length, ()) if b not in warmup_batch_sizes
+            )
+            for batch_size in batch_sizes_for_length:
                 if batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
                     logger.info(
                         "Skipping batched prefill trace warmup for batch_size={}, seq_len={}: "
