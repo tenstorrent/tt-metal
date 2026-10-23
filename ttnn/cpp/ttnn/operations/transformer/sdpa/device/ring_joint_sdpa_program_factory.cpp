@@ -3466,6 +3466,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
+    // Resident mode builds the compute kernel at O2 unconditionally: at the default level the 5 s program sits at
+    // the 70,656 B kernel config buffer (M9's and M10's first builds overflowed it; M10 with its flushes outlined
+    // was still 336 B over), and O2 cuts the three TRISC binaries by ~30 %. Every profiled resident run (which set
+    // O2 through TT_SOL_STEP_PROFILE) showed the same per-piece compute as the unprofiled timings, so O2 costs no
+    // measurable step time here: the step is bound by Tensix instruction throughput, not by RISC issue.
+    if (sol_resident) {
+        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
     // DEV ONLY (perf branch). Resident-step ablation, timing only (results wrong): TT_SOL_ABLATE=qk|exp|pack5|pv|
     // stats|pack1 skips that stage's instructions in the compact step while every CB, DEST and token operation
     // stays (compute_streaming.hpp, kAblate*). Not hashed: set it for the whole process.

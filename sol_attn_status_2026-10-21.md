@@ -1003,6 +1003,11 @@ buffer (70656)", 2.8 KB over, as M9's first build did. The flush lambda, now car
 at four sites on each TRISC. Fix: the S1 flush, the S5 flush and the P@V issue are outlined (`sol_res_s1_flush`,
 `sol_res_s5_flush`, one copy per TRISC) over a per-step state struct (`SolResStepState`); the `m10t` step re-runs
 the 5 s parity (the program-size check), the traced timings and the profile without the 21-minute correctness set.
+**Second build (01:59-02:02):** the outlining removed 2.4 KB (70992 B) and the 5 s runs were still 336 B over. The
+compute kernel was being built at the framework default O3 except under `TT_SOL_STEP_PROFILE`, which set O2; the
+factory now sets O2 for every resident build (~30 % smaller TRISC binaries). Every profiled resident run was at O2
+and showed the same per-piece compute as the unprofiled O3 timings (the step is bound by Tensix instruction
+throughput, not RISC issue), so no step-time cost is expected; the `m10t` traced numbers will say.
 
 **Expected:** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
 −0.25 to −0.35 ms traced at tau 1, i.e. ~4.65 ms (1.58x) from 4.97. The pooled steps use the same code and gain

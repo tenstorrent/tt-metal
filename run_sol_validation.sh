@@ -560,8 +560,10 @@ if want m10; then
 fi
 
 # M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
-# config buffer (73424 > 70656); the S1/S5 flushes and the P@V issue were outlined into one copy per TRISC. This
-# step skips the 21-minute correctness set: 5 s parity (also the program-size check), traced dense + tau 1-3, profile.
+# config buffer (73424 > 70656); outlining the S1/S5 flushes and the P@V issue left it 336 B over (70992), so the
+# resident build now compiles the compute kernel at O2 (factory; ~30 % smaller TRISC binaries, the level every
+# profiled run already used). This step skips the 21-minute correctness set: 5 s parity (also the program-size
+# check), traced dense + tau 1-3, profile.
 if want m10t; then
     run m10t_parity 900 pytest "$T" -s -k "4x8 and resident_call_parity and r4736"
     run m10t_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
