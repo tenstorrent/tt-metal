@@ -159,7 +159,7 @@ assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DF
 # PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
 # diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
 # deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
-assert not (DFLASH_ENABLED and not USE_TRACE), (
+assert not (DFLASH_ENABLED and not USE_TRACE and not ADAPTER.dflash_allows_eager), (
     "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
     "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
 )
@@ -793,12 +793,16 @@ def main() -> None:
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
-    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
+    # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
+    dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
+    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
     # split, so the socket cannot be sized for a range the model was not built with.
-    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx)
-    d2d_out_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers)
+    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx) + dflash_plane
+    d2d_out_planes = (
+        ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers) + dflash_plane
+    )
 
     ttnn.distributed_context_barrier()
 
