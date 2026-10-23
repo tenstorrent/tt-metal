@@ -97,7 +97,8 @@ constexpr auto kAdditiveFastApproxPostNote =
         `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        When it is left unset, block-float operands use the FPU implementation and every other dtype uses the SFPU one.)doc";
 constexpr auto kBiasGeluFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu is computed with the fast lookup-table approximation.
         When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc";
@@ -113,6 +114,7 @@ constexpr auto kDivFastApproxPostNote =
 constexpr auto kMultiplyInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        When it is left unset, block-float operands use the FPU implementation and every other dtype uses the SFPU one.
         The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.)doc";
 constexpr auto kDivideInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
@@ -1678,7 +1680,7 @@ void bind_binary_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC,
         post_note,
-        fast_approx_default.value_or(false) ? "True" : "False",
+        fast_approx_default.has_value() ? (*fast_approx_default ? "True" : "False") : "None",
         has_scalar_first
             ? R"doc(input_tensor_a (ttnn.Tensor or Number): the input tensor, or the left operand when a Number.
             input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.)doc"
@@ -2011,7 +2013,7 @@ void bind_inplace_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC,
         post_note,
-        fast_approx_default.value_or(false) ? "True" : "False");
+        fast_approx_default.has_value() ? (*fast_approx_default ? "True" : "False") : "None");
 
     ttnn::bind_function<Name>(
         mod,
