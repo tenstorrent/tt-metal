@@ -165,6 +165,18 @@ def resolve_padded_load_shape(src_shape, target_shape, expected_shape=None, *, n
     )
 
 
+def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
+    """Reorder axis 0 from HF's per-head ``[first_half, second_half]`` to the interleaved pairs TTML's
+    RoPE expects: ``[0, half, 1, half + 1, ...]``. Other axes are unchanged."""
+    rows = w.shape[0]
+    if rows % n_heads != 0:
+        raise RuntimeError(f"rows {rows} not divisible by n_heads {n_heads}")
+    per_head = rows // n_heads
+    if per_head % 2 != 0:
+        raise RuntimeError(f"rows per head {per_head} must be even")
+    return w.reshape(n_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
+
+
 def initialize_device(yaml_config: dict):
     """Initialize device mesh from configuration.
 
