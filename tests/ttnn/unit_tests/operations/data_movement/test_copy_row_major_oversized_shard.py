@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(60, method="thread")
 @pytest.mark.parametrize(
     "memory_layout",
     [ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED],

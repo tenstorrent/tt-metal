@@ -22,7 +22,7 @@ def _make_oversized_width_input(device, offset):
     return tensor, host
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(60, method="thread")
 @pytest.mark.parametrize("output_memory", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 def test_to_memory_config_oversized_width_uint32(device, output_memory):
     for offset in (0, 37):
@@ -33,7 +33,7 @@ def test_to_memory_config_oversized_width_uint32(device, output_memory):
         assert torch.equal(ttnn.to_torch(source).to(torch.int32), host)
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(60, method="thread")
 @pytest.mark.parametrize("repeats", [(1, 1, 2), (1, 2, 2)], ids=["width", "height-and-width"])
 def test_repeat_unshards_oversized_width_uint32(device, repeats):
     # A WIDTH-sharded last-dimension repeat cannot use the native sharded path.

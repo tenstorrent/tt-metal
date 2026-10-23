@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(60, method="thread")
 @pytest.mark.parametrize("explicit_memory", [False, True])
 @pytest.mark.parametrize(
     "shape,grid_shape,shard,start,end,step",
