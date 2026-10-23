@@ -312,7 +312,7 @@ class TtMiMoMTP:
         """The every-layer draft program: the plan step, the hidden gather, then pass i on MTP layer i with its tokens
         (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once."""
         m, li, chain = self.model, self.inputs, self.model.spec_chain
-        chain.plan()
+        chain.plan_layers()
         cos, sin = m.rope_table_rows(li.rope, m.rope_tables[:2])
         hidden = self._gather_hidden()
         for i, layer in enumerate(self.layers):

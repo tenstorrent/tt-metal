@@ -141,7 +141,7 @@ class SpecChain:
         prog = self._program(DRAFTS, args, scratch)
         ttnn.generic_op([self.mtp, *self.heads, self.result], prog)
 
-    def plan(self):
+    def plan_layers(self):
         """The plan step (every layer; the start of the MTP draft trace)."""
         li = self.layer_inputs
         outs = [li.pos, li.rope, li.hidden, li.tokens[0], *li.serial]
@@ -169,7 +169,7 @@ class SpecChain:
         self.chain()
         self.drafts()
         if self.layer_inputs is not None:
-            self.plan()
+            self.plan_layers()
             for layer in range(1, MAX_DRAFTS):
                 self.tokens(layer)
 

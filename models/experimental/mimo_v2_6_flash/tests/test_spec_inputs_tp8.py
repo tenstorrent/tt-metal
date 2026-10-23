@@ -398,7 +398,7 @@ def test_spec_chain_layers_tp8(mesh_device):
 
     # The plan step, then the tokens steps.
     def run_plan():
-        chain.plan()
+        chain.plan_layers()
         for layer in range(1, MAX_DRAFTS):
             chain.tokens(layer)
 
