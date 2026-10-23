@@ -224,9 +224,8 @@ def test_view_device_order_is_independent_of_span_insertion(mesh_device):
     first = ttnn.experimental_create_sram_tensor_view(mesh, _spec([core], 256), _memory(entries))
     second = ttnn.experimental_create_sram_tensor_view(mesh, _spec([core], 256), _memory(reversed(entries)))
     assert first.device_coords() == second.device_coords() == coords
-    assert first.buffer_address() == second.buffer_address()
     for coord in coords:
-        assert _address(first, coord, core) == _address(second, coord, core)
+        assert _address(first, coord, core) == _address(second, coord, core) == _address(owner, coord, core)
 
 
 def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
