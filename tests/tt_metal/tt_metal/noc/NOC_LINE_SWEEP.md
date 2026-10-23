@@ -17,7 +17,8 @@ data mismatch with a signature that points at the kind of fault.
 
 Faults it is designed to expose:
 
-* A data line stuck or flipping on one NOC path: the same XOR mask on every bad word.
+* A data line stuck at 0 or 1, or inverted, on one NOC path: the same XOR mask on every bad word, classified as
+  `stuck-at-0`, `stuck-at-1`, `inverted` or `intermittent`.
 * A fault tied to a position inside a NOC flit: bad words concentrated on one flit-word index.
 * A fault that depends on the source core, the destination core, or the NOC: a bad (source, destination, NOC)
   subset while the same cores are clean in every other combination.
@@ -33,6 +34,9 @@ Faults it is designed to expose:
   * PULL: every core of the active line reads every passive core's payload into a dedicated local slot.
 * A **sweep** iterates: for each active line, for each other passive line, for each NOC (and RISC) combination.
 * After every step the host reads every slot back and compares it word for word with the expected payload.
+* Payloads are random flits, each followed by its bitwise complement. Every bit at every position inside a 64-byte
+  flit is therefore sent as both 0 and 1 in every 128 bytes, so a stuck-at in either direction cannot hide behind
+  the data, and the fault classification below is exact.
 
 Memory layout in the unreserved L1 region of every core: `[payload][slot 0][slot 1]...[slot N-1]`. Slots are
 pre-filled with `0xDEADBEEF`, so a slot that never received data is reported as `UNDELIVERED` rather than as random
@@ -87,7 +91,7 @@ a kernel on the active line never finished; the step named in the last progress 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TT_NOC_SWEEP_TRANSFER_BYTES` | 1024 | bytes per (source, destination) pair, multiple of 64 |
+| `TT_NOC_SWEEP_TRANSFER_BYTES` | 1024 | bytes per (source, destination) pair, multiple of 128 |
 | `TT_NOC_SWEEP_CHUNK_BYTES` | 0 | bytes per NOC transaction; 0 = whole transfer per call |
 | `TT_NOC_SWEEP_ITERS` | 1 | re-send the same data this many times per step |
 | `TT_NOC_SWEEP_SEED` | 0xC0FFEE | payload RNG seed |
@@ -96,14 +100,15 @@ a kernel on the active line never finished; the step named in the last progress 
 | `TT_NOC_SWEEP_MAX_REPORT` | 16 | bad pairs logged per step and in the final summary |
 | `TT_NOC_SWEEP_VERBOSE` | 0 | 1 = log every step and the cores of every line |
 | `TT_NOC_SWEEP_INJECT_XOR` | 0 | checker self-test, see below |
+| `TT_NOC_SWEEP_INJECT_MODE` | `set` | self-test fault type: `set` (stuck-at-1), `clear` (stuck-at-0), `flip` (inverted) |
 | `TT_NOC_SWEEP_INJECT_FLIT_WORD` | 15 | checker self-test, see below |
 
 The transfer size is capped automatically when a sink line cannot hold one slot per source core (small Ethernet L1
 on some architectures); a warning says so.
 
-Cost: measured on Wormhole N300 at about 2 s per chip for the whole suite (about 4 ms per step, most of it in
-the per-core host L1 reads, whose cost is per call rather than per byte). A Blackhole chip has 14x10 tensix cores,
-so it has about 2.5x the steps and more cores per step; read the actual per-phase cost off the summary line.
+Cost: about 2 s per chip on Wormhole N300 (about 4 ms per step) and about 15-20 s per chip on Blackhole (10-21 ms
+per step; host L1 readback is the largest share, Ethernet program load the next). Send the output to a file: on a
+slow terminal the log writes themselves can take several times longer than the test.
 
 ## Reading a failure
 
@@ -112,13 +117,21 @@ fixture prints a summary at the end:
 
 ```
 [dev 0] active-eth log(0,2) virt(...) phys(2,1) -> row0 log(3,0) virt(...) phys(4,2) over noc1 (PUSH/write, erisc kernel):
-    7/256 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:7}, first bad @+0x3c exp=... got=...
+    8/256 bad words, xor_or=0x00000800, fault=stuck-at-1 [0->1: 8/8, 1->0: 0/8], flit-word{idx:count}={15:8}, first bad @+0x3c exp=... got=...
 ```
 
 * `log` / `virt` / `phys` are the logical, virtual (what the kernel addresses) and physical NOC0 coordinates of the
   core, so the result can be mapped onto the die layout directly.
 * `xor_or` is the OR of `expected ^ got` over all bad words: a single bit means a stuck or flipped data line.
-* `0->1 only` / `1->0 only` / `mixed` is the flip direction.
+* `fault=` classifies the mismatch. For the bits in `xor_or` at the affected flit positions, the host counts how
+  many times a 0 was sent (a chance for a 0->1 flip) and how many arrived as 1, and the same for 1->0. Because
+  every payload carries each flit and its complement, the two chance counts are equal.
+  * `stuck-at-1 [0->1: n/n, 1->0: 0/n]`: every 0 sent on that line arrived as 1, every 1 was fine.
+  * `stuck-at-0 [0->1: 0/n, 1->0: n/n]`: the reverse.
+  * `inverted [0->1: n/n, 1->0: n/n]`: every sample flipped, both directions.
+  * `intermittent 0->1` / `1->0` / `mixed [k/n, ...]`: only some chances were taken, i.e. a marginal or
+    timing-dependent fault rather than a hard one. Re-running with `TT_NOC_SWEEP_ITERS` or another seed shows
+    whether the ratio is stable.
 * `flit-word{idx:count}` is a histogram of which 32-bit word of each 64-byte NOC flit was wrong. A single index
   means the fault is tied to a position inside the flit, i.e. the NOC data path rather than memory.
 * `UNDELIVERED` means the slot still holds the poison pattern: the write never arrived (or the read never
@@ -137,11 +150,13 @@ still expecting the pristine one. Every pair must then be reported with exactly 
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 TT_NOC_SWEEP_INJECT_XOR=0x800 TT_NOC_SWEEP_INJECT_FLIT_WORD=15 \
   ./build/test/tt_metal/unit_tests_noc --gtest_filter='NocLineSweepFixture.TensixRowMajorPush'
-# ... 8/256 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:8} ...
+# ... 8/256 bad words, xor_or=0x00000800, fault=stuck-at-1 [0->1: 8/8, 1->0: 0/8], flit-word{idx:count}={15:8} ...
 ```
 
-The injection only sets bits, so only words whose target bit was 0 become bad. With a 1 KB random payload about
-half of the 16 words at the chosen flit position are affected, which is why the count is around 8 rather than 16.
+A 1 KB payload has 16 flits, so 16 samples of word 15, of which exactly 8 carry a 0 at bit 11 and 8 carry a 1
+(each flit is paired with its complement). `set` corrupts the 8 zeros and reports `stuck-at-1 [0->1: 8/8, 1->0: 0/8]`;
+`TT_NOC_SWEEP_INJECT_MODE=clear` corrupts the 8 ones and reports `stuck-at-0 [0->1: 0/8, 1->0: 8/8]`; `flip`
+corrupts all 16 and reports `inverted [0->1: 8/8, 1->0: 8/8]` with 16/256 bad words.
 
 ## Limitations
 

@@ -10,7 +10,10 @@
 // at this level and reported as a data mismatch rather than surfacing later as a hang in a higher layer.
 //
 // Faults this is designed to expose:
-//   * A data line stuck or flipping on one NOC path: shows up as the same XOR mask on every bad word.
+//   * A data line stuck at 0 or 1, or inverted, on one NOC path: shows up as the same XOR mask on every bad word,
+//     and is classified as stuck-at-0 / stuck-at-1 / inverted / intermittent. Every payload is built from random
+//     flits each followed by its bitwise complement, so every bit at every flit position is sent as both 0 and 1
+//     and the classification is exact rather than statistical.
 //   * A fault tied to a position inside a NOC flit: shows up as bad words concentrated on one flit-word index.
 //   * A fault that depends on the source, the destination, or the NOC: shows up as a bad (source, destination,
 //     NOC) subset while the same cores are clean in every other combination.
@@ -29,7 +32,7 @@
 //     device ever waits for data from another core, so corruption cannot turn into a hang.
 //
 // Environment knobs (all optional):
-//   TT_NOC_SWEEP_TRANSFER_BYTES  bytes per (source, destination) pair, multiple of 64     (default 1024)
+//   TT_NOC_SWEEP_TRANSFER_BYTES  bytes per (source, destination) pair, multiple of 128    (default 1024)
 //   TT_NOC_SWEEP_CHUNK_BYTES     bytes per NOC transaction, 0 = whole transfer per call   (default 0)
 //   TT_NOC_SWEEP_ITERS           how many times each step re-sends the same data         (default 1)
 //   TT_NOC_SWEEP_SEED            payload RNG seed                                        (default 0xC0FFEE)
@@ -38,9 +41,11 @@
 //   TT_NOC_SWEEP_MAX_REPORT      max bad pairs logged per step                            (default 16)
 //   TT_NOC_SWEEP_VERBOSE         1 = log every step and the cores of every line; 0 = one summary line per
 //                                sweep per chip plus a progress line every few seconds   (default 0)
-//   TT_NOC_SWEEP_INJECT_XOR      checker self-test: OR this mask into the payload the host writes to every
+//   TT_NOC_SWEEP_INJECT_XOR      checker self-test: apply this bit mask to the payload the host writes to every
 //                                source core while the expected data is left untouched, so every pair must be
 //                                reported bad with exactly this signature. 0 = off (default).
+//   TT_NOC_SWEEP_INJECT_MODE     how the self-test mask is applied: "set" (stuck-at-1), "clear" (stuck-at-0) or
+//                                "flip" (inverted)                                        (default "set")
 //   TT_NOC_SWEEP_INJECT_FLIT_WORD  which 32-bit word of every 64-byte flit receives the injected mask
 //                                (default 15).
 //
@@ -88,6 +93,10 @@ namespace {
 
 constexpr uint32_t kPoison = 0xDEADBEEF;
 constexpr uint32_t kFlitBytes = 64;
+constexpr uint32_t kFlitWords = kFlitBytes / 4;
+// Payloads are built from pairs of flits: a random flit followed by its bitwise complement, so every bit at
+// every flit-word position is sent as both 0 and 1 within each pair. Transfers are multiples of this.
+constexpr uint32_t kFlitPairBytes = 2 * kFlitBytes;
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_line_sweep.cpp";
 
 enum class LineKind { TensixRow, TensixCol, ActiveEth, IdleEth };
@@ -120,6 +129,7 @@ struct SweepConfig {
     uint32_t max_report = 16;
     bool verbose = false;
     uint32_t inject_xor = 0;  // checker self-test, see header
+    std::string inject_mode = "set";
     uint32_t inject_flit_word = 15;
 };
 
@@ -130,10 +140,14 @@ struct PairResult {
     uint32_t bad_words = 0;
     uint32_t total_words = 0;
     uint32_t xor_or = 0;                                    // OR of (expected ^ got) over all bad words
-    uint32_t zero_to_one = 0;                               // bad words where got has bits set that expected does not
-    uint32_t one_to_zero = 0;                               // bad words where got lost bits that expected has
     std::array<uint32_t, kFlitBytes / 4> flit_word_hist{};  // histogram of (byte offset % 64) / 4
-    bool undelivered = false;                               // entire slot still holds the poison pattern
+    // Fault classification. Over the bits of xor_or at the flit-word positions that had any bad word: how many
+    // times a 0 was sent (chance for a 0->1 flip) and how many of those arrived as 1, and the same for 1->0.
+    uint32_t chances_0to1 = 0;
+    uint32_t flips_0to1 = 0;
+    uint32_t chances_1to0 = 0;
+    uint32_t flips_1to0 = 0;
+    bool undelivered = false;  // entire slot still holds the poison pattern
     uint32_t first_bad_off = 0;
     uint32_t first_exp = 0;
     uint32_t first_got = 0;
@@ -154,7 +168,7 @@ std::vector<uint32_t> parse_list(const std::string& s) {
 SweepConfig config_from_env() {
     SweepConfig cfg;
     cfg.transfer_bytes = tt::parse_env<uint32_t>("TT_NOC_SWEEP_TRANSFER_BYTES", cfg.transfer_bytes);
-    cfg.transfer_bytes = std::max<uint32_t>(kFlitBytes, cfg.transfer_bytes - (cfg.transfer_bytes % kFlitBytes));
+    cfg.transfer_bytes = std::max<uint32_t>(kFlitPairBytes, cfg.transfer_bytes - (cfg.transfer_bytes % kFlitPairBytes));
     cfg.chunk_bytes = tt::parse_env<uint32_t>("TT_NOC_SWEEP_CHUNK_BYTES", cfg.chunk_bytes);
     cfg.chunk_bytes -= cfg.chunk_bytes % kFlitBytes;
     cfg.num_iters = std::max<uint32_t>(1, tt::parse_env<uint32_t>("TT_NOC_SWEEP_ITERS", cfg.num_iters));
@@ -162,8 +176,11 @@ SweepConfig config_from_env() {
     cfg.max_report = tt::parse_env<uint32_t>("TT_NOC_SWEEP_MAX_REPORT", cfg.max_report);
     cfg.verbose = tt::parse_env<uint32_t>("TT_NOC_SWEEP_VERBOSE", 0) != 0;
     cfg.inject_xor = tt::parse_env<uint32_t>("TT_NOC_SWEEP_INJECT_XOR", cfg.inject_xor);
-    cfg.inject_flit_word =
-        tt::parse_env<uint32_t>("TT_NOC_SWEEP_INJECT_FLIT_WORD", cfg.inject_flit_word) % (kFlitBytes / 4);
+    cfg.inject_mode = tt::parse_env<std::string>("TT_NOC_SWEEP_INJECT_MODE", cfg.inject_mode);
+    TT_FATAL(
+        cfg.inject_mode == "set" || cfg.inject_mode == "clear" || cfg.inject_mode == "flip",
+        "TT_NOC_SWEEP_INJECT_MODE must be set, clear or flip");
+    cfg.inject_flit_word = tt::parse_env<uint32_t>("TT_NOC_SWEEP_INJECT_FLIT_WORD", cfg.inject_flit_word) % kFlitWords;
     const std::string nocs = tt::parse_env<std::string>("TT_NOC_SWEEP_NOCS", "0,1");
     cfg.nocs.clear();
     for (uint32_t n : parse_list(nocs)) {
@@ -293,6 +310,20 @@ bool can_run_kernel(const Line& line, bool slow_dispatch, tt::ARCH arch) {
     return true;
 }
 
+// Human-readable fault class from the chance / flip counts.
+std::string fault_class(const PairResult& r) {
+    const bool all_0to1 = r.flips_0to1 == r.chances_0to1;
+    const bool all_1to0 = r.flips_1to0 == r.chances_1to0;
+    const char* cls = (all_0to1 && all_1to0)            ? "inverted"
+                      : (all_0to1 && r.flips_1to0 == 0) ? "stuck-at-1"
+                      : (all_1to0 && r.flips_0to1 == 0) ? "stuck-at-0"
+                      : (r.flips_0to1 && !r.flips_1to0) ? "intermittent 0->1"
+                      : (!r.flips_0to1 && r.flips_1to0) ? "intermittent 1->0"
+                                                        : "intermittent mixed";
+    return fmt::format(
+        "{} [0->1: {}/{}, 1->0: {}/{}]", cls, r.flips_0to1, r.chances_0to1, r.flips_1to0, r.chances_1to0);
+}
+
 std::string pair_signature(const PairResult& r) {
     if (r.undelivered) {
         return "UNDELIVERED (slot still poison)";
@@ -303,16 +334,13 @@ std::string pair_signature(const PairResult& r) {
             flits += fmt::format("{}{}:{}", flits.empty() ? "" : ",", w, r.flit_word_hist[w]);
         }
     }
-    const char* dir = (r.zero_to_one && !r.one_to_zero)   ? "0->1 only"
-                      : (!r.zero_to_one && r.one_to_zero) ? "1->0 only"
-                                                          : "mixed";
     return fmt::format(
-        "{}/{} bad words, xor_or=0x{:08x}, {}, flit-word{{idx:count}}={{{}}}, first bad @+0x{:x} exp=0x{:08x} "
-        "got=0x{:08x}",
+        "{}/{} bad words, xor_or=0x{:08x}, fault={}, flit-word{{idx:count}}={{{}}}, first bad @+0x{:x} "
+        "exp=0x{:08x} got=0x{:08x}",
         r.bad_words,
         r.total_words,
         r.xor_or,
-        dir,
+        fault_class(r),
         flits,
         r.first_bad_off,
         r.first_exp,
@@ -341,15 +369,26 @@ PairResult compare_slot(
         r.bad_words++;
         const uint32_t x = e ^ g;
         r.xor_or |= x;
-        if (g & ~e) {
-            r.zero_to_one++;
-        }
-        if (e & ~g) {
-            r.one_to_zero++;
-        }
         r.flit_word_hist[((i * 4) % kFlitBytes) / 4]++;
     }
     r.undelivered = r.bad_words > 0 && all_poison;
+    if (r.bad_words == 0 || r.undelivered) {
+        return r;
+    }
+    // Second pass: at every affected flit-word position, count how often each bit of the mask was sent as 0 / 1
+    // and how often it arrived flipped. A stuck-at takes every chance in one direction and none in the other; an
+    // inverter takes every chance in both; anything less is intermittent.
+    for (uint32_t i = 0; i < expected.size(); i++) {
+        if (r.flit_word_hist[i % kFlitWords] == 0) {
+            continue;
+        }
+        const uint32_t e = expected[i] & r.xor_or;
+        const uint32_t g = got[i] & r.xor_or;
+        r.chances_0to1 += __builtin_popcount(r.xor_or & ~e);
+        r.chances_1to0 += __builtin_popcount(e);
+        r.flips_0to1 += __builtin_popcount(g & ~e);
+        r.flips_1to0 += __builtin_popcount(e & ~g);
+    }
     return r;
 }
 
@@ -432,9 +471,9 @@ protected:
             // payload + num_sources slots must fit; payload area is rounded up to 1 KB.
             const uint32_t need_slots = l == &sinks ? static_cast<uint32_t>(sources.cores.size()) : 0;
             const uint32_t max_t = (r.size - 1024) / (need_slots + 1);
-            t = std::min(t, max_t - (max_t % kFlitBytes));
+            t = std::min(t, max_t - (max_t % kFlitPairBytes));
         }
-        return std::max<uint32_t>(t, kFlitBytes);
+        return std::max<uint32_t>(t, kFlitPairBytes);
     }
 
     // Runs one step and returns the number of bad pairs. `pull` selects read (active reads from passive) instead
@@ -481,8 +520,10 @@ protected:
         for (uint32_t s = 0; s < sources.cores.size(); s++) {
             std::mt19937 rng(step_seed + s * 0x27D4EB2Fu);
             payloads[s].resize(words);
-            for (auto& w : payloads[s]) {
-                w = rng();
+            for (uint32_t i = 0; i < words; i++) {
+                // Even flits are random; each odd flit is the complement of the flit before it.
+                const bool complement_flit = (i / kFlitWords) % 2 == 1;
+                payloads[s][i] = complement_flit ? ~payloads[s][i - kFlitWords] : rng();
             }
             if (cfg_.inject_xor == 0) {
                 detail::WriteToDeviceL1(device, sources.cores[s], src_payload, payloads[s], sources.host_type);
@@ -490,8 +531,14 @@ protected:
                 // Checker self-test: the device gets a deliberately corrupted copy; the comparison still expects the
                 // pristine payload, so every pair must be reported with exactly the injected signature.
                 std::vector<uint32_t> corrupted = payloads[s];
-                for (uint32_t i = cfg_.inject_flit_word; i < corrupted.size(); i += kFlitBytes / 4) {
-                    corrupted[i] |= cfg_.inject_xor;
+                for (uint32_t i = cfg_.inject_flit_word; i < corrupted.size(); i += kFlitWords) {
+                    if (cfg_.inject_mode == "set") {
+                        corrupted[i] |= cfg_.inject_xor;
+                    } else if (cfg_.inject_mode == "clear") {
+                        corrupted[i] &= ~cfg_.inject_xor;
+                    } else {
+                        corrupted[i] ^= cfg_.inject_xor;
+                    }
                 }
                 detail::WriteToDeviceL1(device, sources.cores[s], src_payload, corrupted, sources.host_type);
             }
