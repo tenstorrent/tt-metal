@@ -1,0 +1,162 @@
+[
+  {
+    "variant": "base",
+    "hifi4_roles": [
+      "embed"
+    ],
+    "fp32_residual": false,
+    "single": {
+      "pcc_normalized": 0.9997201442275614,
+      "pcc_spread": 0.9998220846762882,
+      "pcc_row_p01": 0.9997201442275614,
+      "pcc_row_min": 0.9997201442275614
+    },
+    "single_long": {
+      "pcc_normalized": 0.9979860740209721,
+      "pcc_spread": 0.9991465442535779,
+      "pcc_row_p01": 0.9979860740209721,
+      "pcc_row_min": 0.9979860740209721
+    },
+    "long_context": {
+      "pcc_normalized": 0.9998991419583737,
+      "pcc_spread": 0.9997774973358537,
+      "pcc_row_p01": 0.9977165088947704,
+      "pcc_row_min": 0.9973190350289585
+    },
+    "paper": {
+      "pcc_normalized": 0.9999687608271715,
+      "pcc_spread": 0.9999553940520693,
+      "pcc_row_p01": 0.9995335175047306,
+      "pcc_row_min": 0.99777603692783
+    },
+    "multivariate": {
+      "pcc_normalized": 0.999944709519364,
+      "pcc_spread": 0.9999535987018374,
+      "pcc_row_p01": 0.9996165539230779,
+      "pcc_row_min": 0.9940245752029608
+    },
+    "paper_device_s": 1.0559917567297816
+  },
+  {
+    "variant": "ff",
+    "hifi4_roles": [
+      "embed",
+      "ff1",
+      "ff2"
+    ],
+    "fp32_residual": false,
+    "single": {
+      "pcc_normalized": 0.9996018300501845,
+      "pcc_spread": 0.9998300914993221,
+      "pcc_row_p01": 0.9996018300501845,
+      "pcc_row_min": 0.9996018300501845
+    },
+    "single_long": {
+      "pcc_normalized": 0.9988450380491656,
+      "pcc_spread": 0.9997046449626438,
+      "pcc_row_p01": 0.9988450380491656,
+      "pcc_row_min": 0.9988450380491656
+    },
+    "long_context": {
+      "pcc_normalized": 0.9999163571805982,
+      "pcc_spread": 0.9998317084195818,
+      "pcc_row_p01": 0.9989797106811005,
+      "pcc_row_min": 0.9989727120822376
+    },
+    "paper": {
+      "pcc_normalized": 0.9999721164847383,
+      "pcc_spread": 0.999961910151175,
+      "pcc_row_p01": 0.9995734085070188,
+      "pcc_row_min": 0.9986031417840899
+    },
+    "multivariate": {
+      "pcc_normalized": 0.9999721111321438,
+      "pcc_spread": 0.9999808627919121,
+      "pcc_row_p01": 0.9997285318082816,
+      "pcc_row_min": 0.9987610812061106
+    },
+    "paper_device_s": 1.1082253302447498
+  },
+  {
+    "variant": "all_hifi4",
+    "hifi4_roles": [
+      "decoder",
+      "embed",
+      "ff1",
+      "ff2",
+      "qkv",
+      "wo",
+      "wv"
+    ],
+    "fp32_residual": false,
+    "single": {
+      "pcc_normalized": 0.9996886032721178,
+      "pcc_spread": 0.9998108879412143,
+      "pcc_row_p01": 0.9996886032721178,
+      "pcc_row_min": 0.9996886032721178
+    },
+    "single_long": {
+      "pcc_normalized": 0.9986762156691427,
+      "pcc_spread": 0.9992924636694946,
+      "pcc_row_p01": 0.9986762156691427,
+      "pcc_row_min": 0.9986762156691427
+    },
+    "long_context": {
+      "pcc_normalized": 0.9999542690136232,
+      "pcc_spread": 0.9999113825759867,
+      "pcc_row_p01": 0.9993656068370278,
+      "pcc_row_min": 0.9993419291120246
+    },
+    "paper": {
+      "pcc_normalized": 0.9999809674464983,
+      "pcc_spread": 0.999977040136024,
+      "pcc_row_p01": 0.9997400184429125,
+      "pcc_row_min": 0.9989674488068013
+    },
+    "multivariate": {
+      "pcc_normalized": 0.9999729387973391,
+      "pcc_spread": 0.9999838163588217,
+      "pcc_row_p01": 0.9998045208083483,
+      "pcc_row_min": 0.9981449735509166
+    },
+    "paper_device_s": 1.1491713360883296
+  },
+  {
+    "variant": "fp32res",
+    "hifi4_roles": [
+      "embed"
+    ],
+    "fp32_residual": true,
+    "single": {
+      "pcc_normalized": 0.9997871084083407,
+      "pcc_spread": 0.9998559486063991,
+      "pcc_row_p01": 0.9997871084083407,
+      "pcc_row_min": 0.9997871084083407
+    },
+    "single_long": {
+      "pcc_normalized": 0.9992611572787717,
+      "pcc_spread": 0.9997258829632486,
+      "pcc_row_p01": 0.9992611572787717,
+      "pcc_row_min": 0.9992611572787717
+    },
+    "long_context": {
+      "pcc_normalized": 0.9999436577319303,
+      "pcc_spread": 0.9998957768339146,
+      "pcc_row_p01": 0.9991232317456893,
+      "pcc_row_min": 0.9990736137646168
+    },
+    "paper": {
+      "pcc_normalized": 0.9999768733592485,
+      "pcc_spread": 0.9999709890565396,
+      "pcc_row_p01": 0.9996452421621593,
+      "pcc_row_min": 0.999222241557094
+    },
+    "multivariate": {
+      "pcc_normalized": 0.999969838610173,
+      "pcc_spread": 0.9999751286237687,
+      "pcc_row_p01": 0.9997657165612432,
+      "pcc_row_min": 0.9972236900602662
+    },
+    "paper_device_s": 1.2092842464335263
+  }
+]

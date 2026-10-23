@@ -6,34 +6,34 @@
     "MODEL_END"
   ],
   "reduced_window": {
-    "device_us": 116974.41499999998,
-    "op_to_op_gap_us": 3655.8250000000003,
+    "device_us": 117471.72200000001,
+    "op_to_op_gap_us": 4730.946,
     "ops": 60
   },
   "sections": {
     "embed": {
-      "device_us": 7853.885,
-      "op_to_op_gap_us": 2.2190000000000003,
+      "device_us": 7846.1410000000005,
+      "op_to_op_gap_us": 2.216,
       "ops": 5
     },
     "layer_time": {
-      "device_us": 50981.61499999998,
-      "op_to_op_gap_us": 9.474000000000002,
+      "device_us": 51564.189,
+      "op_to_op_gap_us": 9.303999999999998,
       "ops": 18
     },
     "layer_group": {
-      "device_us": 28164.418999999998,
-      "op_to_op_gap_us": 5.478,
+      "device_us": 28256.722999999998,
+      "op_to_op_gap_us": 5.563000000000001,
       "ops": 11
     },
     "last": {
-      "device_us": 29429.483999999997,
-      "op_to_op_gap_us": 7.666999999999998,
+      "device_us": 29264.777000000002,
+      "op_to_op_gap_us": 7.683,
       "ops": 15
     },
     "head": {
-      "device_us": 545.012,
-      "op_to_op_gap_us": 2024.479,
+      "device_us": 539.8919999999999,
+      "op_to_op_gap_us": 2402.244,
       "ops": 11
     }
   },
@@ -45,103 +45,103 @@
     "head": 1
   },
   "full_model_estimate": {
-    "device_ms": 1050.6851539999998,
+    "device_ms": 1060.474895,
     "ops": 396
   },
   "measured": {
-    "steady_s": 1.200969752855599,
-    "device_s": 1.0564110511913896,
-    "cold_s": 1.3790410570800304,
-    "pcc_normalized": 0.9999975396719799
+    "steady_s": 1.5477836332283914,
+    "device_s": 1.056783783249557,
+    "cold_s": 1.6365002267993987,
+    "pcc_normalized": 0.9999687608271715
   },
   "category_percent": {
-    "Compute": 95.53999999999999,
-    "TM": 3.69,
-    "Other": 0.78
+    "Compute": 95.56,
+    "TM": 3.6699999999999995,
+    "Other": 0.77
   },
   "matmul_weighted_flops_percent": 27.28,
   "stacked": [
     {
       "op": "MatmulDeviceOperation (in0:dram_interleaved)",
-      "percent": 60.43,
-      "device_us": 70683.64,
+      "percent": 60.15,
+      "device_us": 70660.73,
       "count": 22,
       "category": "Compute"
     },
     {
       "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
-      "percent": 15.16,
-      "device_us": 17734.91,
+      "percent": 15.08,
+      "device_us": 17712.04,
       "count": 14,
       "category": "Compute"
     },
     {
       "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
-      "percent": 7.6,
-      "device_us": 8885.95,
+      "percent": 7.58,
+      "device_us": 8903.19,
       "count": 9,
       "category": "Compute"
     },
     {
       "op": "UnaryDeviceOperation (in0:dram_interleaved)",
-      "percent": 7.13,
-      "device_us": 8345.85,
+      "percent": 7.55,
+      "device_us": 8871.91,
       "count": 6,
       "category": "Compute"
     },
     {
       "op": "RotaryEmbeddingLlamaDeviceOperation (in0:dram_interleaved)",
-      "percent": 3.62,
-      "device_us": 4232.85,
+      "percent": 3.61,
+      "device_us": 4238.94,
       "count": 2,
       "category": "Compute"
     },
     {
       "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
-      "percent": 2.33,
-      "device_us": 2729.88,
+      "percent": 2.32,
+      "device_us": 2724.78,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "SDPAOperation (in0:dram_interleaved)",
-      "percent": 1.6,
-      "device_us": 1866.56,
+      "percent": 1.59,
+      "device_us": 1866.01,
       "count": 1,
       "category": "Compute"
     },
     {
       "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
-      "percent": 0.79,
-      "device_us": 920.19,
+      "percent": 0.78,
+      "device_us": 920.08,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "UntilizeCodegenDeviceOperation (in0:dram_interleaved)",
-      "percent": 0.78,
-      "device_us": 908.25,
+      "percent": 0.77,
+      "device_us": 908.86,
       "count": 1,
       "category": "Other"
     },
     {
       "op": "TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)",
       "percent": 0.32,
-      "device_us": 375.43,
+      "device_us": 375.09,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "ReshapeViewDeviceOperation (in0:dram_interleaved)",
       "percent": 0.21,
-      "device_us": 244.9,
+      "device_us": 244.15,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "SliceDeviceOperation (in0:dram_interleaved)",
       "percent": 0.04,
-      "device_us": 46.01,
+      "device_us": 45.95,
       "count": 1,
       "category": "TM"
     }
@@ -150,11 +150,11 @@
     {
       "id": "73",
       "op": "MatmulDeviceOperation 98304 x 1024 x 3072",
-      "device_us": 12993.919,
+      "device_us": 12955.688,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 12.199183325677186,
-      "flops_percent": 15.650412622965707,
+      "dram_percent": 12.23518195251383,
+      "flops_percent": 15.696595498393748,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -162,23 +162,11 @@
     {
       "id": "97",
       "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4850.456,
+      "device_us": 4854.003,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 24.48924389789331,
-      "flops_percent": 27.95066332449209,
-      "fidelity": "HiFi2 BF16 x BF16 => BF16",
-      "in0_block_w": "2",
-      "subblock": "2x2"
-    },
-    {
-      "id": "112",
-      "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4843.599,
-      "bound": "SLOW",
-      "cores": "110",
-      "dram_percent": 24.523912900304087,
-      "flops_percent": 27.99023259899563,
+      "dram_percent": 24.471348699207642,
+      "flops_percent": 27.93023873826667,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -186,23 +174,23 @@
     {
       "id": "99",
       "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4843.379,
+      "device_us": 4850.205,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 24.525026845927194,
-      "flops_percent": 27.991503994682766,
+      "dram_percent": 24.490511225814164,
+      "flops_percent": 27.95210978221799,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
     },
     {
-      "id": "110",
+      "id": "112",
       "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4840.07,
+      "device_us": 4846.721,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 24.54179381703157,
-      "flops_percent": 28.010640884586923,
+      "dram_percent": 24.508115899388475,
+      "flops_percent": 27.972202779211475,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -210,11 +198,23 @@
     {
       "id": "84",
       "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4836.352,
+      "device_us": 4842.847,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 24.560660597078126,
-      "flops_percent": 28.032174379834768,
+      "dram_percent": 24.527720987262246,
+      "flops_percent": 27.99457893802192,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "2x2"
+    },
+    {
+      "id": "110",
+      "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
+      "device_us": 4836.368,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 24.56057934383818,
+      "flops_percent": 28.032081641897932,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -222,23 +222,11 @@
     {
       "id": "86",
       "op": "MatmulDeviceOperation 98304 x 1024 x 2048",
-      "device_us": 4832.73,
+      "device_us": 4835.503,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 24.579068145747847,
-      "flops_percent": 28.053183733885945,
-      "fidelity": "HiFi2 BF16 x BF16 => BF16",
-      "in0_block_w": "2",
-      "subblock": "2x2"
-    },
-    {
-      "id": "114",
-      "op": "MatmulDeviceOperation 98304 x 2048 x 1024",
-      "device_us": 3622.719,
-      "bound": "SLOW",
-      "cores": "110",
-      "dram_percent": 32.788631964002725,
-      "flops_percent": 37.42312407511116,
+      "dram_percent": 24.56497286838618,
+      "flops_percent": 28.037096166885352,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -246,11 +234,11 @@
     {
       "id": "88",
       "op": "MatmulDeviceOperation 98304 x 2048 x 1024",
-      "device_us": 3617.645,
+      "device_us": 3621.801,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 32.834620312385546,
-      "flops_percent": 37.47561262264888,
+      "dram_percent": 32.79694273650043,
+      "flops_percent": 37.43260952941993,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -258,43 +246,55 @@
     {
       "id": "101",
       "op": "MatmulDeviceOperation 98304 x 2048 x 1024",
-      "device_us": 3612.666,
+      "device_us": 3615.856,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 32.87987320167433,
-      "flops_percent": 37.527261758009914,
+      "dram_percent": 32.85086574244107,
+      "flops_percent": 37.494154254556214,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
     },
     {
-      "id": "67",
-      "op": "MatmulDeviceOperation 98304 x 1024 x 1024",
-      "device_us": 2753.312,
+      "id": "114",
+      "op": "MatmulDeviceOperation 98304 x 2048 x 1024",
+      "device_us": 3610.147,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 28.711893167210977,
-      "flops_percent": 49.24013792344006,
+      "dram_percent": 32.90281531472264,
+      "flops_percent": 37.553446612080506,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "2x2"
+    },
+    {
+      "id": "85",
+      "op": "UnaryDeviceOperation",
+      "device_us": 2948.315,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "67",
+      "op": "MatmulDeviceOperation 98304 x 1024 x 1024",
+      "device_us": 2750.446,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 28.7418113280537,
+      "flops_percent": 49.29144677854523,
       "fidelity": "HiFi4 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
     },
     {
-      "id": "100",
-      "op": "BinaryNgDeviceOperation",
-      "device_us": 2733.979,
-      "bound": "",
-      "cores": "110",
-      "dram_percent": 0.0,
-      "flops_percent": 0.0,
-      "fidelity": "BF16, BF16 => BF16",
-      "in0_block_w": "",
-      "subblock": "x"
-    },
-    {
       "id": "74",
       "op": "NlpCreateHeadsDeviceOperation",
-      "device_us": 2729.876,
+      "device_us": 2724.781,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -306,7 +306,7 @@
     {
       "id": "87",
       "op": "BinaryNgDeviceOperation",
-      "device_us": 2697.613,
+      "device_us": 2717.379,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -316,9 +316,9 @@
       "subblock": "x"
     },
     {
-      "id": "113",
+      "id": "100",
       "op": "BinaryNgDeviceOperation",
-      "device_us": 2688.414,
+      "device_us": 2715.57,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
