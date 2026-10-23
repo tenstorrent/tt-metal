@@ -107,6 +107,10 @@ class QuantConfig:
     # ad2792e70b0), dropping the separate concatenate_heads op; a layout change, PCC unchanged.
     # WAN5B_CROSS_SDPA_CONCAT_HEADS=1 / 0 overrides the preset either way.
     cross_sdpa_concat_heads: bool = False
+    # S08. Math fidelity of the fused distributed norms (norm1 / norm2 / norm3, the attention q / k
+    # RMS norms, norm_out); None = their HiFi4 construction default. fp32 dest acc stays on.
+    # WAN5B_NORM_FIDELITY=hifi4 / hifi3 / hifi2 / lofi overrides the preset.
+    norm_math_fidelity: ttnn.MathFidelity | None = None
 
     @staticmethod
     def default() -> QuantConfig:
@@ -352,6 +356,30 @@ def _all_bf8_lofi_act8_out8_ff8_sdpamm_cat() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16() -> QuantConfig:
+    """The S07 default plus bf16 AdaLN shift / 1+scale (A3) (S08).
+
+    A3 measured nothing at T2V, where the affine is one row; at I2V the modulation is per token
+    ([2336, 768] fp32 per block), so the bf16 affine halves those operands and drops the `1 + scale`
+    programs. PCC- and fidelity-gated.
+    """
+    base = _all_bf8_lofi_act8_out8_ff8_sdpamm_cat()
+    base.modulation_affine_dtype = ttnn.bfloat16
+    return base
+
+
+def _all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16_nh2() -> QuantConfig:
+    """`_mod16` plus the fused distributed norms at HiFi2 (fp32 dest acc kept): the 5B default since S08.
+
+    On u20-30 at 160 W, x3 interleaved with the S07 default and `WAN_RMSNORM_WORKER_CAP=73` (set by the
+    5B pipeline): 720p 7.303 vs 7.374 s, I2V 7.814 vs 8.081 s, 480p 3.569 vs 3.743 s total; PCC 99.970 %
+    (S07 default 99.981 %); same-seed fidelity vs the S07 default latent PCC 0.830, PSNR 14.6 dB.
+    """
+    base = _all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16()
+    base.norm_math_fidelity = ttnn.MathFidelity.HiFi2
+    return base
+
+
 def _all_bf8_lofi_act8_out8_ff8_n16() -> QuantConfig:
     """The 5B default with norm_out emitting bf16 (A7), which the default never picked up.
 
@@ -373,6 +401,10 @@ def _all_bf8_lofi_act8_out8_ff8_n16_sdpamm() -> QuantConfig:
 
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm_cat = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm_cat)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16 = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16_nh2 = staticmethod(
+    _all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16_nh2
+)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_n16 = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_n16_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16_sdpamm)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm)
@@ -517,6 +549,21 @@ def apply_quant_config(model, config: QuantConfig) -> None:
             # Materialise the typed empty joint input now, outside any trace capture.
             block.attn1.dummy_joint_as(config.ring_sdpa.input_dtype)
 
+    norm_ckc = _norm_compute_config(arch, config)
+    for block in model.blocks:
+        for norm in (
+            block.norm1,
+            block.norm2,
+            block.norm3,
+            block.attn1.norm_q,
+            block.attn1.norm_k,
+            block.attn2.norm_q,
+            block.attn2.norm_k,
+        ):
+            if hasattr(norm, "compute_kernel_config"):
+                norm.compute_kernel_config = norm_ckc
+    model.norm_out.compute_kernel_config = norm_ckc
+
     model.norm_out_affine_dtype = config.modulation_affine_dtype
     model.norm_out_output_dtype = config.norm_out_output_dtype or ttnn.float32
 
@@ -550,7 +597,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
         f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}, "
         f"per_linear_compute_config={config.per_linear_compute_config}, ff1_output_dtype={config.ff1_output_dtype}, "
-        f"norm_out_output_dtype={config.norm_out_output_dtype}"
+        f"norm_out_output_dtype={config.norm_out_output_dtype}, norm_fidelity={norm_ckc.math_fidelity}"
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
@@ -567,6 +614,22 @@ def _ff1_gelu_form(config: QuantConfig) -> str:
     if forced in _FF1_GELU_FORMS:
         return forced
     return "fast" if config.ff1_fast_gelu else "accurate"
+
+
+_NORM_FIDELITIES = {
+    "hifi4": ttnn.MathFidelity.HiFi4,
+    "hifi3": ttnn.MathFidelity.HiFi3,
+    "hifi2": ttnn.MathFidelity.HiFi2,
+    "lofi": ttnn.MathFidelity.LoFi,
+}
+
+
+def _norm_compute_config(arch, config: QuantConfig):
+    forced = os.environ.get("WAN5B_NORM_FIDELITY", "").strip().lower()
+    fidelity = _NORM_FIDELITIES.get(forced) or config.norm_math_fidelity or ttnn.MathFidelity.HiFi4
+    return ttnn.init_device_compute_kernel_config(
+        arch, math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
 
 
 def _cross_sdpa_concat_heads(config: QuantConfig) -> bool:
@@ -616,10 +679,10 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
 QUANT_CONFIG_ENV = "WAN5B_QUANT_CONFIG"
 """Name of a `QuantConfig` preset to use instead of the 5B default; `bf16` (or `none`) keeps bf16 weights."""
 
-QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8_ff8_sdpamm_cat"
-"""Preset applied when `WAN5B_QUANT_CONFIG` is unset: the fastest PCC-passing 5B configuration on a
-BH Galaxy (sprint 7 S07, 720p T2V / I2V / 480p, PCC 99.981 % vs the torch reference).
-`all_bf8_lofi_act8_out8_ff8` is the previous default (HiFi2 ring-SDPA matmuls, separate concat heads)."""
+QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16_nh2"
+"""Preset applied when `WAN5B_QUANT_CONFIG` is unset: the fastest PCC- and fidelity-gated 5B configuration on a
+BH Galaxy (S08: bf16 AdaLN affine + HiFi2 fused norms on top of the S07 default). `all_bf8_lofi_act8_out8_ff8_sdpamm_cat`
+is the previous default (fp32 AdaLN affine, HiFi4 norms)."""
 
 QUANT_CONFIG_BF16_NAMES = ("bf16", "none")
 
@@ -651,6 +714,8 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8_out8_ff8",
             "all_bf8_lofi_act8_out8_ff8_sdpamm",
             "all_bf8_lofi_act8_out8_ff8_sdpamm_cat",
+            "all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16",
+            "all_bf8_lofi_act8_out8_ff8_sdpamm_cat_mod16_nh2",
             "all_bf8_lofi_act8_out8_ff8_n16",
             "all_bf8_lofi_act8_out8_ff8_n16_sdpamm",
         ]

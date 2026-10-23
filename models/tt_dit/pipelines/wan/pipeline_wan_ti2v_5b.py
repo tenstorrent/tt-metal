@@ -9,6 +9,7 @@ requests and carry swept blockings (see ``_register_5b_matmul_tables``).
 """
 
 import dataclasses
+import os
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
@@ -195,6 +196,12 @@ _BLOCKINGS.update(
 )
 
 
+# The fused distributed RMS norms (q / k norms) see 73 tile rows per device at 720p; the BH heuristic caps them at 64
+# workers, so every call takes a second 9-row round. 73 workers do it in one (S08: -0.07 s 720p denoise, math
+# unchanged; the LayerNorms stay clamped at 64 by their 256 B sticks). The op reads the cap from this env var only;
+# set WAN_RMSNORM_WORKER_CAP=64 to get the heuristic's value back for these shapes.
+os.environ.setdefault("WAN_RMSNORM_WORKER_CAP", "73")
+
 _SDPA_CHUNK_480P = (96, 512)
 
 
@@ -218,7 +225,7 @@ class WanTI2V5BPipeline(WanPipeline):
             # 4x8 BH preset defaults vae_t_chunk_size=None (full-T), which OOMs DRAM
             # for long clips (e.g. 121f needs a ~14GB VAE activation). Chunk the temporal
             # VAE decode (feat_cache carries causal-conv state across chunks).
-            "vae_t_chunk_size": 7,
+            "vae_t_chunk_size": int(os.environ.get("WAN5B_VAE_TCHUNK", 7)),
             # Retune ring SDPA for the 5B's geometry without moving the 14B, which shares
             # WanAttention.sdpa_chunk_size_map at the same (is_blackhole, sp, tp) key.
             #

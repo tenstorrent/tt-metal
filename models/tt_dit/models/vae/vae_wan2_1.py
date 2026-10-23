@@ -2612,8 +2612,14 @@ class WanVAEDecoderAdapter:
             # Output is (B, T, H, W, C) — trim, then undo patchify back to RGB.
             video_torch = video_torch[:, :, :new_logical_h, :new_logical_w, :]
             if self._patch_size > 1:
-                video_torch = unpatchify_bcthw(video_torch.permute(0, 4, 1, 2, 3).contiguous(), self._patch_size)
-                video_torch = video_torch.permute(0, 2, 3, 4, 1).contiguous()
+                # unpatchify_bcthw in BTHWC: one copy instead of three (bit-identical).
+                b, t, h, w, c = video_torch.shape
+                ps = self._patch_size
+                video_torch = (
+                    video_torch.reshape(b, t, h, w, c // (ps * ps), ps, ps)
+                    .permute(0, 1, 2, 6, 3, 5, 4)
+                    .reshape(b, t, h * ps, w * ps, c // (ps * ps))
+                )
             return video_torch
         # Output is (B, C, T, H, W) — trim height and width.
         video_torch = video_torch[:, :, :, :new_logical_h, :new_logical_w]
