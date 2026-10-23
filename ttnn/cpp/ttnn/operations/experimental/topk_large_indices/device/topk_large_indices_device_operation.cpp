@@ -197,7 +197,9 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
             program::compute_body_mode(attrs.k, num_rows, input_last_dim, num_cores, attrs.valid_length)),
         program::multi_chunk_rows(attrs.k, input_last_dim),
         program::split_whole_rows(attrs.k, num_rows, input_last_dim, num_cores),
-        program::row_split_possible(num_rows, num_cores));
+        program::row_split_possible(num_rows, num_cores),
+        program::split_two_chunk_rows(
+            attrs.k, num_rows, input_last_dim, num_cores, attrs.valid_length, tensor_args.has_valid_length_metadata()));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

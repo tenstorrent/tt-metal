@@ -81,4 +81,14 @@ bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim);
 // Whether a core can hold a whole row of several chunks, which the compute kernel splits across MATH and PACK.
 bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
 
+// K' 1024 programs whose searched width is two chunks: the compute kernel splits such rows from two chunks.
+// The scalar valid_length is outside the program hash, so the class is hashed.
+bool split_two_chunk_rows(
+    uint32_t k,
+    uint32_t num_rows,
+    uint32_t input_last_dim,
+    uint32_t num_cores,
+    std::optional<uint32_t> valid_length,
+    bool has_valid_length_metadata);
+
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

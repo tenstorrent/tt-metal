@@ -13,6 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 #include <optional>
@@ -246,6 +247,19 @@ bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, ui
     return multi_chunk_rows(k, input_last_dim) && (!row_split_possible(num_rows, num_cores) || num_rows >= num_cores);
 }
 
+bool split_two_chunk_rows(
+    uint32_t k,
+    uint32_t num_rows,
+    uint32_t input_last_dim,
+    uint32_t num_cores,
+    std::optional<uint32_t> valid_length,
+    bool has_valid_length_metadata) {
+    constexpr uint32_t chunk = to_uint32(LlkTargetK::K1024);
+    const uint32_t searched = std::min(input_last_dim, valid_length.value_or(input_last_dim));
+    return !has_valid_length_metadata && snap_to_llk_target_k(k) == LlkTargetK::K1024 && searched > chunk &&
+           searched <= 2 * chunk && split_whole_rows(k, num_rows, input_last_dim, num_cores);
+}
+
 std::vector<CoreRowAssignment> derive_core_row_assignments(
     const CoreRangeSet& core_grid, uint32_t num_rows, uint32_t num_chunks) {
     TT_FATAL(num_rows > 0, "topk_large_indices requires at least one row of work");
@@ -464,6 +478,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .compile_args = compute_compile_args,
             .named_compile_args = {
                 {"tree", tree},
+                {"two_chunk_split",
+                 split_two_chunk_rows(
+                     k,
+                     flattened_rows_excluding_last_dim(input.logical_shape()),
+                     input.logical_shape()[-1],
+                     static_cast<uint32_t>(cores.size()),
+                     operation_attributes.valid_length,
+                     has_meta)
+                     ? 1u
+                     : 0u},
                 {"split_whole_rows",
                  split_whole_rows(
                      k,

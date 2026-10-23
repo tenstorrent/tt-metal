@@ -517,6 +517,7 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
     constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
     constexpr bool split_whole_rows = get_named_compile_time_arg_val("split_whole_rows") != 0;
+    constexpr bool two_chunk_split = get_named_compile_time_arg_val("two_chunk_split") != 0;
     const uint32_t seg_first_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk) : 0;
     const uint32_t seg_end_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk) : 0;
     const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
@@ -599,8 +600,8 @@ void kernel_main() {
     // Whole rows run split across MATH and PACK; a core's split row stays on one thread.
     if constexpr (split_whole_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
-        // Shorter rows run on one thread; K 512 gains nothing from the split at two chunks.
-        constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
+        // K 512 gains nothing from the split at two chunks; K 1024 does only when the host marks two-chunk rows.
+        constexpr uint32_t min_split_chunks = (K == 512 && !tree) || (K == 1024 && !two_chunk_split) ? 3 : 2;
         if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
             (num_chunks <= max_fused_chunks || split_segments)) {
             MATH((topk_large_indices_split::start()));
