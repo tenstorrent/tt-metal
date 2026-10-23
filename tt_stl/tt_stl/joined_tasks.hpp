@@ -6,13 +6,12 @@
 #include <future>
 #include <vector>
 
-namespace tt::tt_metal::detail {
+namespace ttsl {
 
-// Packing tasks borrow the caller's source and output buffers. Pool futures do
-// not join on destruction, so drain all submitted work before propagating an
-// error from submission or execution. Allocate every future slot before launch.
+// Submitted tasks may borrow caller-owned buffers. Drain every task before
+// returning, including when submission or execution throws.
 template <typename Submit>
-void run_bfp_tasks(size_t count, const Submit& submit) {
+void run_joined_tasks(size_t count, const Submit& submit) {
     std::vector<std::shared_future<void>> pending(count);
     try {
         for (size_t i = 0; i < count; ++i) {
@@ -31,4 +30,4 @@ void run_bfp_tasks(size_t count, const Submit& submit) {
     }
 }
 
-}  // namespace tt::tt_metal::detail
+}  // namespace ttsl

@@ -529,7 +529,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
     const uint32_t tiles_per_chunk = num_tiles / num_chunks;
     const uint32_t remainder = num_tiles % num_chunks;
-    tt::tt_metal::detail::run_bfp_tasks(num_chunks, [&](size_t chunk) {
+    ttsl::run_joined_tasks(num_chunks, [&](size_t chunk) {
         const uint32_t start_tile = chunk * tiles_per_chunk + std::min<size_t>(chunk, remainder);
         const uint32_t end_tile = start_tile + tiles_per_chunk + (chunk < remainder ? 1 : 0);
         return tt::tt_metal::detail::async(

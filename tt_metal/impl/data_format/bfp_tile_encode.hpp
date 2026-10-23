@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <cstring>
 #include <tt-metalium/tile.hpp>
+#include <tt_stl/joined_tasks.hpp>
 #include "bfp_simd.hpp"
-#include "bfp_tasks.hpp"
 #include "common/executor.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -53,7 +53,7 @@ void run_bfp_tile_ranges(size_t tile_count, const Process& process) {
         process(0, tile_count);
         return;
     }
-    run_bfp_tasks(chunks, [&](size_t chunk) {
+    ttsl::run_joined_tasks(chunks, [&](size_t chunk) {
         const size_t begin = tile_count * chunk / chunks;
         const size_t end = tile_count * (chunk + 1) / chunks;
         return async([&, begin, end] { process(begin, end); });

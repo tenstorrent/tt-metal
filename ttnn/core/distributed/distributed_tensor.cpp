@@ -457,9 +457,9 @@ private:
                             --outer_rank;
                         }
                         const U* source = view.data() + view.data_offset();
-                        // A matrix-like view can be packed directly with its
-                        // original row stride. This removes the temporary mesh
-                        // chunk allocation as well as the tile-layout buffer.
+                        // from_vector uses the shared BFP encoder for contiguous
+                        // inputs. A strided mesh view needs its row stride here
+                        // to avoid first copying it into a vector.
                         std::optional<tt::tt_metal::HostTensor> packed;
                         if constexpr (std::is_same_v<U, float> || std::is_same_v<U, bfloat16>) {
                             if (view.dimension() >= 2 && view.size() != 0 && view.strides().back() == 1) {

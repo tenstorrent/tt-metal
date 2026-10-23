@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include "common/executor.hpp"
 #include "impl/data_format/bfp_simd.hpp"
-#include "impl/data_format/bfp_tasks.hpp"
+#include <tt_stl/joined_tasks.hpp>
 
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-umd/types/arch.hpp>
@@ -123,10 +123,10 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
 
 namespace {
 template <int bits, typename T>
-void check_simd_rows(int isa) {
+void check_simd_rows(tt::tt_metal::bfp_simd::Isa isa) {
     auto encode = tt::tt_metal::bfp_simd::select_row_packer<bits, T>(isa);
     if (!encode) {
-        GTEST_SKIP() << "Requested BFP ISA " << isa << " is unavailable on this CPU";
+        GTEST_SKIP() << "Requested BFP ISA " << static_cast<int>(isa) << " is unavailable on this CPU";
     }
     constexpr auto format = [] {
         if constexpr (bits == 7) {
@@ -164,8 +164,8 @@ void check_simd_rows(int isa) {
         }
         uint8_t actual_exponent = 0;
         encode(input.data(), &actual_exponent, actual.data());
-        ASSERT_EQ(actual_exponent, exponent) << "row=" << row << " bits=" << bits << " isa=" << isa;
-        ASSERT_EQ(actual, expected) << "row=" << row << " bits=" << bits << " isa=" << isa;
+        ASSERT_EQ(actual_exponent, exponent) << "row=" << row << " bits=" << bits << " isa=" << static_cast<int>(isa);
+        ASSERT_EQ(actual, expected) << "row=" << row << " bits=" << bits << " isa=" << static_cast<int>(isa);
     }
 }
 
@@ -198,16 +198,17 @@ void check_packed_tiles() {
 
 class BfpSimdRows : public ::testing::TestWithParam<int> {};
 TEST_P(BfpSimdRows, CPU_MatchesOriginalIntegerConverter) {
-    if (GetParam() == 3 && std::getenv("TT_METAL_TEST_REQUIRE_AVX512") != nullptr) {
-        ASSERT_TRUE((tt::tt_metal::bfp_simd::select_row_packer<7, float>(3)))
+    const auto isa = static_cast<tt::tt_metal::bfp_simd::Isa>(GetParam());
+    if (isa == tt::tt_metal::bfp_simd::Isa::Avx512 && std::getenv("TT_METAL_TEST_REQUIRE_AVX512") != nullptr) {
+        ASSERT_TRUE((tt::tt_metal::bfp_simd::select_row_packer<7, float>(tt::tt_metal::bfp_simd::Isa::Avx512)))
             << "This CI leg requires AVX-512; missing CPU coverage is a failure";
     }
-    check_simd_rows<7, float>(GetParam());
-    check_simd_rows<3, float>(GetParam());
-    check_simd_rows<1, float>(GetParam());
-    check_simd_rows<7, bfloat16>(GetParam());
-    check_simd_rows<3, bfloat16>(GetParam());
-    check_simd_rows<1, bfloat16>(GetParam());
+    check_simd_rows<7, float>(isa);
+    check_simd_rows<3, float>(isa);
+    check_simd_rows<1, float>(isa);
+    check_simd_rows<7, bfloat16>(isa);
+    check_simd_rows<3, bfloat16>(isa);
+    check_simd_rows<1, bfloat16>(isa);
 }
 INSTANTIATE_TEST_SUITE_P(BlockfloatCommonTests, BfpSimdRows, ::testing::Values(0, 1, 2, 3));
 
@@ -285,7 +286,7 @@ TEST_P(BfpTaskLifetime, CPU_DrainBeforeRethrowing) {
     failed.set_exception(std::make_exception_ptr(std::runtime_error("packing failed")));
     auto submitted_result = submitted.get_future();
     auto operation = std::async(std::launch::async, [&] {
-        tt::tt_metal::detail::run_bfp_tasks(2, [&](size_t i) {
+        ttsl::run_joined_tasks(2, [&](size_t i) {
             if (i == 0) {
                 return submission_fails ? unfinished_result : failed_result;
             }

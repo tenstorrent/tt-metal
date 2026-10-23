@@ -143,25 +143,26 @@ __attribute__((target("avx512f,avx512bw,avx512vl,avx2"), always_inline)) static 
 template <int bits, typename T>
 using RowPacker = void (*)(const T*, uint8_t*, uint8_t*);
 
-// isa is exposed only to internal CPU tests: 0=auto, 1=scalar, 2=AVX2, 3=AVX512.
+enum class Isa { Auto, Scalar, Avx2, Avx512 };
+
 // Null means the explicitly requested instruction set is unavailable.
 template <int bits, typename T>
-static RowPacker<bits, T> select_row_packer(int isa = 0) {
+static RowPacker<bits, T> select_row_packer(Isa isa = Isa::Auto) {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, bfloat16>);
-    if (isa == 1) {
+    if (isa == Isa::Scalar) {
         return row_scalar<bits, T>;
     }
 #if defined(__x86_64__)
     // Called during conversion, after compiler CPU-feature initialization.
     // No early static initializer or IFUNC resolver calls this selector.
-    if ((isa == 0 || isa == 3) && __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") &&
-        __builtin_cpu_supports("avx512vl") && __builtin_cpu_supports("avx2")) {
+    if ((isa == Isa::Auto || isa == Isa::Avx512) && __builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vl") && __builtin_cpu_supports("avx2")) {
         return row_avx512<bits, T>;
     }
-    if ((isa == 0 || isa == 2) && __builtin_cpu_supports("avx2")) {
+    if ((isa == Isa::Auto || isa == Isa::Avx2) && __builtin_cpu_supports("avx2")) {
         return row_avx2<bits, T>;
     }
 #endif
-    return isa == 0 ? row_scalar<bits, T> : nullptr;
+    return isa == Isa::Auto ? row_scalar<bits, T> : nullptr;
 }
 }  // namespace tt::tt_metal::bfp_simd
