@@ -121,6 +121,8 @@ ExternalReceiver::ExternalReceiver(std::unique_ptr<external::ExternalEnd> link) 
         const_cast<volatile uint32_t*>(ring.bytes_sent)[0] = 0;
         buffers.push_back({.relay = r, .noc_addr = ring.buffer->get_noc_address().value(), .bytes = kRingBytes});
     }
+    // A consumer reading a record's time() needs the steady clock's map, so it has a sample before any record arrives.
+    service().steady().sample();
     service().attach_receiver(*this);
     if (!link_->attach(buffers)) {
         log_warning(tt::LogMetal, "[streaming profiler] the profiled process couldn't point every relay at this process");
