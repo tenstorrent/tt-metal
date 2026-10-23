@@ -40,11 +40,13 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <optional>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -881,9 +883,9 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasWithDifferentValuesRe
 }
 
 // The value comparison of padded replicas across layouts: partial tiles in both dimensions, padding rows inside
-// every batch element, a single column, a single row, rank 3; bf16, fp32, uint8 and uint32. Replica A is the
-// encoding of random values with zero padding, B carries the same values under random padding and is accepted, C is
-// B with one logical value changed and is rejected.
+// every batch element, a single column, a single row, rank 3, rank 1 (a partial and a whole tile width) and rank 0;
+// bf16, fp32, uint8 and uint32. Replica A is the encoding of random values with zero padding, B carries the same values
+// under random padding and is accepted, C is B with one logical value changed and is rejected.
 template <typename T>
 T padded_value(float f) {
     if constexpr (std::is_same_v<T, bfloat16>) {
@@ -988,7 +990,10 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasAcrossLayoutsAccepted
           ttnn::Shape{2, 3, 45, 33},
           ttnn::Shape{1, 1, 33, 1},
           ttnn::Shape{3, 17, 40},
-          ttnn::Shape{1, 1, 1, 50}}) {
+          ttnn::Shape{1, 1, 1, 50},
+          ttnn::Shape{50},
+          ttnn::Shape{64},
+          ttnn::Shape{}}) {
         check_padded_replicas<bfloat16>(shape, rng);
         check_padded_replicas<float>(shape, rng);
         check_padded_replicas<uint8_t>(shape, rng);
@@ -996,11 +1001,11 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasAcrossLayoutsAccepted
     }
 }
 
-// Padded replicas on the layouts the in-place walk does not describe (block floats, a transposed tile, a rank-1
-// tensor, FP8_E4M3 under an alignment that pads a leading dimension), on every tile shape the host supports, and on a
-// row-major tensor with alignment padding. Each replica is encoded from the same values with a different pad value, so
-// the bytes differ in the padding alone; a third replica changes one logical value. Values 2..100 keep a block float's
-// shared exponents unchanged by a pad value of 1.
+// Padded replicas on the layouts the in-place walk does not describe (block floats, a transposed tile, FP8_E4M3 under
+// an alignment that pads a leading dimension), on every tile shape the host supports, and on row-major tensors with
+// alignment padding. Each replica is encoded from the same values with a different pad value, so the bytes differ in
+// the padding alone; a third replica changes one logical value. Values 2..100 keep a block float's shared exponents
+// unchanged by a pad value of 1.
 // The shard buffer `from_vector` produces, kept as is so it carries the element type the dtype's readers expect
 // (uint32 for packed block floats), as a shard read back from a device does.
 HostBuffer encoded_shard(const TensorSpec& spec, const std::vector<float>& logical, float pad_value) {
@@ -1098,18 +1103,40 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasBeyondTheInPlaceWalkA
             TensorLayout(
                 DataType::BFLOAT16, PageConfig(Layout::TILE, Tile({32, 32}, /*transpose_tile=*/true)), MemoryConfig{})),
         rng);
-    // Rank 1.
-    check_encoded_padded_replicas(
-        "rank-1 bf16 50",
-        TensorSpec(ttnn::Shape{50}, TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{})),
-        rng);
-    // Row-major with alignment padding on the width.
-    check_encoded_padded_replicas(
-        "row-major bf16 30x30 aligned to 64",
-        TensorSpec(
-            ttnn::Shape{1, 1, 30, 30},
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, Alignment({64}))),
-        rng);
+}
+
+// Row-major replicas with alignment padding on the width, compared in place: rank 4 and rank 1, bf16 and FP8_E4M3.
+TEST(TensorSerializationFlatbufferGuardTest, PaddedRowMajorReplicasAcceptedAndRejected) {
+    std::mt19937 rng(19);
+    const std::vector<std::pair<std::string, ttnn::Shape>> shapes{
+        {"1x1x30x30", ttnn::Shape{1, 1, 30, 30}}, {"rank-1 50", ttnn::Shape{50}}};
+    for (const DataType dtype : {DataType::BFLOAT16, DataType::FP8_E4M3}) {
+        for (const auto& [name, shape] : shapes) {
+            check_encoded_padded_replicas(
+                fmt::format("row-major {} {} aligned to 64", dtype, name),
+                TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, Alignment({64}))),
+                rng);
+        }
+    }
+}
+
+// A rank-1 tile-layout tensor is one row padded to a whole tile, and its replicas are compared in place. Held as raw
+// bytes, which the in-place walk reads and the decoded comparison does not, they are still accepted when only the
+// padding differs and rejected when a value does.
+TEST(TensorSerializationFlatbufferGuardTest, RankOneReplicasComparedInPlace) {
+    const TensorSpec spec(ttnn::Shape{50}, TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{}));
+    std::vector<float> logical(50);
+    std::iota(logical.begin(), logical.end(), 2.0f);
+    std::vector<float> changed = logical;
+    changed[7] += 300.0f;
+    const auto raw = [&spec](const std::vector<float>& values, float pad_value) {
+        return HostBuffer(bytes_of(encoded_shard(spec, values, pad_value)));
+    };
+
+    EXPECT_NO_THROW(verify_shards_match_topology(two_encoded_replicas(spec, raw(logical, 0.0f), raw(logical, 1.0f))));
+    EXPECT_THAT(
+        [&]() { verify_shards_match_topology(two_encoded_replicas(spec, raw(logical, 0.0f), raw(changed, 1.0f))); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("contents differ")));
 }
 
 // One HostBuffer emplaced at both coordinates shares one copy on disk whatever the label says: the pointer lookup
