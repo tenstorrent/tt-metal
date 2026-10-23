@@ -86,6 +86,15 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshCoordinate& coord);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
+// Forward declaration for the experimental owning fixed-address allocation friend.
+namespace tt::tt_metal::experimental::fixed_address_allocation {
+std::shared_ptr<distributed::MeshBuffer> allocate_at_address(
+    const distributed::MeshBufferConfig& mesh_buffer_config,
+    const distributed::DeviceLocalBufferConfig& device_local_config,
+    distributed::MeshDevice* mesh_device,
+    DeviceAddr address);
+}  // namespace tt::tt_metal::experimental::fixed_address_allocation
+
 namespace tt::tt_metal::distributed {
 
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
@@ -97,13 +106,6 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
-    // Allocate and own an L1 range at exactly this address. Throws if the range is
-    // unavailable. Unlike create(..., address), this reserves allocator storage.
-    static std::shared_ptr<MeshBuffer> allocate_at_address(
-        const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_config,
-        MeshDevice* mesh_device,
-        DeviceAddr address);
     ~MeshBuffer();
 
     // MeshBuffer manages device memory and owns the backing allocation. Copying would create
@@ -143,7 +145,7 @@ public:
     Buffer* get_reference_buffer() const;
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
     // at its specific address. It is absent for non-owning create(..., address) views,
-    // but present for owning allocate_at_address(...) allocations.
+    // but present for owning allocations, including experimental fixed-address allocations.
     Buffer* get_backing_buffer() const;
 
     uint32_t datum_size_bytes() const;
@@ -216,6 +218,8 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
+    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::fixed_address_allocation::allocate_at_address(
+        const MeshBufferConfig&, const DeviceLocalBufferConfig&, MeshDevice*, DeviceAddr);
 };
 
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {

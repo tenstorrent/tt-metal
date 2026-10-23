@@ -19,6 +19,7 @@
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/fixed_address_allocation/mesh_buffer.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -267,7 +268,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(
         [this](uint32_t size, const distributed::DeviceLocalBufferConfig& config, std::optional<DeviceAddr> address) {
             const distributed::ReplicatedBufferConfig mesh_config{.size = size};
             return address.has_value()
-                       ? distributed::MeshBuffer::allocate_at_address(mesh_config, config, device_, address.value())
+                       ? fixed_address_allocation::allocate_at_address(mesh_config, config, device_, address.value())
                        : distributed::MeshBuffer::create(mesh_config, config, device_);
         };
 

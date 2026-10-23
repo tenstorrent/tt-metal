@@ -17,6 +17,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/fixed_address_allocation/mesh_buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
@@ -197,7 +198,7 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRolls
     };
     auto* physical_device = mesh_device->get_devices().front();
     for (const auto blocked_address : {data_address, config_address}) {
-        auto blocker = distributed::MeshBuffer::allocate_at_address(
+        auto blocker = experimental::fixed_address_allocation::allocate_at_address(
             distributed::ReplicatedBufferConfig{.size = 64}, config, mesh_device.get(), blocked_address);
         const auto occupied = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
         // Existing explicit-address create remains a non-owning view.
