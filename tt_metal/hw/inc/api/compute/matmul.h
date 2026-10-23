@@ -70,6 +70,9 @@ ALWI void matmul_block_math_dynamic_throttle(
             throttled_mop_status = 1;
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        // Leave the unthrottled state behind, so the next block's init is redundant.
+        MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+        throttled_mop_status = 0;
     } else {
         if (throttled_mop_status != 0) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
