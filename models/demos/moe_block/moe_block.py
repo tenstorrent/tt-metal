@@ -55,6 +55,10 @@ class RouterConfig:
     normalize_topk: bool = True  # norm_topk_prob
     expert_groups: int = 1  # group-limited routing; 1 = plain top-k
     topk_groups: int = 1
+    # (a proxy: the router picks over num_experts x fold candidates, candidate c is expert c // fold - a Galaxy's
+    # router width on fewer chips; the bias must leave one candidate of each group eligible so a token's picks fold to
+    # distinct experts. The fused head only.)
+    fold: int = 1
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,8 @@ class MoEOptions:
     # the fused head's router logits: on the engine's cores at the start, on their own router cores, or "auto" (the
     # head's cost model: tt/fused_head.py router_placement - the router's FLOPs a core vs the SE path)
     router: Literal["auto", "engine", "router_cores"] = "auto"
+    # the routed experts' gate / up weight readers: the DRAM cores (DRISC, the default) or Tensix readers (A/B)
+    experts_drisc: bool = True
     # the tail (latent models): "fused" one program a chip (tt/tail_engine.py: the latent all-gather into the engine's
     # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); "ops" its ops; "auto": fused
     # where it is built (with the fused head, 640 rows a mesh row)
@@ -253,8 +259,9 @@ class MoEWeights:
     def check(self, model: MoEModel):
         """The contract: every key and shape. fp32 or bf16 on the host; the block quantizes."""
         E, H, I, Hr = model.num_experts, model.emb_dim, model.routed_expert_hidden_dim, model.routed_width
-        assert self.router["weight"].shape == (E, H), f"router weight {tuple(self.router['weight'].shape)}"
-        assert self.router["bias"].shape == (E,)
+        F = model.router.fold
+        assert self.router["weight"].shape == (E * F, H), f"router weight {tuple(self.router['weight'].shape)}"
+        assert self.router["bias"].shape == (E * F,)
         assert len(self.routed) == E, f"{len(self.routed)} routed experts, the model has {E}"
         for e, w in enumerate(self.routed):
             assert w["gate_up"].shape == (2 * I, Hr), f"expert {e} gate_up {tuple(w['gate_up'].shape)}"
@@ -335,7 +342,7 @@ class MoEBlock(LightweightModule):
         self.latent = None
         if model.latent_dim is not None:  # (the fused head does the latent down: only the up is used then)
             self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
-        self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes)
+        self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
         # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
         # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
         acc = None
@@ -782,8 +789,9 @@ class FusedHead:
             rs_mode="fused",
             # (deterministic: the router fin's sum in a fixed order)
             router=RouterSpec(
-                E=E,
+                E=E * model.router.fold,
                 K=K,
+                fold=model.router.fold,
                 route_scale=model.router.route_scale,
                 ordered=deterministic,
                 on_engine={"auto": None, "engine": True, "router_cores": False}[router],
@@ -896,8 +904,8 @@ class Router:
         from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 
         r = model.router
-        if not (r.score_func == "sigmoid" and r.normalize_topk and r.expert_groups == 1):
-            raise NotImplementedError(f"MoEBlock router: sigmoid + bias, normalized, one group only (got {r})")
+        if not (r.score_func == "sigmoid" and r.normalize_topk and r.expert_groups == 1 and r.fold == 1):
+            raise NotImplementedError(f"MoEBlock router: sigmoid + bias, normalized, one group, no fold (got {r})")
         E = model.num_experts
         self.w = _weight(mesh, w["weight"].T, dtypes.router_weights, (None, 0))  # [H, E], H over the columns
         self.cfg = _cfg(ttnn.MathFidelity.HiFi4)
@@ -1022,7 +1030,7 @@ class RoutedExperts:
     chip e // experts_per_chip, row-major chip order), laid out by the close-out plan (pure DRISC, even splits,
     rows_hint = chunk x top_k / experts). Experts that are the same host tensors on every chip are packed once."""
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, routed: list, dtypes: MoEDtypes):
+    def __init__(self, mesh, g: Geometry, model: MoEModel, routed: list, dtypes: MoEDtypes, drisc=True):
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         assert dtypes.routed_weights == ttnn.bfloat4_b, "bring-up: bfp4 routed weights"
@@ -1032,6 +1040,8 @@ class RoutedExperts:
         # (one x helper: a second one costs ~104 KB of every core's arena, which the exchange's combine needs at the
         # LoudBox's per-chip load - flat_layouts.GLM_FLASH)
         self.layout_fields = dict(rows_hint=round(g.chunk_tokens * model.top_k / model.num_experts), x_helpers=1)
+        if not drisc:  # (MoEOptions.experts_drisc off: Tensix weight readers)
+            self.layout_fields.update(drisc=False, drisc_in_overlap=False)
         self.act = _FLAT_ACT[model.routed_expert_activation.kind]
         conv = {}
 

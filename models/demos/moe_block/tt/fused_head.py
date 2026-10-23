@@ -31,6 +31,7 @@ class RouterSpec:
     w_gate: bool | None = None
     # (the fin sums the sources' partials in slot order: bit-identical runs; else in landing order - see RouterStream)
     ordered: bool = False
+    fold: int = 1  # (E candidates, expert = candidate // fold: the joint rows carry experts - MoEModel's RouterConfig)
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,7 @@ class HeadSE3:
             placement="simple" if grid.x - GX < 4 else "auto",
             watcher=watcher,
         )
+        self.eng.ring_dir = self.xg.ring_dir  # (the latent's multi-hop sends: the gather's ring directions)
         if self.rs_mode == "mrs":  # (the gather's semaphores above the arena too: the arena is freed every call)
             self.eng.alloc_arena()
         import os as _os
@@ -332,6 +334,7 @@ class HeadSE3:
                 prio_first=self.logits_priority(router, latent),
                 on_engine=self.router_on_engine(router, latent),
                 ordered=router.ordered,
+                fold=router.fold,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
             )
@@ -346,7 +349,7 @@ class HeadSE3:
             R_, C_ = tuple(mesh_device.shape)
             luts, nps = port_luts(mesh_device, routing.L, tuple(routing.torus))  # (the combine's ports: its torus)
             S_ = rows // G
-            EPC = router.E // (R_ * C_)
+            EPC = router.E // router.fold // (R_ * C_)
             rows_cap = routing.rows_cap or (2 * S_ * router.K + 32 * EPC + 31) // 32 * 32
             off0 = (max(self.router.bytes, self.router.pbuf_sub) + 63) // 64 * 64
             self.routing = RoutingStream(

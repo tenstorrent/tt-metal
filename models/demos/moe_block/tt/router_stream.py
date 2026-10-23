@@ -429,6 +429,9 @@ void kernel_main() {
 # the 32 tokens are split over four): ids = rows 0 .. K - 1 of the token's column, weights = (biased - bias[id]) /
 # their sum x scale, bf16 (round to nearest even)
 _ROWS = r"""
+#ifndef RT_FOLD
+#define RT_FOLD 1
+#endif
 namespace rows_ {
 // (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
 FORCE_INLINE uint32_t fo(uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); }
@@ -496,7 +499,7 @@ inline void make(uint32_t bv, uint32_t bias, uint32_t o_l1, uint32_t scale_bits,
         const uint32_t r1 = sn ? 0xFFFFFFFFu / (sn >> 14) : 0;  // (2^32 / (sn / 2^14): 2^62 / sn = r1 x 2^16)
         const uint32_t rs = (uint32_t)(((uint64_t)r1 * sc) >> 8);  // (weight = wn x rs / 2^32 x 2^(se - 6))
         for (uint32_t q = 0; q < K; ++q) {
-            o[q] = static_cast<uint16_t>(ids[q]);
+            o[q] = static_cast<uint16_t>(ids[q] / RT_FOLD);  // (candidate -> expert: RouterSpec.fold)
             const uint32_t wn = sh >= 0 ? (uint32_t)w[q] << sh : (uint32_t)w[q] >> -sh;
             o[K + q] = static_cast<uint16_t>(bf16_of((uint32_t)(((uint64_t)wn * rs) >> 32), 6 - se));
         }
@@ -578,7 +581,7 @@ void kernel_main() {
         }
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NC_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all increments landed)
-        ra::plan(r0 + 3 + 2 * RA_NC_, B);
+        if (B) ra::plan(r0 + 3 + 2 * RA_NC_, B);  // (no instance here: fewer planner instances than router cores)
     }
 #endif
 #ifdef RT_ROUTE
@@ -679,6 +682,7 @@ class RouterStream:
         fidelity=ttnn.MathFidelity.HiFi3,
         on_engine=False,
         ordered=False,
+        fold=1,
     ):
         """arena: (tensor, base, bytes) - the engine's arena, also carved on these cores and the ports (lockstep L1);
         words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core). ordered: the fin sums the
@@ -686,6 +690,7 @@ class RouterStream:
         its way: ~4 us of GLM's chain; a near tie's pick can then differ between runs)."""
         self.mesh, self.xg = mesh_device, xg
         self.ordered = ordered
+        self.fold = fold
         G = self.G = xg.G
         CR = rows // 32
         assert CR % G == 0
@@ -835,13 +840,11 @@ class RouterStream:
         return self.xg.chips[coord]["rings"][0]["p"]
 
     def _dir(self, p, b):
-        """The direction chip p sends owner b's partial (shortest; ring ties "fwd" - X+, the fabric routing table's
-        tie: a multi-hop unicast must leave through its route's first hop, or it never lands)."""
-        G = self.G
+        """The direction chip p sends owner b's partial (shortest; ring ties the fabric's way - X+ on the
+        LoudBox square and the Galaxy: XGather3.ring_dir)."""
         if not self.xg.ring:
             return "fwd" if b > p else "bwd"
-        df = (b - p) % G
-        return "fwd" if df <= G - df else "bwd"
+        return self.xg.ring_dir(p, b)
 
     def _hops(self, p, b):
         G = self.G
@@ -907,6 +910,8 @@ class RouterStream:
         if not hasattr(self, "_ra_pargs") or self._ra_coord != coord:
             self._ra_pargs, self._ra_coord = self.ra.planner_args(coord), coord
         pxy = [w for c in self.cores for v in [virt(c)] for w in (v.x, v.y)]
+        if j >= self.ra.M:  # (fewer planner instances than router cores - the accumulators bound them: none here)
+            return [self.ra.addr["rows"], self.ra.addr["rows2"], 0] + pxy
         return [self.ra.addr["rows"], self.ra.addr["rows2"], self.ra.pbases[j]] + pxy + self._ra_pargs(j)
 
     def _ra_args2(self, coord, j):
@@ -1065,7 +1070,7 @@ class RouterStream:
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
-        eng += f"#define RT_MSYNC {self.base + self.off['msync']}u\n"
+        eng += f"#define RT_MSYNC {self.base + self.off['msync']}u\n#define RT_FOLD {self.fold}u\n"
         eng += "#define RT_ARR_ORDERED\n" if self.ordered else ""
         if self.on_engine and self.gate is not None:  # (the engine's W-stream gate: se_engine3 gate_target)
             g = self.gate
@@ -1090,7 +1095,12 @@ class RouterStream:
 
             R_, C_ = tuple(self.mesh.shape)
             rt_c = "#define RT_ROUTE\n" + route_src(
-                (R_, C_), coord[0] * C_ + coord[1], E=ET * 32, EPC=self.prep["EPC"], K=K, torus=self.prep["torus"]
+                (R_, C_),
+                coord[0] * C_ + coord[1],
+                E=ET * 32 // self.fold,
+                EPC=self.prep["EPC"],
+                K=K,
+                torus=self.prep["torus"],
             )
             rt_ct = acc(route)
             n0 = len(ct + acc(out) + (self._ra_ct() if self.ra is not None else []))
@@ -1108,7 +1118,10 @@ class RouterStream:
                 config=comp,
             ),
             ttnn.KernelDescriptor(
-                kernel_source=rt_b + self._ra_src(coord, len(ct + acc(out))) + _BRISC,
+                kernel_source=f"#define RT_FOLD {self.fold}u\n"
+                + rt_b
+                + self._ra_src(coord, len(ct + acc(out)))
+                + _BRISC,
                 source_type=st,
                 core_ranges=self.crs,
                 compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []) + rt_ct,

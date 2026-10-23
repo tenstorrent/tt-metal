@@ -785,6 +785,33 @@ class XGather3:
             (d, v): addrs[2 + i * num_links + v] for i, d in enumerate(("fwd", "bwd")) for v in range(num_links)
         }
 
+    def ring_dir(self, p, b):
+        """The ring direction ("fwd" / "bwd") a multi-hop packet from TP position p to b leaves by: the shorter way, and
+        on a tie (the ring's far side) the way the fabric's own routing sends it - a packet injected toward the other
+        neighbour is not delivered (a hang: the latent all-to-all on a ring of 4). Positions, the same on every row
+        (asserted)."""
+        G = self.G
+        df = (b - p) % G
+        if df != G - df:
+            return "fwd" if df < G - df else "bwd"
+        if not hasattr(self, "_ties"):
+            node = lambda c: self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
+            self._ties = {}
+            for coord, ch in self.chips.items():
+                rg = ch["rings"][0]
+                pp = rg["p"]
+                at = {self.chips[c]["rings"][0]["p"]: c for c in self.chips if c[0] == coord[0]}
+                fd = ttnn._ttnn.fabric.get_eth_forwarding_direction(node(coord), node(rg["next"]))
+                for q, qc in at.items():
+                    if (q - pp) % G * 2 == G:
+                        d = (
+                            "fwd"
+                            if ttnn._ttnn.fabric.get_eth_forwarding_direction(node(coord), node(qc)) == fd
+                            else "bwd"
+                        )
+                        assert self._ties.setdefault((pp, q), d) == d, "ring ties differ between mesh rows"
+        return self._ties[(p, b)]
+
     def _pk(self, v, part):
         """Packets of a chunk's shard entry on link v."""
         e = self.eng

@@ -43,7 +43,10 @@ PREP_CB = dict(pu=14, po=15, lrdy=16)
 RTR_CB = dict(
     rx=17, rw=18, ro=19
 )  # (the router logits on the engine: x rows [KTO][MT], W_r^T [ETC][KTO], out fp32)  # (dispatch prep: the units' source view, the untilized rows, latent ready)
-ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
+ARENA_MAX = (
+    1344 * 1024
+)  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less the movers' static CBs (~177 KB
+# end on a port core) - the arena range is carved on them too - and what the head keeps below it)
 
 _BRISC = r"""
 #include <cstdint>
@@ -1793,13 +1796,11 @@ class SeEngine3:
         return (rs[0], len(rs)) if rs else (0, 0)
 
     def la_dir(self, p, b):
-        """The direction chip p sends block b's latent (shortest; ring ties "fwd" - X+, the fabric routing table's
-        tie: a multi-hop unicast must leave through its route's first hop, or it never lands)."""
+        """The direction chip p sends block b's latent (shortest; ring ties the fabric's way)."""
         G = self.shards
         if not self.rs.kind.startswith("ring"):
             return "fwd" if b > p else "bwd"
-        df = (b - p) % G
-        return "fwd" if df <= G - df else "bwd"
+        return self.ring_dir(p, b)  # (the gather's: x_gather3 XGather3.ring_dir - ties as the fabric routes them)
 
     def _la_brisc(self, p, port, la, cx, cy):
         """The latent hand-offs: [count, my port word] + per destination block with rows of mine its port's NoC."""

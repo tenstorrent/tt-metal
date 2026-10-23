@@ -1,0 +1,10 @@
+# LoudBox (8 x P150, physically a 2 x 4 grid): one 2 x 2 square as a 1 x 4 mesh whose 4-long axis is a RING (the
+# square's cycle) - a Galaxy TP ring of 4 (SP 1). TT_VISIBLE_DEVICES: one square's chips (2,3,6,7 or 0,1,4,5)
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

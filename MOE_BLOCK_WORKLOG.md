@@ -1388,3 +1388,20 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   credit - caught. 1000 + 1000 soak calls after the fix.
 - Open: the K3 NOC1 wedge with the prep op in every chunk (worklog above) - root cause not pinned; a traffic-only
   probe later.
+
+### Ring of 4 on the LoudBox (one 2x2 square as a 1x4 mesh) - first runs
+- p150_x4_ring_1x4 (LINE, RING; channels 2) + FABRIC_2D_TORUS_X, TT_VISIBLE_DEVICES of a square (2,3,6,7 / 0,1,4,5);
+  p150_x4_line_1x4 the A/B. Proxy models: k3_ring4 (K3, 112 experts, router at E 896 folded 8:1 - RouterConfig.fold,
+  a structured bias: one eligible candidate a group, distinct experts, uniform), k3_g224 (the same per-chip load on
+  the 2x4: 224 experts, fold 4).
+- Hang: the latent all-to-all on the ring - far-side ties went by p's parity; half the chips injected toward the
+  neighbour the fabric does not route through. Now XGather3.ring_dir: shortest, ties as get_eth_forwarding_direction
+  (latent and router logits). ARENA_MAX 1400 -> 1344 KB (K3 on the ring took KB 14 + the W ring, 1388 KB: below the
+  port cores' static CBs).
+- Ring numbers: tail engine K3 640 136.8 us (ring schedule; 159.5 on the line); head parts K3 E 448 x chain 364.0,
+  + RS 413.0, + latent 447.5 (probe off) / latent on after the tie fix.
+- k3_g224 on the 2x4 (traced, device): head 636-640 | dispatch 147-152 | experts 1214-1216 | tail 155-158 = 2083 us,
+  b2b 2105 (Galaxy K3: 650 | 188 | 1421 | 151).
+- Open: the experts + combine program at SP 1 hangs (ring: first call; line: in back-to-back replays; both squares;
+  Tensix readers too - MoEOptions.experts_drisc off); the same per-chip load on the 2x4 passes.
+- MoEOptions.experts_drisc (typed A/B); fewer planner instances than router cores handled (no instance there).

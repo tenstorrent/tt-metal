@@ -18,7 +18,17 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.moe_block.moe_block import ExpertActivation, act_host
 from models.demos.moe_block.tests.test_tp_collectives import _calls, gen, ncalls
 
-R, C = 2, 4
+# (test-only: MOE_MESH "1x4" with MOE_FABRIC "torus_x" - one 2 x 2 square of the LoudBox as a TP ring of 4, the
+# p150_x4_ring_1x4 descriptor and that square's TT_VISIBLE_DEVICES; default the 2 x 4 lines)
+R, C = (int(v) for v in os.environ.get("MOE_MESH", "2x4").split("x"))
+_FABRIC = {"torus_x": "FABRIC_2D_TORUS_X"}.get(os.environ.get("MOE_FABRIC", ""))
+
+
+def _fab(**kw):
+    p = fabric2d_device_params(**kw)
+    if _FABRIC:
+        p["fabric_config"] = getattr(ttnn.FabricConfig, _FABRIC)
+    return p
 
 
 def pcc(a, b):
@@ -270,7 +280,10 @@ def _router_specs():
     kw["ordered"] = bool(o("HSE3_ORDERED"))
     return {
         "glm": RouterSpec(E=288, K=8, route_scale=2.5, **kw),
-        "k3": RouterSpec(E=int(os.environ.get("HSE3_K3_E", "448")), K=16, **kw),  # (test-only: 896, the Galaxy's)
+        # (test-only: HSE3_K3_E 896, the Galaxy's router; HSE3_K3_FOLD: candidates a planned expert - RouterConfig.fold)
+        "k3": RouterSpec(
+            E=int(os.environ.get("HSE3_K3_E", "448")), K=16, fold=int(os.environ.get("HSE3_K3_FOLD", "1")), **kw
+        ),
     }
 
 
@@ -300,6 +313,7 @@ def _check_routing(head, xs, w_r, b_r, rows_t, rows, name):
         _, ids = torch.topk(sc[tok] + b_r, K, dim=-1)
         wts = sc[tok].gather(1, ids)
         wts = wts / wts.sum(-1, keepdim=True) * spec.route_scale
+        ids = ids // spec.fold
         u = outs[d].to(torch.int64).reshape(n, 2 * K) & 0xFFFF
         dids = u[:, :K]
         dw = (u[:, K:].to(torch.int32) << 16).view(torch.float32)
@@ -321,7 +335,7 @@ def _check_routing(head, xs, w_r, b_r, rows_t, rows, name):
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    [((R, C), _fab(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
     indirect=True,
 )
 def test_se_engine3(mesh_device, device_params):
@@ -383,7 +397,7 @@ def test_se_engine3(mesh_device, device_params):
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    [((R, C), _fab(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
     indirect=True,
 )
 def test_head_se3(mesh_device, device_params):
@@ -424,6 +438,10 @@ def test_head_se3(mesh_device, device_params):
         if head.router is not None:
             spec = ROUTER[name]
             w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
+            if spec.fold > 1:  # (one eligible candidate a group: the picks fold to distinct experts)
+                from models.demos.moe_block.tests.test_moe_block import _fold_bias
+
+                b_r = _fold_bias(b_r, spec.fold)
             head.upload_router(w_r, b_r)
         if os.environ.get("HSE3_LAYOUT"):  # (debug: every landing region's actual L1 range; overlaps flagged)
             _dump_layout(head)
@@ -542,7 +560,7 @@ def test_head_se3(mesh_device, device_params):
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(7168), l1_small_size=0))],
+    [((R, C), _fab(fabric_payload_size=fabric_payload(7168), l1_small_size=0))],
     indirect=True,
 )
 def test_router_vs_ops(mesh_device, device_params):

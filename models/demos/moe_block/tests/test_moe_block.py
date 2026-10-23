@@ -8,6 +8,7 @@ TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1) and the w
 
 import collections
 import dataclasses
+import os
 import statistics
 import time
 
@@ -31,7 +32,19 @@ from models.demos.moe_block.moe_block import (
     split_gate_up,
 )
 
-R, C = 2, 4
+# (test-only: MOE_MESH "1x4" with MOE_FABRIC "torus_x" - one 2 x 2 square of the LoudBox as a TP ring of 4, the
+# p150_x4_ring_1x4 descriptor and that square's TT_VISIBLE_DEVICES; default the 2 x 4 lines)
+R, C = (int(v) for v in os.environ.get("MOE_MESH", "2x4").split("x"))
+_FABRIC = {"torus_x": "FABRIC_2D_TORUS_X"}.get(os.environ.get("MOE_FABRIC", ""))
+
+
+def _fab(**kw):
+    p = fabric2d_device_params(**kw)
+    if _FABRIC:
+        p["fabric_config"] = getattr(ttnn.FabricConfig, _FABRIC)
+    return p
+
+
 POOL = 4
 ITERS = 5
 TRACE_REGION = 64 * 1024 * 1024
@@ -40,6 +53,11 @@ MODELS = {
     "glm53_flash": GLM_53_FLASH,
     # (K3 at the 4x4 stage's per-chip load on the 2x4: 448 experts, 56 a chip - the flat op caps at 64 a chip)
     "k3_448": dataclasses.replace(KIMI_K3, num_experts=448),
+    # (a Galaxy K3 chip on a TP ring of 4 - MOE_MESH 1x4: the router at the real E 896 (folded 8:1 onto 112 experts, 28
+    # a chip as a Galaxy chip's, ~91 rows an expert at chunk 640))
+    "k3_ring4": dataclasses.replace(KIMI_K3, num_experts=112, router=dataclasses.replace(KIMI_K3.router, fold=8)),
+    # (the same on the 2x4: 224 experts folded 4:1, 28 a chip, ~91 rows an expert at chunk 1280)
+    "k3_g224": dataclasses.replace(KIMI_K3, num_experts=224, router=dataclasses.replace(KIMI_K3.router, fold=4)),
 }
 
 
@@ -47,10 +65,23 @@ def pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
 
 
+def _fold_bias(b, F):
+    """A folded router's bias (RouterConfig.fold): of each group of F candidates (one expert) one eligible - group g's
+    candidate (5 g) % F - the rest far below: a token's top-K are distinct experts, uniform over them."""
+    if F == 1:
+        return b
+    b = b.clone().view(-1, F)
+    keep = (torch.arange(b.shape[0]) * 5) % F
+    mask = torch.full_like(b, -1.0e4)
+    mask[torch.arange(b.shape[0]), keep] = 0.0
+    return (b + mask).view(-1)
+
+
 def random_weights(m: MoEModel, seed=0):
     g = torch.Generator().manual_seed(seed)
     r = lambda *s, sc=0.02: torch.randn(*s, generator=g) * sc  # noqa: E731
     H, Hr, I, E = m.emb_dim, m.routed_width, m.routed_expert_hidden_dim, m.num_experts
+    F = m.router.fold
     pool = [{"gate_up": fuse_gate_up(r(I, Hr), r(I, Hr)), "down": r(Hr, I)} for _ in range(POOL)]
     shared = None
     if m.shared_expert_hidden_dim is not None:
@@ -60,7 +91,7 @@ def random_weights(m: MoEModel, seed=0):
     if m.latent_dim is not None:
         latent = {"down": r(Hr, H), "up": r(H, Hr), "norm": 1.0 + r(Hr, sc=0.1)}
     return MoEWeights(
-        router={"weight": r(E, H), "bias": r(E, sc=0.01)},
+        router={"weight": r(E * F, H), "bias": _fold_bias(r(E * F, sc=0.01), F)},
         routed=[pool[e % POOL] for e in range(E)],
         shared=shared,
         latent=latent,
@@ -76,6 +107,7 @@ def reference(x, w: MoEWeights, m: MoEModel, ids=None, wts=None):
         _, ids = torch.topk(s + w.router["bias"].float(), m.top_k, dim=-1)
         wts = s.gather(1, ids)
         wts = wts / (wts.sum(-1, keepdim=True) + 1e-20) * rt.route_scale
+        ids = ids // rt.fold  # (candidates -> experts)
     h = x if m.latent_dim is None else x @ w.latent["down"].float().T
     acc = torch.zeros(x.shape[0], m.routed_width)
     for p in range(POOL):  # (every expert of a pool slot at once)
@@ -134,7 +166,7 @@ def per_chip_programs(mesh_device):
 _PARAMS = [
     pytest.param(
         (R, C),
-        fabric2d_device_params(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
+        _fab(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
         name,
         chunk,
         id=f"{name}-{chunk}",
@@ -259,15 +291,13 @@ def test_moe_block(mesh_device, device_params, model, chunk):
 _TRACE_PARAMS = [
     pytest.param(
         (R, C),
-        fabric2d_device_params(
-            fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0, trace_region_size=TRACE_REGION
-        ),
+        _fab(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0, trace_region_size=TRACE_REGION),
         name,
         chunk,
         id=f"{name}-{chunk}",
     )
     for name, m in MODELS.items()
-    for chunk in (1280, 2048)
+    for chunk in ((640,) if R == 1 else (1280, 2048))  # (1x4: a Galaxy chip's 640 rows a mesh row)
 ] + [
     pytest.param(  # (the Galaxy: 8 x 4, both axes rings; chunk 5120 = 640 rows a mesh row; MOE_EXPERTS=896 for K3's)
         (8, 4),
@@ -304,7 +334,12 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
         m = dataclasses.replace(m, num_experts=int(os.environ["MOE_EXPERTS"]))
     T, H = chunk, m.emb_dim
     w = random_weights(m)
-    opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"), tail=os.environ.get("MOE_TAIL", "auto"))
+    opts = MoEOptions(
+        head=os.environ.get("MOE_HEAD", "auto"),
+        tail=os.environ.get("MOE_TAIL", "auto"),
+        router=os.environ.get("MOE_ROUTER", "auto"),  # (test-only: the fused head's router placement)
+        experts_drisc=os.environ.get("MOE_EXPERTS_DRISC", "1") != "0",  # (test-only: A/B)
+    )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     g = block.geometry
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
@@ -459,7 +494,7 @@ def replay_device_times(mesh_device, tid, model, batches=(10, 40, 100)):
 _SE_PARAMS = [
     pytest.param(
         (R, C),
-        fabric2d_device_params(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
+        _fab(fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0),
         name,
         id=f"{name}-se",
     )
