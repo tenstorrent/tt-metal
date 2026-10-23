@@ -215,9 +215,20 @@ namespace {
 constexpr uint32_t kMaxSticksForWidthNwayFixedCost = 32;
 constexpr size_t kMinNwayInputs = 3;
 
+// Wormhole N300 CI measured width concats (two-input and N-way) up to about 1.3x slower in device time than native,
+// while its non-width concats ran 0.40-0.78x of native. Measured once, on one architecture, so the whole width class
+// goes native there. Blackhole is gated only by the N-way cutoff below.
+bool demoted_width_on_wormhole(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
+    const auto* device = input_tensors.front().device();
+    return device != nullptr && device->arch() == tt::ARCH::WORMHOLE_B0 && concats_width(input_tensors, attrs);
+}
+
 }  // namespace
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
+    if (demoted_width_on_wormhole(input_tensors, attrs)) {
+        return true;
+    }
     if (input_tensors.size() < kMinNwayInputs || input_tensors.front().layout() != ttnn::ROW_MAJOR_LAYOUT ||
         !concats_width(input_tensors, attrs)) {
         return false;

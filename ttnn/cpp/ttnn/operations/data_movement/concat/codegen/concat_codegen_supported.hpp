@@ -61,7 +61,8 @@ tt::tt_metal::TensorSpec codegen_output_spec(
 bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
 // Routing-only perf gate; forced codegen never consults it. A case is demoted when codegen is correct but measured
-// slower than native: a row-major width concat of three or more inputs with few output sticks.
+// slower than native: on Wormhole any width concat, elsewhere a row-major width concat of three or more inputs with few
+// output sticks.
 bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
 // False when groups or sub_core_grids ask for something the codegen path does not implement.

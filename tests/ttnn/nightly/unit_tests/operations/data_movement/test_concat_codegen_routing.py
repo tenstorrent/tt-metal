@@ -884,6 +884,17 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 _L1 = ttnn.L1_MEMORY_CONFIG
 
 
+def _is_width_concat(shapes, dim):
+    return dim % len(shapes[0]) == len(shapes[0]) - 1
+
+
+def _expect_codegen(device, shapes, dim, *, otherwise=True):
+    """Whether auto routes an in-scope call to codegen: Wormhole sends every width concat to native."""
+    if ttnn.device.is_wormhole_b0(device) and _is_width_concat(shapes, dim):
+        return False
+    return otherwise
+
+
 def _auto_route(device, xt, **kwargs):
     """Dispatches `ttnn.concat` after warming native, so cache growth means the call took codegen.
 
@@ -923,7 +934,10 @@ def test_concat_auto_routes_in_scope_case_to_codegen(device, shapes, dim, placem
     xt = _device_inputs(shapes, dtype, ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
     out, grew = _auto_route(device, xt, dim=dim, memory_config=_DRAM)
     assert_equal(_reference(xt, dim=dim), ttnn.to_torch(out))
-    assert grew, "auto served an in-scope case on native; expected codegen"
+    expect = _expect_codegen(device, shapes, dim)
+    assert grew == expect, f"auto served an in-scope case on {'native' if expect else 'codegen'}; expected the other"
+    if not grew:
+        return
     # The second dispatch uses fresh allocations and must rebind them on a program-cache hit.
     entries = device.num_program_cache_entries()
     yt = _device_inputs(shapes, dtype, ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
@@ -938,7 +952,7 @@ def test_concat_auto_codegen_honours_output_memory_config(device, shapes, dim, o
     kwargs = {"dim": dim} if out_config is None else {"dim": dim, "memory_config": out_config}
     out, grew = _auto_route(device, xt, **kwargs)
     assert_equal(_reference(xt, dim=dim), ttnn.to_torch(out))
-    assert grew
+    assert grew == _expect_codegen(device, shapes, dim)
     if out_config is not None:
         assert out.memory_config().buffer_type == out_config.buffer_type
 
@@ -958,7 +972,7 @@ def test_concat_width_nway_perf_gate_boundary(device, sticks, expect_codegen):
     xt = _device_inputs([[sticks, 32]] * 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     out, grew = _auto_route(device, xt, dim=1, memory_config=_DRAM)
     assert_equal(_reference(xt, dim=1), ttnn.to_torch(out))
-    assert grew == expect_codegen
+    assert grew == _expect_codegen(device, [[sticks, 32]] * 3, 1, otherwise=expect_codegen)
 
 
 @pytest.mark.parametrize("dim,shape", [(1, [40, 32]), (0, [40, 32])], ids=["width", "rows"])
@@ -966,7 +980,7 @@ def test_concat_input_count_limit(device, dim, shape, expect_error):
     at_limit = _device_inputs([shape] * _MAX_CODEGEN_INPUTS, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     out, grew = _auto_route(device, at_limit, dim=dim, memory_config=_DRAM)
     assert_equal(_reference(at_limit, dim=dim), ttnn.to_torch(out))
-    assert grew, "auto served a case at the input-count limit on native; expected codegen"
+    assert grew == _expect_codegen(device, [shape], dim), "auto routed a case at the input-count limit wrongly"
 
     over = _device_inputs([shape] * (_MAX_CODEGEN_INPUTS + 1), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     out, grew = _auto_route(device, over, dim=dim, memory_config=_DRAM)
@@ -1077,6 +1091,8 @@ _L1_CASES = {
 
 @pytest.mark.parametrize("case", list(_L1_CASES))
 def test_concat_codegen_cb_plan_follows_live_l1(device, case):
+    if case == "width_2in" and ttnn.device.is_wormhole_b0(device):
+        pytest.skip("Wormhole routes width concats to native, so no codegen plan follows live L1")
     shapes, dim = _L1_CASES[case](_stick_bytes(device))
     xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     kwargs = {"dim": dim, "memory_config": _DRAM}
@@ -1267,3 +1283,29 @@ def test_concat_codegen_trace_capture_under_pressure(device, pin_before_warmup):
             _best_effort(lambda: ttnn.release_trace(device, trace_id))
         if resident is not None:
             ttnn.deallocate(resident)
+
+
+# Wormhole routes every width concat to native; non-width concats stay on codegen there. Blackhole keeps both
+# on codegen above the N-way cutoff (see the in-scope cases above).
+@pytest.mark.parametrize(
+    "shapes,dim",
+    [
+        pytest.param([[1, 1, 128, 100], [1, 1, 128, 200]], -1, id="width_2in"),
+        pytest.param([[1, 3, 32, 32, 2], [1, 3, 32, 32, 2], [1, 3, 32, 32, 81]], 4, id="width_3in"),
+    ],
+)
+def test_concat_wormhole_routes_width_to_native(device, shapes, dim):
+    if not ttnn.device.is_wormhole_b0(device):
+        pytest.skip("width routing to native is Wormhole-only")
+    width = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out, grew = _auto_route(device, width, dim=dim, memory_config=_DRAM)
+    assert_equal(_reference(width, dim=dim), ttnn.to_torch(out))
+    assert not grew, "Wormhole routed a width concat to codegen; expected native"
+
+    rows = _device_inputs([[1, 100, 14, 14]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out, grew = _auto_route(device, rows, dim=1, memory_config=_DRAM)
+    assert_equal(_reference(rows, dim=1), ttnn.to_torch(out))
+    assert grew, "Wormhole routed a non-width concat to native; expected codegen"
+
+    # Forced codegen still runs the kernels on a width concat.
+    assert_equal(_reference(width, dim=dim), ttnn.to_torch(_force_codegen(width, dim=dim, memory_config=_DRAM)))
