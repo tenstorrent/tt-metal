@@ -1333,6 +1333,7 @@ std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
     if (count == 0) {
         return std::nullopt;
     }
+    out.defines["UNARY_RUNTIME_SCALARS"] = "1";
     return out;
 }
 }  // namespace ttnn::operations::unary::utils
