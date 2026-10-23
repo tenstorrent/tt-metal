@@ -104,6 +104,7 @@ jobs:
       perf-run-types: L1_TO_L1
       upload-to-warehouse: false
       pipeline: pr
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
     secrets: inherit
 
   measure:
@@ -131,6 +132,7 @@ jobs:
       perf-run-types: ${{ inputs.run_types || 'L1_TO_L1' }}
       upload-to-warehouse: false
       pipeline: pr
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
     secrets: inherit
 
   llk-perf-gate:
@@ -158,6 +160,7 @@ jobs:
       arch: ${{ matrix.arch }}
       run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
       threshold: ${{ matrix.threshold }}
+      module_thresholds: ${{ matrix.arch == 'wormhole' && 'perf_matmul=0.25,perf_math_matmul=0.25' || '' }}
       min_cycles: "30"
       fail_on_regression: false
       measure_result: >-
@@ -385,6 +388,7 @@ jobs:
             --candidates stage1/perf_gate_report.regressions.csv \
             --baseline baseline --current current \
             --threshold "$THRESHOLD" --min-cycles 30 \
+            --module-threshold "${{ matrix.arch == 'wormhole' && 'perf_matmul=0.25,perf_math_matmul=0.25' || '' }}" \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
             --arch "$ARCH" --report stage2.md || true
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
