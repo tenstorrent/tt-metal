@@ -52,9 +52,9 @@ ALWI void add_bias_bcast_rows(
     reconfig_data_format_srcb(bias_cb_id);
     pack_reconfig_data_format(out_cb_id);
     if constexpr (broadcast == BiasBroadcast::RowBroadcast) {
-        add_bcast_rows_init_short(partials_cb_id, bias_cb_id);
+        add_bcast_rows_init(partials_cb_id, bias_cb_id);
     } else {
-        add_tiles_init(partials_cb_id, bias_cb_id);
+        add_init(partials_cb_id, bias_cb_id);
     }
 
     if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
@@ -117,7 +117,7 @@ ALWI void add_bias_bcast_rows(
                 }
 
                 // Pack DST back to out_buf at the same row-major positions, via strided
-                // pack_tile_block (one call per row instead of per tile). h=1 is a single
+                // pack_block (one call per row instead of per tile). h=1 is a single
                 // contiguous block at col_base offset.
                 pack_subblock_row_strided(
                     0, out_cb_id, col_base, out_row_width, out_subblock_h, out_subblock_w);
