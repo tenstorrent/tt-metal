@@ -22,18 +22,20 @@ using qkv_conv_bw::tile_height;
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits, uint32_t channel_tiles>
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto grad_input = TensorAccessor(tensor::grad_input);
+#if COMPUTE_TAP_GRADS
     const auto grad_tap_partial = TensorAccessor(tensor::grad_tap_partial);
+    DataflowBuffer partial(dfb::partial);  // the finished partial, accumulated in place by the packer
+    const uint32_t partial_tile_bytes = partial.get_entry_size();  // fp32 tiles
+#endif
     DataflowBuffer grad_preact_rm(dfb::grad_preact_rm);
     DataflowBuffer grad_preact_shifted(dfb::grad_preact_shifted_rm);
     DataflowBuffer output(dfb::output);
-    DataflowBuffer partial(dfb::partial);  // the finished partial, accumulated in place by the packer
     Scratchpad<uint16_t> window(scratch::grad_preact_window);
     Noc noc;
 
     constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     const uint32_t tile_bytes = output.get_entry_size();
-    const uint32_t partial_tile_bytes = partial.get_entry_size();  // fp32 tiles
 
     const auto push_grad_preact_shifted = [&]() {
         grad_preact_shifted.reserve_back(tap_count * channel_tiles_per_block);
@@ -100,6 +102,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             write_output(end_tile_row - 1, first_tile_column);
         }
 
+#if COMPUTE_TAP_GRADS
         partial.wait_front(tap_count * channel_tiles_per_block);
 
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
@@ -116,5 +119,6 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         }
         noc.async_write_barrier();
         partial.pop_front(tap_count * channel_tiles_per_block);
+#endif
     }
 }

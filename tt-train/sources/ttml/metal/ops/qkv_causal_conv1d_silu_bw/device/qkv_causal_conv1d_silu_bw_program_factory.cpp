@@ -59,7 +59,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     std::vector<Tensor>& outputs) {
     const auto& input = in.input.mesh_tensor();
     const auto& grad_input = outputs[0].mesh_tensor();
-    const auto& grad_tap_partial = outputs[1].mesh_tensor();
+    const bool tap_grads = attrs.compute_tap_grads;
 
     const uint32_t tile_rows = attrs.row_count / tt::constants::TILE_HEIGHT;
     const uint32_t q_tiles = attrs.q_width / tt::constants::TILE_WIDTH;
@@ -92,7 +92,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
 
     const auto bf16 = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     m2::Group<m2::DataflowBufferSpec> dataflow_buffers;
-    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, bf16)) {
+    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, bf16, tap_grads)) {
         dataflow_buffers.push_back(
             make_dataflow_buffer(m2::DFBSpecName{std::string(buffer.name)}, buffer.tiles, buffer.format));
     }
@@ -127,10 +127,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source = std::string(kernel_dir) + "dataflow/writer_qkv_causal_conv1d_silu_bw.cpp",
-        .dfb_bindings =
-            {consumer(GRAD_PREACT_RM), producer(GRAD_PREACT_SHIFTED_RM), consumer(OUTPUT), consumer(PARTIAL)},
+        .dfb_bindings = {consumer(GRAD_PREACT_RM), producer(GRAD_PREACT_SHIFTED_RM), consumer(OUTPUT)},
         .scratchpad_bindings = {{GRAD_PREACT_WINDOW, "grad_preact_window"}},
-        .tensor_bindings = {tensor(GRAD_INPUT), tensor(GRAD_TAP_PARTIAL)},
+        .tensor_bindings = {tensor(GRAD_INPUT)},
         .compile_time_args =
             {{"channel_tiles_per_block", channel_tiles_per_block},
              {"tile_rows", tile_rows},
@@ -167,7 +166,6 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
              producer(GRAD_PREACT_TILE),
              consumer(GRAD_PREACT_TILE),
              producer(GRAD_PREACT_RM),
-             producer(PARTIAL),
              consumer(GRAD_PREACT_SHIFTED_RM),
              producer(GRAD_PREACT_SHIFTED_TILE),
              consumer(GRAD_PREACT_SHIFTED_TILE),
@@ -181,6 +179,14 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .hw_config = compute_hw,
     };
 
+    for (auto* kernel : {&writer, &compute}) {
+        kernel->compiler_options.defines.insert({"COMPUTE_TAP_GRADS", tap_grads ? "1" : "0"});
+    }
+    if (tap_grads) {
+        writer.dfb_bindings.push_back(consumer(PARTIAL));
+        writer.tensor_bindings.push_back(tensor(GRAD_TAP_PARTIAL));
+        compute.dfb_bindings.push_back(producer(PARTIAL));
+    }
     m2::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu_bw",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
@@ -200,7 +206,6 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
                 {.unique_id = TAP2, .spec = in.tap2.mesh_tensor().tensor_spec()},
                 {.unique_id = TAP3, .spec = in.tap3.mesh_tensor().tensor_spec()},
                 {.unique_id = GRAD_INPUT, .spec = grad_input.tensor_spec()},
-                {.unique_id = GRAD_TAP_PARTIAL, .spec = grad_tap_partial.tensor_spec()},
             },
         .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
@@ -218,8 +223,12 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         {TAP2, in.tap2.mesh_tensor()},
         {TAP3, in.tap3.mesh_tensor()},
         {GRAD_INPUT, grad_input},
-        {GRAD_TAP_PARTIAL, grad_tap_partial},
     };
+    if (tap_grads) {
+        const auto& grad_tap_partial = outputs[1].mesh_tensor();
+        spec.tensor_parameters.push_back({.unique_id = GRAD_TAP_PARTIAL, .spec = grad_tap_partial.tensor_spec()});
+        run_args.tensor_args.insert({GRAD_TAP_PARTIAL, grad_tap_partial});
+    }
     return {std::move(spec), std::move(run_args)};
 }
 

@@ -122,6 +122,7 @@ void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& grad_preact_tile) {
     grad_preact_tile.push_back(channel_tiles_per_block);
 }
 
+#if COMPUTE_TAP_GRADS
 // partial[tap][tile_column] += grad_preact * copy_tap. The partial lives in L1 and the packer adds each step's
 // products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
 // tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
@@ -147,6 +148,7 @@ void accumulate_partial(DataflowBuffer& partial, bool first, bool last) {
         partial.push_back(total);
     }
 }
+#endif
 
 template <uint32_t channel_tiles_per_block>
 void grad_input_tile(DataflowBuffer& grad_preact_shifted, DataflowBuffer& output) {
@@ -166,7 +168,9 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer preact(dfb::preact);
     DataflowBuffer sigmoid(dfb::sigmoid);
     DataflowBuffer grad_preact_tile(dfb::grad_preact_tile);
+#if COMPUTE_TAP_GRADS
     DataflowBuffer partial(dfb::partial);
+#endif
     DataflowBuffer grad_preact_shifted(dfb::grad_preact_shifted_tile);
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
@@ -204,10 +208,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             silu_backward<channel_tiles_per_block>(sigmoid, grad_preact_tile);
             grad_preact_tile.wait_front(channel_tiles_per_block);
             preact.pop_front(channel_tiles_per_block);
+#if COMPUTE_TAP_GRADS
             if (step < own_steps) {  // the extra step's rows belong to the next core's partial
                 const bool first = step == 0, last = step + 1 == own_steps;
                 accumulate_partial<channel_tiles_per_block>(partial, first, last);
             }
+#endif
             compute_kernel_lib::untilize<channel_tiles_per_block, dfb::grad_preact_tile, dfb::grad_preact_rm>(1);
             x_shifted.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);

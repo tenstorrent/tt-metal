@@ -87,12 +87,17 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
             q_width,
             k_width,
             v_width,
-            channel_chunk_size);
+            channel_chunk_size,
+            /*row_splits=*/0,
+            /*compute_tap_grads=*/tap0->get_requires_grad() || tap1->get_requires_grad() || tap2->get_requires_grad() ||
+                tap3->get_requires_grad());
         input->add_grad(grad_input);
-        tap0->add_grad(grad_tap0);
-        tap1->add_grad(grad_tap1);
-        tap2->add_grad(grad_tap2);
-        tap3->add_grad(grad_tap3);
+        if (grad_tap0.has_value()) {
+            tap0->add_grad(*grad_tap0);
+            tap1->add_grad(*grad_tap1);
+            tap2->add_grad(*grad_tap2);
+            tap3->add_grad(*grad_tap3);
+        }
     };
     auto q_node = autograd::add_backward_node(std::move(grad), out_q, input, tap0, tap1, tap2, tap3);
     out_q->set_node(q_node);

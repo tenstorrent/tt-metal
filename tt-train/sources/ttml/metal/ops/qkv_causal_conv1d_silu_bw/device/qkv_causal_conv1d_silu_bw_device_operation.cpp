@@ -105,21 +105,24 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
 QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBackwardOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
     const auto c = static_cast<uint32_t>(channels(attrs));
-    return {
-        TensorSpec(
-            Shape({1, attrs.row_count, c}),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config)),
-        TensorSpec(
+    spec_return_value_t specs{TensorSpec(
+        Shape({1, attrs.row_count, c}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config))};
+    if (attrs.compute_tap_grads) {
+        specs.emplace_back(
             Shape({qkv_conv_bw_tap_count, attrs.row_splits * tt::constants::TILE_HEIGHT, c}),
-            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
+            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+    }
+    return specs;
 }
 
 QkvCausalConv1dSiluBackwardOperation::tensor_return_value_t QkvCausalConv1dSiluBackwardOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    const auto specs = compute_output_specs(attrs, in);
-    return {
-        ttnn::create_device_tensor(specs[0], in.input.device()),
-        ttnn::create_device_tensor(specs[1], in.input.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attrs, in)) {
+        outputs.push_back(ttnn::create_device_tensor(spec, in.input.device()));
+    }
+    return outputs;
 }
 
 }  // namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device

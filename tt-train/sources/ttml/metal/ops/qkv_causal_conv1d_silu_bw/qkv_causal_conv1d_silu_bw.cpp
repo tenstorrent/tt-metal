@@ -104,7 +104,13 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     return best;
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_bw(
+std::tuple<
+    ttnn::Tensor,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>>
+qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& grad_q,
     const ttnn::Tensor& grad_k,
     const ttnn::Tensor& grad_v,
@@ -118,7 +124,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     uint32_t k_width,
     uint32_t v_width,
     uint32_t channel_chunk_size,
-    uint32_t row_splits) {
+    uint32_t row_splits,
+    bool compute_tap_grads) {
     TT_FATAL(
         input.storage_type() == ttnn::StorageType::DEVICE && input.logical_shape().rank() == 3,
         "qkv_causal_conv1d_silu_bw: input must be a [1,T,Q+K+V] device tensor");
@@ -135,10 +142,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         .v_width = v_width,
         .channel_chunk_size = work_split.channel_chunk_size,
         .row_splits = work_split.row_splits,
+        .compute_tap_grads = compute_tap_grads,
         .output_mem_config = ttnn::DRAM_MEMORY_CONFIG};
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
+    if (!compute_tap_grads) {
+        return {outputs[0], std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+    }
     // Partials come out as [4, row_splits * 32, C] so one row reduction finishes them; see the writer's page order.
     auto grad_taps =
         ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{1}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -36,7 +37,14 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
 
 // Returns (grad_input [1,T,Q+K+V] TILE, grad_tap0..3 shaped like the taps). History gets no gradient.
 // channel_chunk_size = 0 and row_splits = 0 are picked by qkv_causal_conv1d_silu_bw_work_split.
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_bw(
+// With compute_tap_grads = false the tap gradients are nullopt and their work is skipped.
+std::tuple<
+    ttnn::Tensor,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>>
+qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& grad_q,
     const ttnn::Tensor& grad_k,
     const ttnn::Tensor& grad_v,
@@ -50,6 +58,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     uint32_t k_width,
     uint32_t v_width,
     uint32_t channel_chunk_size = 0,
-    uint32_t row_splits = 0);
+    uint32_t row_splits = 0,
+    bool compute_tap_grads = true);
 
 }  // namespace ttml::metal

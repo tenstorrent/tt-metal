@@ -165,7 +165,7 @@ void check_metal_bw(
     const auto ref = reference(s, p);
     auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, p, chunk, splits);
     expect_close(ref.grad_input, core::to_xtensor(grad_input), tag + " grad_input");
-    const std::array<ttnn::Tensor, 4> grads = {g0, g1, g2, g3};
+    const std::array<ttnn::Tensor, 4> grads = {*g0, *g1, *g2, *g3};
     for (size_t j = 0; j < 4; ++j) {
         expect_close(ref.grad_taps[j], core::to_xtensor(grads[j]), tag + " grad_tap" + std::to_string(j));
     }
@@ -319,6 +319,62 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 }
 
 INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
+
+// Frozen taps: no tap gradient is produced, through the op and through the autograd wrapper.
+TEST_F(QkvCausalConv1dSiluTest, FrozenTaps) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{64, 96, 64, 32};
+    auto p = random_problem(s, 4);
+    auto ref = reference(s, p);
+    p.grad_y = ref.y;
+    ref = reference(s, p);
+    {
+        auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
+        auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+        std::array<ttnn::Tensor, 4> taps;
+        for (size_t j = 0; j < 4; ++j) {
+            taps[j] = core::from_xtensor(p.taps[j], device);
+        }
+        auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
+        auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
+        auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
+        const auto [grad_input, g0, g1, g2, g3] = metal::qkv_causal_conv1d_silu_bw(
+            grad_q,
+            grad_k,
+            grad_v,
+            input,
+            history,
+            taps[0],
+            taps[1],
+            taps[2],
+            taps[3],
+            s.Q,
+            s.K,
+            s.V,
+            0,
+            0,
+            /*compute_tap_grads=*/false);
+        expect_close(ref.grad_input, core::to_xtensor(grad_input), "grad_input");
+        EXPECT_FALSE(g0.has_value() || g1.has_value() || g2.has_value() || g3.has_value());
+    }
+    auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
+    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+    std::array<TensorPtr, 4> tap_tensors;
+    for (size_t j = 0; j < 4; ++j) {
+        tap_tensors[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ false);
+    }
+    auto [q, k, v] = ops::qkv_causal_conv1d_silu(
+        input, history, tap_tensors[0], tap_tensors[1], tap_tensors[2], tap_tensors[3], s.Q, s.K, s.V);
+    for (const auto& out : {q, k, v}) {
+        out->set_grad(out->get_value());
+    }
+    q->backward();
+    expect_close(ref.grad_input, core::to_xtensor(input->get_grad()), "grad_input");
+    for (const auto& tap : tap_tensors) {
+        EXPECT_FALSE(tap->is_grad_initialized());
+    }
+}
 
 // A loss that uses only q leaves k and v without a gradient; the backward treats them as zero.
 TEST_F(QkvCausalConv1dSiluTest, SingleOutputLoss) {

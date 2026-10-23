@@ -17,6 +17,7 @@ struct QkvCausalConv1dSiluBackwardParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     uint32_t row_splits;
+    bool compute_tap_grads = true;  // false: no partial, no grad_tap output
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

@@ -9,6 +9,7 @@
 #include <string_view>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <vector>
 
 #include "hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 #include "qkv_causal_conv1d_silu_bw_device_operation_types.hpp"
@@ -26,11 +27,11 @@ struct QkvCausalConv1dSiluBackwardDataflowBuffer {
 };
 
 // Every L1 buffer of the program, sized in tiles. Used by both the program factory and the L1 budget check.
-inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dataflow_buffers(
-    uint32_t channel_tiles_per_block, tt::DataFormat input_format) {
+inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_dataflow_buffers(
+    uint32_t channel_tiles_per_block, tt::DataFormat input_format, bool compute_tap_grads = true) {
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
-    return {{
+    std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> buffers{
         {"x_shifted_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
         {"x_shifted_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
         {"weights", 8 * channel_tiles_per_block, bf16},         // taps [4][channel_tiles_per_block], x2 to prefetch
@@ -43,14 +44,17 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
         {"sigmoid", channel_tiles_per_block, fp32},
         {"grad_preact_tile", channel_tiles_per_block, bf16},
         {"grad_preact_rm", 2 * channel_tiles_per_block, bf16},
-        {"partial", 4 * channel_tiles_per_block, fp32},  // grad_w partial [4][channel_tiles], packer adds in place
         {"grad_preact_shifted_rm",
          8 * channel_tiles_per_block,
          bf16},  // 4 shifted row-major copies of the grad_preact window, x2
         {"grad_preact_shifted_tile", 4 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},
         {"ones", 1, bf16},
-    }};
+    };
+    if (compute_tap_grads) {
+        buffers.push_back({"partial", 4 * channel_tiles_per_block, fp32});  // grad_w [4][channel_tiles], L1 accumulated
+    }
+    return buffers;
 }
 
 inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint64_t bytes_per_element) {
