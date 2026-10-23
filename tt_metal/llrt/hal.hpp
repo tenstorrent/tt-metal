@@ -782,8 +782,9 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
-    // NoC addresses from this one up reach the PCIe tile's own configuration space, not the host, so a host buffer
-    // the device addresses by its IOVA (see get_supports_64_bit_pcie_addressing) must end below it.
+    // NoC addresses from this one up reach the PCIe tile's own configuration space, never the host. It bounds only
+    // that range: below it the tile's other windows apply their own PCIe attributes or targets, and only [0, 2^58)
+    // forwards an IOVA (see get_supports_64_bit_pcie_addressing) to the host unchanged.
     uint64_t get_pcie_tile_local_noc_addr_base() const { return pcie_tile_local_noc_addr_base_; }
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }

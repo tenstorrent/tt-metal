@@ -170,6 +170,9 @@ void PinnedMemoryImpl::initialize_from_devices(
         // can hand out one the PCIe tile serves itself: writes there never reach the host, and reads return the
         // tile's configuration registers. Map the buffer through the outbound iATU instead, whose output reaches any
         // IOVA. get_noc_addr then returns its iATU address.
+        // IOVAs from 2^58 up outside that range stay directly addressed: below KMD 2.10.0 an AMD IOMMU hands out all
+        // of its IOVAs from the top of the 64-bit space, those reach the host in practice, and the iATU has too few
+        // regions (16 per device) to map every buffer.
         if (use_64bit_address_space_ && buffer->get_iova() + (mapped_size - 1) >= pcie_tile_local_noc_addr_base) {
             log_debug(
                 tt::LogMetal,
