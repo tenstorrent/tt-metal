@@ -87,10 +87,12 @@ TABLE = {
         "Ring SDPA max_k_splits. auto: 3 when the cores hold three bands of every (head, Q chunk) unit (gemma4_d_p).",
     ),
     "ATTN_GLOBAL_Q_CHUNK": Setting(
-        96,
+        64,
         (32, 64, 96, 128),
-        "Global ring_mla q chunk (head_dim 512, packed 640 K). gemma4_d_p: q96 / k256 at a 640-row slab; q160 overflows "
-        "L1 beside k256.",
+        "Global ring_mla q chunk (head_dim 512, packed 640 K). 64 since the manual perf pass: with q96 the ring kernels "
+        "(HiFi2) overflow the 70656 B kernel config buffer by 176 B at a 10240-position cache (the contract test's); "
+        "q64 fits (10 Q chunks x 8 heads on 110 cores, segmented). gemma4_d_p: q96 / k256; q160 overflows L1 beside "
+        "k256.",
     ),
     "ATTN_GLOBAL_K_CHUNK": Setting(256, (128, 256), "Global ring_mla k chunk (gemma4_d_p: 256)."),
     "ATTN_GLOBAL_SEGMENTED": Setting(
@@ -106,12 +108,22 @@ TABLE = {
         "channel flushes its 15 neighbours (layer 5 column 2294: rel 0.12 vs limit 0.038).",
     ),
     "ATTN_GLOBAL_SDPA": Setting(
-        "composed",
+        "ring_mla",
         ("composed", "ring_mla"),
-        "Global attention over the packed cache. composed: all_gather the slot's rows over SP, QK^T (fp32 out), causal "
-        "mask on the current chunk, fp32 softmax, P V (fp32 out), all HiFi4 + fp32 acc. ring_mla: the fused ring op, "
-        "whose streaming path (the only one with kv_actual_isl) runs bf16 DEST with bf16 O / sum / max state; at head "
-        "dim 512 that puts layer 5's worst output column at 1.4x its component limit (composed: within it).",
+        "Global attention over the packed cache. ring_mla (default since the manual perf pass, as gemma4_d_p): the fused "
+        "ring op over the slot's cache, on-device slot / start metadata (one program for every start), whose streaming "
+        "path runs bf16 DEST with bf16 O / sum / max state; at head dim 512 that puts layer 5's worst output column at "
+        "1.4x its component limit, but the ladders pass (s56320: min layer PCC 0.9908, max rel 0.136). composed: "
+        "all_gather the slot's rows over SP, QK^T (fp32 out), causal mask on the current chunk, fp32 softmax, P V (fp32 "
+        "out), all HiFi4 + fp32 acc (MAX_PRECISION, the component tests); its cost grows with the prefix (a 5120 chunk "
+        "at 51200: ~65 ms per global layer vs ~10).",
+    ),
+    "ATTN_GLOBAL_SDPA_FIDELITY": Setting(
+        "HiFi2",
+        ("same", "HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "ring_mla matmul fidelity (same: ATTN_SDPA_FIDELITY). At HiFi4 the ring kernels overflow the kernel config "
+        "buffer by 32 B for a 210k-position cache (test_positions' last position). gemma4_d_p runs LoFi; here LoFi (with "
+        "the other manual-pass switches) failed the s56320 ladder (max rel 0.160, bias 0.0126).",
     ),
     "ATTN_GLOBAL_FP32_REDUCE": Setting(
         True,
@@ -231,6 +243,7 @@ MAX_PRECISION = {
     "ATTN_SDPA_FIDELITY": "HiFi4",
     "ATTN_SDPA_FP32_ACC": False,  # the op's ceiling on the served path (see the setting)
     "ATTN_GLOBAL_SDPA": "composed",
+    "ATTN_GLOBAL_SDPA_FIDELITY": "HiFi4",
     "ATTN_GLOBAL_FP32_REDUCE": True,
     "ATTN_GLOBAL_FP32_QK": True,
     "MLP_FIDELITY": "HiFi4",

@@ -344,3 +344,16 @@
   with the device profiler on; without it host dispatch is only ~35 ms of the chunk: the chunk is device-bound.
 - `tests/perf/test_serving_trace.py`: op-by-op slot 0 vs traced slot 1 (capture pass, then replay pass): KV bytes of
   layers 0, 5, 59 identical, acks one per layer per chunk in order.
+
+## Manual perf pass: global attention on ring_mla (not pipeline-generated), 2026-10-23
+- `ATTN_GLOBAL_SDPA` default `ring_mla` (gemma4_d_p's op). The device model passes the ChunkMeta's on-device slot /
+  start scalars (the op's metadata path: one program, one trace, any tile-aligned start); the ring_mla receive buffer
+  is shared by the global layers. `composed` stays MAX_PRECISION (component tests) and its cost grew with the
+  prefix: a chunk at 51200 took 1127 ms traced, 431 ms on ring_mla (start 0: 423 -> 388).
+- `ATTN_GLOBAL_SDPA_FIDELITY` HiFi2: at HiFi4 the ring kernels overflow the 70656 B kernel config buffer by 32 B for
+  a 210k-position cache (test_positions). LoFi (gemma4_d_p) put layer 59's median row-norm bias at 0.0126 (limit
+  0.005, s56320 ladder, with other perf switches).
+- `ATTN_GLOBAL_Q_CHUNK` 64: with q96 the HiFi2 kernels overflow the same buffer by 176 B at a 10240-position cache
+  (test_contract's shape).
+- Gates: s56320 min layer PCC 0.99167 (composed: 0.99148), max rel 0.1288 (0.1303), KV PCC by chunk
+  0.9754-0.9938; test_contract producer KV PCC global 0.9894, sliding_k 0.9905, sliding_v 0.9864.

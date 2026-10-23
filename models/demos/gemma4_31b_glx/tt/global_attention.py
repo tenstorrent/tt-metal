@@ -43,6 +43,7 @@ from .attention import (
 from .settings import settings
 
 ROTARY_DIM = 128  # rotating lanes of a 512-wide global head (partial_rotary_factor 0.25 of 512)
+_GATHER_BUFFERS = {}  # (mesh, capacity, width) -> the ring_mla receive buffer the global layers share
 
 
 def global_kv_indices(head_dim: int, rotary_dim: int = ROTARY_DIM):
@@ -199,13 +200,17 @@ class GlobalAttention:
         # Only the ring_mla mode reads it (38 MB per layer per chip).
         self.sdpa_mode = settings.get("ATTN_GLOBAL_SDPA")
         if self.sdpa_mode == "ring_mla":
-            self.gather = ttnn.zeros(
-                [1, 1, max_seq, self.packed],
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # One receive buffer for every global layer (they run one at a time), as gemma4_d_p's ccl_manager.
+            key = (id(mesh), max_seq, self.packed)
+            if key not in _GATHER_BUFFERS:
+                _GATHER_BUFFERS[key] = ttnn.zeros(
+                    [1, 1, max_seq, self.packed],
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            self.gather = _GATHER_BUFFERS[key]
 
         # Ring SDPA: CCL workers on the last compute column, SDPA on the rest.
         grid = mesh.compute_with_storage_grid_size()
@@ -245,7 +250,9 @@ class GlobalAttention:
 
         self.proj_cfg = _compute_config(mesh, settings.get("ATTN_PROJ_FIDELITY"), settings.get("ATTN_PROJ_FP32_ACC"))
         self.grid = matmul_grid()
-        self.sdpa_cfg = _compute_config(mesh, settings.get("ATTN_SDPA_FIDELITY"), settings.get("ATTN_SDPA_FP32_ACC"))
+        fidelity = settings.get("ATTN_GLOBAL_SDPA_FIDELITY")
+        fidelity = settings.get("ATTN_SDPA_FIDELITY") if fidelity == "same" else fidelity
+        self.sdpa_cfg = _compute_config(mesh, fidelity, settings.get("ATTN_SDPA_FP32_ACC"))
         self.norm_cfg = _compute_config(mesh, settings.get("ATTN_AUX_FIDELITY"), settings.get("ATTN_AUX_FP32_ACC"))
 
     def chunk_index(self, start: int) -> int:
@@ -345,7 +352,6 @@ class GlobalAttention:
             c = self.chunk_index(start)
             cos, sin = self.cos[c], self.sin[c]
         else:
-            assert self.sdpa_mode == "composed", "the device model runs the composed global attention"
             cos, sin = meta.global_rope
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qk = ttnn.linear(
@@ -411,9 +417,12 @@ class GlobalAttention:
                 )
             ttnn.deallocate(fresh)
         else:
-            self.write_kv(packed, start)
+            self.write_kv(packed, start, meta)
             ttnn.deallocate(packed)
-            attn = self._ring_mla(q_r, c)
+            if meta is None:
+                attn = self._ring_mla(q_r, self.slot, self.kv_actual[c])
+            else:
+                attn = self._ring_mla(q_r, meta.slot, meta.kv_actual)
         ttnn.deallocate(q_r)
         heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
@@ -530,7 +539,7 @@ class GlobalAttention:
         ttnn.deallocate(inv)
         return ttnn.reshape(out, (1, h, s, d))
 
-    def _ring_mla(self, q_r, c):
+    def _ring_mla(self, q_r, slot, kv_actual):
         attn, _ = ttnn.transformer.ring_mla(
             q_r,
             self.cache,
@@ -549,8 +558,8 @@ class GlobalAttention:
             ccl_core_grid_offset=self.ccl_offset,
             use_column_major_ccl=True,
             is_balanced=False,
-            slot_id=self.slot,
-            kv_actual_isl_tensor=self.kv_actual[c],
+            slot_id=slot,
+            kv_actual_isl_tensor=kv_actual,
             kv_cache_num_layers=1,
             kv_cache_layer_idx=0,
         )

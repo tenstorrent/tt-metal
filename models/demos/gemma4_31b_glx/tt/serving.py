@@ -440,8 +440,6 @@ def _validate(params):
         raise ValueError("gemma4_31b_glx serves its layers on one rank")
     if params.max_seq_len % params.chunk_size or params.chunk_size % (MESH_SHAPE[0] * MESH_SHAPE[1] * TILE):
         raise ValueError(f"max_seq {params.max_seq_len} / chunk {params.chunk_size}: not the served geometry")
-    if settings.get("ATTN_GLOBAL_SDPA") != "composed":
-        raise ValueError("serving needs ATTN_GLOBAL_SDPA=composed (the slot-aware global attention)")
 
 
 class Gemma431bGlxAdapter(PrefillModelAdapter):
