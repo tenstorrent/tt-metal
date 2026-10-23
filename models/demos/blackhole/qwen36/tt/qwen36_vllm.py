@@ -69,7 +69,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
-        "supports_device_grammar": True,
+        "supports_device_grammar": False,
         "max_device_top_k": 32,
     }
 

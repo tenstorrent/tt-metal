@@ -693,6 +693,16 @@ jobs:
               || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
             echo '✅ Structured output passed'
 
+      - name: 🔍 Check structured output stayed on host grammar sampling
+        if: ${{ matrix.test-group.expect-host-grammar }}
+        run: |
+          steps=$(grep -c 'TT device grammar sampling active' "${FILE_SERVER_LOG}" || true)
+          if [ "${steps}" -ne 0 ]; then
+            echo "❌ ${steps} device grammar sampling steps in the server log; expected host grammar only"
+            exit 1
+          fi
+          echo '✅ No device grammar sampling steps; structured output ran on host'
+
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
