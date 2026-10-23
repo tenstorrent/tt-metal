@@ -334,8 +334,10 @@ class TtMiMoModel:
         self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
         # before any capture.
-        self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        # Throwaway (timing only): the heads serve at most 4 users, so past 4 they take slots 0-3 and the other
+        # slots keep a stale token. Every step still runs the decoder over all decode_users rows.
+        self.greedy_head = GreedyHead(self.plan, self.vocab_local, min(self.decode_users, 4), self.max_batch)
+        self.sampler = DeviceSampler(self.plan, self.vocab_local, min(self.decode_users, 4), self.max_batch)
         if self.mtp is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
             # inputs and output, like the samplers' buffers, before any capture.
@@ -1108,7 +1110,7 @@ class TtMiMoModel:
         assert self.decode_trace is None
         if greedy_only and self.greedy_head is None:
             # Persistent buffers, allocated before any capture.
-            self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+            self.greedy_head = GreedyHead(self.plan, self.vocab_local, min(self.decode_users, 4), self.max_batch)
         written = greedy_only or self.layer_groups is not None  # GreedyHead wrote the tokens into the input
         # Per-step token slots for device-resident runs, allocated before capture: buffers allocated after a
         # capture may overlap the trace's replayed intermediates.
