@@ -1,0 +1,3 @@
+# Generated validation reports belong outside the source checkout.
+/validation/results/
+/validation/RESULTS.md
