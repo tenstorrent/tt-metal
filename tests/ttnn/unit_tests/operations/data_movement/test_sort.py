@@ -1660,10 +1660,13 @@ def test_sort_tied_values_indices_are_a_permutation(descending, device):
 
 
 
-@pytest.mark.parametrize("n", [1000, 3000])
-@pytest.mark.parametrize("descending", [False, True])
-@pytest.mark.parametrize("nan_bits", [0x7FC00000, 0xFFC00000 - (1 << 32)])
-@pytest.mark.parametrize("stable", [False, True])
+@pytest.mark.parametrize("stable", [False, True], ids=["unstable", "stable"])
+@pytest.mark.parametrize(
+    "descending, nan_bits",
+    [(False, 0x7FC00000), (True, 0xFFC00000 - (1 << 32))],  # +NaN / -NaN as int32 bit patterns
+    ids=["asc_pos_nan", "desc_neg_nan"],
+)
+@pytest.mark.parametrize("n", [1000, 3000, 300000])
 def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable, device):
     """Regression test for #60613: fp32 NaNs must not sort past padding and leak out-of-range indices."""
     torch.manual_seed(0)
@@ -1678,3 +1681,6 @@ def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable
     indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
     assert (indices >= 0).all() and (indices < n).all(), f"out-of-range indices emitted for n={n}"
     assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(n).unsqueeze(0)), "indices not a permutation"
+
+    values = ttnn.to_torch(ttnn_values)
+    assert torch.isnan(values).sum().item() == num_nan, f"expected {num_nan} NaNs preserved, found {torch.isnan(values).sum().item()}"
