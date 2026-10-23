@@ -259,11 +259,12 @@ def save_checkpoint(
     committed, counts such leaves and names up to three; an optimizer saved without `model_params` warns once,
     since nothing can cross-check its state. Any failure, the final rename included, removes the `.tmp`.
 
-    `verify_replicas` (on by default) byte-compares every copy a tensor's label calls a replica before one copy is
-    saved, for model parameters and optimizer state alike, and raises `ReplicaMismatchError` naming the tensor if
-    they differ: a `Replicate` label over data that differs would otherwise be saved as one device's copy. This is
-    the check that covers a parameter whose own label is wrong in that direction. It reads every copy, so each
-    tensor briefly takes its replicated size in host memory; `False` restores the label-trusting gather.
+    `verify_replicas` (on by default) compares the values of every copy a tensor's label calls a replica (tile padding
+    is not compared) before one copy is saved, for model parameters and optimizer state alike, and raises
+    `ReplicaMismatchError` naming the tensor if they differ: a `Replicate` label over data that differs would otherwise
+    be saved as one device's copy. This is the check that covers a parameter whose own label is wrong in that direction.
+    It reads every copy, so each tensor briefly takes its replicated size in host memory; `False` restores the
+    label-trusting gather.
     """
     manifest = {}
     records = []  # (group, path, name, tensor) in stream order

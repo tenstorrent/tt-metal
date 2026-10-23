@@ -98,10 +98,12 @@ class Sharding:
         ``auto_compose._compose_nd_sharded``): a Shard axis concatenates its shards along the sharded dim, and a
         Replicate axis contributes one copy.
 
-        With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on), ``ttnn.verify_shards_match_topology``
-        checks the host copy first: the shards the label calls replicas of each other must hold the same bytes, else
-        ``ReplicaMismatchError`` is raised, i.e. the label does not describe the data and keeping one copy would drop
-        the others. The check compares shards already on the host, so it moves no data and allocates nothing."""
+        With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on),
+        ``ttnn.verify_shards_match_topology`` checks the host copy first: the shards the label calls replicas of each
+        other must hold the same values (their tile padding may differ), else ``ReplicaMismatchError`` is raised, i.e.
+        the label does not describe the data and keeping one copy would drop the others. The check compares shards
+        already on the host, so it moves no data; replicas whose bytes match cost one memcmp, and it allocates only to
+        decode replicas whose padding differs in a layout it cannot walk in place, such as block floats."""
         value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
         dtype = value.dtype
         if self._is_single_device():
