@@ -62,7 +62,7 @@ always written "Refinement N"); *block* = the blocking-model block; device times
 - **Precision baseline**: bf16 within 1 ULP (p50 = 0); fp32 TF32-class (≈ 1.5e4 fp32 ULP p50, −0.13 % median bias
   from FPU operand truncation). See `verification_report.md`.
 
-### [ ] Refinement 1 — Numerical configurability: bfloat8_b (input and gamma) + fp32_dest_acc_en=False
+### [x] Refinement 1 — Numerical configurability: bfloat8_b (input and gamma) + fp32_dest_acc_en=False
 
 **Goal**: Extend three `SUPPORTED` axes:
 

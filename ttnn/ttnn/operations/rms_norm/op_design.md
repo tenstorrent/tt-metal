@@ -39,7 +39,7 @@ file. Every count names its unit.
 | `input_tensor` | `ttnn.Tensor` | yes | rank ≥ 2, on device | — | buffer address RT |
 | `gamma` (keyword-only) | `Optional[ttnn.Tensor]` | no | logical volume == W and `shape[-1] == W` (canonical shape `(1,1,1,W)`) | `None` | presence + layout CT, address RT |
 | `epsilon` (keyword-only) | `float` | no | finite, ≥ 0 | `1e-6` | fp32 bit pattern RT |
-| `compute_kernel_config` (keyword-only) | `ttnn.ComputeConfigDescriptor` | no | `fp32_dest_acc_en=True` in Phase 0; any `math_fidelity` / `math_approx_mode` | `default_compute_kernel_config()` (HiFi4, fp32_dest_acc_en=True, math_approx_mode=False) | passed as-is: `config=compute_kernel_config` on the compute `KernelDescriptor` |
+| `compute_kernel_config` (keyword-only) | `ttnn.ComputeConfigDescriptor` | no | `fp32_dest_acc_en` True or False (False refused for fp32 input — EXCLUSION); any `math_fidelity` / `math_approx_mode` | `default_compute_kernel_config()` (HiFi4, fp32_dest_acc_en=True, math_approx_mode=False) | passed as-is: `config=compute_kernel_config` on the compute `KernelDescriptor` |
 | `memory_config` (keyword-only, extension) | `Optional[ttnn.MemoryConfig]` | no | Phase 0: `None` or an interleaved config | `None` → `ttnn.DRAM_MEMORY_CONFIG` | host only |
 
 `memory_config` is not in the mandated signature but **must be accepted**: `eval/golden_tests/rms_norm/helpers.py`
@@ -317,7 +317,9 @@ Regime-pinned tests (required; shapes pin the regime for any grid with ≤ 256 c
 
 ## Circular Buffers
 
-`T_in`, `T_out` = tile bytes of the input/output dtype; `T_g` = tile bytes of the gamma dtype; `F32` = 4096 B;
+`T_in`, `T_out` = tile bytes of the input/output dtype; `T_g` = tile bytes of the gamma dtype; `I` = intermediate
+tile bytes — DEST-produced intermediates follow DEST width (Refinement 1): `Float32` / 4096 B at
+`fp32_dest_acc_en=True`, `Float16_b` / 2048 B at `False` (`_FMT_INTERM` role + `Geometry.interm_tile_bytes`);
 `b` = `block_rows`, `n` = `core_w_tiles`, `c` = `chunk_w_tiles`, `s` = `row_stride_tiles`, `gw` = `w_group_size`,
 `L` = `xg_lookahead_chunks`. Every CB is declared once over all `used_cores` (M1). Full ledger: `l1_ledger.md`.
 
@@ -328,12 +330,12 @@ Regime-pinned tests (required; shapes pin the regime for any grid with ≤ 256 c
 | `cb_gamma_rm_stick` (RM gamma only) | 2 | `round_up(n·32·e_g, ttnn.get_dram_alignment())` | 1 | landing pad for the gamma slice | gamma dtype (raw bytes) | writer | writer | kernel start only |
 | `cb_gamma_tiles` (gamma only) | 3 | `T_g` | `s` | resident gamma slice (row 0 valid) | gamma dtype | writer | compute | whole kernel |
 | `cb_reduce_scaler` | 4 | 2048 | 2 | [full, partial] scaler pair | bf16 | reader | compute | whole kernel |
-| `cb_sumsq` | 5 | `F32` | `2·b` | `[P_full, P_last]` per row (strided pack, M8) | fp32 | compute | compute | per block |
-| `cb_rowsum_partial` (R2) | 6 | `F32` | `b` | per-row partial S (column 0) | fp32 | compute | writer | per block |
-| `cb_rowsum_gather` (R2) | 7 | `F32` | `gw·b` | `[row][member]` partials; symmetric address (M1) | fp32 | writer (root: remote writes land here; root pushes) | compute (root) | per block |
-| `cb_inv_rms_root` (R2) | 8 | `F32` | `b` | root's finalized inverse-RMS, multicast source | fp32 | compute (root) | writer (root) | per block |
-| `cb_inv_rms` | 9 | `F32` | `b` | per-row inverse-RMS (column 0); multicast destination in R2 | fp32 | compute (R1) / writer (R2) | compute | per block |
-| `cb_x_gamma` (gamma only) | 10 | `F32` | `L·b·c` | x⊙γ lookahead window | fp32 | compute | compute | per block |
+| `cb_sumsq` | 5 | `I` | `2·b` | `[P_full, P_last]` per row (strided pack, M8) | intermediate (fp32 / bf16 per DEST width) | compute | compute | per block |
+| `cb_rowsum_partial` (R2) | 6 | `I` | `b` | per-row partial S (column 0) | intermediate (fp32 / bf16 per DEST width) | compute | writer | per block |
+| `cb_rowsum_gather` (R2) | 7 | `I` | `gw·b` | `[row][member]` partials; symmetric address (M1) | intermediate (fp32 / bf16 per DEST width) | writer (root: remote writes land here; root pushes) | compute (root) | per block |
+| `cb_inv_rms_root` (R2) | 8 | `I` | `b` | root's finalized inverse-RMS, multicast source | intermediate (fp32 / bf16 per DEST width) | compute (root) | writer (root) | per block |
+| `cb_inv_rms` | 9 | `I` | `b` | per-row inverse-RMS (column 0); multicast destination in R2 | intermediate (fp32 / bf16 per DEST width) | compute (R1) / writer (R2) | compute | per block |
+| `cb_x_gamma` (gamma only) | 10 | `I` | `L·b·c` | x⊙γ lookahead window | intermediate (fp32 / bf16 per DEST width) | compute | compute | per block |
 | `cb_out_tiles` | 11 | `T_out` | TILE: `2·b·c`; RM: `b·c` | streams chunks | output dtype | compute | writer (TILE) / compute (RM, untilize) | per chunk |
 | `cb_out_rm_sticks` (RM only) | 12 | `T_out` | `2·b·c` | streams untilized chunk slabs | output dtype | compute | writer | per chunk |
 
@@ -404,7 +406,9 @@ Helpers considered and rejected (every `raw_api` / hand-written dataflow entry a
 | Multicast without handshake overwrites a live inverse-RMS | `McastConfig(handshake=False)` | protocol invariant: a member reserves `cb_inv_rms` and its compute has popped block b−1's inverse-RMS before its block-b partial exists; the root multicasts only after all block-b partials arrived |
 | Semaphore races | gather counter reused across blocks | cumulative `noc_semaphore_wait_min(sem, (gw−1)·(block_idx+1))`, never reset |
 | Gamma row broadcast reads stale rows | `cb_gamma_tiles` rows 1–31 are stale/poisoned | gamma consumed only via `BroadcastDim::Row` (srcB row 0); TILE gamma reads land row 0 of faces 0/1 at in-page offsets 0 and `256·e_g` |
-| fp32 + `fp32_dest_acc_en=False` | precision convention | EXCLUSION (NotImplementedError); bf16 + False outside Phase 0 SUPPORTED; config read from the resolved descriptor, never overridden |
+| fp32 + `fp32_dest_acc_en=False` | precision convention | EXCLUSION (`ExcludedCell`); bf16 / bf8b + False SUPPORTED since Refinement 1 (16-bit intermediates); config read from the resolved descriptor, never overridden |
+| bf8b TILE gamma page | shared exponents precede the mantissas, so face-row byte offsets are wrong | writer reads the whole 1088 B page per tile (`gamma_is_block_float` CT arg); Row broadcast still consumes row 0 only |
+| bf8b × non-aligned shape | block quantization of a padded / masked tile | EXCLUSION mirroring the author-scoped INVALID entries (`w_non_aligned`, `h_non_aligned`) |
 | Reduce scaler format | the reduce LLK expects the scaler in bf16 row-0 layout | `cb_reduce_scaler` bf16, filled by the pool-type-aware `calculate_and_prepare_reduce_scaler<…, SUM, REDUCE_ROW>`; `1/W` applied in the fp32 post-op, never baked into the bf16 scaler |
 | Regime only on some grids | R1/R2 choice depends on `num_cores_available` and L1 size | selection function pinned above; regime-pinned tests use shapes that select the same regime on any grid ≤ 256 cores and L1 ≤ 1.5 MiB |
 | x popped while still needed | x is read by sum-of-squares, γ-scale and (no gamma) normalize | sum-of-squares/rowsum use `None/None` (no pop); x popped per chunk only after its last consumer; M5 keeps each pop contiguous |
