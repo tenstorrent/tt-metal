@@ -141,9 +141,9 @@ class InProcessRolloutBatchSource(RolloutBatchSource):
         for start in range(0, len(self._prompts), n):
             prompts = [list(p) for p in self._prompts[start : start + n]]
             extra = {k: list(col[start : start + n]) for k, col in self._extra_columns.items()}
-            start = time.perf_counter()
+            t0 = time.perf_counter()
             rollout = self.sampler.generate(prompts)
-            generation_time_s = time.perf_counter() - start
+            generation_time_s = time.perf_counter() - t0
             validate_rollout_batch(
                 rollout,
                 num_prompts=len(prompts),
