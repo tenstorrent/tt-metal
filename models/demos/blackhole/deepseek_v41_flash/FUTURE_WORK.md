@@ -18,6 +18,8 @@ Today a snapshot is a full copy of the prefix state at power-of-two token counts
 
 ## One Generator-level prefill path for the vLLM adapter and the demo
 
+**Make the server use the Generator's prefill code instead of calling `Model.prefill_interleaved` directly.** The vLLM adapter should go through `Generator` (`tt/generator.py`, `prefill_forward_text` and its chunking / `num_cached_tokens` handling), like the tt_transformers vLLM wrappers do (they inherit `Generator` and call `super().prefill_forward_text`), so the demo and the server run the same prefill code. For that, what only `prefill_interleaved` has today (windows of chunks per user, per-row chunk starts, carried state between calls, APC snapshots and restores, the first-step cap, key export, drafter taps) has to move into `Generator` / `Model.prefill_forward`, and the server must keep its results and its speed (compare against the figures in the first section above).
+
 `tt/generator_vllm.py` calls `Model.prefill_interleaved` directly while the demo goes through `Generator.prefill_forward_text` / `Model.prefill_forward`; the demo cannot reach APC, windows or per-row chunk starts. tt_transformers' vLLM wrappers inherit `Generator` and call `super().prefill_forward_text`, which owns chunked prefill and `num_cached_tokens`. Do it after the items above; the refactor itself does not change speed (speed depends on the trace type, pool dtype, export policy, APC and host overlap).
 
 ## Device sampler: inverse-CDF draw returns zero-weight tokens (`tt/device_sampler.py`)
