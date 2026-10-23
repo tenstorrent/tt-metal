@@ -24,7 +24,6 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-umd/simulation/simulation_chip.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>
@@ -61,9 +60,7 @@ inline std::string get_core_descriptor_file(
             CoreType::WORKER;
 
     if (env.get_rtoptions().get_simulator_enabled()) {
-        const std::string soc_desc_path = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
-            env.get_rtoptions().get_simulator_path());
-        tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc_path);
+        const tt_xy_pair& grid_size = soc_desc.grid_size;
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
             switch (arch) {
                 default:
