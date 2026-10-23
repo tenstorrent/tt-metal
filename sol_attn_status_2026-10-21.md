@@ -996,6 +996,14 @@ inits it at 15 (`init_sdpa_streaming_semaphores<15>`) while the streaming paths 
 every stage switch (subtract and matmul share the unpacker/math configuration), which is the cost that bounds the
 gain.
 
+**M10 first build (2026-10-23, 01:27-01:51):** the correctness set passed 11/11 with PCC values identical to the
+production run's (the interleave changes issue order, not arithmetic), the traced dense op was unchanged
+(7.22-7.48 ms), and every 5 s run failed at program creation: "Program size (73424) too large for kernel config
+buffer (70656)", 2.8 KB over, as M9's first build did. The flush lambda, now carrying the P@V issue, was inlined
+at four sites on each TRISC. Fix: the S1 flush, the S5 flush and the P@V issue are outlined (`sol_res_s1_flush`,
+`sol_res_s5_flush`, one copy per TRISC) over a per-step state struct (`SolResStepState`); the `m10t` step re-runs
+the 5 s parity (the program-size check), the traced timings and the profile without the 21-minute correctness set.
+
 **Expected:** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
 −0.25 to −0.35 ms traced at tau 1, i.e. ~4.65 ms (1.58x) from 4.97. The pooled steps use the same code and gain
 in proportion. This does not reach 1.8x (4.09 ms); the remaining compute levers (section 15: the pooled phase and

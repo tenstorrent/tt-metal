@@ -559,6 +559,23 @@ if want m10; then
     [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m10_logs" 2>/dev/null
 fi
 
+# M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
+# config buffer (73424 > 70656); the S1/S5 flushes and the P@V issue were outlined into one copy per TRISC. This
+# step skips the 21-minute correctness set: 5 s parity (also the program-size check), traced dense + tau 1-3, profile.
+if want m10t; then
+    run m10t_parity 900 pytest "$T" -s -k "4x8 and resident_call_parity and r4736"
+    run m10t_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    for tau in 1.0 2.0 3.0; do
+        run "m10t_trace_tau${tau}" 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident \
+            SOL_BENCH_PREFIX=off SOL_TAU=$tau pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    done
+    run m10t_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
+        SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m10_logs" 2>/dev/null
+fi
+
 # M9 timing only (the m9 correctness set passed 11/11 on the first build; the 5 s runs hit the kernel config
 # buffer limit and were re-run after outlining the step's pack and grouping helpers).
 if want m9t; then
