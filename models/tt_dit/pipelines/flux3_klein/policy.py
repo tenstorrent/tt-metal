@@ -10,10 +10,10 @@ host by ``references.prepare_references``), and returns a structured :class:`Adm
 :class:`Flux3KleinAdmissionError` (the 422 analogue) carrying it. A rejected request never allocates on the device.
 
 Checks, in order: canvas sides (multiples of 16 inside ``[MIN_SIDE, MAX_SIDE]``, reference ``pipeline.py:26``);
-references at most ``FLUX3_KLEIN_MAX_REFERENCES`` (``pipeline.py:27``); every reference's four VAE encoder levels
-tile-aligned (the plain ``ttnn.group_norm`` reduces over whole 32-row tiles, so a level whose ``H * W`` is not a
-multiple of 32 would fold padding rows into the statistics; ``budget="reference_size"``), the canvas likewise
-(``budget="canvas_size"``); text at most ``FLUX3_KLEIN_MAX_TEXT_LENGTH`` tokens. These are the model's own
+references at most ``FLUX3_KLEIN_MAX_REFERENCES`` (``pipeline.py:27``); the canvas's four VAE decoder levels
+tile-aligned (``budget="canvas_size"``; the H-partitioned decoder's fused group norm reduces whole 32-row tiles).
+References of any prepared size are admitted since 2026-10-21 (the encoder's plain GroupNorm has an exact path for
+unaligned row counts); text at most ``FLUX3_KLEIN_MAX_TEXT_LENGTH`` tokens. These are the model's own
 structural limits. There is NO token budget: the measured-bucket gate (``max_total_tokens``, refusing any request
 larger than the biggest bucket that had run on the ring) was removed on 2026-10-19 by the user's decision; a request
 of any admitted shape goes to the device, and a device allocation failure surfaces as the ttnn exception. The
@@ -135,15 +135,10 @@ def admit(resolved: Flux3KleinResolved, mesh_shape: tuple[int, int]) -> Admissio
             return Admission(False, f"{name} {side} outside [{cap.min_side}, {cap.max_side}]", "side", measured)
     if num_references > cap.max_references:
         return Admission(False, REFERENCES_REASON, "references", measured)
-    for index, (ref_w, ref_h) in enumerate(reference_sizes):
-        if not vae_levels_tile_aligned(ref_w, ref_h):
-            return Admission(
-                False,
-                f"reference {index} prepared to {ref_w}x{ref_h} has a VAE level that is not tile-aligned "
-                f"(level rows {vae_level_rows(ref_w, ref_h)})",
-                "reference_size",
-                measured,
-            )
+    # References of any prepared size are admitted (2026-10-21): the encoder's GroupNorm computes exact fp32 statistics
+    # for levels whose row count is not a multiple of the tile height (layers/normalization.py _forward_unaligned;
+    # test_encode_unaligned_reference: 880x1168 / 400x736 / 1232x816 at pcc 0.9998-0.9999 vs the CPU encode). The
+    # former refusal (``reference_size``) rejected most real photos at BFL's own prepared sizes.
     if not vae_levels_tile_aligned(width, height):
         return Admission(
             False,

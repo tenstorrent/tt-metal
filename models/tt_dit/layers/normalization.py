@@ -559,6 +559,9 @@ class GroupNorm(Module):
         self.num_local_channels = num_local_channels
         self.num_padded_channels = num_padded_channels
         self.num_padded_groups = num_padded_groups
+        self._gamma_torch = None  # plain affine for the exact unaligned-row path (set by _prepare_torch_state)
+        self._beta_torch = None
+        self._unaligned_cache = None
 
     @classmethod
     def from_torch(
@@ -582,6 +585,9 @@ class GroupNorm(Module):
         return module
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # The plain per-channel affine, kept for the exact unaligned-row path (``_forward_unaligned``).
+        self._gamma_torch = state["weight"].detach().float().clone() if "weight" in state else None
+        self._beta_torch = state["bias"].detach().float().clone() if "bias" in state else None
         if "weight" in state:
             state["weight"] = self._prepare_param(state["weight"])
         if "bias" in state:
@@ -634,16 +640,140 @@ class GroupNorm(Module):
             self._grid_cache[key] = grid
         return grid
 
+    # --- exact path for row counts that are not a multiple of the tile height -------------------------------------------
+    # ``ttnn.group_norm`` reduces whole 32-row tiles, so an H * W that is not a multiple of 32 would fold the padding
+    # rows into the statistics; the Klein admission policy refused such shapes (BFL's own reference sizing produces
+    # them for most real photos: 4032x3024 -> 2352x1760, 1000x1000 -> 1008x1008). This path computes the statistics
+    # explicitly in fp32 over the REAL rows (zero padding contributes nothing to the sums and the divisor is the true
+    # count), normalises in fp32 and rounds to bf16 once: bf16 operands, fp32 accumulation, like the fused op.
+
+    def _unaligned_consts(self):
+        """Per-device fp32 affine [1, 1, 1, C_local], the group indicator [C_local, G_local] and its transpose."""
+        if getattr(self, "_unaligned_cache", None) is not None:
+            return self._unaligned_cache
+        if self._gamma_torch is None or self._beta_torch is None:
+            # Weights came from the tensor cache (no torch state passed through _prepare_torch_state): recover the
+            # plain affine from the packed row-major device parameters (the inverse of create_group_norm_weight_bias_rm:
+            # per virtual column, C_padded / nvc channels laid out in 32-wide rows).
+            self._gamma_torch = self._unpack_affine(self.weight.data)
+            self._beta_torch = self._unpack_affine(self.bias.data)
+        assert (
+            self.num_padded_channels == self.num_local_channels
+        ), f"unaligned path needs tile-aligned local channels, got {self.num_local_channels}"
+        d, c = self.num_devices, self.num_local_channels
+        g_local = self.num_padded_groups
+        cg = c // g_local
+        mesh = self.mesh_device
+        shape = tuple(int(v) for v in mesh.shape)
+        if d > 1:
+            dims = (0, None) if self.mesh_axis == 0 else (None, 0)
+            mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=shape, dims=dims)
+        else:
+            mapper = ttnn.ReplicateTensorToMesh(mesh)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+
+        def up(t, mp):
+            return ttnn.from_torch(
+                t.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mp,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        gamma = up(self._gamma_torch.reshape(d, 1, 1, c), mapper)
+        beta = up(self._beta_torch.reshape(d, 1, 1, c), mapper)
+        ind = torch.zeros(c, g_local)
+        for ch in range(c):
+            ind[ch, ch // cg] = 1.0
+        m = up(ind.reshape(1, 1, c, g_local), rep)
+        mt = up(ind.T.contiguous().reshape(1, 1, g_local, c), rep)
+        cfg = ttnn.init_device_compute_kernel_config(
+            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        self._unaligned_cache = (gamma, beta, m, mt, cg, cfg)
+        return self._unaligned_cache
+
+    def _unpack_affine(self, packed: ttnn.Tensor) -> torch.Tensor:
+        """``[num_devices * C_local]`` plain affine (device order along ``mesh_axis``) from the packed parameter."""
+        mesh = self.mesh_device
+        shape = tuple(int(v) for v in mesh.shape)
+        full = ttnn.to_torch(packed, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()  # [n_all, 1, rows, 32]
+        full = full.reshape(-1, full.shape[-2], full.shape[-1])
+        if self.num_devices > 1:
+            # shards along mesh_axis are replicated along the other axis: take one replica per shard
+            stride = shape[1] if self.mesh_axis == 0 else 1
+            picks = [full[i * stride] for i in range(self.num_devices)]
+        else:
+            picks = [full[0]]
+        nvc = int(self.num_virtual_cols)
+        cpc = self.num_padded_channels // nvc
+        out = []
+        for t in picks:
+            rows = t.shape[0]
+            rpc = rows // nvc
+            chans = torch.cat([t[j * rpc : (j + 1) * rpc].reshape(-1)[:cpc] for j in range(nvc)])
+            out.append(chans[: self.num_local_channels])
+        return torch.cat(out)
+
+    def _forward_unaligned(self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int) -> ttnn.Tensor:
+        gamma, beta, m, mt, cg, cfg = self._unaligned_consts()
+        n = height * width
+        n32 = math.ceil(n / 32) * 32
+        xf = ttnn.typecast(x, ttnn.float32)
+        if n32 != n:
+            xf = ttnn.pad(xf, [(0, 0), (0, 0), (0, n32 - n), (0, 0)], 0.0)
+        cnt = float(n * cg)
+        s1 = ttnn.sum(xf, dim=2, keepdim=True)  # [B, 1, 1, C]: zero rows add nothing
+        mean_g = ttnn.multiply(ttnn.matmul(s1, m, compute_kernel_config=cfg), 1.0 / cnt)  # [B, 1, 1, G]
+        ttnn.deallocate(s1)
+        mean_c = ttnn.matmul(mean_g, mt, compute_kernel_config=cfg)  # [B, 1, 1, C]
+        ttnn.deallocate(mean_g)
+        xc = ttnn.subtract(xf, mean_c)  # the padding rows become -mean: masked out of the variance below
+        ttnn.deallocate(xf)
+        ttnn.deallocate(mean_c)
+        if n32 != n:
+            keep = torch.zeros(1, 1, n32, 1)
+            keep[:, :, :n, :] = 1.0
+            keep_t = ttnn.from_torch(
+                keep, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            xc = ttnn.multiply(xc, keep_t)
+            ttnn.deallocate(keep_t)
+        s2 = ttnn.sum(ttnn.multiply(xc, xc), dim=2, keepdim=True)
+        var_g = ttnn.multiply(ttnn.matmul(s2, m, compute_kernel_config=cfg), 1.0 / cnt)
+        ttnn.deallocate(s2)
+        rstd_g = ttnn.rsqrt(ttnn.add(var_g, self.eps))
+        ttnn.deallocate(var_g)
+        rstd_c = ttnn.matmul(rstd_g, mt, compute_kernel_config=cfg)
+        ttnn.deallocate(rstd_g)
+        y = ttnn.multiply(xc, rstd_c)
+        ttnn.deallocate(xc)
+        ttnn.deallocate(rstd_c)
+        y = ttnn.add(ttnn.multiply(y, gamma), beta)
+        if n32 != n:
+            y = ttnn.slice(y, [0, 0, 0, 0], [batch_size, 1, n, channels])
+        y = ttnn.typecast(y, ttnn.bfloat16)
+        y = y.reshape([batch_size, height, width, channels])
+        return _apply_activation_fn(y, self.activation_fn)
+
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
+        if (width * height) % 32 != 0:
+            return self._forward_unaligned(x, batch_size, height, width, channels)
+        try:
+            core_grid = self._core_grid_for(width * height, batch_size)
+        except ValueError as err:
+            # A tile-aligned row count the fused op's DRAM grid rule cannot serve (e.g. 256,960 rows = 8030 tiles of 32
+            # channels / 8 groups, the /2 level of an 880x1168 reference): the exact path handles any row count.
+            logger.info(f"GroupNorm: {err}; using the exact unaligned path")
+            return self._forward_unaligned(x, batch_size, height, width, channels)
         kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
             input_mask=self.mask.data,
             num_groups=self.num_padded_groups,
             epsilon=self.eps,
-            core_grid=self._core_grid_for(width * height, batch_size),
+            core_grid=core_grid,
             inplace=False,
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
