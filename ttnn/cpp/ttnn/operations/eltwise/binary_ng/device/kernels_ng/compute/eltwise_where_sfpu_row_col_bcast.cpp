@@ -47,7 +47,6 @@ ALWI void process_tile(
 
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the op here.
-    copy_init(cb_left);
     BINARY_SFPU_INIT
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
@@ -55,7 +54,6 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_dfb_other.wait_front(num_tiles_per_cycle);
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
         reconfig_data_format(CB_OTHER, CB_OTHER);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
 
@@ -70,18 +68,15 @@ ALWI void process_tile(
 
         exp_dfb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
         exp_dfb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
-        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 3);
         }
-        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
 // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS

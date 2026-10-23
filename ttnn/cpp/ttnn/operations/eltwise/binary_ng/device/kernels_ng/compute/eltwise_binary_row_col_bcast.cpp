@@ -59,7 +59,6 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
         reconfig_data_format(cb_raw_other, cb_raw_other);
         unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
 
@@ -73,12 +72,10 @@ ALWI void process_tile(
         tile_regs_release();
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
 
         PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
@@ -124,9 +121,6 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

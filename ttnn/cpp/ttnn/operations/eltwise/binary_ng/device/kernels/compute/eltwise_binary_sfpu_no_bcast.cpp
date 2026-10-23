@@ -62,12 +62,9 @@ FORCE_INLINE void process_sfpu_tiles(
 
     tile_regs_acquire();
     // Startup and preprocessing preserve the LHS-format SrcA invariant.
-    copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
-    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-    copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -80,7 +77,6 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
-    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();
@@ -114,10 +110,6 @@ void kernel_main() {
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
-    copy_init(cb_post_lhs_id);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT

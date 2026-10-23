@@ -41,11 +41,9 @@ ALWI void process_tile(
         dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
-        copy_init(dfb_in0.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_in0.get_id(), i, i * 3);
         }
-        copy_init(dfb_in1.get_id());
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
@@ -107,7 +105,6 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
-    copy_init(cb_in0_id);
     BINARY_SFPU_INIT
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

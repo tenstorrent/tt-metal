@@ -76,7 +76,6 @@ ALWI void process_tile(
     DataflowBuffer exp_dfb_out(cb_out);
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
-    pack_reconfig_data_format(cb_out, cb_llk_post);
     reconfig_data_format(cb_bcast, cb_bcast);
     unary_bcast_init<BroadcastType::COL>(cb_bcast);
     exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
@@ -89,7 +88,6 @@ ALWI void process_tile(
     exp_dfb_llk_post.push_back(num_tiles_per_cycle);
     tile_regs_release();
 
-    pack_reconfig_data_format(cb_llk_post, cb_out);
 
     PREPROCESS(
         BCAST_OP,
@@ -114,13 +112,9 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
-        copy_init(cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
         }
-        reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
-        copy_init(cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
@@ -184,10 +178,6 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
-    copy_init(cb_post_lhs);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT

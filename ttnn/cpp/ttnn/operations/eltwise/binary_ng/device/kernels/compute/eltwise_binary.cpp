@@ -52,9 +52,6 @@ ALWI void process_tile(
 
         cb_out.reserve_back(num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-#endif
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);
@@ -92,13 +89,7 @@ void kernel_main() {
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_post_rhs_id, cb_out_id);
-#ifdef PACK_RELU
-    pack_relu_config(ReluConfig::zero());
-#endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-    binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs_id, cb_post_rhs_id);
-#endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
