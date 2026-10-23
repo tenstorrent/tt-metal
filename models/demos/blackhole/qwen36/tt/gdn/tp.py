@@ -249,7 +249,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
     else:
         fused = torch.cat(
@@ -266,7 +266,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=qkvz_mc,
             cache_path=c("qkvz" + (".dramshard" if qkvz_sharded else "")),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
         # Separate A+B projection (column-parallel fallback)
         ab = torch.cat(
@@ -277,7 +277,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=0,
         )
         tw["ab"] = tpc.shard_w(
-            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b)
         )
     # Row-parallel out projection: DRAM-width-sharded (like the in-proj) — decode tput win.
     _out_sharded = getattr(args, "gdn_out_weight_memcfg", None) is not None
@@ -287,7 +287,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out.dramshard" if _out_sharded else "out"),
-        dtype=ttnn.bfloat8_b,
+        dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
     )
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
@@ -298,7 +298,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_path=c("out.colpar"),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
@@ -339,7 +339,7 @@ class TPGatedDeltaNet:
         self.gdn_wy_inverse = getattr(args, "gdn_wy_inverse", None)
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
-        self.cfg = tpc.COMPUTE_HIFI2
+        self.cfg = tpc.exact_compute_cfg(args)
         # Must match load_gdn_weights_tp gates
         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
         self._fuse_ab = self._dram_sharded
@@ -393,7 +393,9 @@ class TPGatedDeltaNet:
         # Spec decode only (set by SpeculativeDecoder): run the ONE fused recurrent device op in
         # forward_decode instead of the composite, so decode and hybrid verify share GDN math.
         # Full-batch (B == self.B) only — it has no bucketed B<Bmax state slice/writeback.
-        self.use_fused_recurrent_decode = False
+        # QWEN36_GDN_FUSED_DECODE=1 selects it for plain decode too (full batch only): one device op in place of
+        # the ~13-op composite recurrence (M10 upsampler op-count work, 2026-10-22; audited vs the CPU oracle).
+        self.use_fused_recurrent_decode = os.environ.get("QWEN36_GDN_FUSED_DECODE") == "1"
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Which causal conv runs the single-sequence prefill when valid_len is None (masked buckets always
         # keep the MAC FIR, whose one-hot new_state selection they need):
@@ -622,10 +624,17 @@ class TPGatedDeltaNet:
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        out_dtype = tpc.exact_partial_dtype(self.args)  # fp32 partials under the exact profile (summed in fp32)
+        dt = dict(dtype=out_dtype) if out_dtype is not None else {}
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
-                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+                x,
+                weight,
+                self.args.gdn_out_decode_1d_progcfg,
+                self.cfg,
+                out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                out_dtype=out_dtype,
             )
         if not self._out_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
@@ -640,9 +649,9 @@ class TPGatedDeltaNet:
                     tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
-                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt
                 )
-            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt)
         return tpc.sharded_decode_matmul(
             x,
             weight,
@@ -651,6 +660,7 @@ class TPGatedDeltaNet:
             self.args.act_shard_gdn_value,
             self.args.prefill_progcfg,
             self.args.gdn_value_dim_tp,
+            out_dtype=out_dtype,
         )
 
     def _project_qkvzab(self, x, S, out_mc=None):
@@ -1003,9 +1013,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
-        out = tpc.tp_reduce_scatter(
-            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        out = tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology(), args=self.args)
         if return_state:
             return out, captured[0], captured[1]
         return out
@@ -1414,16 +1422,7 @@ class TPGatedDeltaNet:
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, B, T, partial.shape[-1]))
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **tpc.prefill_rs_kwargs(self.args),
-        )
+        return tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology(), args=self.args)
 
     def forward_decode(self, x):
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
@@ -1546,15 +1545,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        out = tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        out = tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology())
         return out
 
     # ------------------------------------------------------------------ #

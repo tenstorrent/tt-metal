@@ -87,7 +87,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
             cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
     else:
         qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
@@ -101,7 +101,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=qg_mc,
             cache_path=c("wqkv" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
         # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
         # each device lands on its GQA-assigned head instead of a fraction of one.
@@ -111,7 +111,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=k_mc,
             cache_path=c("wk" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
         tw["wv"] = tpc.shard_w(
             v_proj,
@@ -119,7 +119,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             dim=-1,
             memory_config=v_mc,
             cache_path=c("wv" + tag),
-            dtype=ttnn.bfloat8_b,
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
     # Row-parallel wo (reduce-scatter after): DRAM-width-sharded like the in-proj — decode tput win.
     wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -129,7 +129,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=0,
         memory_config=args.attn_wo_weight_memcfg if wo_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
-        dtype=ttnn.bfloat8_b,
+        dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
     )
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
@@ -154,7 +154,7 @@ class TPAttention:
         self.HD = args.head_dim
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
-        self.compute_cfg = tpc.COMPUTE_HIFI2
+        self.compute_cfg = tpc.exact_compute_cfg(args)
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
         # Must match load_attention_weights_tp gates
@@ -308,6 +308,8 @@ class TPAttention:
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
         matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
+        out_dtype = tpc.exact_partial_dtype(self.args)  # fp32 partials under the exact profile (summed in fp32)
+        dt = dict(dtype=out_dtype) if out_dtype is not None else {}
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
@@ -316,6 +318,7 @@ class TPAttention:
                 self.args.attn_wo_decode_1d_progcfg,
                 self.compute_cfg,
                 out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                out_dtype=out_dtype,
             )
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
@@ -335,8 +338,9 @@ class TPAttention:
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
                     memory_config=tpc.prefill_act_mem(x.shape[-2], ttnn.L1_MEMORY_CONFIG),
+                    **dt,
                 )
-            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt)
         return tpc.sharded_decode_matmul(
             x,
             weight,
@@ -345,6 +349,7 @@ class TPAttention:
             self.args.act_shard_attn_out,
             self.args.prefill_progcfg,
             self.args.attn_out_dim_tp,
+            out_dtype=out_dtype,
         )
 
     def _make_heads(self, qg, kp, vp, S):
@@ -568,9 +573,7 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
-        return tpc.tp_reduce_scatter(
-            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        return tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology(), args=self.args)
 
     def _kv_shard_cfg(self, B):
         """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
@@ -1043,15 +1046,7 @@ class TPAttention:
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
-        return tt_all_reduce(
-            wo_partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return tpc.reduce_partials(wo_partial, self.mesh, self.tt_ccl, self.args.ccl_topology())
 
     def forward_prefill_paged(
         self,
@@ -1271,6 +1266,4 @@ class TPAttention:
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
-        return tpc.tp_reduce_scatter(
-            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        return tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology(), args=self.args)
