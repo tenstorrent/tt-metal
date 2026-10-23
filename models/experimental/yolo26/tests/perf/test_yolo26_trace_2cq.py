@@ -224,7 +224,7 @@ def run_yolo26_trace_2cq_perf(
     [{"l1_small_size": YOLO26_L1_SMALL_SIZE, "trace_region_size": 8000000, "num_command_queues": 2}],
     indirect=True,
 )
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
 @pytest.mark.parametrize("input_size", [640])
 @pytest.mark.parametrize("variant", ["yolo26n", "yolo26s"])
 def test_yolo26_trace_2cq_perf(device, batch_size, input_size, variant):
@@ -255,7 +255,7 @@ def test_yolo26_trace_2cq_perf(device, batch_size, input_size, variant):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [4], indirect=True)
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
 @pytest.mark.parametrize("input_size", [640])
 @pytest.mark.parametrize("variant", ["yolo26n", "yolo26s"])
 def test_yolo26_trace_2cq_perf_dp(mesh_device, batch_size, input_size, variant):

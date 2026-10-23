@@ -41,6 +41,10 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0019 | Items observed this session but not yet recorded (L1_SMALL OOM, tilize warning spam, API additions) | 2026-10-22 | RECORDED (appended): see entry; OOM worked around, warning not addressed |
 | YOLO26-0020 | Which findings are ttnn / tt-metal behaviour rather than model bugs? | 2026-10-22 | OPEN: summary table in entry; nothing reported upstream yet |
 | YOLO26-0021 | dp=4 on the QB2 (1×4 mesh): does it scale, and what is the 10-run e2e FPS? | 2026-10-23 | DONE: n 643.7 FPS, s 566.9 FPS (10-run mean, trace+2CQ e2e) = 3.97× single chip; intermittent hang at trace capture logged, not root-caused |
+| YOLO26-0022 | Single-chip perf optimization from a tracy profile (ops, fusion, sharding, L1, matmul/conv config sweeps) | 2026-10-23 | DONE: model-only n 6.01 → 1.81 ms, s 6.85 → 2.34 ms; e2e n 522 FPS, s 412 FPS; dp=4 n 1772 FPS, s 1567 FPS; PCC unchanged, 17/17 PCC tests, demo 16/16 |
+| YOLO26-0023 | 600 FPS on one chip for yolo26s with PCC intact | 2026-10-23 | DONE: batch 2 per chip, e2e trace+2CQ 603.6 / 603.9 / 604.4 FPS (10 runs); PCC unchanged; batched demo 8/8 matched, checked visually |
+| YOLO26-0024 | Batch > 2 per chip | 2026-10-23 | DONE: max batch 4 (batch-aware conv blocking); e2e batch 4 s 659.7 FPS, n 1092.6 FPS; PCC intact; batch 5 still fails |
+| YOLO26-0025 | dp=4 with batch 2 / 4 per chip | 2026-10-23 | DONE: batch 4/chip n 2561–2571 FPS, s 2347–2404 FPS; batch 2/chip n ~1868, s ~1805; one trace-capture hang (batch 2, n) |
 
 ## Entries
 
@@ -384,3 +388,247 @@ ttnn / tt-metal / environment behaviour we worked around (candidates for upstrea
   left over across mesh open/close, not the model code, since the identical code passed 10/10 after resets).
   Status OPEN: if it recurs, capture `tt-triage` / watcher output before resetting.
 - Next: commit the dp changes; consider larger per-chip batch to amortize dispatch.
+
+### YOLO26-0022 — single-chip performance optimization (appended 2026-10-23)
+
+Goal: cut latency on one chip (dp scales it), guided by a tracy device profile. All code in `tt/ttnn_yolo26.py`
+unless noted; uncommitted at time of writing.
+
+Methods:
+- Device profile: `python -m tracy -r -p --no-web-server <script>`; script (`scratchpad/prof.py`) builds `TtYOLO26`
+  (uint8 input), runs 2 warm forwards and 1 profiled forward, `ttnn.ReadDeviceProfiler` after each (reading only once
+  overflowed the 12000-marker profiler DRAM buffers: "markers were dropped" + report assert). Numbers below are
+  DEVICE KERNEL DURATION of the last forward.
+- Model-only latency: trace of one forward replayed 200× back to back (`scratchpad/quick.py`), plus PCC on bus.jpg
+  (uint8 path) vs Ultralytics one2one output. "e2e" = `test_yolo26_trace_2cq_perf` (trace + 2CQ, upload + read-back).
+- All runs on chip 0 (`TT_VISIBLE_DEVICES=0` + p150 mesh descriptor) unless dp=4.
+
+Starting point (MEASURED, yolo26n, 624 ops, kernel sum 5.37 ms; trace 6.01 ms):
+
+| Bucket | Device time | Cause |
+|---|---|---|
+| Input reshape [640,1920]→[409600,3] + I2S of 6-byte rows | 0.637 + 0.791 ms | one NoC transfer per pixel |
+| untilize / tilize / slice / concat / reshape / S2I / I2S / permute / binary in DRAM row-major | ~2.6 ms | every add, split and concat went DRAM + row-major |
+| standalone SiLU (87 unary ops) | 0.34 ms | SiLU not fused into conv |
+| conv + halo + matmul | ~0.85 ms | |
+
+Changes and their effect (MEASURED, model-only ms, PCC box/cls on bus.jpg):
+
+| # | Change | n | s | PCC n | PCC s |
+|---|---|---|---|---|---|
+| 0 | start | 6.01 | 6.85 | 0.99959/0.99850 | 0.99903/0.99755 |
+| 1 | uint8 input padded to 8 ch on host ([B,1,H,W·8], `uint8_input_from_torch`); rows sharded into L1 (640 wide pages), typecast in L1, `ttnn.experimental.view` to [HW, 8] (zero copy: shard width == last dim); stem consumes that sharding | | | | |
+| 2 | SiLU fused into conv (`activation=SILU`) | 4.34 | 5.29 | 0.99960/0.99819 | 0.99919/0.99788 |
+| 3 | Activations stay [1,1,NHW,C] tile in L1: residual `add` and channel `concat` shard-local (height-sharded inputs aligned to the first, else L1 interleaved); C2f/C3k2/C2PSA chunk replaced by a second 1×1 conv on half the cv1 weights (`cv1_b`); block-interface channels zero-padded to 32 (n: 16-ch hidden of model.2/model.16) so concats are tile-aligned | 2.40 | 3.12 | 0.99963/0.99837 | 0.99919/0.99788 |
+| 4 | Attention token-major: qkv weights reordered to [q|k|v] heads at load, scale folded into q; no permutes | 2.01 | 2.66 | 0.99964/0.99857 | 0.99918/0.99779 |
+| 5 | Heads batched: q/k zero-padded to head_dim, `nlp_create_qkv_heads` → one Q·Kᵀ, one softmax, one ·V, `nlp_concat_heads` | 1.951 | 2.506 | same | same |
+| 6 | SPPF pools row-major height-sharded (n only, hidden ≤ 128) | 1.928 | 2.505 | same | same |
+| 7 | bf16 attention scores (was fp32) | 1.918 | 2.488 | 0.99964/0.99845 | 0.99918/0.99792 |
+| 8 | explicit `MatmulMultiCoreReuseProgramConfig` for Q·Kᵀ / ·V (one 32-token block of one head per core) | 1.865 | 2.388 | 0.99964/0.99844 | 0.99919/0.99796 |
+| 9 | conv height/block threshold NHW/C_out > 4 → > 8 | 1.835 | 2.351 | 0.99962/0.99844 | 0.99921/0.99802 |
+| 10 | softmax without fp32 dest acc (`SOFTMAX_COMPUTE_KERNEL_CONFIG`) | 1.814 | 2.331 | 0.99963/0.99830 | 0.99919/0.99802 |
+
+Step 1 alone (stem micro-benchmark, host-timed incl. dispatch): 1.537 → 0.142 ms, bit-identical conv output.
+End state (MEASURED, yolo26n profile): 272 ops, kernel sum 1.434 ms (conv 576, matmul 476, halo 140, softmax 43 µs);
+yolo26s: 277 ops, 2.158 ms. Trace minus kernel sum ≈ 0.4 ms on n = dispatch gaps (~1.5 µs/op).
+
+Sweeps (MEASURED) — kept configuration is HiFi4, fp32 dest acc, packer L1 acc, bf16 weights:
+
+| Conv/matmul config (all layers) | n ms | n PCC box/cls | s ms | s PCC box/cls |
+|---|---|---|---|---|
+| HiFi4, fp32 acc, l1acc, bf16 (kept) | 2.014 | 0.99964/0.99857 | 2.655 | 0.99918/0.99779 |
+| HiFi2 | 2.000 | 0.99879/0.99336 | hung, see below | |
+| fp32 acc off | 1.951 | 0.99815/0.99348 | 2.508 | 0.99470/0.99111 |
+| packer l1 acc off | 2.018 | 0.99957/0.99854 | 2.676 | 0.99918/0.99775 |
+| fp32 + l1 acc off | 1.945 | 0.99717/0.98968 | 2.534 | 0.98976/0.98433 |
+| bfp8 weights | 2.003 | 0.99241/0.96691 | 2.598 | 0.95598/0.94312 |
+| LoFi | 1.997 | 0.96428/0.84376 | 2.542 | 0.93236/0.90340 |
+
+(run at step 4; at most 3–6 % faster for a clear accuracy loss.) Per-op sweep under tracy (6 conv shapes × fidelity ×
+fp32 × l1acc × SiLU): fidelity changes nothing (ops are not FPU-bound); the fused SiLU dominates, e.g. 1×1
+160×160 32→64: 3.7 µs without, 23.9 µs with; stem 29 vs 67 µs (~1.25 µs per output tile per core). Model-level with
+activations removed (timing only): 2.398 → 2.205 ms, i.e. SiLU ≈ 0.19 ms total.
+
+| SiLU variant on a sharded 160×160×64 conv output | device time | accuracy |
+|---|---|---|
+| fused in conv (kept) | 23.9 µs | PCC 0.99995 |
+| conv + `ttnn.silu` | 3.7 + 16.2 µs | same |
+| conv + `sigmoid(FastApproximate)` + mul | 3.7 + 3.4 + 9.8 µs | PCC 0.9974, max rel err 2.7 % (rejected) |
+| conv + `sigmoid(AccurateWithFastExp)` + mul | 3.7 + 9.6 + 9.8 µs | exact |
+| mul with sigmoid as `input_tensor_b_activations` | binding rejected `UnaryWithParam` list | — |
+
+READ: `ckernel_sfpu_silu.h` always uses the non-approximate sigmoid (exp + reciprocal), ignoring approx mode.
+
+| Height/block threshold (height if NHW/C_out > t) | n ms | s ms |
+|---|---|---|
+| 4 (original) | 1.865 | 2.388 |
+| 6 | 1.863 | 2.387 |
+| 8 / 10 / 12 (kept 8) | 1.835 | 2.350 |
+| 16 | 1.898 | 2.555 |
+| 32 | 2.008 | 2.608 |
+| 64 | 2.088 | FAIL (TT_THROW program.cpp:2625) |
+
+| SPPF maxpool 5×5 on 20×20 (tracy, pool + halo µs) | C=128 | C=256 |
+|---|---|---|
+| tile in/out, auto = block (was) | 26.2 + 2.0 (28 cores) | 26.3 + 2.0 (56 cores) |
+| row-major in/out, height | 8.5 + 2.7 (100 cores) | 15.3 + 4.9 |
+| tile out, height | 48.4 (13 cores) | 94.0 |
+| width | 145–170 (4–16 cores) | 145–170 |
+
+In-model, row-major pools need an untilize and a tilize of the 400-row concat that run on 13 cores; net n 1.951 →
+1.928 ms, s 2.506 → 2.520 ms, so s keeps tile pools (`row_major_pools = hidden ≤ 128`).
+
+| Softmax variant (PSA) | n ms | s ms | PCC n | PCC s |
+|---|---|---|---|---|
+| numeric_stable, fp32 dest | 1.835 | 2.351 | 0.99962/0.99844 | 0.99921/0.99802 |
+| not stable, fp32 dest | 1.822 | 2.346 | 0.99962/0.99836 | 0.99919/0.99799 |
+| numeric_stable, bf16 dest (kept) | 1.814 | 2.331 | 0.99963/0.99830 | 0.99919/0.99802 |
+| not stable, bf16 dest | 1.805 | 2.332 | 0.99960/0.99826 | 0.99919/0.99808 |
+
+Stable kept: guards exp overflow on other images for ≤ 0.01 ms.
+
+Refuted / rejected (MEASURED): `core_grid=` on the batched attention matmuls (n 1.918 → 2.027 ms; replaced by explicit
+program configs); lower conv precision (tables above); SiLU alternatives (table above); thresholds > 12.
+
+Defects hit and fixed during the work (MEASURED):
+- concat helper copied the first tensor's full memory config incl. shard width → `TT_FATAL Shard width 64 must match
+  physical width 32` in reshard; fixed with a per-tensor config (same grid / rows per core, own width).
+- `max_pool2d(applied_shard_scheme=...)` on an already sharded input → `TT_FATAL A sharding scheme should not be
+  specified for a sharded input tensor`; pass the scheme only for the first (interleaved) pool.
+- conv given a row-major tensor height-sharded 4 rows per core → `TT_FATAL shard_align_error` (tensor_layout.cpp:171);
+  SPPF cv2 now gets it L1 interleaved.
+- 8 of 17 tests in `tests/pcc` (block-by-block / partial-model tests that re-upload each block input as row-major NHWC
+  and call `ttnn.concat` on `TtUpsample` output) failed after step 3: (a) SPPF residual `add` got a row-major [1,H,W,C]
+  identity → tilize shard error; (b) the tests concat `TtUpsample` output with NHWC tensors. Fixed by `_as_flat_tile`
+  (add/concat bring any input to [1,1,NHW,C] tile; no-op inside the full model) and restoring `TtUpsample`'s NHWC
+  row-major output contract. 17/17 pass after; model-only time unchanged (n 1.814, s 2.339 ms).
+- Device hang: the HiFi2 yolo26s sweep run sat at 100 % CPU for 11 min (normal run ~2 min) inside the forward. Run
+  killed, `tt-smi -r`, all later runs used a reset per run and a 420 s timeout; not reproduced; root cause unknown
+  (INFERRED: same family as the YOLO26-0021 trace-capture hang; HiFi2 itself not suspected, n HiFi2 ran fine).
+
+Validation of the final code (MEASURED):
+- `tests/pcc` 17/17 pass. `test_tt_yolo26.py`: random input n box 0.999686 / cls 0.998921, s 0.999620 / 0.998932;
+  uint8 bus.jpg n 0.999628 / 0.998305, s 0.999190 / 0.998020.
+- e2e trace + 2CQ, single chip, 3 runs: n 1.91 ms, 522.1–522.7 FPS (was 162.28); s 2.43 ms, 412.1–412.3 FPS (was
+  142.88).
+- dp=4 trace + 2CQ, 3 runs (reset before each): n 2.24–2.27 ms per batch of 4, 1759.6 / 1772.1 / 1789.2 FPS
+  (min/mean/max; was 643.7); s 2.55–2.56 ms, 1564.6 / 1566.6 / 1569.3 FPS (was 566.9). n scales 3.4× over one chip
+  (vs 3.97× before): INFERRED per-iteration mesh overhead (2.26 vs 1.91 ms) now matters at ~1.9 ms per forward.
+- Demo (`demo.py --compare`, bus + zidane, n + s): 16/16 reference detections matched (same class, IoU ≥ 0.992,
+  conf within 0.02); images in `/home/ttuser/sdawle/yolo26_demo_outputs/optimized/`.
+- Log noise: some 1×1 convs log `Mismatch between computed MemoryConfig ... Using computed config`
+  (matmul_device_operation.cpp:278) — matmul picks its own output core grid; harmless, not addressed.
+
+API changes: uint8 input is now [B, 1, H, W·8] (`UINT8_INPUT_CHANNELS`, `uint8_input_from_torch`; callers in test
+infra, demo and PCC test updated); `TtAttention` / `TtBottleneck` / `TtC2f` / `TtC3k` / `TtC3k2` internals changed
+(padded interfaces, `cv1_b`); `TtConvBNSiLU.load_weights` takes optional `in_segments` / `out_segments`.
+
+Open: SiLU SFPU cost (~0.19 ms) needs a tt-metal kernel change; dispatch gaps (~0.4 ms on n) need fewer ops; stem conv
+67 µs of which ~38 µs SiLU on 16→32-padded output tiles.
+
+### YOLO26-0020 addendum (2026-10-23) — further ttnn behaviour found in YOLO26-0022 (none filed)
+
+| Behaviour | Workaround here | Upstream? |
+|---|---|---|
+| SFPU SiLU ignores approx mode, ~1.25 µs per tile per core; dominates small fused convs | none | Yes: approximate SiLU option |
+| Batched matmul [1,h,416,64]×[1,h,64,416] default config uses 1 core per head (44 µs); `core_grid=` made it slower | explicit `MatmulMultiCoreReuseProgramConfig` | Yes: default config |
+| `max_pool2d` tile output: 26 µs on 28 cores at 20×20×128 vs 8.5 µs row-major height-sharded | row-major pools for n | Maybe |
+| `reshape` of a sharded row-major tensor changing the last dim goes S2I → reshape → I2S; `experimental.view` does it for free when shard width == last dim | use `view` | Maybe: reshape could take the view path |
+| Profiler: one `ReadDeviceProfiler` after weight-prep + 2 forwards overflows 12000-marker buffers, then the ops report asserts | read after every forward | Maybe: clearer error |
+
+### YOLO26-0023 — 600 FPS single chip for yolo26s (appended 2026-10-23)
+
+Target: ≥ 600 FPS end-to-end (trace + 2CQ, upload + read-back) on ONE chip for yolo26s, PCC intact, detections
+checked visually. Start: batch 1, e2e 2.43 ms = 412 FPS, model-only 2.33 ms.
+
+Where batch-1 time goes (MEASURED, s): model-only without any activation 1.918 ms vs 2.339 ms ⇒ SiLU ≈ 0.42 ms; even a
+free SiLU leaves batch 1 at ~1.9 ms + e2e overhead, i.e. < 600 FPS. So the target needs throughput: several 20×20
+/ 40×40 layers run on 13–56 cores, so a second image costs much less than a second forward.
+
+Changes (code):
+- `TtAttention` supports batch > 1: fused qkv → row-major → [B, 1, N, C] → tile, `nlp_create_qkv_heads` batches
+  heads × images; heads concat back and return to [1, 1, B·N, C] (N = 400 is not tile-aligned, hence row-major).
+- Intermediates freed as soon as consumed (`_free` in every block, backbone, neck, head, attention; temporary copies in
+  `add` / `concat`). Without it batch 2 failed: `Statically allocated circular buffers ... clash with L1 buffers`
+  (head cv3_0_0). Batch 3/4 still fail the same way in the 160×160 stage (not pursued).
+- Persistent trace input lives in L1, sharded by image rows (`TtYOLO26.input_memory_config`); per iteration
+  `ttnn.copy(staging DRAM → L1 sharded)` (0.020 ms) replaces DRAM→DRAM copy (0.039 ms) + in-trace sharding copy;
+  `preprocess` skips the copy when the input is already sharded.
+- SPPF pools row-major also from batch 2 on (s: 3.191 → 3.178 ms).
+- Height/block rule on output NHW (stride-2 convs), threshold 4 (s 2.339 → 2.305 ms, n 1.814 → 1.806 ms).
+- perf test parametrized over batch 1 and 2; demo takes several `-i` images as one batch.
+
+MEASURED, yolo26s batch 2: model-only 3.178 ms per 2 images (629 FPS); PCC per image (bus, mirrored bus) box
+0.99920 / 0.99897, cls 0.99800 / 0.99788 (batch-1 values 0.99920 / 0.99800). e2e (`test_yolo26_trace_2cq_perf
+[yolo26s-640-2]`, 10 separate processes, chip reset before each): 3.31 ms per batch, 603.6 / 603.93 / 604.4 FPS
+(min / mean / max). Loop split before the input change (batch 2): trace 3.190, + copy & upload 3.243, + outputs to
+DRAM 3.279, + reads 3.383 ms.
+
+Regression (MEASURED): `tests/pcc` 17/17; single chip n b1 527.0, n b2 795.2, s b1 418.4, s b2 604.2 FPS; dp=4 (b1
+per chip) n 1772.6, s 1582.5 FPS. Batched demo (bus + zidane in one forward, yolo26s): 8/8 reference detections
+matched, IoU ≥ 0.995, conf within 0.021; images in `/home/ttuser/sdawle/yolo26_demo_outputs/batch2/`, checked
+visually (identical objects and boxes to the CPU reference).
+
+Tried and rejected (MEASURED):
+- Per-layer conv sweep (each conv alone, tracy, height/block/width × act_block_h 0/32/64/128): best-per-layer sum
+  1600 vs default 1680 µs, but applying the 11 winning overrides made the model slower (2.305 → 2.428 ms; reshards
+  between neighbours). Mechanism removed.
+- Packed single output tensor (one DRAM read per iteration): e2e n 1.91 → 2.07 ms, s 2.43 → 2.59 ms (in-trace concats
+  of unaligned 80-ch scores cost more than the saved reads on one chip). Removed.
+- bfloat8_b conv outputs: s 2.314 ms (−1 %), cls 0.98573. fp32 dest acc off globally: s 2.197 ms, cls 0.99232.
+- Stem conv only with bf16 dest: s b2 3.178 → 3.159 ms but cls 0.99800 → 0.99691 (PCC not intact). Reverted.
+- Depthwise convs: READ `prepare_conv2d_weights.cpp` expands grouped weights to dense, but with block sharding each
+  core only multiplies its 32-channel block (act_block_w 3 tiles); their time is readers + SiLU, not wasted FLOPs.
+
+Process note: an edit script computed an empty slice and `str.replace("", ...)` prepended a block to the top of
+`ttnn_yolo26.py` (IndentationError in the next test run); repaired by moving the block into the class and checked
+against the last checkpoint. The intermittent trace-capture hang (YOLO26-0021/0022) recurred once (packed-output run);
+all later runs reset the chip first.
+
+Margin: 0.6 %. Remaining levers: SiLU kernel (needs tt-metal change, ~0.8 ms of the 3.2 ms batch-2 forward is SFPU
+SiLU by the batch-1 ratio, INFERRED), attention batch round-trip (~38 µs per PSA block), e2e reads (0.10 ms).
+
+### YOLO26-0024 — batch > 2 on one chip (appended 2026-10-23)
+
+MEASURED failures before the change (all `Statically allocated circular buffers ... clash with L1 buffers`): batch 3
+and 4 at the stem conv (640×640, default act_block_h 30 tiles); after shrinking the stem blocks, batch 3 at model.5
+(3×3 s2 80×80×256→256: full 3×3×256×256 bf16 weights on every height-sharded core, double-buffered); batch 4 then at
+model.1.
+
+Fix (`TtConvBNSiLU._large_batch_settings`, chosen per batch size since the conv cache is keyed by batch):
+- batch ≤ 2: conv defaults (unchanged; the large-batch settings measured 2.305 → 2.568 ms at batch 1, 3.178 → 3.667
+  ms at batch 2 for s, so they are not applied there);
+- batch 3: weights single-buffered, stem act_block_h 256;
+- batch 4: weights single-buffered, stem act_block_h 128, other height-sharded convs act_block_h 64.
+- `preprocess` frees the model's own sharded uint8 copy right after the typecast.
+
+MEASURED (yolo26s, model-only, quickb.py, PCC per image vs Ultralytics): batch 1 2.309 ms (433 FPS), 2 3.179 ms (629),
+3 4.661 ms (644), 4 5.855 ms (683); min cls PCC 0.99788–0.99800 at every batch. yolo26n batch 4: 3.430 ms (1166 FPS),
+cls ≥ 0.99822. e2e trace + 2CQ batch 4: s 6.06 ms = 659.7 FPS, n 3.66 ms = 1092.6 FPS. Batched demo (4 images, s):
+16/16 reference detections matched, IoU ≥ 0.995, checked visually (`/home/ttuser/sdawle/yolo26_demo_outputs/batch4/`).
+`tests/pcc` 17/17.
+
+Batch 5 still fails at model.2.cv2 (1×1 conv on the 160×160×192 concat, ~12 KB short; act_block_h does not apply to
+the matmul path); act_block_h 32 / stem 64 did not help. Would need the block input freed before cv2 inside C2f
+(ownership change) or DRAM slicing of the 160×160 stage. Not pursued: batch 3 → 4 already gained only 6 %.
+
+### YOLO26-0025 — dp=4 with batch 2 / 4 per chip (appended 2026-10-23)
+
+METHOD: `test_yolo26_trace_2cq_perf_dp[blackhole-<variant>-640-<batch>-4-device_params0]` (dp test now parametrized
+over batch 1, 2, 4), trace + 2CQ e2e, 3 separate processes per point, chip reset before each. MEASURED:
+
+| dp=4 | ms per pass | FPS (runs) |
+|---|---|---|
+| n, batch 1/chip (YOLO26-0022) | 2.26 | 1772.6 |
+| s, batch 1/chip (YOLO26-0022) | 2.53 | 1582.5 |
+| n, batch 2/chip (8 images) | 4.28–4.29 | 1870.2, 1866.2 (run 1 hung, see below) |
+| s, batch 2/chip (8 images) | 4.41–4.46 | 1812.8, 1797.3, 1795.4 |
+| n, batch 4/chip (16 images) | 6.22–6.25 | 2561.9, 2570.5, 2560.7 |
+| s, batch 4/chip (16 images) | 6.66–6.82 | 2403.6, 2379.0, 2347.4 |
+
+Scaling vs one chip at the same per-chip batch (e2e): s batch 2 604 → 1805 (3.0×), s batch 4 660 → ~2377 (3.6×).
+INFERRED: the gap to 4× is per-iteration host work on the mesh (8 / 16-image upload, 6 outputs × 4 devices read back),
+which scales with batch; the traced compute itself shows no mesh overhead (YOLO26-0022: 1.876 vs 1.861 ms).
+
+Defect, MEASURED: dp=4 batch 2 yolo26n run 1 hung in `capture_trace_2cq` until the 600 s timeout; the next runs
+(after `tt-smi -r`) passed. Same intermittent hang as YOLO26-0021/0022; root cause still unknown.

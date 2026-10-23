@@ -8,6 +8,7 @@ Demonstrates inference on Tenstorrent hardware with visualization.
 """
 
 import argparse
+import os
 import torch
 import ttnn
 import cv2
@@ -299,8 +300,16 @@ def compare_detections(tt_dets: list, ref_dets: list, iou_threshold: float = 0.7
 
 def main():
     parser = argparse.ArgumentParser(description="YOLO26 Object Detection Demo")
-    parser.add_argument("--input", "-i", type=str, required=True, help="Input image path")
-    parser.add_argument("--output", "-o", type=str, default="output.jpg", help="Output image path")
+    parser.add_argument(
+        "--input", "-i", type=str, nargs="+", required=True, help="Input image path(s); several run as one batch"
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default="output.jpg",
+        help="Output image path; with several inputs, <output stem>_<input name>.jpg per image",
+    )
     parser.add_argument("--variant", type=str, default="yolo26n", help="Model variant (yolo26n, yolo26s)")
     parser.add_argument("--input-size", type=int, default=640, help="Input size")
     parser.add_argument("--conf-threshold", type=float, default=0.25, help="Confidence threshold")
@@ -313,40 +322,52 @@ def main():
     args = parser.parse_args()
 
     from models.experimental.yolo26.common import YOLO26_L1_SMALL_SIZE
-    from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26
+    from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26, uint8_input_from_torch
 
-    logger.info(f"Running YOLO26 demo: {args.variant}, input {args.input}, size {args.input_size}")
+    batch_size = len(args.input)
+    logger.info(f"Running YOLO26 demo: {args.variant}, batch {batch_size}, inputs {args.input}, size {args.input_size}")
 
-    input_tensor, original_image, scale_info = load_image(args.input, args.input_size)
-    logger.info(f"Loaded image: {original_image.shape}")
+    images = [load_image(path, args.input_size) for path in args.input]
+    for path, (_, original_image, _) in zip(args.input, images):
+        logger.info(f"Loaded image {path}: {original_image.shape}")
 
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=YOLO26_L1_SMALL_SIZE)
     try:
-        # Raw uint8 image in, [1, 1, H, W * 3]: conversion and 1/255 normalization run on device
+        # Raw uint8 images in (see uint8_input_from_torch): conversion and 1/255 normalization run on device
         tt_model = TtYOLO26(device, args.variant, uint8_input=True)
         tt_model.load_weights_from_ultralytics(args.variant)
 
-        _, h, w, c = input_tensor.shape
-        image_u8 = (input_tensor * 255).round().to(torch.uint8).reshape(1, 1, h, w * c)
+        batch = torch.cat([input_tensor for input_tensor, _, _ in images])
+        image_u8 = uint8_input_from_torch((batch * 255).round().to(torch.uint8))
         tt_input = ttnn.from_torch(image_u8, dtype=ttnn.uint8, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
         outputs = tt_model(tt_input)
-        boxes, scores, shapes = tt_outputs_to_torch(outputs, 1, tt_model.num_classes)
+        boxes, scores, shapes = tt_outputs_to_torch(outputs, batch_size, tt_model.num_classes)
     finally:
         ttnn.close_device(device)
 
-    tt_dets = postprocess_detections(boxes, scores, shapes, conf_threshold=args.conf_threshold)[0]
-    tt_dets = [to_original_coords(d, scale_info) for d in tt_dets]
+    all_dets = postprocess_detections(boxes, scores, shapes, conf_threshold=args.conf_threshold)
+    for path, (input_tensor, original_image, scale_info), dets in zip(args.input, images, all_dets):
+        output = args.output
+        if batch_size > 1:
+            name = os.path.splitext(os.path.basename(path))[0]
+            output = f"{args.output.rsplit('.', 1)[0]}_{name}.jpg"
+        show_detections(args, path, input_tensor, original_image, scale_info, dets, output)
 
-    logger.info(f"TTNN {args.variant}: {len(tt_dets)} detections")
+
+def show_detections(args, path, input_tensor, original_image, scale_info, dets, output):
+    """Log, draw and save one image's detections; with --compare also the Ultralytics reference side by side."""
+    tt_dets = [to_original_coords(d, scale_info) for d in dets]
+
+    logger.info(f"TTNN {args.variant} {path}: {len(tt_dets)} detections")
     for x1, y1, x2, y2, score, class_id in tt_dets:
         logger.info(f"  {COCO_CLASSES[class_id]:12s} {score:.2f} [{x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f}]")
 
     tt_image = draw_detections(original_image, tt_dets, f"TTNN {args.variant} (Tenstorrent)")
-    cv2.imwrite(args.output, tt_image)
-    logger.info(f"Saved output to: {args.output}")
+    cv2.imwrite(output, tt_image)
+    logger.info(f"Saved output to: {output}")
 
     if args.compare:
-        ref_dets = run_reference(args.variant, args.input, args.conf_threshold, scale_info, input_tensor)
+        ref_dets = run_reference(args.variant, path, args.conf_threshold, scale_info, input_tensor)
         logger.info(f"Ultralytics {args.variant} (end2end, CPU fp32): {len(ref_dets)} detections")
         for x1, y1, x2, y2, score, class_id in ref_dets:
             logger.info(f"  {COCO_CLASSES[class_id]:12s} {score:.2f} [{x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f}]")
@@ -365,7 +386,7 @@ def main():
 
         ref_image = draw_detections(original_image, ref_dets, f"Ultralytics {args.variant} (CPU reference)")
         side_by_side = np.concatenate([tt_image, ref_image], axis=1)
-        compare_path = args.output.rsplit(".", 1)[0] + "_vs_reference.jpg"
+        compare_path = output.rsplit(".", 1)[0] + "_vs_reference.jpg"
         cv2.imwrite(compare_path, side_by_side)
         logger.info(f"Saved comparison to: {compare_path}")
 

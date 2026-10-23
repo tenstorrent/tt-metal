@@ -29,18 +29,34 @@ from models.tt_cnn.tt.builder import (
     WidthShardedStrategyConfiguration,
 )
 
-from models.experimental.yolo26.common import (
-    safe_reshape,
-    to_nhwc,
-)
 
-# Attention matmuls/softmax at full precision (N <= 400 tokens, so the cost is small)
+# Attention matmuls at full precision (N <= 400 tokens, so the cost is small)
 ATTN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+# Softmax over bf16 scores: fp32 dest accumulation only slows its exp (PCC unchanged, ~10 us per PSA block faster)
+SOFTMAX_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=False,
+)
+
+# uint8 input pixels carry RGB + 5 zero channels: a 16-byte row-major stick is the minimum L1-aligned size, so the
+# image can be sharded by rows and viewed as one stick per pixel without any data movement (see TtYOLO26.preprocess)
+UINT8_INPUT_CHANNELS = 8
+
+
+def uint8_input_from_torch(images: torch.Tensor) -> torch.Tensor:
+    """uint8 images [B, H, W, 3] -> host layout of the uint8 model input, [B, 1, H, W * UINT8_INPUT_CHANNELS]."""
+    b, h, w, c = images.shape
+    images = torch.nn.functional.pad(images.to(torch.uint8), (0, UINT8_INPUT_CHANNELS - c))
+    return images.reshape(b, 1, h, w * UINT8_INPUT_CHANNELS)
+
 
 # Channel multiplier relative to the yolo26n layout used throughout this file.
 # n and s share depth (every C3k2 has n=1) and differ only in width (0.25 vs 0.5).
@@ -51,6 +67,115 @@ def get_width_multiplier(variant: str) -> int:
     if variant not in YOLO26_WIDTH_MULTIPLIER:
         raise ValueError(f"Unsupported YOLO26 variant '{variant}', supported: {list(YOLO26_WIDTH_MULTIPLIER)}")
     return YOLO26_WIDTH_MULTIPLIER[variant]
+
+
+def pad_to_tile(channels: int) -> int:
+    """Channel count rounded up to a tile width, so channel concat/split never cuts through a tile."""
+    return -(-channels // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def scatter_segments(t: torch.Tensor, segments: List[Tuple[int, int]], dim: int) -> torch.Tensor:
+    """Place consecutive chunks of t along dim into zero-padded segments, segments = [(real, padded), ...]."""
+    parts, start = [], 0
+    for real, padded in segments:
+        part = t.narrow(dim, start, real)
+        start += real
+        if padded > real:
+            shape = list(part.shape)
+            shape[dim] = padded - real
+            part = torch.cat([part, part.new_zeros(shape)], dim)
+        parts.append(part)
+    assert start == t.shape[dim], f"segments cover {start} of {t.shape[dim]} channels"
+    return torch.cat(parts, dim)
+
+
+def slice_out_channels(weight: ttnn.Tensor, bias: ttnn.Tensor, start: int, end: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Output channels [start, end) of a host conv weight/bias pair (the conv that computes one chunk of another)."""
+    w, b = ttnn.to_torch(weight), ttnn.to_torch(bias)
+    return ttnn.from_torch(w[start:end].contiguous()), ttnn.from_torch(b[..., start:end].contiguous())
+
+
+def _with_memory_config_of(x: ttnn.Tensor, ref: ttnn.Tensor) -> ttnn.Tensor:
+    return x if x.memory_config() == ref.memory_config() else ttnn.to_memory_config(x, ref.memory_config())
+
+
+def _height_sharded_like(ref: ttnn.Tensor, width: int) -> ttnn.MemoryConfig:
+    """ref's height sharding (grid, rows per core) for a tensor with `width` channels."""
+    spec = ref.memory_config().shard_spec
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(spec.grid, [spec.shape[0], width], spec.orientation),
+    )
+
+
+def _is_height_sharded(x: ttnn.Tensor) -> bool:
+    return x.is_sharded() and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+
+def _as_flat_tile(x: ttnn.Tensor) -> ttnn.Tensor:
+    """x as a flattened [1, 1, NHW, C] tile tensor (block inputs may arrive e.g. as row-major NHWC)."""
+    flat = [1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]]
+    if x.layout == ttnn.TILE_LAYOUT and list(x.shape) == flat:
+        return x
+    if x.is_sharded():
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, flat)
+    return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def _free(*tensors: ttnn.Tensor):
+    """Release block-internal tensors as soon as they are consumed (keeps L1 free for larger batches)."""
+    for t in tensors:
+        ttnn.deallocate(t)
+
+
+def add(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    """Elementwise add of two flattened [1, 1, NHW, C] tile tensors, staying in L1 (b follows a's memory config).
+
+    b may also be a block input in another form (e.g. row-major NHWC when a block is driven on its own).
+    """
+    if not a.is_sharded() and a.memory_config().buffer_type != ttnn.BufferType.L1:
+        a = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    b_in = b
+    b = _with_memory_config_of(_as_flat_tile(b), a)
+    out = ttnn.add(a, b, memory_config=a.memory_config())
+    if b is not b_in:
+        _free(b)
+    return out
+
+
+def concat(tensors: List[ttnn.Tensor]) -> ttnn.Tensor:
+    """Channel concat of flattened [1, 1, NHW, C] tile tensors with tile-aligned C, staying in L1.
+
+    Height-sharded inputs are aligned to the first tensor's sharding and concatenated shard by shard; anything
+    else is concatenated L1 interleaved.
+    """
+    inputs = tensors
+    tensors = [_as_flat_tile(t) for t in tensors]
+    ref = tensors[0]
+    if _is_height_sharded(ref):
+        aligned = []
+        for t in tensors:
+            mc = _height_sharded_like(ref, t.padded_shape[-1])
+            aligned.append(t if t.memory_config() == mc else ttnn.to_memory_config(t, mc))
+        out = ttnn.concat(
+            aligned, dim=3, memory_config=_height_sharded_like(ref, sum(t.padded_shape[-1] for t in aligned))
+        )
+    else:
+        aligned = [
+            t
+            if (not t.is_sharded() and t.memory_config().buffer_type == ttnn.BufferType.L1)
+            else ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+            for t in tensors
+        ]
+        out = ttnn.concat(aligned, dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # release the converted copies (the inputs themselves belong to the caller)
+    temps = {id(t): t for t in tensors + aligned if not any(t is i for i in inputs)}
+    _free(*temps.values())
+    return out
 
 
 class TtConvBNSiLU:
@@ -86,8 +211,27 @@ class TtConvBNSiLU:
         self.bias = None
         self._conv_cache = {}
 
-    def load_weights(self, weight: ttnn.Tensor, bias: ttnn.Tensor):
-        """Load pre-folded Conv+BN weights."""
+    def load_weights(
+        self,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        in_segments: Optional[List[Tuple[int, int]]] = None,
+        out_segments: Optional[List[Tuple[int, int]]] = None,
+    ):
+        """Load pre-folded Conv+BN weights.
+
+        in_segments / out_segments ([(real, padded), ...]) zero-pad input / output channel groups, for convs whose
+        input is a concat of tile-padded tensors or whose output must be tile-padded. Padded outputs are exactly 0
+        (zero weights and bias, SiLU(0) = 0), so they add and concat like real channels.
+        """
+        needs_padding = any(r != p for r, p in (in_segments or []) + (out_segments or []))
+        if needs_padding:
+            w, b = ttnn.to_torch(weight).float(), ttnn.to_torch(bias).float().reshape(1, 1, 1, -1)
+            if out_segments:
+                w, b = scatter_segments(w, out_segments, 0), scatter_segments(b, out_segments, 3)
+            if in_segments:
+                w = scatter_segments(w, in_segments, 1)
+            weight, bias = ttnn.from_torch(w), ttnn.from_torch(b)
         self.weight = weight
         self.bias = bias
 
@@ -114,13 +258,30 @@ class TtConvBNSiLU:
                 torch.zeros(1, 1, 1, self.out_channels, dtype=torch.bfloat16), dtype=ttnn.bfloat16
             )
 
+    def _large_batch_settings(self, batch_size: int) -> Tuple[int, bool]:
+        """(height-sharded act_block_h, weights double buffer) for this batch size.
+
+        Up to batch 2 the conv defaults are fastest. From batch 3 on they no longer fit L1 (circular buffers clash
+        with the activations): batch 3 needs single-buffered weights (e.g. 3x3x256x256 on every core of model.5)
+        and smaller stem blocks, batch 4 also smaller blocks on every height-sharded conv. Measured on yolo26s;
+        these settings would cost 10-15 % at batch 1-2. Batch 5 still fails (model.2.cv2, 1x1 conv at 160x160).
+        """
+        if batch_size <= 2:
+            return 0, True
+        if self.name == "model.0":
+            return (256 if batch_size == 3 else 128), False
+        return (0 if batch_size == 3 else 64), False
+
     def _get_sharding_strategy(self, batch_size: int, height: int, width: int):
         """Determine optimal sharding strategy based on tensor dimensions."""
-        nhw = batch_size * height * width
+        # Output rows: a stride-2 conv's work is a quarter of its input rows
+        nhw = batch_size * height * width // (self.stride * self.stride)
         ratio = nhw / self.out_channels if self.out_channels > 0 else float("inf")
 
+        # Height sharding for tall outputs, block sharding otherwise (output-NHW threshold swept over 2..16 on
+        # yolo26n/s, 4 is best; input-NHW thresholds 4..64 were all slower)
         if ratio > 4:
-            return HeightShardedStrategyConfiguration()
+            return HeightShardedStrategyConfiguration(act_block_h_override=self._large_batch_settings(batch_size)[0])
         elif ratio < 0.25:
             return WidthShardedStrategyConfiguration()
         else:
@@ -150,7 +311,9 @@ class TtConvBNSiLU:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
                 enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
+                enable_weights_double_buffer=self._large_batch_settings(batch_size)[1],
+                # SiLU runs in the conv's packer instead of as a separate op on the conv output
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if self.activation else None,
             )
             self._conv_cache[key] = TtConv2d(config, self.device)
         return self._conv_cache[key]
@@ -170,10 +333,6 @@ class TtConvBNSiLU:
         """
         conv = self._get_conv(batch_size, height, width)
         x, h_w = conv(x, return_output_dim=True)
-
-        if self.activation:
-            x = ttnn.silu(x)
-
         return x, h_w[0], h_w[1]
 
 
@@ -183,6 +342,9 @@ class TtBottleneck:
 
     YOLO26 uses: Conv3x3 -> Conv3x3 pattern (not 1x1->3x3 like ResNet)
     Structure: Conv3x3 (reduce) -> Conv3x3 (expand) -> Add (if shortcut)
+
+    padded_channels: input/output carry this many channels (real ones first, the rest zero), so the block can sit
+    between tile-padded tensors; the hidden tensor is internal and stays unpadded.
     """
 
     def __init__(
@@ -194,53 +356,46 @@ class TtBottleneck:
         groups: int = 1,
         expansion: float = 0.5,
         name: str = "",
+        padded_channels: Optional[int] = None,
     ):
         self.device = device
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.shortcut = shortcut and in_channels == out_channels
-        hidden_channels = int(out_channels * expansion)
+        self.hidden_channels = int(out_channels * expansion)
+        self.padded_in = padded_channels or in_channels
+        self.padded_out = padded_channels or out_channels
 
-        # YOLO26 uses 3x3 convs in bottleneck
         # cv1: 3x3 conv (in_ch -> hidden_ch)
         self.conv1 = TtConvBNSiLU(
-            device, in_channels, hidden_channels, kernel_size=3, stride=1, padding=1, name=f"{name}.cv1"
+            device, self.padded_in, self.hidden_channels, kernel_size=3, stride=1, padding=1, name=f"{name}.cv1"
         )
         # cv2: 3x3 conv (hidden_ch -> out_ch)
         self.conv2 = TtConvBNSiLU(
-            device, hidden_channels, out_channels, kernel_size=3, stride=1, padding=1, groups=groups, name=f"{name}.cv2"
+            device,
+            self.hidden_channels,
+            self.padded_out,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=groups,
+            name=f"{name}.cv2",
         )
 
     def load_weights(self, cv1_weight, cv1_bias, cv2_weight, cv2_bias):
         """Load weights for both conv layers."""
-        self.conv1.load_weights(cv1_weight, cv1_bias)
-        self.conv2.load_weights(cv2_weight, cv2_bias)
+        self.conv1.load_weights(cv1_weight, cv1_bias, in_segments=[(self.in_channels, self.padded_in)])
+        self.conv2.load_weights(cv2_weight, cv2_bias, out_segments=[(self.out_channels, self.padded_out)])
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
         """Forward pass with optional residual connection."""
-        identity = x
-
-        out, h, w = self.conv1(x, batch_size, height, width)
-        out, h, w = self.conv2(out, batch_size, h, w)
-
+        hidden, h, w = self.conv1(x, batch_size, height, width)
+        out, h, w = self.conv2(hidden, batch_size, h, w)
+        _free(hidden)
         if self.shortcut:
-            # Ensure both tensors are in DRAM and ROW_MAJOR with proper shape for add
-            if identity.memory_config().is_sharded():
-                identity = ttnn.sharded_to_interleaved(identity, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if out.memory_config().is_sharded():
-                out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            # Convert to ROW_MAJOR first
-            identity = ttnn.to_layout(identity, ttnn.ROW_MAJOR_LAYOUT)
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-
-            # Reshape to proper [batch, h, w, channels] format for element-wise add
-            identity = ttnn.reshape(identity, [batch_size, height, width, self.out_channels])
-            out = ttnn.reshape(out, [batch_size, h, w, self.out_channels])
-
-            # Add with proper shapes
-            out = ttnn.add(out, identity)
-
+            residual = add(out, x)
+            _free(out)
+            out = residual
         return out, h, w
 
 
@@ -255,6 +410,10 @@ class TtC2f:
     - n bottleneck blocks processing x2
     - Concat x1 + x2 + bottleneck outputs
     - cv2: 1x1 conv to fuse features
+
+    On device the split is not materialized: cv1 produces [x1 | x2] for the concat and cv1_b (the second half of
+    cv1's weights) produces x2 for the bottlenecks. Each hidden_channels group is tile-padded, so the concat is
+    tile-aligned and stays sharded in L1.
 
     Note: hidden_channels must be provided explicitly as it varies
     based on width_multiple (0.25 for early stages, 0.5 for later stages in YOLO26n).
@@ -274,31 +433,36 @@ class TtC2f:
         self.device = device
         self.n = n
         self.hidden_channels = hidden_channels
+        self.hidden_padded = pad_to_tile(hidden_channels)
+        hp = self.hidden_padded
 
-        # Initial conv to split: in → 2*hidden
-        self.cv1 = TtConvBNSiLU(
-            device, in_channels, 2 * hidden_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1"
-        )
+        # Initial conv: in → [x1 | x2], and x2 alone
+        self.cv1 = TtConvBNSiLU(device, in_channels, 2 * hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1")
+        self.cv1_b = TtConvBNSiLU(device, in_channels, hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1_b")
 
         # Bottleneck blocks - use expansion=0.5 to match PyTorch
         # PyTorch: hidden → hidden/2 → hidden
         self.bottlenecks = []
         for i in range(n):
             self.bottlenecks.append(
-                TtBottleneck(device, hidden_channels, hidden_channels, shortcut, groups, 0.5, name=f"{name}.m.{i}")
+                TtBottleneck(
+                    device, hidden_channels, hidden_channels, shortcut, groups, 0.5, f"{name}.m.{i}", padded_channels=hp
+                )
             )
 
         # Final fusion conv
         # Input channels = hidden_channels * (2 + n) after concatenation
         self.cv2 = TtConvBNSiLU(
-            device, hidden_channels * (2 + n), out_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2"
+            device, hp * (2 + n), out_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2"
         )
 
     def load_weights(self, weight_loader, prefix: str):
         """Load weights from weight loader."""
         # YOLO26 naming: model.2.cv1.conv.weight, model.2.cv1.bn.weight
+        h, hp = self.hidden_channels, self.hidden_padded
         cv1_w, cv1_b = weight_loader.get_conv_bn(f"{prefix}.cv1")
-        self.cv1.load_weights(cv1_w, cv1_b)
+        self.cv1.load_weights(cv1_w, cv1_b, out_segments=[(h, hp)] * 2)
+        self.cv1_b.load_weights(*slice_out_channels(cv1_w, cv1_b, h, 2 * h), out_segments=[(h, hp)])
 
         for i, bottleneck in enumerate(self.bottlenecks):
             cv1_w, cv1_b = weight_loader.get_conv_bn(f"{prefix}.m.{i}.cv1")
@@ -306,7 +470,7 @@ class TtC2f:
             bottleneck.load_weights(cv1_w, cv1_b, cv2_w, cv2_b)
 
         cv2_w, cv2_b = weight_loader.get_conv_bn(f"{prefix}.cv2")
-        self.cv2.load_weights(cv2_w, cv2_b)
+        self.cv2.load_weights(cv2_w, cv2_b, in_segments=[(h, hp)] * (2 + self.n))
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
         """
@@ -314,48 +478,21 @@ class TtC2f:
 
         Splits input, processes through bottlenecks, concatenates all features.
         """
-        # Initial conv
-        x, h, w = self.cv1(x, batch_size, height, width)
+        x12, h, w = self.cv1(x, batch_size, height, width)
+        y, _, _ = self.cv1_b(x, batch_size, height, width)
 
-        # Prepare tensor for slicing
-        # Conv output is [1, 1, N*H*W, C] in TILE_LAYOUT - need to reshape for slice
-        if x.memory_config().is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Convert to ROW_MAJOR first (required before reshape for non-tile-aligned dims)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Now reshape to [batch, h, w, channels]
-        x = ttnn.reshape(x, [batch_size, h, w, 2 * self.hidden_channels])
-
-        # Split: first half and second half along channel dimension
-        x1 = ttnn.slice(x, (0, 0, 0, 0), (batch_size, h, w, self.hidden_channels))
-        x2 = ttnn.slice(x, (0, 0, 0, self.hidden_channels), (batch_size, h, w, 2 * self.hidden_channels))
-
-        # Collect features for concatenation (keep in ROW_MAJOR for small channels)
-        features = [x1, x2]
-
-        # Process through bottlenecks - keep in ROW_MAJOR to avoid tile alignment issues
-        y = x2
-        for bottleneck in self.bottlenecks:
-            # Bottleneck needs ROW_MAJOR input for 16-channel tensors
-            y, _, _ = bottleneck(y, batch_size, h, w)
+        features = [x12]
+        for i, bottleneck in enumerate(self.bottlenecks):
+            y_next, _, _ = bottleneck(y, batch_size, h, w)
+            if i == 0:
+                _free(y)  # cv1_b's copy of x2 (x12 carries x2 for the concat)
+            y = y_next
             features.append(y)
 
-        # Concatenate all features
-        # Convert all to same memory format before concat
-        concat_features = []
-        for f in features:
-            if f.memory_config().is_sharded():
-                f = ttnn.sharded_to_interleaved(f, memory_config=ttnn.L1_MEMORY_CONFIG)
-            f = ttnn.to_layout(f, ttnn.TILE_LAYOUT)
-            concat_features.append(f)
-
-        out = ttnn.concat(concat_features, dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Final fusion conv
-        out, h, w = self.cv2(out, batch_size, h, w)
-
+        cat = concat(features)
+        _free(*features)
+        out, h, w = self.cv2(cat, batch_size, h, w)
+        _free(cat)
         return out, h, w
 
 
@@ -374,36 +511,40 @@ class TtC3k:
     2. x2 = cv2(x)  # Split path 2
     3. y = bottleneck_chain(x1)  # Process x1 through bottlenecks
     4. out = cv3(concat(y, x2))  # Fuse and project
+
+    Input and output are tile-padded to pad_to_tile(in_channels) channels, as are the two inner paths.
     """
 
     def __init__(self, device, in_channels: int, name: str = ""):
         self.device = device
         self.in_channels = in_channels
-        hidden = in_channels // 2  # 64 → 32
+        self.padded = pad_to_tile(in_channels)
+        self.hidden = in_channels // 2  # 64 → 32
+        self.hidden_padded = pad_to_tile(self.hidden)
+        cp, hp = self.padded, self.hidden_padded
 
         # cv1: in → hidden/2
-        self.cv1 = TtConvBNSiLU(device, in_channels, hidden, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1")
+        self.cv1 = TtConvBNSiLU(device, cp, hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1")
         # cv2: in → hidden/2
-        self.cv2 = TtConvBNSiLU(device, in_channels, hidden, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2")
+        self.cv2 = TtConvBNSiLU(device, cp, hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2")
         # cv3: in → in (after concat of 2 hidden/2 = in channels)
-        self.cv3 = TtConvBNSiLU(
-            device, in_channels, in_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv3"
-        )
+        self.cv3 = TtConvBNSiLU(device, 2 * hp, cp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv3")
 
         # 2 bottlenecks - note: these use expansion=1.0 (32→32→32)
         self.bottlenecks = [
-            TtBottleneck(device, hidden, hidden, shortcut=True, expansion=1.0, name=f"{name}.m.0"),
-            TtBottleneck(device, hidden, hidden, shortcut=True, expansion=1.0, name=f"{name}.m.1"),
+            TtBottleneck(device, self.hidden, self.hidden, True, 1, 1.0, name=f"{name}.m.{i}", padded_channels=hp)
+            for i in range(2)
         ]
 
     def load_weights(self, weight_loader, prefix: str):
         """Load weights for C3k block."""
+        c, cp, h, hp = self.in_channels, self.padded, self.hidden, self.hidden_padded
         w, b = weight_loader.get_conv_bn(f"{prefix}.cv1")
-        self.cv1.load_weights(w, b)
+        self.cv1.load_weights(w, b, in_segments=[(c, cp)], out_segments=[(h, hp)])
         w, b = weight_loader.get_conv_bn(f"{prefix}.cv2")
-        self.cv2.load_weights(w, b)
+        self.cv2.load_weights(w, b, in_segments=[(c, cp)], out_segments=[(h, hp)])
         w, b = weight_loader.get_conv_bn(f"{prefix}.cv3")
-        self.cv3.load_weights(w, b)
+        self.cv3.load_weights(w, b, in_segments=[(h, hp)] * 2, out_segments=[(c, cp)])
 
         for i, bottleneck in enumerate(self.bottlenecks):
             cv1_w, cv1_b = weight_loader.get_conv_bn(f"{prefix}.m.{i}.cv1")
@@ -412,36 +553,16 @@ class TtC3k:
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
         """Forward pass through C3k."""
-        # cv1 path - will be processed by bottlenecks
-        x1, h, w = self.cv1(x, batch_size, height, width)
-
-        # cv2 path - skip connection
+        y, h, w = self.cv1(x, batch_size, height, width)
         x2, _, _ = self.cv2(x, batch_size, height, width)
-
-        # Process x1 through bottleneck chain
-        y = x1
         for bottleneck in self.bottlenecks:
-            y, _, _ = bottleneck(y, batch_size, h, w)
-
-        # Concat y and x2 along channel dimension
-        # Prepare tensors for concat
-        if y.memory_config().is_sharded():
-            y = ttnn.sharded_to_interleaved(y, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if x2.memory_config().is_sharded():
-            x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
-
-        y = ttnn.reshape(y, [batch_size, h, w, self.in_channels // 2])
-        x2 = ttnn.reshape(x2, [batch_size, h, w, self.in_channels // 2])
-
-        # Concat
-        out = ttnn.concat([y, x2], dim=3)
-
-        # cv3 output projection
-        out, h, w = self.cv3(out, batch_size, h, w)
-
+            y_next, _, _ = bottleneck(y, batch_size, h, w)
+            _free(y)
+            y = y_next
+        cat = concat([y, x2])
+        _free(y, x2)
+        out, h, w = self.cv3(cat, batch_size, h, w)
+        _free(cat)
         return out, h, w
 
 
@@ -457,67 +578,52 @@ class TtC3k2:
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
+        self.hidden_padded = pad_to_tile(hidden_channels)
+        self.n = n
+        hp = self.hidden_padded
 
-        # cv1: in → 2*hidden
-        self.cv1 = TtConvBNSiLU(
-            device, in_channels, 2 * hidden_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1"
-        )
+        # cv1: in → [x1 | x2], cv1_b: in → x2
+        self.cv1 = TtConvBNSiLU(device, in_channels, 2 * hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1")
+        self.cv1_b = TtConvBNSiLU(device, in_channels, hp, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1_b")
 
         # C3k blocks instead of bottlenecks
-        self.c3k_blocks = []
-        for i in range(n):
-            self.c3k_blocks.append(TtC3k(device, hidden_channels, name=f"{name}.m.{i}"))
+        self.c3k_blocks = [TtC3k(device, hidden_channels, name=f"{name}.m.{i}") for i in range(n)]
 
         # cv2: (n+2)*hidden → out
-        cv2_in = (n + 2) * hidden_channels
-        self.cv2 = TtConvBNSiLU(device, cv2_in, out_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2")
+        self.cv2 = TtConvBNSiLU(
+            device, (n + 2) * hp, out_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2"
+        )
 
     def load_weights(self, weight_loader, prefix: str):
         """Load weights."""
+        h, hp = self.hidden_channels, self.hidden_padded
         w, b = weight_loader.get_conv_bn(f"{prefix}.cv1")
-        self.cv1.load_weights(w, b)
+        self.cv1.load_weights(w, b, out_segments=[(h, hp)] * 2)
+        self.cv1_b.load_weights(*slice_out_channels(w, b, h, 2 * h), out_segments=[(h, hp)])
 
         for i, c3k in enumerate(self.c3k_blocks):
             c3k.load_weights(weight_loader, f"{prefix}.m.{i}")
 
         w, b = weight_loader.get_conv_bn(f"{prefix}.cv2")
-        self.cv2.load_weights(w, b)
+        self.cv2.load_weights(w, b, in_segments=[(h, hp)] * (2 + self.n))
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
         """Forward pass."""
-        # cv1
-        x, h, w = self.cv1(x, batch_size, height, width)
+        x12, h, w = self.cv1(x, batch_size, height, width)
+        y, _, _ = self.cv1_b(x, batch_size, height, width)
 
-        # Prepare for split
-        if x.memory_config().is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, [batch_size, h, w, 2 * self.hidden_channels])
-
-        # Split
-        x1 = ttnn.slice(x, (0, 0, 0, 0), (batch_size, h, w, self.hidden_channels))
-        x2 = ttnn.slice(x, (0, 0, 0, self.hidden_channels), (batch_size, h, w, 2 * self.hidden_channels))
-
-        # Collect features
-        features = [x1, x2]
-
-        # Process through C3k blocks
-        y = x2
-        for c3k in self.c3k_blocks:
-            y, _, _ = c3k(y, batch_size, h, w)
-            # Reshape output for features list
-            if y.memory_config().is_sharded():
-                y = ttnn.sharded_to_interleaved(y, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-            y = ttnn.reshape(y, [batch_size, h, w, self.hidden_channels])
+        features = [x12]
+        for i, c3k in enumerate(self.c3k_blocks):
+            y_next, _, _ = c3k(y, batch_size, h, w)
+            if i == 0:
+                _free(y)  # cv1_b's copy of x2 (x12 carries x2 for the concat)
+            y = y_next
             features.append(y)
 
-        # Concat all features
-        out = ttnn.concat(features, dim=3)
-
-        # cv2
-        out, h, w = self.cv2(out, batch_size, h, w)
-
+        cat = concat(features)
+        _free(*features)
+        out, h, w = self.cv2(cat, batch_size, h, w)
+        _free(cat)
         return out, h, w
 
 
@@ -747,7 +853,10 @@ class TtSPPF:
     """
     Spatial Pyramid Pooling - Fast (SPPF).
 
-    Efficient implementation using sequential max pooling.
+    Efficient implementation using sequential max pooling. Narrow inputs pool row-major and height sharded (a few
+    image rows per core, ~11 us per pool at 20x20x128 vs ~28 us in tile layout on 28 cores); their outputs share
+    one sharding, so the concat is shard-local. For a single wide input (yolo26s, 256 channels) the untilize/tilize
+    around the row-major pools costs more than it saves, so it pools in tile layout; from batch 2 on row-major wins.
     """
 
     def __init__(self, device, in_channels: int, out_channels: int, kernel_size: int = 5, name: str = ""):
@@ -782,7 +891,6 @@ class TtSPPF:
         )
 
         self.hidden_channels = hidden_channels
-        self.input_for_residual = None  # Will be set during forward
 
     def load_weights(self, weight_loader, prefix: str):
         """Load weights from weight loader."""
@@ -792,21 +900,11 @@ class TtSPPF:
         cv2_w, cv2_b = weight_loader.get_conv_bn(f"{prefix}.cv2")
         self.cv2.load_weights(cv2_w, cv2_b)
 
-    def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
-        """Forward with spatial pyramid pooling."""
-        # Store input for residual connection
-        self.input_for_residual = x
+    def _row_major_pools(self, batch_size: int) -> bool:
+        return self.hidden_channels <= 128 or batch_size > 1
 
-        # cv1 (no activation)
-        x, h, w = self.cv1(x, batch_size, height, width)
-
-        # Reshape for max_pool2d
-        x = safe_reshape(x, [batch_size, h, w, self.hidden_channels])
-        if x.layout == ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Sequential max pooling (no device parameter in new API)
-        y1 = ttnn.max_pool2d(
+    def _pool(self, x: ttnn.Tensor, batch_size: int, h: int, w: int) -> ttnn.Tensor:
+        return ttnn.max_pool2d(
             input_tensor=x,
             batch_size=batch_size,
             input_h=h,
@@ -816,72 +914,52 @@ class TtSPPF:
             stride=[1, 1],
             padding=[self.padding, self.padding],
             dilation=[1, 1],
+            # the first row-major pool shards its interleaved input; the later ones inherit that sharding
+            applied_shard_scheme=None if x.is_sharded() else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT if self._row_major_pools(batch_size) else ttnn.TILE_LAYOUT,
         )
 
-        y2 = ttnn.max_pool2d(
-            input_tensor=y1,
-            batch_size=batch_size,
-            input_h=h,
-            input_w=w,
-            channels=self.hidden_channels,
-            kernel_size=[self.kernel_size, self.kernel_size],
-            stride=[1, 1],
-            padding=[self.padding, self.padding],
-            dilation=[1, 1],
-        )
+    def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
+        """Forward with spatial pyramid pooling."""
+        identity = x
+        y, h, w = self.cv1(x, batch_size, height, width)
+        temps = [y]
 
-        y3 = ttnn.max_pool2d(
-            input_tensor=y2,
-            batch_size=batch_size,
-            input_h=h,
-            input_w=w,
-            channels=self.hidden_channels,
-            kernel_size=[self.kernel_size, self.kernel_size],
-            stride=[1, 1],
-            padding=[self.padding, self.padding],
-            dilation=[1, 1],
-        )
+        if self._row_major_pools(batch_size):
+            if y.is_sharded():
+                y = ttnn.sharded_to_interleaved(y, memory_config=ttnn.L1_MEMORY_CONFIG)
+                temps.append(y)
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+            temps.append(y)
 
-        # Concatenate all pooling results - ensure consistent shapes
-        pool_outputs = [x, y1, y2, y3]
-        concat_outputs = []
-        for p in pool_outputs:
-            if p.memory_config().is_sharded():
-                p = ttnn.sharded_to_interleaved(p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            p = ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT)
-            # Reshape to [batch, h, w, channels] for consistent concat
-            p = ttnn.reshape(p, [batch_size, h, w, self.hidden_channels])
-            concat_outputs.append(p)
+        # Sequential max pooling
+        pools = [y]
+        for _ in range(3):
+            pools.append(self._pool(pools[-1], batch_size, h, w))
+        temps += pools[1:]
 
-        out = ttnn.concat(concat_outputs, dim=3)
+        if self._row_major_pools(batch_size):
+            pools[0] = ttnn.to_memory_config(y, _height_sharded_like(pools[1], self.hidden_channels))
+            cat = ttnn.concat(pools, dim=3, memory_config=_height_sharded_like(pools[1], 4 * self.hidden_channels))
+            temps += [pools[0], cat]
+            # a few image rows per core is not tile-aligned: hand cv2 an interleaved tensor to shard its own way
+            cat = ttnn.sharded_to_interleaved(cat, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            cat = concat(pools)
+        temps.append(cat)
 
-        # Final conv
-        out, h, w = self.cv2(out, batch_size, h, w)
+        out, h, w = self.cv2(cat, batch_size, h, w)
+        _free(*{id(t): t for t in temps}.values())
 
         # IMPORTANT: SPPF has residual connection (add=True in PyTorch)
-        # Need to add input x to output
-        # First, ensure input is in compatible format
-        if self.input_for_residual.memory_config().is_sharded():
-            input_res = ttnn.sharded_to_interleaved(self.input_for_residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            input_res = self.input_for_residual
-        input_res = ttnn.to_layout(input_res, ttnn.ROW_MAJOR_LAYOUT)
-        input_res = ttnn.reshape(input_res, [batch_size, h, w, self.in_channels])
-
-        # Convert output for add
-        if out.memory_config().is_sharded():
-            out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.reshape(out, [batch_size, h, w, self.in_channels])
-
-        # Residual add
-        out = ttnn.add(out, input_res)
-
-        return out, h, w
+        residual = add(out, identity)
+        _free(out)
+        return residual, h, w
 
 
 class TtUpsample:
-    """Upsample layer for neck feature fusion."""
+    """Nearest 2x upsample of a flattened [1, 1, N*H*W, C] tile tensor (or NHWC), returning row-major NHWC
+    [N, 2H, 2W, C] in L1 (concat flattens and tilizes it)."""
 
     def __init__(self, scale_factor: int = 2):
         self.scale_factor = scale_factor
@@ -890,9 +968,10 @@ class TtUpsample:
         self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int
     ) -> Tuple[ttnn.Tensor, int, int]:
         """Upsample using nearest neighbor interpolation."""
-        x = safe_reshape(x, [batch_size, height, width, channels])
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.upsample(x, scale_factor=self.scale_factor, mode="nearest")
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG) if x.is_sharded() else x
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, [batch_size, height, width, channels])
+        x = ttnn.upsample(x, scale_factor=self.scale_factor, mode="nearest", memory_config=ttnn.L1_MEMORY_CONFIG)
         return x, height * self.scale_factor, width * self.scale_factor
 
 
@@ -911,8 +990,8 @@ class TtAttention:
         self.key_dim = self.head_dim // 2
         self.scale = self.key_dim**-0.5
 
-        # QKV conv: outputs [key_dim, key_dim, head_dim] per head
-        qkv_dim = num_heads * (2 * self.key_dim + self.head_dim)
+        # QKV conv: [all q | all k | all v], q and k padded to head_dim per head (see load_weights)
+        qkv_dim = 3 * num_heads * self.head_dim
         self.qkv = TtConvBNSiLU(
             device, dim, qkv_dim, kernel_size=1, stride=1, padding=0, activation=False, name=f"{name}.qkv"
         )
@@ -924,125 +1003,126 @@ class TtAttention:
         )
 
     def load_weights(self, weight_loader, prefix: str):
-        """Load attention weights."""
+        """Load attention weights.
+
+        qkv output channels are reordered from per-head [q, k, v] groups to [all q | all k | all v], with q and k
+        zero-padded from key_dim to head_dim channels per head (q.k is unchanged), which is the fused layout
+        nlp_create_qkv_heads splits into per-head tensors. The attention scale is folded into the q weights.
+        """
+        nh, kd, hd = self.num_heads, self.key_dim, self.head_dim
+        per_head = 2 * kd + hd
         qkv_w, qkv_b = weight_loader.get_conv_bn(f"{prefix}.qkv")
-        self.qkv.load_weights(qkv_w, qkv_b)
+        w, b = ttnn.to_torch(qkv_w).float(), ttnn.to_torch(qkv_b).float().reshape(-1)
+        q_rows = [i * per_head + j for i in range(nh) for j in range(kd)]
+        k_rows = [i * per_head + kd + j for i in range(nh) for j in range(kd)]
+        v_rows = [i * per_head + 2 * kd + j for i in range(nh) for j in range(hd)]
+        segments = [(kd, hd)] * nh
+        q_w = scatter_segments(w[q_rows] * self.scale, segments, 0)
+        q_b = scatter_segments(b[q_rows] * self.scale, segments, 0)
+        k_w, k_b = scatter_segments(w[k_rows], segments, 0), scatter_segments(b[k_rows], segments, 0)
+        w = torch.cat([q_w, k_w, w[v_rows]], 0)
+        b = torch.cat([q_b, k_b, b[v_rows]], 0)
+        self.qkv.load_weights(ttnn.from_torch(w), ttnn.from_torch(b.reshape(1, 1, 1, -1)))
         proj_w, proj_b = weight_loader.get_conv_bn(f"{prefix}.proj")
         self.proj.load_weights(proj_w, proj_b)
         pe_w, pe_b = weight_loader.get_conv_bn(f"{prefix}.pe")
         self.pe.load_weights(pe_w, pe_b)
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
-        """Forward pass with self-attention using optimized SDPA kernel.
-
-        Uses ttnn.transformer.scaled_dot_product_attention for fused attention.
+        """Forward pass, token-major: x is [1, 1, B * N, C] with N = H * W tokens per image.
 
         PyTorch YOLO26 Attention flow:
         1. qkv = self.qkv(x)  # Conv projection
         2. qkv.view(B, num_heads, key_dim*2+head_dim, N)
         3. split into Q[B,heads,key_dim,N], K[B,heads,key_dim,N], V[B,heads,head_dim,N]
-        4. attn = (Q^T @ K) * scale  # equivalent to Q @ K^T with transposed Q,K
+        4. attn = (Q^T @ K) * scale
         5. attn = softmax(attn)
-        6. out = V @ attn^T  # equivalent to attn @ V with standard layout
+        6. out = V @ attn^T
         7. out = out.view(B,C,H,W) + pe(v.view(B,C,H,W))
         8. out = proj(out)
+
+        With tokens as rows this is softmax(Q K^T) V batched over heads: nlp_create_qkv_heads splits the fused
+        qkv into [1, heads, N, head_dim] (K transposed), and the heads concatenate back to PyTorch's channel
+        order (head-major). Softmax runs on the tile-padded [N, N] scores but only over the N logical columns.
         """
-        # QKV projection (TTNN conv)
+        nh, hd = self.num_heads, self.head_dim
+
         qkv, h, w = self.qkv(x, batch_size, height, width)
+        if qkv.is_sharded():
+            qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        rows = qkv.shape[-2]
+        tokens = rows // batch_size
 
-        N = h * w
-        per_head_dim = self.key_dim * 2 + self.head_dim  # Q_dim + K_dim + V_dim per head
-        total_dim = self.num_heads * per_head_dim
-
-        qkv = safe_reshape(qkv, [batch_size, h, w, total_dim])
-        if qkv.memory_config().is_sharded():
-            qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Reshape to [B, num_heads, per_head_dim, N] like PyTorch
-        qkv = ttnn.permute(qkv, [0, 3, 1, 2])  # [B, C, H, W]
-        qkv = ttnn.reshape(qkv, [batch_size, total_dim, N])  # [B, C, N]
-        qkv = ttnn.reshape(qkv, [batch_size, self.num_heads, per_head_dim, N])  # [B, heads, per_head, N]
-
-        # Split Q, K, V: [B, heads, key_dim, N], [B, heads, key_dim, N], [B, heads, head_dim, N]
-        q = ttnn.slice(qkv, [0, 0, 0, 0], [batch_size, self.num_heads, self.key_dim, N])
-        k = ttnn.slice(qkv, [0, 0, self.key_dim, 0], [batch_size, self.num_heads, 2 * self.key_dim, N])
-        v = ttnn.slice(qkv, [0, 0, 2 * self.key_dim, 0], [batch_size, self.num_heads, per_head_dim, N])
-
-        # Transpose Q, K to standard SDPA format: [B, heads, N, dim]
-        # PyTorch does Q^T @ K, but SDPA does Q @ K^T, so we transpose both Q and K
-        q_sdpa = ttnn.permute(q, [0, 1, 3, 2])  # [B, heads, N, key_dim]
-        k_sdpa = ttnn.permute(k, [0, 1, 3, 2])  # [B, heads, N, key_dim]
-
-        # V also needs transpose for SDPA output format
-        v_sdpa = ttnn.permute(v, [0, 1, 3, 2])  # [B, heads, N, head_dim]
-
-        # Convert to TILE layout for SDPA
-        q_sdpa = ttnn.to_layout(q_sdpa, ttnn.TILE_LAYOUT)
-        k_sdpa = ttnn.to_layout(k_sdpa, ttnn.TILE_LAYOUT)
-        v_sdpa = ttnn.to_layout(v_sdpa, ttnn.TILE_LAYOUT)
-
-        # Note: TTNN's optimized SDPA requires K and V to have same head_dim.
-        # YOLO26 has key_dim=32, head_dim=64, so we use manual attention.
-        # This still uses optimized ttnn.matmul and ttnn.softmax kernels.
-
-        # Q @ K^T: [B, heads, N, key_dim] @ [B, heads, key_dim, N] -> [B, heads, N, N]
-        k_t = ttnn.permute(k_sdpa, [0, 1, 3, 2])
+        # Each image attends over its own tokens: with several images the flattened rows become a batch dimension
+        # (H * W = 400 is not tile-aligned, so through row-major)
+        qkv_heads = qkv
+        if batch_size > 1:
+            qkv_heads = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
+            qkv_heads = ttnn.reshape(qkv_heads, [batch_size, 1, tokens, qkv.shape[-1]])
+            qkv_heads = ttnn.to_layout(qkv_heads, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q, k_t, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_heads, num_heads=nh, transpose_k_heads=True, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        # One 32-token block of one head per core: the default config for these batched matmuls uses one core per
+        # head for q.k^T
+        token_tiles = -(-tokens // ttnn.TILE_SIZE)
+        head_tiles = hd // ttnn.TILE_SIZE
+        grid = self.device.compute_with_storage_grid_size()
+        scores_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=head_tiles,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=token_tiles,
+        )
+        values_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=token_tiles,
+            out_subblock_h=1,
+            out_subblock_w=head_tiles,
+            per_core_M=1,
+            per_core_N=head_tiles,
+        )
         attn = ttnn.matmul(
-            q_sdpa,
+            q,
             k_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.float32,
-            compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG,
-        )
-        attn = ttnn.multiply(attn, self.scale)
-
-        # Softmax - reshape to 2D for ttnn.softmax, then back
-        attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
-        attn = ttnn.reshape(attn, [batch_size * self.num_heads * N, N])
-        attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
-        attn = ttnn.softmax(attn, dim=-1, numeric_stable=True, compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG)
-        attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
-        attn = ttnn.reshape(attn, [batch_size, self.num_heads, N, N])
-        attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
-
-        # Attn @ V: [B, heads, N, N] @ [B, heads, N, head_dim] -> [B, heads, N, head_dim]
-        out = ttnn.matmul(
-            attn,
-            v_sdpa,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG,
+            program_config=scores_config,
         )
+        _free(q, k_t)
+        scores = attn
+        attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=SOFTMAX_COMPUTE_KERNEL_CONFIG)
+        _free(scores)
+        heads = ttnn.matmul(
+            attn,
+            v,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG,
+            program_config=values_config,
+        )
+        _free(attn, v)
+        out = ttnn.experimental.nlp_concat_heads(heads, memory_config=ttnn.L1_MEMORY_CONFIG)
+        _free(heads)
+        if batch_size > 1:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+            out = ttnn.reshape(out, [1, 1, rows, out.shape[-1]])
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Reshape output: [B, heads, N, head_dim] -> [B, C, H, W]
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-        out = ttnn.permute(out, [0, 2, 1, 3])  # [B, N, heads, head_dim]
-        out = ttnn.reshape(out, [batch_size, N, self.dim])  # [B, N, C]
-        out = ttnn.reshape(out, [batch_size, h, w, self.dim])  # [B, H, W, C]
-        out = ttnn.permute(out, [0, 3, 1, 2])  # [B, C, H, W]
-
-        # Positional encoding on V
-        v_spatial = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
-        v_spatial = ttnn.reshape(v_spatial, [batch_size, self.dim, N])
-        v_spatial = ttnn.reshape(v_spatial, [batch_size, self.dim, h, w])
-        v_spatial = ttnn.permute(v_spatial, [0, 2, 3, 1])  # [B, H, W, C]
-        pe, _, _ = self.pe(v_spatial, batch_size, h, w)
-
-        # Add PE to output
-        pe = safe_reshape(pe, [batch_size, h, w, self.dim])
-        if pe.memory_config().is_sharded():
-            pe = ttnn.sharded_to_interleaved(pe, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        pe = ttnn.to_layout(pe, ttnn.ROW_MAJOR_LAYOUT)
-        pe = ttnn.permute(pe, [0, 3, 1, 2])  # [B, C, H, W]
-        out = ttnn.add(out, pe)
-
-        # Convert back to NHWC for proj conv
-        out = ttnn.permute(out, [0, 2, 3, 1])  # [B, H, W, C]
+        # Positional encoding: depthwise conv over v of all heads (the last section of the fused qkv)
+        v_all = ttnn.slice(qkv, [0, 0, 0, 2 * nh * hd], [1, 1, rows, 3 * nh * hd], memory_config=ttnn.L1_MEMORY_CONFIG)
+        _free(qkv)
+        pe, _, _ = self.pe(v_all, batch_size, h, w)
+        _free(v_all)
+        mixed = add(pe, out)
+        _free(pe, out)
 
         # Project back (TTNN conv)
-        out, h, w = self.proj(out, batch_size, h, w)
-
+        out, h, w = self.proj(mixed, batch_size, h, w)
+        _free(mixed)
         return out, h, w
 
 
@@ -1077,29 +1157,14 @@ class TtPSABlock:
         """Forward pass."""
         # Attention with residual
         attn_out, h, w = self.attn(x, batch_size, height, width)
-
-        # Residual add
-        x_res = safe_reshape(x, [batch_size, height, width, self.dim])
-        attn_out = safe_reshape(attn_out, [batch_size, h, w, self.dim])
-        if x_res.memory_config().is_sharded():
-            x_res = ttnn.sharded_to_interleaved(x_res, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if attn_out.memory_config().is_sharded():
-            attn_out = ttnn.sharded_to_interleaved(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x_res = ttnn.to_layout(x_res, ttnn.ROW_MAJOR_LAYOUT)
-        attn_out = ttnn.to_layout(attn_out, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.add(x_res, attn_out)
+        x1 = add(attn_out, x)
+        _free(attn_out)
 
         # FFN with residual
-        ffn_out, h, w = self.ffn_cv1(x, batch_size, h, w)
-        ffn_out, h, w = self.ffn_cv2(ffn_out, batch_size, h, w)
-
-        ffn_out = safe_reshape(ffn_out, [batch_size, h, w, self.dim])
-        if ffn_out.memory_config().is_sharded():
-            ffn_out = ttnn.sharded_to_interleaved(ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ffn_out = ttnn.to_layout(ffn_out, ttnn.ROW_MAJOR_LAYOUT)
-
-        out = ttnn.add(x, ffn_out)
-
+        hidden, h, w = self.ffn_cv1(x1, batch_size, h, w)
+        ffn_out, h, w = self.ffn_cv2(hidden, batch_size, h, w)
+        out = add(ffn_out, x1)
+        _free(hidden, ffn_out, x1)
         return out, h, w
 
 
@@ -1120,9 +1185,12 @@ class TtC3k2PSA:
         self.hidden_channels = hidden_channels
         self.n = n
 
-        # cv1: in_channels -> 2 * hidden_channels
+        # cv1: in_channels -> 2 * hidden_channels ([y0 | y1] for the concat), cv1_b: y1 alone
         self.cv1 = TtConvBNSiLU(
             device, in_channels, 2 * hidden_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1"
+        )
+        self.cv1_b = TtConvBNSiLU(
+            device, in_channels, hidden_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1_b"
         )
 
         # cv2: (2 + n) * hidden_channels -> out_channels
@@ -1143,6 +1211,8 @@ class TtC3k2PSA:
         """Load weights."""
         cv1_w, cv1_b = weight_loader.get_conv_bn(f"{prefix}.cv1")
         self.cv1.load_weights(cv1_w, cv1_b)
+        h = self.hidden_channels
+        self.cv1_b.load_weights(*slice_out_channels(cv1_w, cv1_b, h, 2 * h))
         cv2_w, cv2_b = weight_loader.get_conv_bn(f"{prefix}.cv2")
         self.cv2.load_weights(cv2_w, cv2_b)
 
@@ -1164,36 +1234,18 @@ class TtC3k2PSA:
 
         So output of concat is [y0, y1, m(y1)] = 3 * hidden_channels = 384
         """
-        # cv1
-        x, h, w = self.cv1(x, batch_size, height, width)
-
-        # Split into y0 and y1
-        x = safe_reshape(x, [batch_size, h, w, 2 * self.hidden_channels])
-        if x.memory_config().is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        y0 = ttnn.slice(x, [0, 0, 0, 0], [batch_size, h, w, self.hidden_channels])
-        y1 = ttnn.slice(x, [0, 0, 0, self.hidden_channels], [batch_size, h, w, 2 * self.hidden_channels])
+        x01, h, w = self.cv1(x, batch_size, height, width)
+        y, _, _ = self.cv1_b(x, batch_size, height, width)
 
         # Process y1 through Sequential(Bottleneck, PSABlock)
-        y1_processed, h, w = self.bottleneck(y1, batch_size, h, w)
-        y1_processed, h, w = self.psa(y1_processed, batch_size, h, w)
+        y1, h, w = self.bottleneck(y, batch_size, h, w)
+        y2, h, w = self.psa(y1, batch_size, h, w)
+        _free(y, y1)
 
-        # Prepare for concat - need [y0, y1, y1_processed]
-        y0 = ttnn.to_layout(y0, ttnn.ROW_MAJOR_LAYOUT)
-        y1 = ttnn.to_layout(y1, ttnn.ROW_MAJOR_LAYOUT)
-        y1_processed = safe_reshape(y1_processed, [batch_size, h, w, self.hidden_channels])
-        if y1_processed.memory_config().is_sharded():
-            y1_processed = ttnn.sharded_to_interleaved(y1_processed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        y1_processed = ttnn.to_layout(y1_processed, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Concat [y0, y1, y1_processed] = 3 * 128 = 384 channels
-        out = ttnn.concat([y0, y1, y1_processed], dim=3)
-
-        # cv2: 384 -> 256
-        out, h, w = self.cv2(out, batch_size, h, w)
-
+        cat = concat([x01, y2])
+        _free(x01, y2)
+        out, h, w = self.cv2(cat, batch_size, h, w)
+        _free(cat)
         return out, h, w
 
 
@@ -1214,10 +1266,9 @@ class TtC2PSA:
         self.out_channels = out_channels
         self.c = in_channels // 2  # Hidden channels per branch
 
-        # cv1 doubles channels then we split
-        self.cv1 = TtConvBNSiLU(
-            device, in_channels, in_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1"
-        )
+        # cv1 output is split into a and b: computed as two convs on the two halves of its weights
+        self.cv1_a = TtConvBNSiLU(device, in_channels, self.c, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1_a")
+        self.cv1_b = TtConvBNSiLU(device, in_channels, self.c, kernel_size=1, stride=1, padding=0, name=f"{name}.cv1_b")
         # cv2 takes concat of 2 branches
         self.cv2 = TtConvBNSiLU(
             device, in_channels, out_channels, kernel_size=1, stride=1, padding=0, name=f"{name}.cv2"
@@ -1231,7 +1282,8 @@ class TtC2PSA:
     def load_weights(self, weight_loader, prefix: str):
         """Load C2PSA weights."""
         cv1_w, cv1_b = weight_loader.get_conv_bn(f"{prefix}.cv1")
-        self.cv1.load_weights(cv1_w, cv1_b)
+        self.cv1_a.load_weights(*slice_out_channels(cv1_w, cv1_b, 0, self.c))
+        self.cv1_b.load_weights(*slice_out_channels(cv1_w, cv1_b, self.c, 2 * self.c))
         cv2_w, cv2_b = weight_loader.get_conv_bn(f"{prefix}.cv2")
         self.cv2.load_weights(cv2_w, cv2_b)
 
@@ -1240,36 +1292,19 @@ class TtC2PSA:
 
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, int, int]:
         """Forward pass."""
-        # cv1
-        x, h, w = self.cv1(x, batch_size, height, width)
-
-        # Split into a and b branches
-        x = safe_reshape(x, [batch_size, h, w, self.in_channels])
-        if x.memory_config().is_sharded():
-            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Split along channel dim
-        a = ttnn.slice(x, [0, 0, 0, 0], [batch_size, h, w, self.c])
-        b = ttnn.slice(x, [0, 0, 0, self.c], [batch_size, h, w, self.in_channels])
+        a, h, w = self.cv1_a(x, batch_size, height, width)
+        b, _, _ = self.cv1_b(x, batch_size, height, width)
 
         # Process b through PSA blocks
         for block in self.psa_blocks:
-            b, h, w = block(b, batch_size, h, w)
+            b_next, h, w = block(b, batch_size, h, w)
+            _free(b)
+            b = b_next
 
-        # Prepare for concat
-        a = ttnn.to_layout(a, ttnn.ROW_MAJOR_LAYOUT)
-        b = safe_reshape(b, [batch_size, h, w, self.c])
-        if b.memory_config().is_sharded():
-            b = ttnn.sharded_to_interleaved(b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        b = ttnn.to_layout(b, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Concat
-        out = ttnn.concat([a, b], dim=3)
-
-        # cv2
-        out, h, w = self.cv2(out, batch_size, h, w)
-
+        cat = concat([a, b])
+        _free(a, b)
+        out, h, w = self.cv2(cat, batch_size, h, w)
+        _free(cat)
         return out, h, w
 
 
@@ -1392,21 +1427,28 @@ class TtYOLO26Backbone:
             ttnn.deallocate(x_in)
 
         # Stage 1
-        x, h, w = self.conv1(x, batch_size, h, w)
-        x, h, w = self.c2f_1(x, batch_size, h, w)
+        x1, h, w = self.conv1(x, batch_size, h, w)
+        _free(x)
+        x2, h, w = self.c2f_1(x1, batch_size, h, w)
+        _free(x1)
 
         # Stage 2 → P3 output (128 channels)
-        x, h, w = self.conv2(x, batch_size, h, w)
-        p3, p3_h, p3_w = self.c2f_2(x, batch_size, h, w)
+        x3, h, w = self.conv2(x2, batch_size, h, w)
+        _free(x2)
+        p3, p3_h, p3_w = self.c2f_2(x3, batch_size, h, w)
+        _free(x3)
 
         # Stage 3 → P4 output (128 channels)
-        x, h, w = self.conv3(p3, batch_size, p3_h, p3_w)
-        p4, p4_h, p4_w = self.c3k2_3(x, batch_size, h, w)
+        x4, h, w = self.conv3(p3, batch_size, p3_h, p3_w)
+        p4, p4_h, p4_w = self.c3k2_3(x4, batch_size, h, w)
+        _free(x4)
 
         # Stage 4 → P5 output (256 channels)
-        x, h, w = self.conv4(p4, batch_size, p4_h, p4_w)
-        x, h, w = self.c3k2_4(x, batch_size, h, w)
-        p5, p5_h, p5_w = self.sppf(x, batch_size, h, w)
+        x5, h, w = self.conv4(p4, batch_size, p4_h, p4_w)
+        x6, h, w = self.c3k2_4(x5, batch_size, h, w)
+        _free(x5)
+        p5, p5_h, p5_w = self.sppf(x6, batch_size, h, w)
+        _free(x6)
 
         return (p3, p3_h, p3_w), (p4, p4_h, p4_w), (p5, p5_h, p5_w)
 
@@ -1520,56 +1562,46 @@ class TtYOLO26Neck:
 
         # ===== Top-down path =====
         # model.10: Process P5 with C2PSA (256→256)
+        # Each feature map is released right after its last use (the backbone outputs are consumed here)
         p5_out, p5_out_h, p5_out_w = self.c2psa_10(p5, batch_size, p5_h, p5_w)
+        _free(p5)
 
-        # Upsample P5 output and concat with P4
+        # Upsample P5 output and concat with P4: 256 + 128 = 384 channels
         p5_up, _, _ = self.upsample(p5_out, batch_size, p5_out_h, p5_out_w, 256 * self.k)
-        p4_nhwc = to_nhwc(p4, batch_size, p4_h, p4_w, 128 * self.k)
-        if p5_up.memory_config().is_sharded():
-            p5_up = ttnn.sharded_to_interleaved(p5_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        p5_up = ttnn.to_layout(p5_up, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Concat: 256 + 128 = 384 channels
-        concat_p4 = ttnn.concat([p5_up, p4_nhwc], dim=3)
+        cat = concat([p5_up, p4])
+        _free(p5_up, p4)
 
         # model.13: C3k2 (384→128)
-        f_p4, f_p4_h, f_p4_w = self.c3k2_13(concat_p4, batch_size, p4_h, p4_w)
+        f_p4, f_p4_h, f_p4_w = self.c3k2_13(cat, batch_size, p4_h, p4_w)
+        _free(cat)
 
-        # Upsample and concat with P3
+        # Upsample and concat with P3: 128 + 128 = 256 channels
         f_p4_up, _, _ = self.upsample(f_p4, batch_size, f_p4_h, f_p4_w, 128 * self.k)
-        p3_nhwc = to_nhwc(p3, batch_size, p3_h, p3_w, 128 * self.k)
-        if f_p4_up.memory_config().is_sharded():
-            f_p4_up = ttnn.sharded_to_interleaved(f_p4_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        f_p4_up = ttnn.to_layout(f_p4_up, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Concat: 128 + 128 = 256 channels
-        concat_p3 = ttnn.concat([f_p4_up, p3_nhwc], dim=3)
+        cat = concat([f_p4_up, p3])
+        _free(f_p4_up, p3)
 
         # model.16: C3k2 (256→64) → N3 output
-        n3, n3_h, n3_w = self.c3k2_16(concat_p3, batch_size, p3_h, p3_w)
+        n3, n3_h, n3_w = self.c3k2_16(cat, batch_size, p3_h, p3_w)
+        _free(cat)
 
         # ===== Bottom-up path =====
-        # model.17: Downsample N3 (64→64)
+        # model.17: Downsample N3 (64→64), concat with f_p4: 64 + 128 = 192 channels
         n3_down, n3_down_h, n3_down_w = self.conv_17(n3, batch_size, n3_h, n3_w)
-
-        # Concat with f_p4: 64 + 128 = 192 channels
-        n3_down_nhwc = to_nhwc(n3_down, batch_size, n3_down_h, n3_down_w, 64 * self.k)
-        f_p4_nhwc = to_nhwc(f_p4, batch_size, f_p4_h, f_p4_w, 128 * self.k)
-        concat_n4 = ttnn.concat([n3_down_nhwc, f_p4_nhwc], dim=3)
+        cat = concat([n3_down, f_p4])
+        _free(n3_down, f_p4)
 
         # model.19: C3k2 (192→128) → N4 output
-        n4, n4_h, n4_w = self.c3k2_19(concat_n4, batch_size, f_p4_h, f_p4_w)
+        n4, n4_h, n4_w = self.c3k2_19(cat, batch_size, f_p4_h, f_p4_w)
+        _free(cat)
 
-        # model.20: Downsample N4 (128→128)
+        # model.20: Downsample N4 (128→128), concat with p5_out: 128 + 256 = 384 channels
         n4_down, n4_down_h, n4_down_w = self.conv_20(n4, batch_size, n4_h, n4_w)
-
-        # Concat with p5_out: 128 + 256 = 384 channels
-        n4_down_nhwc = to_nhwc(n4_down, batch_size, n4_down_h, n4_down_w, 128 * self.k)
-        p5_out_nhwc = to_nhwc(p5_out, batch_size, p5_out_h, p5_out_w, 256 * self.k)
-        concat_n5 = ttnn.concat([n4_down_nhwc, p5_out_nhwc], dim=3)
+        cat = concat([n4_down, p5_out])
+        _free(n4_down, p5_out)
 
         # model.22: C3k2 (384→256) → N5 output
-        n5, n5_h, n5_w = self.c3k2_22(concat_n5, batch_size, p5_out_h, p5_out_w)
+        n5, n5_h, n5_w = self.c3k2_22(cat, batch_size, p5_out_h, p5_out_w)
+        _free(cat)
 
         return (n3, n3_h, n3_w), (n4, n4_h, n4_w), (n5, n5_h, n5_w)
 
@@ -1700,16 +1732,18 @@ class TtDetectHead:
     def __call__(self, x: ttnn.Tensor, batch_size: int, height: int, width: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass. Returns (bbox_output, cls_output)."""
         # cv2 branch: bbox
-        bbox, h, w = self.cv2_0(x, batch_size, height, width)
-        bbox, h, w = self.cv2_1(bbox, batch_size, h, w)
-        bbox, h, w = self.cv2_2(bbox, batch_size, h, w)
+        b0, h, w = self.cv2_0(x, batch_size, height, width)
+        b1, h, w = self.cv2_1(b0, batch_size, h, w)
+        bbox, h, w = self.cv2_2(b1, batch_size, h, w)
+        _free(b0, b1)
 
         # cv3 branch: cls
-        cls, h, w = self.cv3_0_0(x, batch_size, height, width)
-        cls, h, w = self.cv3_0_1(cls, batch_size, h, w)
-        cls, h, w = self.cv3_1_0(cls, batch_size, h, w)
-        cls, h, w = self.cv3_1_1(cls, batch_size, h, w)
-        cls, h, w = self.cv3_2(cls, batch_size, h, w)
+        cls = x
+        for i, conv in enumerate((self.cv3_0_0, self.cv3_0_1, self.cv3_1_0, self.cv3_1_1, self.cv3_2)):
+            out, h, w = conv(cls, batch_size, h if i else height, w if i else width)
+            if i:
+                _free(cls)
+            cls = out
 
         return bbox, cls, h, w
 
@@ -1775,12 +1809,15 @@ class TtYOLO26Head:
 
         # N3 detection (stride 8, 80x80)
         bbox_n3, cls_n3, h3, w3 = self.head_n3(n3, batch_size, n3_h, n3_w)
+        _free(n3)
 
         # N4 detection (stride 16, 40x40)
         bbox_n4, cls_n4, h4, w4 = self.head_n4(n4, batch_size, n4_h, n4_w)
+        _free(n4)
 
         # N5 detection (stride 32, 20x20)
         bbox_n5, cls_n5, h5, w5 = self.head_n5(n5, batch_size, n5_h, n5_w)
+        _free(n5)
 
         return {
             "boxes": [(bbox_n3, h3, w3), (bbox_n4, h4, w4), (bbox_n5, h5, w5)],
@@ -1811,13 +1848,16 @@ class TtYOLO26:
             variant: Model variant ('yolo26n', 'yolo26s')
             num_classes: Number of detection classes (default: 80 for COCO)
             input_channels: Input channels; > 3 means the input is zero-padded (stem weights are padded to match)
-            uint8_input: Input is the raw uint8 RGB image as [B, 1, H, W * 3] (HWC rows, 0..255). It is converted,
-                reshaped and padded on device; the 1/255 normalization is folded into the stem weights. Wide rows
-                keep the host -> device upload to H pages instead of H * W.
+            uint8_input: Input is the raw uint8 RGB image as [B, 1, H, W * UINT8_INPUT_CHANNELS] (HWC rows, 0..255,
+                channels zero-padded; see uint8_input_from_torch). It is sharded by rows, converted and viewed as one
+                stick per pixel on device; the 1/255 normalization is folded into the stem weights. Wide rows keep
+                both the host -> device upload and the sharding copy to H pages instead of H * W.
         """
         self.device = device
         self.variant = variant
         self.num_classes = num_classes
+        if uint8_input:
+            input_channels = UINT8_INPUT_CHANNELS
         self.input_channels = input_channels
         self.uint8_input = uint8_input
 
@@ -1856,13 +1896,41 @@ class TtYOLO26:
         _, state_dict = load_yolo26_from_ultralytics(variant)
         self.load_weights_from_state_dict(state_dict)
 
+    def input_memory_config(self, batch_size: int, height: int, width: int) -> ttnn.MemoryConfig:
+        """L1 height sharding of the uint8 input [B, 1, H, W * C] by image rows (B * H wide pages over the grid).
+
+        A traced runner can keep its persistent input in this layout and copy each new image straight into it,
+        so the trace starts from L1 (see preprocess).
+        """
+        rows = batch_size * height
+        grid = self.device.compute_with_storage_grid_size()
+        rows_per_core = -(-rows // (grid.x * grid.y))
+        num_cores = -(-rows // rows_per_core)
+        shard_spec = ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(num_cores, grid, True),
+            [rows_per_core, width * self.input_channels],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
     def preprocess(self, x: ttnn.Tensor) -> Tuple[ttnn.Tensor, int, int, int]:
-        """uint8 [B, 1, H, W * 3] -> bf16 [1, 1, B * H * W, input_channels] (values 0..255, padded with zeros)."""
-        batch_size, height, width = x.shape[0], x.shape[2], x.shape[3] // 3
+        """uint8 [B, 1, H, W * C] -> bf16 [1, 1, B * H * W, C] height sharded in L1 (values 0..255).
+
+        Image rows are sharded first (B * H wide pages), so the copy out of DRAM is a few large transfers; the
+        row-major sharded tensor is then re-viewed as one C-channel stick per pixel, which is free because the
+        shard bytes are identical. The stem conv consumes this sharding directly. An input that already has this
+        sharding (see input_memory_config) skips the copy.
+        """
+        batch_size, height, width = x.shape[0], x.shape[2], x.shape[3] // self.input_channels
+        rows = batch_size * height
+        x = ttnn.reshape(x, [1, 1, rows, width * self.input_channels])
+        sharded_copy = None
+        if not x.is_sharded():
+            x = sharded_copy = ttnn.to_memory_config(x, self.input_memory_config(batch_size, height, width))
         x = ttnn.typecast(x, ttnn.bfloat16)
-        x = ttnn.reshape(x, [1, 1, batch_size * height * width, 3])
-        if self.input_channels > 3:
-            x = ttnn.pad(x, [(0, 0), (0, 0), (0, 0), (0, self.input_channels - 3)], 0.0)
+        if sharded_copy is not None:
+            ttnn.deallocate(sharded_copy)
+        x = ttnn.experimental.view(x, [1, 1, rows * width, self.input_channels])
         return x, batch_size, height, width
 
     def __call__(
@@ -1879,7 +1947,7 @@ class TtYOLO26:
         Args:
             x: Input tensor [batch, height, width, channels] in NHWC format, or flattened [1, 1, N*H*W, C]
                (e.g. L1 sharded) with batch_size/height/width given, or with uint8_input the raw image
-               [B, 1, H, W * 3]
+               [B, 1, H, W * UINT8_INPUT_CHANNELS]
             deallocate_input: free x after the stem conv (used by the trace runner)
 
         Returns:

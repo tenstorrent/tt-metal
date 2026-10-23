@@ -13,7 +13,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import divup, is_wormhole_b0, is_blackhole
-from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26
+from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26, uint8_input_from_torch
 from models.experimental.yolo26.tt.model_preprocessing import YOLO26WeightLoader
 
 
@@ -89,14 +89,13 @@ class YOLO26TestInfra:
 
     def setup_uint8_input(self, torch_input_tensor=None):
         """
-        Host input for the uint8 path: NCHW float in [0, 1] -> uint8 [B, 1, H, W * 3] (HWC rows).
+        Host input for the uint8 path: NCHW float in [0, 1] -> uint8 [B, 1, H, W * UINT8_INPUT_CHANNELS] (HWC rows).
 
         One row page per image row (H pages, not H * W) is what makes the host -> device copy fast.
         """
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        n, c, h, w = torch_input_tensor.shape
         x = (torch_input_tensor * 255).round().clamp(0, 255).to(torch.uint8)
-        x = x.permute(0, 2, 3, 1).reshape(n, 1, h, w * c)
+        x = uint8_input_from_torch(x.permute(0, 2, 3, 1))
         # Data parallel on a mesh: shard the batch, batch_size images per device
         mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=0) if self.num_devices > 1 else None
         return ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper)

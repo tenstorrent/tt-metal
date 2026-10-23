@@ -51,12 +51,16 @@ class YOLO26PerformantRunner:
             input_channels,
         )
 
-        # Inputs: raw uint8 image [B, 1, H, W * 3] -> DRAM staging buffer (written on CQ1) -> persistent DRAM
-        # input (copied on CQ0). The trace always reads the persistent input, so its address never changes.
-        # Conversion to bf16, channel padding and normalization happen inside the trace.
+        # Inputs: raw uint8 image [B, 1, H, W * UINT8_INPUT_CHANNELS] -> DRAM staging buffer (written on CQ1) ->
+        # persistent input, already sharded by image rows in L1 (copied on CQ0). The trace always reads the
+        # persistent input, so its address never changes; conversion to bf16 and normalization happen inside it.
         self.tt_inputs_host = self.runner_infra.setup_uint8_input()
         self.tt_image_res = self.tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
-        self.input_tensor = ttnn.allocate_tensor_on_device(self.tt_image_res.spec, device)
+        model = self.runner_infra.ttnn_model
+        b, _, h, row = self.tt_image_res.shape
+        self.input_tensor = ttnn.to_memory_config(
+            self.tt_image_res, model.input_memory_config(b, h, row // model.input_channels)
+        )
 
         # Trace state
         self.tid = None

@@ -102,19 +102,18 @@ def test_tt_yolo26_pcc(device, variant):
 )
 @pytest.mark.parametrize("variant", ["yolo26n", "yolo26s"])
 def test_tt_yolo26_uint8_input_pcc(device, variant):
-    """uint8 input path (on-device typecast/reshape, 1/255 folded into the stem) on a real image."""
+    """uint8 input path (on-device sharding/typecast/view, 1/255 folded into the stem) on a real image."""
     import numpy as np
     from PIL import Image
     from ultralytics import YOLO
     from ultralytics.utils import ASSETS
-    from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26
+    from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26, uint8_input_from_torch
 
     torch_model = YOLO(f"{variant}.pt")
     tt_model = TtYOLO26(device, variant, uint8_input=True)
     tt_model.load_weights_from_state_dict(torch_model.model.state_dict())
 
     img = torch.from_numpy(np.asarray(Image.open(ASSETS / "bus.jpg").convert("RGB").resize((640, 640))).copy())
-    h, w, c = img.shape
 
     with torch.no_grad():
         preds = torch_model.model.eval().float()(img.permute(2, 0, 1)[None].float() / 255)
@@ -122,7 +121,9 @@ def test_tt_yolo26_uint8_input_pcc(device, variant):
     pt_box = one2one["boxes"].flatten()
     pt_cls = one2one["scores"].flatten()
 
-    tt_x = ttnn.from_torch(img.reshape(1, 1, h, w * c), dtype=ttnn.uint8, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_x = ttnn.from_torch(
+        uint8_input_from_torch(img[None]), dtype=ttnn.uint8, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_out = tt_model(tt_x)
 
     tt_box, tt_cls = [], []
