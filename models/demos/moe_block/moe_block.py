@@ -333,7 +333,8 @@ class MoEBlock(LightweightModule):
             mesh_device, g, model, self.experts, dispatch_in_program=options.experts_during_dispatch
         )
         self.stage_hook = None  # (profiling: called with the stage name after every stage)
-        self.keep_taps = False  # (debug: keep the last call's routing rows for taps())
+        self.keep_taps = False  # (debug: keep the last call's routing rows for taps(); "device": as a device tensor -
+        # no host read in the forward, so a traced forward keeps them too: taps() reads them)
         self._taps = {}
         # The exchange's arena address is baked into its kernels: run the head and the tail once first (their ops'
         # one-time L1 - collective semaphores, program state - lands now), then build the exchange on the L1 left.
@@ -383,7 +384,9 @@ class MoEBlock(LightweightModule):
         if self.fused is not None:
             se, out = self.fused(x)
             self._mark("head")
-            if self.keep_taps:
+            if self.keep_taps == "device":
+                self._taps = dict(rows_dev=out.pop("rows"))
+            elif self.keep_taps:
                 self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(out["rows"])])
             y_own = self.exchange.prepped((out["xbuf"], out["route"]), hook=self.stage_hook)  # owners' sums [S/N, Hr]
             for k in ("rows", "xbuf", "route", "latent"):
@@ -543,8 +546,26 @@ class MoEBlock(LightweightModule):
         return fabric_reduce_scatter(t, cluster_axis=1, topology=self._tp_topology(), num_links=self.geometry.links)
 
     def taps(self) -> dict:
-        """Debug: the last forward's routing rows (keep_taps = True)."""
+        """Debug: the last forward's routing rows (keep_taps = True, or "device": read now)."""
+        if "rows_dev" in self._taps:
+            return dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(self._taps["rows_dev"])])
         return self._taps
+
+    def input_buffer(self) -> ttnn.Tensor:
+        """A persistent x [1, 1, S/SP, H/TP] TILE: forward(input_buffer()) reads it in place (the fused head's own x -
+        no copy). A traced forward is captured on it; each replay's x is written into it first."""
+        if self.fused is not None:
+            return self.fused.x
+        if getattr(self, "_x_in", None) is None:
+            g = self.geometry
+            self._x_in = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, g.tokens_per_row, self.model.emb_dim // g.tp]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._x_in
 
     def close(self):
         pass
@@ -697,7 +718,15 @@ class FusedHead:
             wd.append(w.shared["down"].float()[:, sl].T.contiguous())
         wl = [w.latent["down"].float()] * N if latent else None
         self.w = self.head.upload(gu, wd, w_latent=wl)
-        self.x = None
+        # (the programs bake x's address: one x buffer - a new x tensor each call rebuilt every chip's program, ~175 ms of
+        # host; patching its address into the cached programs' args instead costs ~3 ms a call)
+        self.x = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, g.tokens_per_row, H // g.tp]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mesh,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
         self.head.upload_router(w.router["weight"].float(), w.router["bias"].float())
 
     def attach(self, exchange):
@@ -715,11 +744,8 @@ class FusedHead:
     def __call__(self, x):
         """x [1, 1, S/SP, H/TP] -> (the shared expert's output: [S/N, H] the owners' rows, or (latent) [S/SP, H/TP];
         the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after."""
-        # (into one x buffer: the programs bake x's address - a new x tensor each call rebuilt every chip's program,
-        # ~175 ms of host)
-        if self.x is None:
-            self.x = ttnn.allocate_tensor_on_device(x.spec, x.device())
-        ttnn.copy(x, self.x)
+        if int(x.buffer_address()) != int(self.x.buffer_address()):  # (MoEBlock.input_buffer(): read in place)
+            ttnn.copy(x, self.x)
         se = self.head.run(self.x, self.w)
         out = dict(self.head.outputs)
         self.head.free_arena()

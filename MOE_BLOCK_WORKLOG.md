@@ -1066,3 +1066,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   descriptors reassigned to each program. That costs 2.5-3.6 ms of host a call; the device copy it would replace is
   ~0.1 ms and one program. GLM wall 4.8 -> 7.2 ms; reverted. Traced, x is the trace's fixed input buffer anyway (written
   before each replay), so the copy leaves the forward altogether.
+
+### Traced forward (test_moe_block_traced, chunk 1280)
+- The forward captures as is (ttnn begin/end_trace_capture on the block's input buffer): every per-call allocation (the
+  head's and the exchange's alternating L1 arenas, the manifest, the DRAM outputs) lands at the same address each call, so
+  the capture's addresses are the replay's; no host reads (taps "device": the routing rows kept as a device tensor, read
+  after the replay) and no host writes in the forward; the programs are built and the DRISC senders started by the eager
+  calls before the capture. MoEBlock.input_buffer(): the fused head's x (allocated once; read in place - no copy).
+- 300 replays a model, each on a fresh x (16-input pool, never the previous one) written into the input buffer first,
+  each checked against its x's own reference (device routing; the rows must repeat the x's first routing): GLM PCC min
+  0.98654, K3 0.99605. Eager soaks (150 calls) unchanged.
+- Wall (LoudBox 2x4, slowest chip done): GLM replay 1731 us (1699 back to back) vs eager 3856 us on the input buffer
+  (4.9-5.3 ms with the x copy from another tensor), eager device sum 1816; K3 3196 (3144) vs 5278 (6.5 ms), device sum
+  3242. Traced is at the device time; the host left is the input write (host -> device x: +260 us GLM, +435 us K3), gone
+  when the block's x comes from attention in the same trace.

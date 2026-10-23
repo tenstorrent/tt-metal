@@ -33,6 +33,7 @@ from models.demos.moe_block.moe_block import (
 R, C = 2, 4
 POOL = 4
 ITERS = 5
+TRACE_REGION = 64 * 1024 * 1024
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 MODELS = {
     "glm53_flash": GLM_53_FLASH,
@@ -249,6 +250,117 @@ def test_moe_block(mesh_device, device_params, model, chunk):
         ttnn.deallocate(out)
     logger.info(
         f"MOE_WALL {model}: forward {statistics.median(ws):.0f} us wall (median of {ITERS}; {[round(v) for v in ws]})"
+    )
+
+
+_TRACE_PARAMS = [
+    pytest.param(
+        (R, C),
+        fabric2d_device_params(
+            fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0, trace_region_size=TRACE_REGION
+        ),
+        name,
+        id=f"{name}-1280",
+    )
+    for name, m in MODELS.items()
+]
+
+
+@pytest.mark.parametrize("mesh_device, device_params, model", _TRACE_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.timeout(3600)
+def test_moe_block_traced(mesh_device, device_params, model):
+    """One forward (chunk 1280) captured as a trace on the block's input buffer and replayed: each replay's x (from a
+    pool of fresh inputs, never the previous one) written into the input buffer first, each replay's output checked
+    against its own reference (the device's routing, read from the kept routing rows); MOE_TRACE_REPLAYS (test-only)
+    replays. Then the wall time of a replay, with and without the input write, vs an eager forward."""
+    import os
+
+    m, chunk = MODELS[model], 1280
+    T, H = chunk, m.emb_dim
+    w = random_weights(m)
+    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0))
+    g = block.geometry
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    NX = 16
+    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(2000 + k)).to(torch.bfloat16) for k in range(NX)]
+    hx = [
+        ttnn.from_torch(x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+        for x_ in xs
+    ]
+    x_in = block.input_buffer()
+    refs = {}  # k -> (routing rows, reference output): a replay's routing must repeat its x's first one
+
+    def check(out, k, tag):
+        y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
+        rows = block.taps()["rows"]
+        if k not in refs:
+            ids_d, wts_d = device_routing(rows, g.tokens_per_chip, m.top_k)
+            refs[k] = (rows, reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0])
+        else:
+            assert all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])), f"{tag}: x {k}'s routing changed"
+        p_dev = pcc(y, refs[k][1])
+        assert p_dev > 0.98, f"{tag} (x {k}): block output off (PCC {p_dev:.5f})"
+        return p_dev
+
+    # eager first (every program built and loaded, the DRISC senders started), on the input buffer as traced
+    block.keep_taps = "device"
+    for k in range(2):
+        ttnn.copy_host_to_device_tensor(hx[k], x_in)
+        out = block(x_in)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"MoEBlock {model} eager call {k}: PCC {check(out, k, 'eager'):.5f}")
+        ttnn.deallocate(out)
+    # (the eager forward's wall, before the capture, taps off: kept rows move the head's DRAM outputs - a rebuild a call)
+    block.keep_taps, ew = False, []
+    for i in range(ITERS + 1):
+        ttnn.copy_host_to_device_tensor(hx[i], x_in)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        ttnn.deallocate(block(x_in))
+        ttnn.synchronize_device(mesh_device)
+        ew.append((time.perf_counter() - t0) * 1e6)
+    ew, block.keep_taps = ew[1:], "device"
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = block(x_in)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    n = int(os.environ.get("MOE_TRACE_REPLAYS", "48"))
+    order = [(3 * i + 2) % NX for i in range(n)]  # (consecutive replays on different inputs)
+    ps = []
+    for i, k in enumerate(order):
+        ttnn.copy_host_to_device_tensor(hx[k], x_in)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ps.append(check(out, k, f"replay {i}"))
+        if i % 50 == 49 or i == n - 1:
+            logger.info(f"MoEBlock {model} traced: {i + 1} replays checked, PCC min {min(ps):.5f}")
+    # timing
+    REP = 20
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(REP):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    back = (time.perf_counter() - t0) * 1e6 / REP
+    one, inw = [], []
+    for i in range(ITERS):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        one.append((time.perf_counter() - t0) * 1e6)
+        t0 = time.perf_counter()
+        ttnn.copy_host_to_device_tensor(hx[i], x_in)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        inw.append((time.perf_counter() - t0) * 1e6)
+    ttnn.release_trace(mesh_device, tid)
+    ttnn.deallocate(out)
+    med = statistics.median
+    logger.info(
+        f"MOE_TRACE {model}: replay {med(one):.0f} us wall (median of {ITERS}), back to back {back:.0f} us a replay "
+        f"({REP}), with the input write {med(inw):.0f} us; eager forward {med(ew):.0f} us"
     )
 
 
