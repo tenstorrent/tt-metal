@@ -14,7 +14,23 @@ SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id
 
 @pytest.mark.parametrize("hg", [None, 1, 2, 99], ids=["hg_auto", "hg1", "hg2", "hg_all"])
 @pytest.mark.parametrize(
-    "B, H, D", [(32, 4, 256), (1, 4, 256), (8, 16, 128), (32, 2, 256), (32, 8, 256), (32, 1, 512), (32, 4, 512)]
+    "B, H, D",
+    [
+        (32, 4, 256),
+        (1, 4, 256),
+        (8, 16, 128),
+        (32, 2, 256),
+        (32, 8, 256),
+        (32, 1, 512),
+        (32, 4, 512),
+        # dense per-chip head counts: 31B tp4 (8 heads, D 256 / 512), 12B tp8 (2 heads), batch 1 and 8 rows
+        (32, 8, 512),
+        (1, 8, 256),
+        (1, 8, 512),
+        (8, 8, 256),
+        (32, 2, 512),
+        (1, 2, 256),
+    ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_concat_heads_decode_matches_composite(mesh_device, device_params, B, H, D, hg):

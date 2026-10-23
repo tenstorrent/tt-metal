@@ -43,6 +43,14 @@ CASES = {
     "three_outputs": (32, 2816, 3, [True, True, False], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
     "single_l1": (32, 2816, 1, [True], [1.0], False, False, "l1", 22),
     "w1024_b8": (8, 1024, 1, [True], [1.0], False, False, "dram", 22),
+    # dense variants: 31B hidden 5376 (168 column tiles -> 21 cores x 8), 12B hidden 3840 (120 -> 20 x 6)
+    "dense31b_single": (32, 5376, 1, [True], [1.0], False, False, "dram", 22),
+    "dense31b_residual_scalar": (32, 5376, 1, [True], [0.90625], True, False, "dram", 22),
+    "dense31b_b1_residual": (1, 5376, 1, [True], [1.0], True, False, "dram", 22),
+    "dense31b_l1": (32, 5376, 1, [True], [1.0], False, False, "l1", 22),
+    "dense12b_single": (32, 3840, 1, [True], [1.0], False, False, "dram", 22),
+    "dense12b_residual_scalar": (32, 3840, 1, [True], [1.1015625], True, False, "dram", 22),
+    "dense12b_b1_residual": (1, 3840, 1, [True], [1.0], True, False, "dram", 22),
 }
 
 

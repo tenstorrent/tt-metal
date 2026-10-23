@@ -24,8 +24,20 @@ def _pcc(a, b):
         (32, 2816, False, 2816**-0.5, "dram"),
         (32, 2816, True, 1.0, "l1"),
         (8, 1024, True, 1.0, "dram"),
+        (32, 5376, True, 1.0, "dram"),
+        (1, 5376, True, 1.0, "dram"),
+        (32, 3840, True, 1.0, "dram"),
     ],
-    ids=["b32_gamma", "b1_gamma", "b32_router_scalar", "b32_l1", "b8_w1024"],
+    ids=[
+        "b32_gamma",
+        "b1_gamma",
+        "b32_router_scalar",
+        "b32_l1",
+        "b8_w1024",
+        "dense31b_b32",
+        "dense31b_b1",
+        "dense12b_b32",
+    ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_rms_norm_decode_matches_rms_norm(mesh_device, device_params, R, W, gamma, scalar, mem):

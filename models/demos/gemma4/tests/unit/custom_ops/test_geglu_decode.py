@@ -25,8 +25,26 @@ def _pcc(a, b):
         (4, 64, 704, "dram"),
         (1, 128, 96, "dram"),
         (1, 128, 288, "dram"),
+        # dense MLP per-chip halves: 31B tp4 5376 / tp8 2688, 12B tp4 3840 / tp8 1920
+        (1, 32, 5376, "dram"),
+        (1, 1, 5376, "dram"),
+        (1, 32, 2688, "dram"),
+        (1, 32, 3840, "dram"),
+        (1, 32, 1920, "l1"),
     ],
-    ids=["experts_b32", "shared_mlp_b32", "experts_b1_l1", "two_row_tiles", "lanes_mlp_8x4", "lanes_mlp_2x4"],
+    ids=[
+        "experts_b32",
+        "shared_mlp_b32",
+        "experts_b1_l1",
+        "two_row_tiles",
+        "lanes_mlp_8x4",
+        "lanes_mlp_2x4",
+        "dense31b_tp4",
+        "dense31b_tp4_b1",
+        "dense31b_tp8",
+        "dense12b_tp4",
+        "dense12b_tp8_l1",
+    ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_geglu_decode_matches_composite(mesh_device, device_params, E, R, I, mem):

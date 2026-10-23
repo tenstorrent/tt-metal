@@ -35,6 +35,15 @@ _L1_HEADROOM_BYTES = 64_000
 # to find_largest_divisor(..., 8)). Prefer L1-aware shrinking below over a hard
 # empirical cap — set GEMMA4_DECODE_IN0_BLOCK_W_MAX only for sweeps.
 _DECODE_IN0_BLOCK_W_MAX = max(1, int(os.environ.get("GEMMA4_DECODE_IN0_BLOCK_W_MAX", "8")))
+# GEMMA4_DRAM_SHARD_ROW_VIEW=1: decode rows below one tile (batch < 32) take the matmul through metadata reshapes
+# of the row tile instead of a Pad program before and a Slice program after (see DramShardedLinear.__call__).
+_ROW_VIEW = os.environ.get("GEMMA4_DRAM_SHARD_ROW_VIEW", "0") == "1"
+# GEMMA4_DRAM_SHARD_DECODE_1D=1: decode through the 1D-multicast matmul (tt/decode_matmul.py, every worker core one
+# N tile, K streamed in GEMMA4_DECODE_MM_IN0_BLOCK_W blocks) on an interleaved on-device copy of the width-sharded
+# weight, instead of the DRAM-sharded kernel (whose core grid must divide both K and N tiles: 8 cores for the
+# dense 31B / 12B wqkv and o_proj) with its activation reshard before and after: 3 programs -> 1 per matmul. The
+# copy is made at load from the warm ``.ws`` cache (no second cache file); prefill keeps its 2D config.
+_DECODE_1D = os.environ.get("GEMMA4_DRAM_SHARD_DECODE_1D", "0") == "1"
 
 
 def _roundup(a, b):
@@ -333,6 +342,18 @@ class DramShardedLinear:
         # Act shard grid must match decode_progcfg (K and N), not a K-only grid.
         self._act_memcfg = activation_memcfg(k, n)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
+        self._decode_1d = None
+        if _DECODE_1D:
+            from models.demos.gemma4.tt.decode_matmul import decode_1d_progcfg, decode_compute_kernel_config
+
+            sharded = self.weight
+            self.weight = ttnn.to_memory_config(sharded, ttnn.DRAM_MEMORY_CONFIG)
+            sharded.deallocate(True)
+            n_padded = int(self.weight.shape[-1])
+            self._decode_1d = (
+                decode_1d_progcfg(mesh_device, k, n_padded),
+                decode_compute_kernel_config(mesh_device),
+            )
 
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
@@ -366,21 +387,51 @@ class DramShardedLinear:
             # keep the logical [..., M, N] volume (avoids reshape volume mismatch).
             pad = TILE_SIZE - M
             x_run = x_work
-            if pad:
-                x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
-            x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
-            if pad:
-                x_run.deallocate(True)
-            out = ttnn.linear(
-                x_sh,
-                self.weight,
-                program_config=self._decode_pc,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            # GEMMA4_DRAM_SHARD_ROW_VIEW=1: a TILE activation of M < 32 logical rows already occupies one row tile
+            # (padded_shape rows == 32) and the decode kernel is row-independent, so the tile is presented as 32
+            # logical rows (a metadata reshape) and the result as M rows again, instead of a Pad program before and
+            # a Slice program after the matmul (2 of the 5 programs per decode matmul at batch 1).
+            row_view = (
+                pad > 0
+                and _ROW_VIEW
+                and x_work.layout == ttnn.TILE_LAYOUT
+                and int(x_work.padded_shape[-2]) == TILE_SIZE
+                and len(x_work.shape) == 4
             )
-            x_sh.deallocate(True)
-            out = ttnn.to_memory_config(out, out_mc)
-            if pad:
+            if row_view:
+                full = ttnn.Shape([1, 1, TILE_SIZE, n_in])
+                x_run = ttnn.reshape(x_work, full, full)
+            elif pad:
+                x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+            if self._decode_1d is not None:
+                # interleaved weight, 1D multicast config (no activation reshard)
+                pc, ckc = self._decode_1d
+                out = ttnn.linear(
+                    x_run,
+                    self.weight,
+                    program_config=pc,
+                    compute_kernel_config=compute_kernel_config if compute_kernel_config is not None else ckc,
+                    memory_config=out_mc,
+                )
+                if pad and not row_view:
+                    x_run.deallocate(True)
+            else:
+                x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
+                if pad and not row_view:
+                    x_run.deallocate(True)
+                out = ttnn.linear(
+                    x_sh,
+                    self.weight,
+                    program_config=self._decode_pc,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                x_sh.deallocate(True)
+                out = ttnn.to_memory_config(out, out_mc)
+            if row_view:
+                n_out = int(out.shape[-1])
+                out = ttnn.reshape(out, ttnn.Shape([1, 1, M, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
+            elif pad:
                 out_pad = out
                 out = ttnn.slice(
                     out_pad,

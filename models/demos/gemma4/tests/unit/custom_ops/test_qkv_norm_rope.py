@@ -63,7 +63,23 @@ def _composite(q, k, v, gq_rm, gk_rm, cos_b, sin_b):
 @pytest.mark.parametrize("variant", [2, 1], ids=["k2_fpu_rope", "k1_sfpu_rope"])
 @pytest.mark.parametrize(
     "B, Hq, Hkv, D, partial",
-    [(32, 4, 2, 256, None), (32, 4, 2, 256, 64), (1, 4, 2, 256, None), (8, 16, 8, 256, None), (32, 4, 2, 512, 256)],
+    [
+        (32, 4, 2, 256, None),
+        (32, 4, 2, 256, 64),
+        (1, 4, 2, 256, None),
+        (8, 16, 8, 256, None),
+        (32, 4, 2, 512, 256),
+        # dense per-chip shapes: 31B tp4 sliding (8 q / 4 kv) and global (8 q / 1 kv, D 512); 12B tp4 sliding
+        # (4 q / 2 kv) and global (4 q / 1 kv replicated, D 512); tp8: 31B 4/2, 12B 2/1 and 2 q / 1 kv global
+        (32, 8, 4, 256, None),
+        (1, 8, 4, 256, None),
+        (8, 8, 4, 256, None),
+        (32, 8, 1, 512, 128),
+        (1, 8, 1, 512, 128),
+        (32, 4, 1, 512, 128),
+        (32, 2, 1, 256, None),
+        (32, 2, 1, 512, 128),
+    ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv, D, partial, variant):
