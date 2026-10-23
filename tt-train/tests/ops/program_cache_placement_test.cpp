@@ -12,11 +12,14 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp"
 #include "metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp"
+#include "metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.hpp"
 #include "metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp"
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
+#include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/silu_bw/device/silu_bw_device_operation.hpp"
 #include "metal/ops/softmax/device/softmax_device_operation.hpp"
+#include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
@@ -129,6 +132,38 @@ TEST_F(ProgramCachePlacementTest, ProfilerNoOp_L1InputAfterDramDoesNotReuseThePr
         random_input(kShape, 1U, ttnn::Layout::ROW_MAJOR), [](const ttnn::Tensor& input) {
             ttnn::prim::ttml_profiler_no_op(input, "placement", zeros_on_device(kShape));
         });
+}
+
+TEST_F(ProgramCachePlacementTest, FrobeniusNormalize_L1InputAfterDramDoesNotReuseTheProgram) {
+    expect_l1_launch_throws_after_dram(random_input(kShape, 1U), [](const ttnn::Tensor& input) {
+        ttnn::prim::ttml_frobenius_normalize(input, /*epsilon=*/1e-7F, zeros_on_device(kShape));
+    });
+}
+
+TEST_F(ProgramCachePlacementTest, SelectTargetLogit_L1InputAfterDramDoesNotReuseTheProgram) {
+    const auto target = random_targets(2U);
+    expect_l1_launch_throws_after_dram(random_input(kShape, 1U), [&](const ttnn::Tensor& logit) {
+        ttnn::prim::ttml_select_target_logit(
+            logit,
+            target,
+            /*local_V=*/kShape[3],
+            /*cluster_axis=*/std::nullopt,
+            /*first_v=*/0U,
+            zeros_on_device(kRowShape));
+    });
+}
+
+TEST_F(ProgramCachePlacementTest, SubtractAtTarget_L1InputAfterDramDoesNotReuseTheProgram) {
+    const auto target = random_targets(2U);
+    expect_l1_launch_throws_after_dram(random_input(kShape, 1U), [&](const ttnn::Tensor& input) {
+        ttnn::prim::ttml_subtract_at_target(
+            input,
+            target,
+            /*local_V=*/kShape[3],
+            /*cluster_axis=*/std::nullopt,
+            /*first_v=*/0U,
+            zeros_on_device(kShape));
+    });
 }
 
 // swiglu_elemwise_bw takes L1 inputs: the L1 launch must build its own program and compute what the DRAM launch did.
