@@ -1037,6 +1037,19 @@ _KNOWN_WORKLOAD_VARS = ("TT_PERF_ISL_TOKENS", "TT_PERF_OSL_TOKENS", "TT_PERF_BAT
 _ENV_INT_DEFAULT_RE = re.compile(r'os\.environ\.get\(\s*"(TT_PERF_[A-Z0-9_]+)"\s*,\s*"(\d+)"\s*\)')
 
 
+def skeleton_env_vars() -> frozenset:
+    """Every TT_PERF_* knob the SKELETON itself declares, read out of _SKELETON_REF.
+
+    _KNOWN_WORKLOAD_VARS is hand-maintained and was always going to drift from the skeleton beside
+    it: TT_PERF_FLUSH_EVERY and TT_PERF_EAGER_OSL_TOKENS are emitted by the skeleton, so every
+    generated test has them, yet neither was listed -- which is why invented_workload_vars reported
+    them for every model and its own docstring had to excuse the noise. Deriving the set from the
+    skeleton keeps the two from disagreeing again, the same reason _skeleton_default reads its
+    numbers there rather than restating them.
+    """
+    return frozenset(v for v, _ in _ENV_INT_DEFAULT_RE.findall(_SKELETON_REF))
+
+
 def _stage_layers_var(stage) -> str:
     """layer_depth owns this spelling. Imported lazily, not at module scope: this module is loaded
     BY PATH in places (spec_from_file_location), where a relative import has no parent package --
@@ -1081,6 +1094,7 @@ def invented_workload_vars(src: str, stages=()) -> list:
     """
     allowed = (
         set(_KNOWN_WORKLOAD_VARS)
+        | skeleton_env_vars()
         | {_stage_layers_var(st) for st in (stages or ())}
         # The per-stage trace knob, derived from the same declaration as the depth knob beside it.
         | {"TT_PERF_%s_TRACE" % str(st).upper() for st in (stages or ())}
@@ -1092,6 +1106,25 @@ def invented_workload_vars(src: str, stages=()) -> list:
         if int(default) > 0:  # a positive literal is a CAP; 0 means "ask the pipeline"
             out.append((var, int(default)))
     return sorted(set(out))
+
+
+def model_heavy_axis(src: str, stages=()) -> tuple | None:
+    """THIS model's own heavy axis: the (var, default) the generated test invented to size the work.
+
+    The heavy axis is model-specific and the generator says so in its own instructions -- TOKENS for
+    an LLM, TIMESTEPS for diffusion, FRAMES for video, PHONEMES for audio. The tool owns the token
+    spelling (TT_PERF_OSL_TOKENS) and drives it; for every other axis the generator parameterises a
+    knob, nothing sets it, and the test keeps its own small literal. On Qwen-Image-Edit that left
+    TT_PERF_DENOISE_STEPS=2 against a 50-step schedule, so the stage carrying 98% of per-image time
+    was sampled at 1/25 scale and ranked below encoders worth 0.8% of it.
+
+    Returns None when the model has no invented axis (every LLM: the tool already drives its axis)
+    or when more than one candidate survives. AMBIGUITY IS NOT GUESSED AT. No static rule separates
+    a work-shaping knob from an incidental count, so a test with two of them keeps exactly today's
+    behaviour rather than having the tool pick one and silently resize the capture.
+    """
+    cands = invented_workload_vars(src, stages)
+    return cands[0] if len(cands) == 1 else None
 
 
 def validate_generated_perf_test(out_path: Path, task: str, component: bool = False) -> tuple[str, str]:
