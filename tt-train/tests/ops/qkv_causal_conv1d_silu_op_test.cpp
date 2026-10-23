@@ -320,6 +320,40 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 
 INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
 
+// Rank-4 [1,1,T,C] activations are accepted and returned.
+TEST_F(QkvCausalConv1dSiluTest, RankFour) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{64, 96, 64, 32};
+    auto p = random_problem(s, 6);
+    auto ref = reference(s, p);
+    p.grad_y = ref.y;
+    ref = reference(s, p);
+    const auto rank4 = [](const xt::xarray<float>& a) {
+        return xt::xarray<float>(xt::reshape_view(a, {size_t{1}, size_t{1}, a.shape()[1], a.shape()[2]}));
+    };
+    auto input = autograd::create_tensor(core::from_xtensor(rank4(p.x), device), /* requires_grad */ true);
+    auto history = core::from_xtensor(rank4(p.h), device, ttnn::Layout::ROW_MAJOR);
+    std::array<TensorPtr, 4> tap_tensors;
+    for (size_t j = 0; j < 4; ++j) {
+        tap_tensors[j] =
+            autograd::create_tensor(core::from_xtensor(rank4(p.taps[j]), device), /* requires_grad */ true);
+    }
+    auto [q, k, v] = ops::qkv_causal_conv1d_silu(
+        input, history, tap_tensors[0], tap_tensors[1], tap_tensors[2], tap_tensors[3], s.Q, s.K, s.V);
+    EXPECT_EQ(q->get_value().logical_shape(), ttnn::Shape({1, 1, s.T, s.Q}));
+    expect_close(rank4(slice_cols(ref.y, 0, s.Q)), core::to_xtensor(q->get_value()), "q");
+    for (const auto& out : {q, k, v}) {
+        out->set_grad(out->get_value());
+    }
+    q->backward();
+    EXPECT_EQ(input->get_grad().logical_shape(), ttnn::Shape({1, 1, s.T, s.C()}));
+    expect_close(rank4(ref.grad_input), core::to_xtensor(input->get_grad()), "grad_input");
+    for (size_t j = 0; j < 4; ++j) {
+        expect_close(rank4(ref.grad_taps[j]), core::to_xtensor(tap_tensors[j]->get_grad()), "grad_tap");
+    }
+}
+
 // A preallocated grad_input is written in place.
 TEST_F(QkvCausalConv1dSiluTest, PreallocatedGradInput) {
     using namespace ttml;
