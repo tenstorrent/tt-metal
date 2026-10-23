@@ -27,8 +27,9 @@ device-free, bounded by the L1 budget and the per-core DRAM stream bound; grids 
 ``compute_with_storage_grid_size`` (the whole grid and its divisor sub-grids, never a literal list), so the same
 lab runs on a Wormhole 8x8 and a Blackhole 13x10, and the resolver table (``DecodeMMConfig``) carries grids as
 fractions of the device grid or per-arch entries clamped to the largest fitting grid; the device sweep walks it by coordinate
-descent (K block, then fidelity, then grid). A candidate whose output differs from the baseline's at
-PCC < ``GEMMA4_LAB_PCC`` (0.9999) is rejected (``ok=0``) and never ``best``.
+descent (K block, then fidelity, then grid). A candidate whose output neither reproduces the baseline's (PCC >= ``GEMMA4_LAB_PCC``, 0.9999) nor is at least as close to the fp32
+golden as the baseline is (the arm that admits a more accurate fidelity over the LoFi configs) is rejected
+(``ok=0``).
 
     TT_VISIBLE_DEVICES=<chip> pytest models/demos/gemma4/tests/unit/test_matmul_knob_lab.py \\
         -k "m31B and qkv and tp4 and bs32" -s
@@ -524,6 +525,7 @@ class ShapeLab:
         self.kt, self.nt = k // TILE_SIZE, n // TILE_SIZE
         self.results = []
         self.baseline = None
+        self.baseline_golden = float("nan")
         self.ds_able = wdtype == ttnn.bfloat8_b and IN1 != "il" and can_dram_shard(k, n, dtype=wdtype)
         self.ds_cores = _decode_core_grid(k, n)[2] if self.ds_able else None
         self.act_kind, self.act_cores = self._act_layout()
@@ -831,6 +833,7 @@ class ShapeLab:
 
     def run(self, cand: Cand) -> dict:
         res = dict(cand=cand.name, family=cand.family, knobs=cand.knobs, ok=0, us=float("nan"), note="-", runs=[])
+        res["guard"] = "-"
         res["pcc_base"] = res["pcc_golden"] = float("nan")
         try:
             eager, traced, means = self.time_candidate(cand)
@@ -841,16 +844,24 @@ class ShapeLab:
             res["runs"] = means
             res["pcc_golden"] = _pcc(traced, self.golden)
             res["pcc_base"] = 1.0 if self.baseline is None else _pcc(traced, self.baseline)
+            # The guard: the candidate reproduces the current config (PCC >= PCC_MIN against it) or is at least as
+            # close to the fp32 golden as the current config is. The second arm is what admits a more accurate
+            # fidelity: the DRAM-sharded / lm_head configs run at LoFi (0.99984-0.99987 vs fp32 on these shapes), so
+            # every HiFi2 candidate (0.99999 vs fp32) sits near 0.9998 against them and would otherwise be rejected
+            # for being better.
+            golden_ok = math.isfinite(res["pcc_golden"]) and res["pcc_golden"] >= self.baseline_golden - 1e-9
             if not torch.equal(eager, traced):
                 res["note"] = f"trace_vs_eager_pcc={_pcc(eager, traced):.6f}"
             elif not math.isfinite(res["pcc_base"]):
                 res["note"] = "non_finite_output"
-            elif res["pcc_base"] < PCC_MIN:
-                res["note"] = f"pcc_below_{PCC_MIN}"
+            elif res["pcc_base"] < PCC_MIN and not golden_ok:
+                res["note"] = f"pcc_below_{PCC_MIN}_and_less_accurate_than_baseline"
             else:
                 res["ok"] = 1
+                res["guard"] = "base" if res["pcc_base"] >= PCC_MIN else "golden"
             if self.baseline is None and res["ok"]:
                 self.baseline = traced
+                self.baseline_golden = res["pcc_golden"]
                 res["is_baseline"] = 1
         self.results.append(res)
         k = res["knobs"]
@@ -860,7 +871,8 @@ class ShapeLab:
             f"RESULT lab {self.tag} cand={res['cand']} family={res['family']} grid={k['grid']} gridspec={k['gspec']} cores={k['cores']} "
             f"in0_block_w={k['bw']} out_subblock={k['osub']} per_core={k['pc']} fidelity={k['fid']} fp32acc={k['acc']} "
             f"in1={k['in1']} out={k['out']} workers_per_bank={k['wpb']} form={k['form']} ok={res['ok']} "
-            f"pcc_base={res['pcc_base']:.6f} pcc_golden={res['pcc_golden']:.6f} us={res['us']:.2f} runs={runs} "
+            f"pcc_base={res['pcc_base']:.6f} pcc_golden={res['pcc_golden']:.6f} guard={res['guard']} us={res['us']:.2f} "
+            f"runs={runs} "
             f"dram_mb={self.dram_bytes / 1e6:.1f} roofline_us={self.roofline_us:.2f} ratio={ratio:.2f} "
             f"note={res['note']}"
         )
