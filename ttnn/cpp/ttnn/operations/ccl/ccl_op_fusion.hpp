@@ -52,8 +52,14 @@ struct AllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
 
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
+        std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
+    // ProgramDescriptor form of init_all_gather: the worker sync semaphore becomes a SemaphoreDescriptor in `desc`.
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
@@ -87,7 +93,7 @@ struct StridedAllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
@@ -112,11 +118,11 @@ struct ReduceScatterFusedOpSignaler {
 
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
     void init_reduce_scatter(
         tt::tt_metal::ProgramDescriptor& desc,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRangeSet& core_range_to_signal);
 
     void init_fused_op();
@@ -211,7 +217,7 @@ struct MatmulFusedOpSignaler {
     void init_llama_rs_cores_mm(
         const tt::tt_metal::CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         int privilaged_index = 0);
     // Get the rt values
     // Write the semaphore ID
@@ -223,17 +229,17 @@ struct MatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args,
         tt::tt_metal::CoreCoord current_core,
         tt::tt_metal::NOC writer_noc,
-        const tt::tt_metal::IDevice* device) const;
+        const tt::tt_metal::distributed::MeshDevice* device) const;
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRange& matmul_workers,
         const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
@@ -241,12 +247,12 @@ struct MatmulFusedOpSignaler {
     // SemaphoreDescriptors in `desc` (ids free on every core they cover); everything else is identical.
     void init_fused_op(
         tt::tt_metal::ProgramDescriptor& desc,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRange& matmul_workers,
         const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
     void init_fused_op(
         tt::tt_metal::ProgramDescriptor& desc,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRangeSet& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
@@ -295,6 +301,12 @@ struct MinimalMatmulFusedOpSignaler {
 
     void init_fused_op(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& program,
         const tt::tt_metal::IDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
@@ -316,11 +328,14 @@ struct StridedReduceScatterFusedOpSignaler {
     uint32_t fused_op_receiver_signal_semaphore = 0;
     // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core progress counter
     uint32_t mm_progress_counters_addr = 0;
+    // Descriptor path binds this buffer; mm_progress_counters_addr is the legacy recorded value.
+    tt::tt_metal::Buffer* mm_progress_counters_buffer = nullptr;
     // Rolling-window return path (MM output held in L1 as only mm_window_blocks M blocks per core).
     // Set by the RS program factory, consumed by the matmul factory: L1 base address (identical on
     // every MM core) of that core's per-RS-reader credit counters, and how many readers there are.
     // mm_window_blocks == 0 means no window, and the other two are unused.
     uint32_t rs_credit_counters_addr = 0;
+    tt::tt_metal::Buffer* rs_credit_counters_buffer = nullptr;
     uint32_t num_rs_readers = 0;
     uint32_t mm_window_blocks = 0;
 
@@ -330,6 +345,11 @@ struct StridedReduceScatterFusedOpSignaler {
 
     void init_strided_reduce_scatter(
         tt::tt_metal::Program& program,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
+
+    void init_strided_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& program,
         const tt::tt_metal::IDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
 

@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.demos.deepseek_v3.utils.config_dataclass import (
     ConfigWeight,
     DeepseekSamplingArgs,
@@ -314,12 +315,13 @@ def get_dram_sharded_matmul_config(m: int, k: int, n: int, input_num_shards: int
     assert (
         n_tiles % output_num_shards == 0
     ), "The output tensor must evenly shard across output_num_shards (without padding)"
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=dram_decode_in0_block_w(k_tiles, n_tiles, input_num_shards),
         per_core_M=m_tiles,
         per_core_N=even_int_div(n_tiles, output_num_shards),
         fused_activation=None,
     )
+    return with_dram_sharded_cores_per_bank(program_config, m, k, n, input_num_shards)
 
 
 def dram_sharded_weight_config(k, n, dram_grid_size):

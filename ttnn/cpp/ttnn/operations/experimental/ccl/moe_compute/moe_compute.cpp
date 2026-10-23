@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "moe_compute.hpp"
 #include "device/moe_compute_device_operation.hpp"

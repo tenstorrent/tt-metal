@@ -452,17 +452,24 @@ operands. For the integer operations, the second operand may also be a
 The modifying variants, ``OP=``, are available.
 
 Conditional operators are provided -- ``==``, ``!=``, ``<``, ``>=``,
-``>`` & ``<=``. These produce a ``vBool`` result, which may be used
-directly in a ``v_if`` conditional. Both operands must
-be related vector types, or the second operand may be an appropriate
-scalar operator, or, for integral comparisons, may be a ``vMag`` type.
+``>`` & ``<=``. These produce a type that may implicitly convert
+to a ``vBool`` type.  These may be used:
 
-``vBool``s may be combined with ``&&``, ``||`` and ``!``
-operations. Note that these are not short-circuiting.
+  * in a ``v_if`` or ``v_elseif`` conditional.
+  * operands to a ``&&``, ``||`` and ``!`` operators (which may
+    themselves be combined and/or used in ``v_if`` & ``v_elseif``
+    conditionals.
+  * the operand of a ``mask`` call (see below).
+
+Both operands must be related vector types, or the second operand may
+be an appropriate scalar operator, or, for integral comparisons, may
+be a ``vMag`` type.  The ``&&``, ``||`` operators are not
+short-circuiting.
 
 You may create predicate functions that return a ``vBool``, but they
 must be invoked inside a ``v_if`` (or ``v_elseif``) condition.  Do not
-store the return value and then interrogate it later.
+store the return value and then interrogate it later (a compile error
+will most-likely result).
 
 Float comparisons have the following properties:
 
@@ -488,7 +495,7 @@ and unsigned) are not correct over the full range -- except on Quasar
 for signed compares. This is a compiler defect that is yet to be
 fixed. However, when values are less than 2^31 apart, the
 ordering compares are (a) correct and (b) can be cheaper than the
-full sequence, even on Quasar.  To that and the ``sfpi::nearby``
+full sequence, even on Quasar.  To that end the ``sfpi::nearby``
 wrapper function is provided and may be used to wrap all, or part, of
 comparison sequences. The compiler does not have vector value range
 information to deduce this itself.
@@ -498,6 +505,27 @@ information to deduce this itself.
     vInt a = exexp (f, ExponentMode::Biased);
     v_if (nearby (a < 255)) {
     } v_endif;
+
+Mask Generation
+^^^^^^^^^^^^^^^
+
+Masks can be generated from comparison operations on Blackhole and
+Quasar targets:
+
+.. code-block:: c++
+
+    vUInt mask (a OP b)
+
+Where ``OP`` is one of ``<``, ``<=``, ``==``, ``!=``, ``>`` or
+``>=``. The types supported are:
+
+  * vFloat
+  * vSMag
+  * vInt: Quasar only
+
+The result elements are all-zeroes or all-ones, depending on the
+comparison result. These use the ordering compare instructions and
+the ``nearby`` wrapper cannot be used (nor is it needed).
 
 Scalar Values
 ^^^^^^^^^^^^^
