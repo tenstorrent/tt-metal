@@ -309,12 +309,15 @@ KernelDescriptor merge_kernel(
         "a half grew common runtime args; the merge does not rebase them yet");
 
     reconcile_config(fused, unified, merged);
-    // Both halves of a dataflow kernel sit in one binary and the kernel config ring, not instruction
-    // count, is what this op runs out of. These two wait on the NoC rather than issue back to back, so
-    // trading speed for size costs them little. The compute halves keep their default O3: the fused
-    // matmul is the one place where a lower level has measured 1.8x slower.
+    // The data-movement kernels at O2, the level each half has alone, not the Os that would save ring:
+    // both halves issue their DRAM weight reads back to back, and Os cost the fused half 2-6 us per
+    // expert and the unified half up to 1.4x at 512 tokens. The compute kernel keeps its default O3,
+    // trimmed where it can afford it in hybrid_compute.cpp.
+    //
+    // The JIT cache does not key on the opt level, so a change here needs those kernels' cache
+    // entries cleared before it shows on the device.
     if (!std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(merged.config)) {
-        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+        merged.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
     if (run_fused_pass) {
         merged.defines.emplace_back("HYB_RUN_FUSED_PASS", "1");
