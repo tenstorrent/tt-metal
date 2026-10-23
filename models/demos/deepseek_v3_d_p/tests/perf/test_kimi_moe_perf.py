@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import routed_expert_combine_overlap_arg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -67,7 +68,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=3_751_000,
+    expected_ns=3_103_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -75,6 +76,8 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
+    # K3 does not opt into the routed expert / combine overlap; 6.31 ms is its Oct 16 baseline, from before
+    # the overlap existed (#60928's runs: 6.304 / 6.316 / 6.308 ms).
     expected_ns=6_310_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
@@ -203,6 +206,7 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         request,
         **case.extra,
         measure=measure,
+        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
     )
 
     assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"

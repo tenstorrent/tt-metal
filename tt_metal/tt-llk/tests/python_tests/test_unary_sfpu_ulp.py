@@ -76,9 +76,10 @@ from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_budget_diff import RECORDED_SKIP
 from helpers.ulp_sweep import (
     golden_input,
-    measurable_mask,
+    near_zero_floor,
     nonfinite_failures,
     nonfinite_reason,
+    ranked_mask,
     stimuli_format_for,
     sweep_cells,
     sweep_spec,
@@ -239,7 +240,11 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # turning it into a skip nobody reads.
     src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
 
-    mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)
+    # Ranked over the op's claim as well as the measurable lanes: a lane past an
+    # argument-reduction limit or on a pole is one the op answers nothing for, so it
+    # can no more set a budget than be a non-finite failure (which already read the
+    # claim). Sin's and Cos's budgets were set by |x| ~ 1e13 lanes answering 2e38.
+    mask = ranked_mask(mathop, src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
         mathop,
         src,
@@ -275,16 +280,17 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     # Before the emit return, or an empty mask is recorded as bit-exact `max: 0`. The
     # overflow first: an all-non-finite cell also has `lanes == 0`, and only this
-    # reason carries the lane count the headroom report reads back.
+    # verdict carries the lane count the headroom report reads back (`nonfinite`).
     if overflowed.any():
-        reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
+        verdict = ulp_sweep.nonfinite_verdict(overflowed, src, golden, result, stats)
+        reason = nonfinite_reason(verdict, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
         )
     elif lanes == 0:
-        reason = "no lane a step count can describe"
-        unmeasurable = reason
+        verdict = ulp_sweep.Unmeasurable(why="no lane a step count can describe")
+        unmeasurable = verdict.why
     else:
         unmeasurable = None
     if unmeasurable:
@@ -294,10 +300,10 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             _record_ulp_measurement(
                 distance,
                 mask=mask,
-                nonfinite=int(overflowed.sum()),
+                nonfinite=verdict.nonfinite,
             )
         if ulp_sweep.EMIT:
-            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            ulp_sweep.record_unmeasurable(mathop.name, key, verdict)
             return
         if not gated:
             pytest.skip(f"{cell}: {RECORDED_SKIP} -- not measurable: {unmeasurable}")
@@ -306,10 +312,13 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     if ulp_sweep.EMIT or not gated:
         # Measured, not gated. The JSONL row is what `--ulp-measure` would have written
         # from inside passed_test, which this branch returns before; a tolerance cell is
-        # held against its row's "max N ULP" by the headroom report.
+        # held against its row's `measured` figure by the headroom report.
         _record_ulp_measurement(distance, mask=mask)
         if ulp_sweep.EMIT:
-            ulp_sweep.record(mathop.name, key, int(stats["max"]))
+            # A cell that only a near-zero lane demotes is recorded with the floor that
+            # covers it, and the emitter enrols it on the lanes outside that floor.
+            floor = near_zero_floor(golden, result, distance, mask, out_fmt)
+            ulp_sweep.record(mathop.name, key, int(stats["max"]), floor=floor)
             return
         # A skip, not a pass: nothing here judged the cell. Without --ulp-measure there
         # is no record for the headroom report either, and a regression would show green.

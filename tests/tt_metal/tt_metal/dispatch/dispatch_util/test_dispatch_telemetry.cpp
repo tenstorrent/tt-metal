@@ -38,6 +38,7 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "distributed/mesh_trace.hpp"
 #include "llrt/core_descriptor.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 // Clang TSan sets __has_feature(thread_sanitizer) but not always __SANITIZE_THREAD__.
 #if defined(__has_feature)
@@ -136,7 +137,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return devices_.at(0)->get_devices().front(); }
+    auto* device() const { return devices_.at(0)->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -228,7 +229,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return device_->get_devices().front(); }
+    auto* device() const { return device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
@@ -298,7 +299,7 @@ protected:
         }
     }
 
-    IDevice* device() const { return mesh_device_->get_devices().front(); }
+    auto* device() const { return mesh_device_->impl().get_devices().front(); }
 
     tt::umd::TTDevice& tt_device() const {
         return *MetalContext::instance().get_cluster().get_driver()->get_tt_device(device()->id());
