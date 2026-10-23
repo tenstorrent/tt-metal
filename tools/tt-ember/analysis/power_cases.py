@@ -100,6 +100,15 @@ def write_cross_op_cases_file(
 # POWER_CASE_SPECS comment above. "regular" (the pre-case-5 writer stand-in, marginal cost of
 # write amplification rather than the writer's full contribution) is deliberately not used here.
 ALL_ACTIVE_CASE = "writer_amp"
+
+# The cases the per-figure scripts read under <op>/. make_pj_per_flop.py takes only cases that
+# run the matmuls (POWER_CASE 2 and 3 skip matmul_tiles, so energy per FLOP is undefined for them;
+# case 4 runs them on stale data). make_pj_per_flop_by_engine.py needs all four of its cases.
+PJ_PER_FLOP_CASES: List[Tuple[str, str]] = [
+    ("regular", "Regular (POWER_CASE=0)"),
+    ("writer_amp", "Writer amp, 100% write amplification (POWER_CASE=1)"),
+]
+PJ_PER_FLOP_BY_ENGINE_CASES: List[str] = ["regular", "writer_amp", "compute_idle", "reader_idle2"]
 ENGINE_ABLATIONS: List[Tuple[str, str, str]] = [
     ("reader", "reader_idle2", "Reader"),
     ("writer", "writer_idle", "Writer"),
@@ -146,20 +155,19 @@ class Runs:
             return {row["grid"]: row for row in csv.DictReader(f)}
 
 
-def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str, float]]]:
-    """Dynamic energy [J] per engine (reader/writer/compute) for one op's case sweep, per grid:
-    (all-active dynamic avg charge - idle-case dynamic avg charge) x V_core. Returns None if the
-    all-active case is missing; skips (with a note) any engine whose idle case is missing, so
-    callers still get whatever engines have data.
-    """
-    note_prefix = f"[ENERGY][{op}]"
-    active = runs.rows(op, ALL_ACTIVE_CASE, note_prefix)
-    if active is None:
-        return None
-
+def energy_by_engine_from_rows(
+    active: Dict[str, Dict[str, str]],
+    idle_by_case: Dict[str, Dict[str, Dict[str, str]]],
+    legacy: bool,
+    note_prefix: str,
+) -> Dict[str, Dict[str, float]]:
+    """Dynamic energy [J] per engine per grid from program_intervals.csv rows ({grid: row}):
+    (all-active dynamic avg charge - idle-case dynamic avg charge) x V_core, for each engine of
+    ENGINE_ABLATIONS whose idle case is in idle_by_case. Grids without a finite value are
+    skipped with a note."""
     per_engine: Dict[str, Dict[str, float]] = {}
     for engine, idle_case, _label in ENGINE_ABLATIONS:
-        idle = runs.rows(op, idle_case, note_prefix)
+        idle = idle_by_case.get(idle_case)
         if idle is None:
             continue
         per_grid: Dict[str, float] = {}
@@ -170,8 +178,8 @@ def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str
                 vcore = float(active_row["avg_vcore_v"])
             except (KeyError, ValueError):
                 vcore = float("nan")
-            active_as = whole_run_value(active_row, "dynamic_charge_avg_as", runs.legacy)
-            idle_as = whole_run_value(idle[grid], "dynamic_charge_avg_as", runs.legacy)
+            active_as = whole_run_value(active_row, "dynamic_charge_avg_as", legacy)
+            idle_as = whole_run_value(idle[grid], "dynamic_charge_avg_as", legacy)
             energy_j = (active_as - idle_as) * vcore
             if not math.isfinite(energy_j):
                 print(f"{note_prefix} note: {engine} at {grid} has no finite value, skipping", flush=True)
@@ -179,8 +187,24 @@ def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str
             per_grid[grid] = energy_j
         if per_grid:
             per_engine[engine] = per_grid
+    return per_engine
 
-    return per_engine or None
+
+def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str, float]]]:
+    """energy_by_engine_from_rows for one op's complete runs of this sweep. Returns None if the
+    all-active case is missing; skips (with a note) any engine whose idle case is missing, so
+    callers still get whatever engines have data.
+    """
+    note_prefix = f"[ENERGY][{op}]"
+    active = runs.rows(op, ALL_ACTIVE_CASE, note_prefix)
+    if active is None:
+        return None
+    idle_by_case = {}
+    for _engine, idle_case, _label in ENGINE_ABLATIONS:
+        rows = runs.rows(op, idle_case, note_prefix)
+        if rows is not None:
+            idle_by_case[idle_case] = rows
+    return energy_by_engine_from_rows(active, idle_by_case, runs.legacy, note_prefix) or None
 
 
 def to_pj_per_flop(per_key_j: Dict[str, Dict[str, float]], flops: float) -> Dict[str, Dict[str, float]]:

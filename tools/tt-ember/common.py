@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -26,6 +27,8 @@ RUN_COMPLETE_FILE = "run_complete.json"
 
 # Joules to picojoules, for energy per FLOP.
 PJ_PER_J = 1e12
+# Tile edge, in elements.
+TILE = 32
 
 # Default --trim-ms. run_sweep.py uses 1 ms instead: the published POWER_CASE results were
 # made with it, and changing it would change them.
@@ -106,7 +109,8 @@ WORKLOAD_ENV_VARS = (
     "TT_METAL_NULL_KERNELS",
     "TT_METAL_KERNELS_EARLY_RETURN",
     "TT_METAL_SLOW_DISPATCH_MODE",
-    # The AICLK run_sweep.py pins after every reset (Blackhole).
+    # Record only: run_sweep.py sets it to the AICLK it pins after every reset (Blackhole), so the
+    # pin is part of run_complete.json. Nothing reads it, and exporting it does not pin the clock.
     "TT_EMBER_AICLK_MHZ",
 )
 
@@ -295,6 +299,17 @@ def whole_run_value(row: Mapping[str, str], column: str, legacy: bool) -> float:
     except (KeyError, ValueError):
         return float("nan")
     return value * run_s / window_s if window_s > 0 else float("nan")
+
+
+def matmul_flops(m: int, n: int, k: int, iterations: int) -> float:
+    """FLOPs of iterations M x K by K x N matmuls."""
+    return 2.0 * m * n * k * iterations
+
+
+def rows_by_grid(path: Path) -> Dict[str, Dict[str, str]]:
+    """program_intervals.csv as {grid: row}."""
+    with Path(path).open(newline="") as f:
+        return {r["grid"]: r for r in csv.DictReader(f)}
 
 
 def add_mode_argument(parser: argparse.ArgumentParser) -> None:

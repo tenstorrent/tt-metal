@@ -153,8 +153,11 @@ each run it issues a hardware reset via `tt-smi -r` and waits for the device to 
 ensuring a clean thermal and electrical baseline; with `aiclk_mhz` set in the config it re-pins
 the Blackhole clock after every reset (see `aiclk/`), and records it in `run_complete.json`.
 Whether the pin survives tt-metal opening the device is not checked; confirm it once with
-`python3 aiclk/set_aiclk.py --watch 30` while a run is going. Stops immediately if any reset or
-run fails.
+`python3 aiclk/set_aiclk.py --watch 30` while a run is going. When the sweep ends, or stops
+early, it releases the pin (`set_aiclk.py 0`). The pin goes to `--device-id` as a tt_umd PCI
+index, which is not always tt-metal's device number (`set_aiclk.py` with no MHz lists the
+indices it sees); on a multi-chip host, check that the two match. Stops immediately if any
+reset or run fails.
 
 - A run is skipped once it is complete: `auto.py` writes `run_complete.json` into the run
   directory only after the parser succeeded, recording the app arguments, the workload
@@ -164,12 +167,16 @@ run fails.
   instead of being mixed in; use another `--output-root`, or `--force` to re-run.
 - The analyses read only runs complete with this sweep's settings; a step whose inputs include
   another run is skipped with a note. The exception is `compare_runs`, which overlays every run
-  under `<op>/`.
+  under `<op>/`. The per-case steps read the 1x1 runs (`<op>/<case>`), so a config that uses
+  them must include `[1, 1]` in `blocks`.
 - `--dry-run` prints every command without touching the board; `--analyses-only` regenerates the
-  charts from existing runs. For `long_matmul` it still needs `--app-exe`, which `run_complete.json` records.
+  charts from existing runs. For `long_matmul` it still needs `--app-exe`, which `run_complete.json`
+  records. It stops with an error if the output root does not exist or holds no complete run of
+  the sweep.
 - Every command, the resets and the environment go to `<output-root>/sweep.log`. The first run
   that actually executes writes the config, the tt-metal commit and the board list to
-  `<output-root>/PROVENANCE.md`; resumed or `--analyses-only` invocations leave it alone.
+  `<output-root>/PROVENANCE.md`. A resume adds a dated section instead of replacing it, and
+  `--analyses-only` leaves it alone.
 
 A config is a YAML mapping:
 

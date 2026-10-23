@@ -10,7 +10,6 @@ on the same board with the same shape and iteration count; the only difference i
 kernel reuses tiles. --block and --case label the chart; run_sweep.py passes the ones it ran.
 """
 import argparse
-import csv
 import sys
 from pathlib import Path
 
@@ -22,16 +21,20 @@ import matplotlib.pyplot as plt
 
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common import PJ_PER_J, add_mode_argument, save_figure, whole_run_value  # noqa: E402
+from common import (
+    DEFAULT_DPI,
+    PJ_PER_J,
+    add_mode_argument,
+    matmul_flops,
+    rows_by_grid,
+    save_figure,
+    whole_run_value,
+)  # noqa: E402
 
 
 def reads_per_multiply(bm: int, bn: int) -> float:
     """DRAM tile reads per tile multiply with BM x BN output blocking (2.00 at 1x1)."""
     return (bm + bn) / (bm * bn)
-
-
-def load(path):
-    return {r["grid"]: r for r in csv.DictReader(open(path))}
 
 
 def main():
@@ -57,12 +60,12 @@ def main():
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
     add_mode_argument(ap)
-    ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_naive_vs_blocked.png"))
     args = ap.parse_args()
 
     m, n, k, iters = args.app_args
-    flops = 2 * m * n * k * iters
+    flops = matmul_flops(m, n, k, iters)
     shape = f"M={m} N={n} K={k} x{iters} iterations, HiFi4 bfloat16, split mode, case {args.case}"
     bm, bn = args.block
     labels = (
@@ -70,7 +73,7 @@ def main():
         f"Blocked {bm}x{bn}, tile reuse ({reads_per_multiply(bm, bn):.2f} tile reads per multiply)",
     )
 
-    runs = [load(args.naive_csv), load(args.blocked_csv)]
+    runs = [rows_by_grid(args.naive_csv), rows_by_grid(args.blocked_csv)]
     # Grid order comes from the naive run, so the chart follows whatever the device swept.
     grids = [g for g in runs[0] if g in runs[1]]
     if not args.keep_first_grid:

@@ -28,7 +28,6 @@ Reads the same <output-root>/<op>/<case>/program_intervals.csv tree the sweep wr
 in tt-ember is modified.
 """
 import argparse
-import csv
 import math
 import sys
 from pathlib import Path
@@ -42,7 +41,7 @@ import matplotlib.pyplot as plt
 # common.py lives one directory up.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import power_cases as pc  # noqa: E402
-from common import add_mode_argument, save_figure, whole_run_value  # noqa: E402
+from common import DEFAULT_DPI, TILE, add_mode_argument, rows_by_grid, save_figure, whole_run_value  # noqa: E402
 
 # Engine -> the ablation case whose absence isolates it: power_cases' ENGINE_ABLATIONS, so the
 # two charts decompose energy the same way.
@@ -54,7 +53,6 @@ ENGINES = [(engine, idle_case) for engine, idle_case, _label in pc.ENGINE_ABLATI
 # counted as the tanh approximation (tanh, two multiplies, an add, a cube, a scale).
 FLOPS_PER_ELEM = {"add": 1, "recip": 1, "exp": 1, "sigmoid": 3, "silu": 4, "gelu": 6}
 
-TILE = 32
 ELEMS_PER_TILE = TILE * TILE
 FLOPS_PER_MATMUL_TILE_OP = 2 * TILE**3
 
@@ -68,34 +66,27 @@ def op_flops(op: str, M: int, N: int, K: int, iters: int) -> float:
 
 
 def load(csv_path: Path):
-    if not csv_path.exists():
-        return None
-    with csv_path.open(newline="") as f:
-        return {r["grid"]: r for r in csv.DictReader(f)}
+    return rows_by_grid(csv_path) if csv_path.exists() else None
 
 
 def energy_by_engine(op_root: Path, legacy: bool):
-    """Dynamic energy [J] per engine per grid: (all-active - engine-idle) charge x V_core."""
+    """Dynamic energy [J] per engine per grid (power_cases.energy_by_engine_from_rows), and the
+    measured all-active dynamic energy per grid."""
     active = load(op_root / ALL_ACTIVE / "program_intervals.csv")
     if active is None:
         return None, None
-    per_engine = {}
-    for engine, idle_case in ENGINES:
-        idle = load(op_root / idle_case / "program_intervals.csv")
-        if idle is None:
-            continue
-        per_engine[engine] = {
-            g: (
-                whole_run_value(r, "dynamic_charge_avg_as", legacy)
-                - whole_run_value(idle[g], "dynamic_charge_avg_as", legacy)
-            )
-            * float(r["avg_vcore_v"])
-            for g, r in active.items()
-            if g in idle
-        }
-    measured = {
-        g: whole_run_value(r, "dynamic_charge_avg_as", legacy) * float(r["avg_vcore_v"]) for g, r in active.items()
-    }
+    idle_by_case = {}
+    for _engine, idle_case in ENGINES:
+        rows = load(op_root / idle_case / "program_intervals.csv")
+        if rows is not None:
+            idle_by_case[idle_case] = rows
+    per_engine = pc.energy_by_engine_from_rows(active, idle_by_case, legacy, f"[{op_root.name}]")
+    measured = {}
+    for g, r in active.items():
+        try:
+            measured[g] = whole_run_value(r, "dynamic_charge_avg_as", legacy) * float(r["avg_vcore_v"])
+        except (KeyError, ValueError):
+            measured[g] = float("nan")
     return per_engine, measured
 
 
@@ -121,7 +112,7 @@ def main():
     ap.add_argument("--board", default="", help="Board name for the chart title, e.g. 'Blackhole p100a'")
     ap.add_argument("--out", type=Path, default=None)
     add_mode_argument(ap)
-    ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     args = ap.parse_args()
     M, N, K, iters = args.app_args
 
@@ -201,7 +192,7 @@ def main():
     labels += ops
     ax.legend(handles, labels, fontsize=8, ncol=2, loc="upper right")
     out = args.out or (
-        args.output_root / "figures" / "cross_op" / "energy_per_flop_by_engine_stacked_cross_op_corrected.png"
+        args.output_root / "compare_runs_out" / "energy_per_flop_by_engine_stacked_cross_op_corrected.png"
     )
     save_figure(fig, out, args.dpi)
     print(f"Wrote: {out}")
