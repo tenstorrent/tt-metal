@@ -1482,14 +1482,20 @@ def slab_block_mask(complete_blocks_col, arange_blocks_row, start: int, value: f
     per-layer ones."""
 
     dram = ttnn.DRAM_MEMORY_CONFIG
-    complete_col = ttnn.slice(
-        complete_blocks_col, (0, 0, start, 0), (1, 1, start + SLAB_SCORE_BLOCK_ROWS, 1), memory_config=dram
+    # A one-block slab has no sub-range: ttnn.slice over a full extent returns its input, so the column is the block.
+    one_block = _shape(complete_blocks_col)[2] == SLAB_SCORE_BLOCK_ROWS
+    complete_col = (
+        complete_blocks_col
+        if one_block
+        else ttnn.slice(
+            complete_blocks_col, (0, 0, start, 0), (1, 1, start + SLAB_SCORE_BLOCK_ROWS, 1), memory_config=dram
+        )
     )
     invalid_bits = ttnn.ge(arange_blocks_row, complete_col, dtype=ttnn.uint32, memory_config=dram)
     invalid = ttnn.typecast(invalid_bits, ttnn.bfloat16, memory_config=dram)
     mask_tiled = ttnn.multiply(invalid, value, memory_config=dram)
     mask = ttnn.to_layout(mask_tiled, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
-    _deallocate(complete_col, invalid_bits, invalid, mask_tiled)
+    _deallocate(None if one_block else complete_col, invalid_bits, invalid, mask_tiled)
     return mask
 
 
@@ -5783,8 +5789,11 @@ class Qwen38TTNNQSA:
             _require_shape(masked, (1, 1, SLAB_SCORE_BLOCK_ROWS, blocks), "masked QSA slab block scores")
             block_ids_parts.append(ttnn.experimental.topk_large_indices(masked, k=BLOCK_TOPK))
             _deallocate(masked)
-        block_ids = ttnn.concat(block_ids_parts, dim=2, memory_config=dram)
-        _deallocate(*block_ids_parts)
+        if len(block_ids_parts) == 1:
+            block_ids = block_ids_parts[0]  # ttnn.concat of one tensor returns it (an alias): the part is the result
+        else:
+            block_ids = ttnn.concat(block_ids_parts, dim=2, memory_config=dram)
+            _deallocate(*block_ids_parts)
         _require_shape(block_ids, (1, 1, rows, BLOCK_TOPK), "top-k QSA slab block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(

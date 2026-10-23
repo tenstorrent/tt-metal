@@ -103,8 +103,8 @@ def test_slab_routes_its_rows_in_one_call_and_reduces_in_512_row_blocks() -> Non
 class _AliasingTensor:
     """A stand-in device tensor: ttnn.slice over the full extent and ttnn.concat of one tensor return their input."""
 
-    def __init__(self, shape, name):
-        self.shape, self.name = tuple(shape), name
+    def __init__(self, shape, name, dtype=None, layout=None):
+        self.shape, self.name, self.dtype, self.layout = tuple(shape), name, dtype, layout
 
 
 def _slab_reduce_fakes(monkeypatch, rows: int):
@@ -296,6 +296,142 @@ def test_qsa_slab_emulation_is_the_one_row_rule_per_row(position: int) -> None:
         assert torch.equal(inputs["row_keep_bits"][0, 0, row], one["row_keep_bits"].reshape(-1))
         assert torch.equal(inputs["row_fill"][0, 0, row], one["row_fill"].reshape(-1))
     assert inputs["q_positions_row"].tolist() == [[[list(range(position, position + SLAB))]]]
+
+
+def _qsa_fake_ttnn(monkeypatch, blocks: int):
+    """A fake ttnn for the QSA slab selection whose slice/concat alias like the real ones (a full-extent slice and a
+    one-tensor concat return their input) and whose ops refuse a freed input, as a device op does; returns the freed
+    tensors and the top-k block-id parts in creation order."""
+    freed, parts = [], []
+    u32, rm = "uint32", "row_major"
+
+    def live(*tensors):
+        for tensor in tensors:
+            if any(tensor is gone for gone in freed):
+                raise RuntimeError(f"{tensor.name} is not device resident")
+
+    def made(shape, name, *inputs, dtype=u32, layout=rm):
+        live(*inputs)
+        return _AliasingTensor(shape, name, dtype, layout)
+
+    def slice_(tensor, start, end, memory_config):
+        live(tensor)
+        if not any(start) and tuple(end) == tensor.shape:
+            return tensor  # the alias the real op returns for a full-extent slice
+        shape = tuple(stop - begin for begin, stop in zip(start, end))
+        return _AliasingTensor(shape, f"{tensor.name}[{start[2]}]", tensor.dtype, tensor.layout)
+
+    def concat(tensors, dim, memory_config):
+        live(*tensors)
+        if len(tensors) == 1:
+            return tensors[0]  # the alias the real op returns for one tensor
+        shape = list(tensors[0].shape)
+        shape[dim] = sum(part.shape[dim] for part in tensors)
+        return _AliasingTensor(shape, "concat", tensors[0].dtype, tensors[0].layout)
+
+    def topk_large_indices(masked, k):
+        parts.append(made((1, 1, masked.shape[2], k), f"block_ids{len(parts)}", masked))
+        return parts[-1]
+
+    fake_ttnn = SimpleNamespace(
+        DRAM_MEMORY_CONFIG="dram",
+        ROW_MAJOR_LAYOUT=rm,
+        uint32=u32,
+        bfloat16="bfloat16",
+        slice=slice_,
+        concat=concat,
+        all_reduce=lambda tensor, **kwargs: made(tensor.shape, "scores", tensor),
+        add=lambda lhs, rhs, **kwargs: made(lhs.shape, "sum", lhs, rhs),
+        ge=lambda lhs, rhs, **kwargs: made((1, 1, rhs.shape[2], lhs.shape[3]), "invalid_bits", lhs, rhs),
+        typecast=lambda tensor, dtype, **kwargs: made(tensor.shape, "invalid", tensor),
+        multiply=lambda tensor, value, **kwargs: made(tensor.shape, "mask_tiled", tensor),
+        to_layout=lambda tensor, layout, **kwargs: made(tensor.shape, "mask", tensor),
+        bitwise_left_shift=lambda tensor, bits, **kwargs: made(tensor.shape, "starts", tensor),
+        repeat_interleave=lambda tensor, repeats, dim, **kwargs: made(
+            (*tensor.shape[:3], tensor.shape[3] * repeats), "repeated", tensor
+        ),
+        bitwise_and=lambda lhs, rhs, **kwargs: made(lhs.shape, "kept", lhs, rhs),
+        bitwise_or=lambda lhs, rhs, **kwargs: made(lhs.shape, "sparse_indices", lhs, rhs),
+        deallocate=freed.append,
+        experimental=SimpleNamespace(
+            indexer_score_dsa=lambda query, cache, gate, **kwargs: made(
+                (1, 1, CHUNK_ROWS, blocks + CHUNK_ROWS), "local_scores", query, cache
+            ),
+            topk_large_indices=topk_large_indices,
+        ),
+    )
+    monkeypatch.setattr(qsa_module, "ttnn", fake_ttnn)
+    return SimpleNamespace(freed=freed, parts=parts, live=live)
+
+
+@pytest.mark.parametrize("expand", [False, True])
+@pytest.mark.parametrize("rows", [512, 1024, 2048])
+def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, rows: int, expand: bool) -> None:
+    """The slab's block ids stay live until the caller frees them. A 512-row slab is one 512-row score block, so its
+    block ids are its one top-k part (ttnn.concat of one tensor returns that tensor) and that part is not freed;
+    larger slabs concatenate their parts and free each one once. Nothing the method did not create is freed."""
+    blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
+    fake = _qsa_fake_ttnn(monkeypatch, blocks)
+    owner = SimpleNamespace(
+        allocated_compressed_blocks=blocks,
+        index_gate="gate",
+        indexer_chunk_start=0,
+        indexer_compute_config="compute",
+        collective_topology="linear",
+        mesh_contract=SimpleNamespace(
+            mark_local_partial=lambda tensor, **kwargs: fake.live(tensor),
+            validate_tensor=lambda tensor, **kwargs: fake.live(tensor),
+        ),
+    )
+    capacity, budget = qsa_module.SPARSE_INDEX_CAPACITY, qsa_module.TOKEN_BUDGET
+    inputs = {
+        "index_query": _AliasingTensor((1, 1, rows, qsa_module.INDEX_HEAD_DIM), "index_query"),
+        "cache": _AliasingTensor((1, 1, blocks, qsa_module.INDEX_HEAD_DIM), "cache"),
+        "keep": _AliasingTensor((1, 1, rows, capacity), "keep"),
+        "fill": _AliasingTensor((1, 1, rows, capacity), "fill"),
+        "offsets": _AliasingTensor((1, 1, rows, budget), "offsets"),
+        "pad": _AliasingTensor((1, 1, rows, capacity - budget), "pad"),
+    }
+    masks = tuple(_AliasingTensor((1, 1, block_rows, blocks), f"mask{i}") for i in range(rows // block_rows))
+    result = qsa_module.Qwen38TTNNQSA._sparse_indices_slab(
+        owner,
+        inputs["index_query"],
+        SimpleNamespace(compressed_index_cache=inputs["cache"]),
+        SimpleNamespace(block_masks=masks, row_keep_bits=inputs["keep"], row_fill=inputs["fill"]),
+        SimpleNamespace(rows=rows, block_offsets_rows=inputs["offsets"], sentinel_pad_rows=inputs["pad"]),
+        expand=expand,
+    )
+    fake.live(result)
+    assert result.shape == (1, 1, rows, capacity if expand else qsa_module.BLOCK_TOPK), result.shape
+    assert len(fake.parts) == rows // block_rows, [part.name for part in fake.parts]
+    for tensor in (*inputs.values(), *masks):
+        assert all(tensor is not gone for gone in fake.freed), tensor.name
+    one_block = len(fake.parts) == 1
+    if not expand:
+        assert (result is fake.parts[0]) == one_block, (result.name, one_block)
+    for part in fake.parts:
+        times = sum(part is gone for gone in fake.freed)
+        assert times == (0 if one_block and not expand else 1), (part.name, times)
+
+
+@pytest.mark.parametrize("rows", [512, 1024])
+def test_slab_block_mask_never_frees_the_complete_block_column(monkeypatch, rows: int) -> None:
+    """The mask of a one-block (512-row) slab reads the whole complete-block column: ttnn.slice over that full extent
+    returns the column itself, which the mask must not free (the next QSA layer reads it again when the masks are
+    not hoisted). Larger slabs slice each block's rows and free those slices."""
+    blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
+    fake = _qsa_fake_ttnn(monkeypatch, blocks)
+    column = _AliasingTensor((1, 1, rows, 1), "complete_blocks_col")
+    arange = _AliasingTensor((1, 1, 1, blocks), "arange_blocks_row")
+    masks = [
+        qsa_module.slab_block_mask(column, arange, start, qsa_module.INDEXER_MASK_VALUE)
+        for start in range(0, rows, block_rows)
+    ]
+    fake.live(column, arange, *masks)
+    assert all(mask.shape == (1, 1, block_rows, blocks) for mask in masks), [mask.shape for mask in masks]
+    sliced = [gone.name for gone in fake.freed if gone.name.startswith("complete_blocks_col[")]
+    expected = [f"complete_blocks_col[{start}]" for start in range(0, rows, block_rows)]
+    assert sliced == ([] if rows == block_rows else expected), sliced
 
 
 # --------------------------------------------------------------------------- the driver's plan
