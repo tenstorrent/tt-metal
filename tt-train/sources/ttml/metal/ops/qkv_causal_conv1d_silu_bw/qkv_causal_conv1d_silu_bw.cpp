@@ -25,17 +25,23 @@ bool chunk_fits_l1(uint32_t chunk, uint64_t l1_bytes) {
                chunk / tt::constants::TILE_WIDTH, bf16, sizeof(uint16_t)) <= l1_bytes;
 }
 
+// Tile-aligned divisors of channels that fit l1_bytes, from the widest down to min_chunk.
+std::vector<uint32_t> candidate_chunks(uint32_t channels, uint64_t l1_bytes, uint32_t min_chunk) {
+    std::vector<uint32_t> chunks;
+    for (uint32_t chunk = std::min(channels, max_chunk); chunk >= min_chunk; chunk -= tt::constants::TILE_WIDTH) {
+        if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes)) {
+            chunks.push_back(chunk);
+        }
+    }
+    return chunks;
+}
+
 }  // namespace
 
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device) {
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;
-    const uint64_t l1_bytes = available_l1_bytes(device);
-    for (uint32_t chunk = std::min(channels, max_chunk); chunk >= tw; chunk -= tw) {
-        if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes)) {
-            return chunk;
-        }
-    }
-    return tw;
+    const auto chunks = candidate_chunks(channels, available_l1_bytes(device), tw);
+    return chunks.empty() ? tw : chunks.front();
 }
 
 QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
@@ -74,11 +80,7 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     } else {
         // Chunk 32 makes the reader issue 64-byte row reads and runs 1.5x slower than chunk 64 at the same
         // split, more than the model predicts, so it is only a fallback.
-        for (uint32_t chunk = std::min(channels, max_chunk); chunk >= 2 * tw; chunk -= tw) {
-            if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes)) {
-                chunks.push_back(chunk);
-            }
-        }
+        chunks = candidate_chunks(channels, l1_bytes, 2 * tw);
         if (chunks.empty()) {
             chunks.push_back(tw);
         }
