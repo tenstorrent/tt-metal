@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 namespace tt::tt_fabric {

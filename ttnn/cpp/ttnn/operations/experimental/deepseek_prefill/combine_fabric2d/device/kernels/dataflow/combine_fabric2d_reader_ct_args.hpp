@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 31;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 35;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -37,8 +37,7 @@ struct ReaderCtArgs {
     uint32_t freed_slot;
     uint32_t fwd_pages_per_stream;
     uint32_t my_stream;
-    uint32_t num_forwarding_chunks = 0;  // Host construction derives this from the descriptor block.
-    uint32_t fwd_sem_addr;
+    uint32_t num_vcs = 0;  // Host construction derives this from the descriptor block.
     uint32_t nbr_chip_id;
     uint32_t num_assignments;
     uint32_t schedule_len;
@@ -69,6 +68,15 @@ struct ReaderCtArgs {
     uint32_t expert_threshold;
     // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
+    // Pages in the dispatched buffer. Runs are clamped to it, as dispatch dropped every token past it.
+    uint32_t dispatch_capacity;
+    // Pages per channel -- the ring each channel wraps in, and the window a writer may run ahead by.
+    uint32_t vc_pages;
+    // Our courier: the opposite direction's worker on THIS chip, whose sender points at the chip our
+    // regions came from. We bump its per-channel queues and raise its done flag.
+    uint32_t credit_outbox_noc_x;
+    uint32_t credit_outbox_noc_y;
+    uint32_t credit_done_addr;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -76,6 +84,8 @@ struct ReaderCtArgs {
         const op::CombineFabric2dInputs& tensor_args,
         const ttnn::MeshCoordinate& coord,
         const op::StreamPlacement& self,
+        // The opposite direction's worker on THIS chip -- the courier for this reader's credits.
+        const op::StreamPlacement& opposite,
         const std::vector<op::Assignment>& work,
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
@@ -93,7 +103,6 @@ struct ReaderCtArgs {
         // and READS region q of its own — the same q, because every chip runs the same code. Doubles as
         // this stream's share of the same-chip run, which it copies after the fabric work.
         my_stream(plan.stream),
-        fwd_sem_addr(plan.fwd_arrived_addr),
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),
         schedule_len(static_cast<uint32_t>(work.size())),
@@ -113,7 +122,12 @@ struct ReaderCtArgs {
         unt_freed_slot(untilizers.my_freed_slot),
         final_sem_addr(plan.final_arrived_addr),
         expert_threshold(args.hybrid_token_threshold),
-        expert_table_page_base(plan.expert_table_page_base) {
+        expert_table_page_base(plan.expert_table_page_base),
+        dispatch_capacity(op::dispatch_capacity(tensor_args)),
+        vc_pages(plan.vc_pages),
+        credit_outbox_noc_x(static_cast<uint32_t>(opposite.worker_virtual.x)),
+        credit_outbox_noc_y(static_cast<uint32_t>(opposite.worker_virtual.y)),
+        credit_done_addr(plan.credit_done_addr) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -128,6 +142,7 @@ struct ReaderCtArgs {
             blocks_.push_back(w.dst_dg_index);
             blocks_.push_back(w.split_idx);
             blocks_.push_back(w.split_count);
+            blocks_.push_back(op::vc_for_own(w.distance, op::ring_extent(args)));
         }
         // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
         // order the upstream sender emits them, because both sides derive it from the same generator. They
@@ -136,7 +151,7 @@ struct ReaderCtArgs {
         // per expert, which is the order the upstream sender emits them in too.
         const auto forwarding =
             op::forwarding_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
-        num_forwarding_chunks = static_cast<uint32_t>(forwarding.size());
+        num_vcs = static_cast<uint32_t>(forwarding.size());
         for (const auto& c : forwarding) {
             c.append_to(blocks_);
         }
@@ -146,6 +161,14 @@ struct ReaderCtArgs {
             blocks_.push_back(u.noc.x);
             blocks_.push_back(u.noc.y);
             blocks_.push_back(u.counter_slot);
+        }
+        // Per channel: its three counters, and the channel a page moves into one hop on (VC_NONE when it
+        // is delivered there instead, which is the class that drains the ring).
+        for (uint32_t v = 0; v < num_vcs; v++) {
+            blocks_.push_back(plan.vc_arrived_addr[v]);
+            blocks_.push_back(plan.vc_freed_addr[v]);
+            blocks_.push_back(plan.vc_outbox_addr[v]);
+            blocks_.push_back(op::vc_after_hop(v, op::ring_extent(args)));
         }
     }
 
@@ -160,8 +183,7 @@ struct ReaderCtArgs {
             freed_slot,
             fwd_pages_per_stream,
             my_stream,
-            num_forwarding_chunks,
-            fwd_sem_addr,
+            num_vcs,
             nbr_chip_id,
             num_assignments,
             schedule_len,
@@ -181,7 +203,12 @@ struct ReaderCtArgs {
             unt_freed_slot,
             final_sem_addr,
             expert_threshold,
-            expert_table_page_base};
+            expert_table_page_base,
+            dispatch_capacity,
+            vc_pages,
+            credit_outbox_noc_x,
+            credit_outbox_noc_y,
+            credit_done_addr};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -196,28 +223,32 @@ struct ReaderCtArgs {
         freed_slot(get_compile_time_arg_val(6)),
         fwd_pages_per_stream(get_compile_time_arg_val(7)),
         my_stream(get_compile_time_arg_val(8)),
-        num_forwarding_chunks(get_compile_time_arg_val(9)),
-        fwd_sem_addr(get_compile_time_arg_val(10)),
-        nbr_chip_id(get_compile_time_arg_val(11)),
-        num_assignments(get_compile_time_arg_val(12)),
-        schedule_len(get_compile_time_arg_val(13)),
-        num_routed_experts(get_compile_time_arg_val(14)),
-        experts_per_chip(get_compile_time_arg_val(15)),
-        my_expert_base(get_compile_time_arg_val(16)),
-        num_experts_per_tok(get_compile_time_arg_val(17)),
-        dispatch_group_size(get_compile_time_arg_val(18)),
-        local_split_count(get_compile_time_arg_val(19)),
-        my_dg_index(get_compile_time_arg_val(20)),
-        control_addr(get_compile_time_arg_val(21)),
-        meta_prefetch_cap(get_compile_time_arg_val(22)),
-        walks_down(get_compile_time_arg_val(23)),
-        unt_ring_addr(get_compile_time_arg_val(24)),
-        unt_ring_batches(get_compile_time_arg_val(25)),
-        num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_slot(get_compile_time_arg_val(27)),
-        final_sem_addr(get_compile_time_arg_val(28)),
-        expert_threshold(get_compile_time_arg_val(29)),
-        expert_table_page_base(get_compile_time_arg_val(30)) {}
+        num_vcs(get_compile_time_arg_val(9)),
+        nbr_chip_id(get_compile_time_arg_val(10)),
+        num_assignments(get_compile_time_arg_val(11)),
+        schedule_len(get_compile_time_arg_val(12)),
+        num_routed_experts(get_compile_time_arg_val(13)),
+        experts_per_chip(get_compile_time_arg_val(14)),
+        my_expert_base(get_compile_time_arg_val(15)),
+        num_experts_per_tok(get_compile_time_arg_val(16)),
+        dispatch_group_size(get_compile_time_arg_val(17)),
+        local_split_count(get_compile_time_arg_val(18)),
+        my_dg_index(get_compile_time_arg_val(19)),
+        control_addr(get_compile_time_arg_val(20)),
+        meta_prefetch_cap(get_compile_time_arg_val(21)),
+        walks_down(get_compile_time_arg_val(22)),
+        unt_ring_addr(get_compile_time_arg_val(23)),
+        unt_ring_batches(get_compile_time_arg_val(24)),
+        num_untilizers(get_compile_time_arg_val(25)),
+        unt_freed_slot(get_compile_time_arg_val(26)),
+        final_sem_addr(get_compile_time_arg_val(27)),
+        expert_threshold(get_compile_time_arg_val(28)),
+        expert_table_page_base(get_compile_time_arg_val(29)),
+        dispatch_capacity(get_compile_time_arg_val(30)),
+        vc_pages(get_compile_time_arg_val(31)),
+        credit_outbox_noc_x(get_compile_time_arg_val(32)),
+        credit_outbox_noc_y(get_compile_time_arg_val(33)),
+        credit_done_addr(get_compile_time_arg_val(34)) {}
 
     // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
     // standalone op places its ring counters in. The framework re-initialises those every launch; the
@@ -245,13 +276,19 @@ struct ReaderCtArgs {
 #endif
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
-    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
+    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(12);  // schedule_len
     static constexpr uint32_t forwarding_chunk_base =
-        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(12);  // num_assignments
+        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(11);  // num_assignments
     static constexpr uint32_t untilizer_base =
-        forwarding_chunk_base + CHUNK_WORDS * get_compile_time_arg_val(9);  // num_forwarding_chunks
-    static constexpr uint32_t accessor_base =
-        untilizer_base + UNT_PEER_WORDS * get_compile_time_arg_val(26);  // num_untilizers
+        forwarding_chunk_base + CHUNK_WORDS * get_compile_time_arg_val(9);  // num_vcs
+    static constexpr uint32_t vc_base =
+        untilizer_base + UNT_PEER_WORDS * get_compile_time_arg_val(25);  // num_untilizers
+    static constexpr uint32_t accessor_base = vc_base + VC_WORDS * get_compile_time_arg_val(9);  // num_vcs
+
+    uint32_t vc_arrived_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 0]; }
+    uint32_t vc_freed_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 1]; }
+    uint32_t vc_outbox_addr(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 2]; }
+    uint32_t vc_next(uint32_t v) const { return kernel_compile_time_args[vc_base + v * VC_WORDS + 3]; }
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
