@@ -262,7 +262,7 @@ def test_lanes_of_several_requests_propose_without_the_device(adapter):
     assert adapter.chain_stats["stale"] == adapter.chain_stats["misplaced"] == 0
 
 
-def test_a_deferred_verify_answers_host_tensors(adapter, monkeypatch):
+def test_a_deferred_verify_answers_host_tensors(adapter, monkeypatch, expect_error):
     """``defer_read`` on a fused_sample verify with MIMO_SPEC_DEFER=0: host tensors (the plugin reads it
     synchronously, chaining nothing), which ``read_decode_output`` passes through, as it passes an argmax_ids or
     logits verify's tensor."""
@@ -283,10 +283,10 @@ def test_a_deferred_verify_answers_host_tensors(adapter, monkeypatch):
     assert adapter.read_decode_output(out) is out
     ids = torch.zeros(rows, width, dtype=torch.int32)
     assert adapter.read_decode_output(ids, async_read=True)[0] is ids
-    with pytest.raises(ValueError, match="defer_read"):
+    with expect_error(ValueError, "defer_read"):
         adapter.decode_forward(tokens, positions, TABLE, None, spec_mode="argmax_ids", num_valid_drafts=valid,
                                defer_read=True)  # fmt: skip
-    with pytest.raises(ValueError, match="chain"):
+    with expect_error(ValueError, "chain"):
         adapter.decode_forward(
             tokens,
             positions,
@@ -388,7 +388,7 @@ def defer(monkeypatch):
     monkeypatch.setattr(generator_vllm, "SPEC_DEFER", True)
 
 
-def test_deferred_verifies_follow_the_oracle(adapter, defer):
+def test_deferred_verifies_follow_the_oracle(adapter, defer, expect_error):
     """Each fused verify returns a handle (increasing tip ids, no host tensors); its read, on another thread, is the
     synchronous answer with p0 the submitted column 0; its propose returns the drafts its page carries, enqueueing
     nothing. Greedy decoding through them reproduces the oracle."""
@@ -418,7 +418,7 @@ def test_deferred_verifies_follow_the_oracle(adapter, defer):
         drafts = out.draft_token_ids[SPEC_ROW].tolist()
         assert int(out.num_valid.sum()) == MAX_DRAFTS and lane.mtp.planned == planned, "nothing enqueued"
         assert drafts == [draft_of(len(seq) - 1, k) for k in range(MAX_DRAFTS)]
-        with pytest.raises(RuntimeError, match="proposed a second time"):
+        with expect_error(RuntimeError, "proposed a second time"):
             adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=handle)
     assert seq == SEQ[: len(seq)]
     assert tips == sorted(set(tips)) and all(isinstance(t, int) for t in tips)
@@ -613,12 +613,12 @@ def contract_case(adapter, case):
         ("not_deferred", "deferred"),
     ],
 )
-def test_a_chained_verify_outside_the_contract_raises(adapter, defer, case, match):
-    with pytest.raises(ValueError, match=match):
+def test_a_chained_verify_outside_the_contract_raises(adapter, defer, case, match, expect_error):
+    with expect_error(ValueError, match):
         contract_case(adapter, case)
 
 
-def test_a_chain_onto_a_declined_draft_raises_at_the_read(adapter, defer):
+def test_a_chain_onto_a_declined_draft_raises_at_the_read(adapter, defer, expect_error):
     """The step chained onto declined its draft at the context limit (the plugin stops chaining 2 (1 + K) short of
     max_model_len, so only a contract slip gets here): the relay idles the pass and the read raises."""
     p = MAX_SEQ_LEN - 1 - MAX_DRAFTS - 2
@@ -628,7 +628,7 @@ def test_a_chain_onto_a_declined_draft_raises_at_the_read(adapter, defer):
     newer = chained(adapter, pending.tip_id, p + 1 + MAX_DRAFTS).handle
     readout = read_on_thread(adapter, pending)
     assert int(readout.accepted_counts[SPEC_ROW]) == 1 + MAX_DRAFTS
-    with pytest.raises(RuntimeError, match="drafted nothing on device"):
+    with expect_error(RuntimeError, "drafted nothing on device"):
         adapter.read_decode_output(newer)
 
 
@@ -649,7 +649,7 @@ def test_capabilities_of_the_chained_lane_path():
     assert caps["supports_prefill_over_pending_spec"] and "supports_finishing_slots" not in caps
 
 
-def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch):
+def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch, expect_error):
     """M15: a prefill into another slot runs while a deferred verify is in flight. It writes only its slot's page
     tables, the verify is read and proposed after it as if nothing had happened, and nothing chains onto it."""
     monkeypatch.setattr(generator_vllm, "PREFILL_BATCH", False)
@@ -669,7 +669,7 @@ def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch):
     assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[501 : 501 + m]
     out = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
     assert out.draft_token_ids[SPEC_ROW].tolist() == [draft_of(500 + m, k) for k in range(MAX_DRAFTS)]
-    with pytest.raises(ValueError, match="chain_tip"):
+    with expect_error(ValueError, "chain_tip"):
         chained(adapter, pending.tip_id, 500 + 1 + MAX_DRAFTS)
 
 
