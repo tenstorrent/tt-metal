@@ -10,7 +10,7 @@ Each BatchNorm is already folded into the conv before it.
 import math
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
+from models.experimental.bevformer.tt.tt_common import TTConv2D, is_pointwise, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
 
@@ -227,19 +227,16 @@ class TTBottleneck:
         self.with_dcn = "conv_offset" in conv_pth.conv2
         dram_convs = self.dram_convs(dram_activation, dram_input)
         self.is_downsample = "downsample" in conv_pth
-        # conv2d reshapes a DRAM input to NHWC, which in TILE copies it whenever the width is not
-        # a tile multiple. A layer's first block feeds its input to two such convs, the strided
-        # conv1 and the downsample, so one ROW_MAJOR copy, which reshapes for free, serves both.
-        conv1_reads_dram = dram_activation or dram_input
-        self.row_major_input = (
+        # A layer's first block opens with a strided 1x1 conv1 and downsample on the block input.
+        # In DRAM both run as linears over the input subsampled at their shared stride, so the
+        # block takes that subsample once, and tilizes it once, for the two.
+        self.shared_subsample = (
             self.is_downsample
-            and conv1_reads_dram
-            and input_layout == ttnn.TILE_LAYOUT
-            and tuple(conv_args.conv1.stride) != (1, 1)
-            and tuple(conv_args.downsample[0].stride) != (1, 1)
+            and {"conv1", "downsample"} <= dram_convs
+            and is_pointwise(conv_args.conv1)
+            and is_pointwise(conv_args.downsample[0])
+            and tuple(conv_args.conv1.stride) == tuple(conv_args.downsample[0].stride) != (1, 1)
         )
-        if self.row_major_input:
-            input_layout = ttnn.ROW_MAJOR_LAYOUT
 
         # A sliced DRAM conv2 reads and writes ROW_MAJOR, where conv2d's reshapes to NHWC and back
         # are free; in TILE both copy the tensor, as the widths are not tile multiples. conv3, a
@@ -325,9 +322,11 @@ class TTBottleneck:
             )
 
     def __call__(self, x_identity):
-        if self.row_major_input:
-            x_identity = ttnn.to_layout(x_identity, ttnn.ROW_MAJOR_LAYOUT)
-        x, _, _ = self.conv1(x_identity)
+        if self.shared_subsample:
+            subsample = self.conv1.subsample(x_identity)
+            x_identity = ttnn.to_layout(subsample, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(subsample)
+        x, _, _ = self.conv1(x_identity, subsampled=self.shared_subsample)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if self.row_major_conv2 and x.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -336,7 +335,7 @@ class TTBottleneck:
         x, _, _ = self.conv2(x)
         # Before conv3, whose output may stay in L1 for the add and would crowd the downsample's.
         if self.is_downsample:
-            x_identity, _, _ = self.downsample(x_identity)
+            x_identity, _, _ = self.downsample(x_identity, subsampled=self.shared_subsample)
         x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG)
         x, _, _ = self.conv3(x)
         if not self.conv3.output_in_l1:
