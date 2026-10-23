@@ -17,3 +17,15 @@ the reference's state_tensors(state, layer, seq) as of position seq: a tensor th
 first seq positions (however it is compressed), a fixed-size one (state.fixed) as it is. Check:
 python -m bringup_fw.reference.check_trace --state. This package never imports the framework (bringup_fw).
 """
+
+
+def trace_state(spec, layer, cache, seq):
+    if "keys" in cache:
+        # attention: keys / values [1, kv_heads, N, head_dim], post k_norm and partial rotate-half RoPE as the reference
+        return {"key": cache["keys"][0, :, :seq], "value": cache["values"][0, :, :seq]}
+    # Gated DeltaNet, fixed-size state as of the trace's last position.
+    # conv_states [1, conv_dim, linear_conv_kernel_dim]: the last kernel pre-conv q|k|v inputs, oldest first; the
+    # reference keeps the last kernel - 1 of them.
+    # recurrent_states [1, v_heads, k_dim, v_dim] fp32: the reference's [v_heads, k_dim, v_dim].
+    conv = cache["conv_states"][0]
+    return {"conv": conv[:, 1:], "recurrent": cache["recurrent_states"][0]}
