@@ -51,6 +51,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
     test_unary_program_hash.cpp
+    test_unary_dram_read_plan.cpp
 )
 
 set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
@@ -67,6 +68,7 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_helpers.cpp
     ccl/test_ccl_llama_rs_signaler.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
+    ccl/test_moe_compute_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp

@@ -110,7 +110,8 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration.yaml
 ```
 
-**Expect:** runner `[mock-migration] KV chunk table -> /tmp/m3_kv_chunk_table.pb, device map -> …`;
+**Expect:** runner `[migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb (no worker handshake)`
+and `[migration] rank 0: local device map -> …`;
 producer `[producer] layer acks 240/240`, per-layer `K=… V=… index_k=…`, then
 `[producer] slot N M3 KV PCC over [0,10240) across 60 layers` and `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default `0.93` — different from the runner's `0.88`
@@ -141,7 +142,7 @@ endpoint kills both workers.
 # ---- Between runs: stop terminal A (Ctrl-C), then clear ----
 pkill -f migration_endpoint ; pkill prun ; pkill prted ; pkill prte
 rm -f /dev/shm/mig_ep1_* /dev/shm/ep_1_[ab]_* \
-      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* \
+      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
       /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.json /tmp/m3_migration_done.sentinel
 
 # ---- Terminal A — migration endpoint (leave running) ----
@@ -177,7 +178,7 @@ minutes of silence first):
 [migration] delivered 32 local device-map entries -> /ep_1_a_cmd     (and again for /ep_1_b_cmd)
 [migration] KV chunk address table serialized to /tmp/m3_kv_chunk_table.pb (configs=9, entries=691200)
 [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
-[migration] LayerAck channel ready at /tt_prefill_layer_acks_m3_prefill
+[migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 ```
 
 **Every verdict is logged by the DRIVER (terminal C), not the runner** — the runner-side
@@ -228,7 +229,7 @@ python -m models.demos.common.prefill.runners.prefill_producer \
   --manifest $M3/m3_producer_mock_migration_2rank.yaml
 ```
 
-**Expect:** rank 0 `[mock-migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
+**Expect:** rank 0 `[migration] merged KV chunk table -> /data/philei/tmp/m3_kv_chunk_table_pp.pb`
 (configs=9, layers=60); each rank `local device map -> /tmp/m3_kv_device_map_r<rank>.json`; producer
 merges both maps (`merged 2 device maps: 32 chips total`), then per-layer `K=… V=… index_k=…` across
 `60/60 local layers` and `KV cache PCC PASSED`.

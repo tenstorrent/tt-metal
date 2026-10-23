@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_single_chip, ti_skip
+from tt_py_test_utils_common.utility_functions import is_single_chip, ti_skip
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 

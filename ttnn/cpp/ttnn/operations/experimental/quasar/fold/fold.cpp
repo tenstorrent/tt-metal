@@ -17,7 +17,6 @@
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/quasar/reshard/reshard.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -334,8 +333,9 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::operations::experimental::quasar::reshape(input_tensor, new_shape);
 
+    const auto arch = input_tensor.device()->arch();
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        arch,
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -346,7 +346,7 @@ static Tensor apply_halo_padding(
     // halo op there, matching the standard call's flags (pad_val=0, remote_read=false,
     // transpose_mcast=false, is_out_tiled=false). WH/BH keep the standard halo (unchanged).
     Tensor halo_output;
-    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+    if (arch == tt::ARCH::QUASAR) {
         halo_output = ttnn::operations::experimental::quasar::halo(
             reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
     } else {

@@ -201,13 +201,23 @@ void validate_gcb_size_cap(uint32_t size) {
         kMaxCbPagesBytes);
 }
 
+// How deep in K a receiver's slab of the weight may be. A gather_in0 matmul over PrefetcherPipes takes
+// K-blocks one in0 shard deep, and when K does not fill the ring its shards are padded, so the slab has
+// to run past the weight's K for the prefetcher to cut it into whole shard-deep K-blocks (the matmul
+// checks the depth against its shards). Every other consumer reads the weight's own K.
+enum class SlabDepth : uint8_t {
+    WeightK,
+    PaddedForPipeGather,
+};
+
 // Shared receiver-contiguous weight ↔ matmul cross-checks. Returns the number of K-blocks the
 // prefetcher must push per receiver: gather-in0 uses one block per ring position, while mcast-in0
 // uses the configured inner-dimension block width.
 uint32_t validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
-    uint32_t receiver_count) {
+    uint32_t receiver_count,
+    SlabDepth slab_depth) {
     TT_FATAL(
         program_config.gather_in0 != program_config.mcast_in0,
         "receiver-contiguous Tensor prefetcher requires exactly one of gather_in0 or mcast_in0 to be true");
@@ -225,17 +235,28 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
         nd_opt.has_value(),
         "weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))) "
         "for the receiver-contiguous Tensor prefetcher path");
+    // A rank-3 shard (G, K, n_per_recv) is a grouped weight (an expert stack): every receiver slab holds
+    // all G groups, each a (K, n_per_recv) block the prefetcher streams like a weight of its own.
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
-        shard_shape.rank() == 2,
-        "receiver-contiguous NdShardSpec shard shape must be 2D (K, n_per_recv); got rank {}",
-        shard_shape.rank());
+        shard_shape.rank() == 2 || shard_shape.rank() == 3,
+        "receiver-contiguous NdShardSpec shard shape must be (K, n_per_recv) or, for a grouped weight, "
+        "(num_groups, K, n_per_recv); got {}",
+        shard_shape);
+    if (shard_shape.rank() == 3) {
+        TT_FATAL(
+            weight.padded_shape().rank() >= 3 && shard_shape[0] == weight.padded_shape()[-3],
+            "grouped receiver-contiguous weight: the shard's group dim ({}) must hold the weight's whole dim -3 "
+            "(weight shape {})",
+            shard_shape[0],
+            weight.padded_shape());
+    }
 
     const auto& tile = weight.tensor_spec().tile();
     const uint32_t tile_h = tile.get_height();
     const uint32_t tile_w = tile.get_width();
-    const uint32_t shard_K = shard_shape[0];
-    const uint32_t shard_N = shard_shape[1];
+    const uint32_t shard_K = shard_shape[-2];
+    const uint32_t shard_N = shard_shape[-1];
     TT_FATAL(
         shard_K % tile_h == 0 && shard_N % tile_w == 0,
         "receiver-contiguous shard shape ({}, {}) must be tile-aligned (tile {}x{})",
@@ -246,11 +267,14 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
 
     const auto& wp = weight.padded_shape();
     TT_FATAL(wp.rank() >= 2, "weight must be at least 2D; got rank {}", wp.rank());
+    const auto weight_K = static_cast<uint32_t>(wp[-2]);
+    const bool slab_may_pad = slab_depth == SlabDepth::PaddedForPipeGather;
     TT_FATAL(
-        shard_K == static_cast<uint32_t>(wp[-2]),
-        "receiver-contiguous shard K ({}) must equal full weight K ({}); each shard spans the full K dimension",
+        slab_may_pad ? (shard_K >= weight_K) : (shard_K == weight_K),
+        "receiver-contiguous shard K ({}) must {} the weight's K ({}); each shard spans the full K dimension",
         shard_K,
-        static_cast<uint32_t>(wp[-2]));
+        slab_may_pad ? "cover" : "equal",
+        weight_K);
 
     const auto& bds = weight.buffer()->buffer_distribution_spec();
     TT_FATAL(bds.has_value(), "receiver-contiguous weight buffer must have a BufferDistributionSpec");
@@ -423,7 +447,7 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const uint32_t receiver_count = gcb.receiver_cores().num_cores();
     TT_FATAL(receiver_count > 0, "global_cb has no receivers");
     if (is_receiver_contiguous_weight(weight)) {
-        return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+        return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count, SlabDepth::WeightK);
     }
     // Weight checks first: they establish num_global_cb_receivers > 0 and that it divides the
     // receiver count, which is what the per-sender rule below is stated against.
@@ -445,7 +469,11 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
         "PrefetcherPipe delivery is receiver-contiguous only: allocate the weight with an NdShardSpec giving each "
         "receiver its own (full K, N/receiver_count) DRAM shard. The legacy K-row-major WIDTH_SHARDED layout needs a "
         "sender that slices one bank's shard across its receivers, which this transport does not do.");
-    return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+    return validate_recv_contig_weight_for_matmul_1d(
+        program_config,
+        weight,
+        receiver_count,
+        program_config.gather_in0 ? SlabDepth::PaddedForPipeGather : SlabDepth::WeightK);
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the
@@ -562,7 +590,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
         validate_grid_for_consumer(cfg, i, receiver_count);
 
         // Per-(config, weight) recv-contig cross-checks and consumer-specific K-block count.
-        const uint32_t block_count = validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count);
+        const uint32_t block_count =
+            validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count, SlabDepth::WeightK);
 
         const uint32_t page_bytes = gcb_page_bytes(cfg, weights[i], block_count);
         TT_FATAL(page_bytes > 0, "program_configs[{}] page_bytes computed as 0", i);

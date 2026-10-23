@@ -22,6 +22,11 @@ void kernel_main() {
     constexpr auto cb_other = tt::CBIndex::c_2;
     constexpr auto cb_input_grad = tt::CBIndex::c_3;
     constexpr auto cb_other_grad = tt::CBIndex::c_4;
+    DataflowBuffer cb_grad_out_obj(cb_grad_out);
+    DataflowBuffer cb_input_obj(cb_input);
+    DataflowBuffer cb_other_obj(cb_other);
+    DataflowBuffer cb_input_grad_obj(cb_input_grad);
+    DataflowBuffer cb_other_grad_obj(cb_other_grad);
 
     // Boot unpack from the first input and pack for the first output; the second
     // output's format is applied through DataFormatReconfig::Enabled on its PackTile.
@@ -39,7 +44,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{cb_grad_out_obj},
             ckl::CopyTile<
                 ckl::input(
                     cb_other,
@@ -47,13 +52,13 @@ void kernel_main() {
                     ckl::PopPolicy::PerTile,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D1>{},
+                ckl::Dst::D1>{cb_other_obj},
             ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 cb_input_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Enabled)>{});
+                ckl::DataFormatReconfig::Enabled)>{cb_input_grad_obj});
 
         // Chain 2: other_grad = grad * input. grad_out was left in the CB by chain 1;
         // this chain pops it.
@@ -66,7 +71,7 @@ void kernel_main() {
                     ckl::PopPolicy::PerTile,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{cb_grad_out_obj},
             ckl::CopyTile<
                 ckl::input(
                     cb_input,
@@ -74,12 +79,12 @@ void kernel_main() {
                     ckl::PopPolicy::PerTile,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D1>{},
+                ckl::Dst::D1>{cb_input_obj},
             ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 cb_other_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Enabled)>{});
+                ckl::DataFormatReconfig::Enabled)>{cb_other_grad_obj});
     }
 }

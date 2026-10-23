@@ -50,4 +50,26 @@ inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const s
 {
     calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
+
+// 0x42 repeated (about 48.56 as a float): easy to spot in dumps. Keep it positive and well above 1, or guards like
+// sfpu_reciprocal_iter's skip the Newton step and a broken init still passes.
+constexpr std::uint32_t SFPU_LREG_CLOBBER_BITS = 0x42424242u;
+
+// Fills LREG0..7 and the programmable constants LREG12..14 (via LREG0, so those go first) with the pattern.
+// LREG11 (-1.0) is left alone on purpose: kernels may read it without programming it.
+inline void clobber_sfpu_lregs()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, SFPU_LREG_CLOBBER_BITS >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, SFPU_LREG_CLOBBER_BITS & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG6, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
+}
 } // namespace ckernel::sfpu
