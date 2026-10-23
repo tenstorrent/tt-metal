@@ -7,7 +7,7 @@
 // iterations.
 
 #include <stdint.h>
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 

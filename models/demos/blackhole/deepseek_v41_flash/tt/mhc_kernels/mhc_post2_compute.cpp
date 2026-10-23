@@ -11,7 +11,7 @@
 // when T <= 16.
 
 #include <cstdint>
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
