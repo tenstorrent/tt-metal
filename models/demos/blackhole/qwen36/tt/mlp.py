@@ -52,8 +52,10 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
 
 def mlp_decode_dshard_active(args, num_devices, use_gateup_agmm=True):
     """QWEN36_MLP_DECODE_DSHARD applies to the dense TP MLP at TP=4 only (measured on QB2; TP=8 decode grids are tuned separately). Requires the packed w_gate_up prefill weight
-    (use_gateup_agmm: MoE shared experts, which run w1/w3 in prefill, are excluded) and the DRAM-sharded decode
-    configs in args. A non-qualifying MLP (single device, MoE shared expert) silently keeps the interleaved layout."""
+    (use_gateup_agmm: MoE shared experts, which run w1/w3 in prefill, are excluded), no small-M prefill
+    (args.prefill_small_m_max > 0 runs the interleaved w1/w3 in prefill, see tpc.use_small_m) and the DRAM-sharded
+    decode configs in args. A non-qualifying MLP (single device, MoE shared expert, small-M prefill) silently keeps the
+    interleaved layout."""
     from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
     if not tpc.mlp_decode_dshard_enabled():
@@ -61,6 +63,7 @@ def mlp_decode_dshard_active(args, num_devices, use_gateup_agmm=True):
     return (
         num_devices == 4
         and use_gateup_agmm
+        and not tpc.use_small_m(args, 1)
         and tpc.mlp_gateup_agmm_enabled(num_devices)
         and args is not None
         and getattr(args, "num_devices", None) == 4
