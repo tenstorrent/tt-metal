@@ -53,6 +53,11 @@ void BatchNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(), "Quasar batch_norm does not support sharded output.");
     TT_FATAL(input.logical_shape().rank() == 4, "batch_norm supports tensors of rank 4");
+    // The factory derives the per-plane tile count from the padded H x W, so an empty input has no geometry.
+    TT_FATAL(
+        input.logical_volume() > 0,
+        "Quasar batch_norm does not support empty tensors (logical shape {})",
+        input.logical_shape());
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16,
         "Quasar batch_norm: input must be BFLOAT16 (no BFLOAT8_B on Quasar; FLOAT32 not implemented), got: {}",

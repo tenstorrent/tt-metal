@@ -20,6 +20,11 @@ bool softmax_is_minimally_tile_padded(const Tensor& t) {
     const auto& logical = t.logical_shape();
     const auto& padded = t.padded_shape();
     const auto& tile = t.tensor_spec().tile();
+    // A rank-1 TILE tensor carries an implicit tile-height dim: logical [W] pads to [tile_h, round_up(W)].
+    if (logical.rank() == 1) {
+        return padded.rank() == 2 && padded[0] == tile.get_height() &&
+               padded[1] == tt::round_up(logical[0], tile.get_width());
+    }
     if (logical.rank() != padded.rank()) {
         return false;
     }
@@ -49,6 +54,9 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
+    // The factory derives the tile-row count from the padded width, so an empty input has no valid geometry.
+    TT_FATAL(
+        a.logical_volume() > 0, "Quasar softmax does not support empty tensors (logical shape {})", a.logical_shape());
     TT_FATAL(!a.is_sharded(), "Quasar softmax does not support sharded input.");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Quasar softmax does not support sharded output.");
     TT_FATAL(

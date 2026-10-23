@@ -8,22 +8,10 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+QUASAR_ONLY = "Quasar-native kernels (DFB implicit sync, multi-hart DM / NEO threading)"
 
-@pytest.mark.parametrize(
-    "shape",
-    [
-        (1, 4, 32, 64),  # 4 planes of 2 tiles: one round, batch 2
-        (2, 3, 64, 128),  # 6 planes of 8 tiles: two rounds, duplicate planes
-        (1, 2, 32, 32),  # 2 planes of 1 tile: batch 1
-        (1, 1, 96, 96),  # 1 plane of 9 tiles: batch 3
-    ],
-)
-@pytest.mark.parametrize("affine", ["none", "weight", "weight_bias"])
-def test_quasar_batch_norm(device, shape, affine):
-    if device.arch() != ttnn.device.Arch.QUASAR:
-        pytest.skip("Quasar-native kernels (DFB implicit sync, multi-hart DM / NEO threading)")
-    torch.manual_seed(0)
-    eps = 1e-5
+
+def _run_batch_norm(device, shape, affine, eps=1e-5):
     N, C, H, W = shape
     x = torch.randn(shape, dtype=torch.bfloat16)
     mean = torch.randn((1, C, 1, 1), dtype=torch.bfloat16)
@@ -47,9 +35,49 @@ def test_quasar_batch_norm(device, shape, affine):
     )
     out = ttnn.to_torch(out).float()
     assert_with_pcc(ref, out, 0.999)
+    # PCC is blind to a uniform scale (e.g. a wrong eps fold), so also bound the error.
+    torch.testing.assert_close(out, ref, rtol=0.02, atol=0.02)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 4, 32, 64),  # 4 planes of 2 tiles: one round, batch 2
+        (2, 3, 64, 128),  # 6 planes of 8 tiles: two rounds on a small grid, duplicate planes
+        (1, 2, 32, 32),  # 2 planes of 1 tile: batch 1
+        (1, 1, 96, 96),  # 1 plane of 9 tiles: batch 3
+    ],
+)
+@pytest.mark.parametrize("affine", ["none", "weight", "weight_bias"])
+def test_quasar_batch_norm(device, shape, affine):
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip(QUASAR_ONLY)
+    torch.manual_seed(0)
+    _run_batch_norm(device, shape, affine)
+
+
+# Second round per core on any grid: five planes per core leave the second round partially occupied with the
+# default 4 NEOs, so the per-plane parameter fetch, the scale / shift ring reuse and the eps tile retention
+# across rounds are all exercised (each plane has its own channel statistics).
+@pytest.mark.parametrize("affine", ["none", "weight_bias"])
+def test_quasar_batch_norm_multiple_rounds(device, affine):
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip(QUASAR_ONLY)
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    _run_batch_norm(device, (1, 5 * grid.x * grid.y, 32, 64), affine)
 
 
 # ---- contract rejections (host-side validation, run on every arch) ----
+
+
+def test_quasar_batch_norm_rejects_empty_input(device, expect_error):
+    to_dev = lambda t: ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device)
+    x = to_dev(torch.zeros((0, 2, 32, 32), dtype=torch.bfloat16))
+    mean = to_dev(torch.zeros((1, 2, 1, 1), dtype=torch.bfloat16))
+    var = to_dev(torch.ones((1, 2, 1, 1), dtype=torch.bfloat16))
+    with expect_error(RuntimeError, "does not support empty tensors"):
+        ttnn.experimental.quasar.batch_norm(x, running_mean=mean, running_var=var)
 
 
 def _bn_operands(device, C=2, param_hw=(1, 1), dtype=torch.bfloat16):
@@ -101,16 +129,7 @@ def test_quasar_batch_norm_rejects_bad_thread_plan(device, expect_error, monkeyp
 @pytest.mark.parametrize("plan", ["1,4,1", "2,4,4", "1,1,1"])
 def test_quasar_batch_norm_thread_plan_override(device, monkeypatch, plan):
     if device.arch() != ttnn.device.Arch.QUASAR:
-        pytest.skip("Quasar-native kernels (DFB implicit sync, multi-hart DM / NEO threading)")
+        pytest.skip(QUASAR_ONLY)
     monkeypatch.setenv("TTNN_QSR_BATCH_NORM_THREADS", plan)
     torch.manual_seed(0)
-    C = 3
-    x = torch.randn((2, C, 64, 128), dtype=torch.bfloat16)
-    mean = torch.randn((1, C, 1, 1), dtype=torch.bfloat16)
-    var = torch.rand((1, C, 1, 1), dtype=torch.bfloat16) + 0.5
-    ref = torch.nn.functional.batch_norm(
-        x.float(), mean.float().reshape(C), var.float().reshape(C), training=False, eps=1e-5
-    )
-    to_dev = lambda t: ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.experimental.quasar.batch_norm(to_dev(x), running_mean=to_dev(mean), running_var=to_dev(var), eps=1e-5)
-    assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.999)
+    _run_batch_norm(device, (2, 3, 64, 128), "none")
