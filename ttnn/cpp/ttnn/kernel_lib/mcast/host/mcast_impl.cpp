@@ -502,6 +502,9 @@ void McastImpl::prepare_arguments_() const {
     layout_.sender_mcast_mode =
         uniform_sender_mcast_mode && first_sender_mcast_mode ? *first_sender_mcast_mode : SenderMcastMode::Unknown;
     prepared_arch_ = device_.get().arch();
+    TT_FATAL(
+        !(prepared_arch_ == tt::ARCH::QUASAR && cfg_.noc == tt::tt_metal::NOC::NOC_1),
+        "Quasar has one NoC; configure the multicast NoC as NOC_0");
     prepared_device_grid_ = device_.get().compute_with_storage_grid_size();
     generic_metadata_ = {.mcast = layout_};
     if (transfer_mode == TransferMode::Multicast) {

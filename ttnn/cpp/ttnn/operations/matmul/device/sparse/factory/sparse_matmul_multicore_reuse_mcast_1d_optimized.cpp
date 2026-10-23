@@ -1069,7 +1069,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     }
     ttnn::kernel_lib::host::Mcast in0_mcast(
         *device,
-        {.noc = device->arch() == tt::ARCH::QUASAR ? tt_metal::NOC::NOC_0 : in0_noc, .handshake_cores = all_cores},
+        {.noc = in0_noc, .handshake_cores = all_cores},
         CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
         in0_mcast_receiver_num_cores,
         ttnn::kernel_lib::host::McastExplicitFixedSenderConfig{.senders_per_group = {start_core}});

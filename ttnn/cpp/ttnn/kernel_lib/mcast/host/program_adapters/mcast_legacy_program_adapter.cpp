@@ -117,10 +117,8 @@ void McastImpl::check_kernel_noc_(const CoreCoord& core, NOC noc) const {
     }
     const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
     const bool sender = std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
-    // Quasar has one unified NoC, so every requested NoC is NOC_0 there.
-    const NOC effective_noc = prepared_arch_ == tt::ARCH::QUASAR ? NOC::NOC_0 : noc;
     TT_FATAL(
-        !(sender || chain) || effective_noc == cfg_.noc,
+        !(sender || chain) || noc == cfg_.noc,
         "Multicast sender/forwarder NoC differs from the configured multicast NoC");
 }
 
