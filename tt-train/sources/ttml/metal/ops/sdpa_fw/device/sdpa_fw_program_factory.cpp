@@ -365,8 +365,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         (mask_type == AttentionMaskType::Causal) ? kNumCausalMaskTiles : (2U * Sq_chunk_t * Sk_chunk_t);
     const uint32_t cb_gate_tiles = 2U * Sq_chunk_t * vWt;
     const uint32_t cb_intermediate_tiles = Sq_chunk_t * kIntermediateTiles;
-    const uint32_t cb_attention_weights_tiles = Sq_chunk_t * Sk_chunk_t;  // single-buffered, rewritten in place
-    const uint32_t cb_stat_tiles = Sq_chunk_t;                            // max / sum / exp-max-diff, one per row
+    // The compute kernel rewrites attention weights, stats and mm_out in place (pop, reserve, pack at the same
+    // offsets). That only works while each CB holds exactly one block, so these must stay single-buffered.
+    const uint32_t cb_attention_weights_tiles = Sq_chunk_t * Sk_chunk_t;
+    const uint32_t cb_stat_tiles = Sq_chunk_t;  // max / sum / exp-max-diff, one per row
     const uint32_t cb_mm_out_tiles = Sq_chunk_t * vWt;
     const uint32_t cb_output_tiles = Sq_chunk_t * vWt;
 
