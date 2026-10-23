@@ -48,6 +48,27 @@ ARENA_MAX = (
 )  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less the movers' static CBs (~177 KB
 # end on a port core) - the arena range is carved on them too - and what the head keeps below it)
 
+
+def arena_cap(mesh_device, kb):
+    """L1 the arena may take on this mesh now: from where it lands (the top of the free L1 - placed top-down) down to the
+    movers' static circular buffers (the x gather's port CB at K step kb: the arena's range is carved on the port cores
+    too), ARENA_MAX at most. (GLM-5.3's larger fabric payload - 6 pages a packet - grows the port CB past ARENA_MAX's
+    allowance: its arena then clashed with it.)"""
+    from models.demos.moe_block.tt.x_gather3 import port_cb_bytes
+
+    return min(ARENA_MAX, (l1_free_bytes(mesh_device) - port_cb_bytes(kb) - 1024) // 64 * 64)
+
+
+def l1_free_bytes(mesh_device):
+    """L1 a core from the allocator's base up to the lowest L1 allocated now (a probe: L1 is placed top-down)."""
+    probe = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
+    )
+    top = int(probe.buffer_address())
+    ttnn.deallocate(probe)
+    return top - ttnn._ttnn.device.GetAllocatorBaseAddress(mesh_device, ttnn.BufferType.L1)
+
+
 _BRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -1173,6 +1194,7 @@ class SeEngine3:
         self.KB = KB or 16  # (fewer, larger rounds: K3 403 -> 341 us at 640 rows; GLM-Flash neutral)
         self.NSG = self.KT // self.KB
         assert self.KT % self.KB == 0 and self.NSG % 2 == 0
+        self.arena_max = arena_cap(mesh_device, self.KB)
         assert self.NSG % shards == 0 and (self.NSG // shards) % 2 == 0, "even K steps a shard"
         self.SPS = self.NSG // shards
         nf = self.NSG // 2
@@ -1327,7 +1349,7 @@ class SeEngine3:
                     if (
                         o - t0 >= need
                         or self.KC == kcs[-1]
-                        or (self.KC == kcs[0] and KTO // self.KC == 2 and o + need <= ARENA_MAX)
+                        or (self.KC == kcs[0] and KTO // self.KC == 2 and o + need <= self.arena_max)
                     ):
                         break
                 if o - t0 < need:
@@ -1338,15 +1360,15 @@ class SeEngine3:
                 for k, v in rsz:
                     off[k], t0 = t0, al(t0 + v)
             self.off, self.arena_bytes = off, o
-            if o <= ARENA_MAX:
+            if o <= self.arena_max:
                 break
-        if o > ARENA_MAX:
+        if o > self.arena_max:
             sizes = {
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
                 for i, (k, k2) in enumerate(zip(off, list(off)[1:] + [None]))
             }
             raise ValueError(
-                f"se_engine3: arena {o // 1024} KB > {ARENA_MAX // 1024} KB of L1 (KB {self.KB}): "
+                f"se_engine3: arena {o // 1024} KB > {self.arena_max // 1024} KB of L1 (KB {self.KB}): "
                 + ", ".join(f"{k} {v // 1024}" for k, v in sizes.items())
             )
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
@@ -1383,8 +1405,9 @@ class SeEngine3:
             finc=16 * 8,
             psync=16 * max(8, self.NPD),
         )
-        if self.NCH > 1:  # (the ports' FINB-free credits, a page a chunk)
-            self.rs_sizes["ffree"] = 16 * 2
+        if self.NCH > 1:  # (the ports' FINB-free credits, a page a chunk: a core no port reads (fnr 0) credits every
+            # chunk up front - NCH - 1 pages, else its NCRISC blocks on the reserve and stops the W stream; a hang)
+            self.rs_sizes["ffree"] = 16 * max(2, self.NCH - 1)
         return list(self.rs_sizes.items())
 
     def alloc_arena(self, extra=()):

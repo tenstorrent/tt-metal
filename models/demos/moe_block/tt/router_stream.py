@@ -665,6 +665,40 @@ class RouterStream:
     """The router chain on its own cores (module docstring). cores: the RB logical router cores (the mover column's
     free cells), xg: the gather (its ports carry the logits)."""
 
+    @staticmethod
+    def layout_of(G, ET, K, kbr):
+        """The router cores' arena regions (offsets, bytes) at K block kbr: G chips, ET expert tiles, top-K."""
+        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+        off, o = {}, 0
+        for k, v in [
+            ("xr", 2 * G * kbr * 2048),
+            ("wr", 2 * kbr * ET * 2048),
+            ("hold", G * ET * 4096),
+            ("sc", ET * 4096),
+            ("idx", ET * 2048),
+            ("best", 4096),
+            ("bias", ET * 4096),
+            # (above the planner's overlay - everything below the bias, dead once the rows are made: another chip's
+            # partials for the next call may land while this chip's planner of this call still runs - launch skew)
+            ("arr", (G - 1) * ET * 4096),
+            ("finc", 16 * 8),
+            ("psync", 16 * 2),
+            ("arrb", 16 * max(1, G - 1)),  # (the arrivals' slots in landing order)
+            ("rdy", 16 * 2),
+            ("out", 32 * 4 * K),
+            ("words", 128),
+            ("route", 32 * 4 * 2),
+            ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
+            ("msync", 16),  # (the compute's PACK -> MATH: the BEST page is in L1 - their shares of the rows)
+        ]:
+            off[k], o = o, al(o + v)
+        return off, o
+
+    @staticmethod
+    def min_bytes(G, E, K):
+        """The least arena the router cores need (K block 1)."""
+        return RouterStream.layout_of(G, E // 32, K, 1)[1]
+
     def __init__(
         self,
         mesh_device,
@@ -707,30 +741,7 @@ class RouterStream:
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
 
         def layout(kbr):
-            off, o = {}, 0
-            for k, v in [
-                ("xr", 2 * G * kbr * 2048),
-                ("wr", 2 * kbr * ET * 2048),
-                ("hold", G * ET * 4096),
-                ("bias", ET * 4096),
-                # (above the planner's overlay - everything below the bias: another chip's partials for the next call
-                # may land while this chip's planner of this call still runs - launch skew)
-                ("arr", (G - 1) * ET * 4096),
-                ("sc", ET * 4096),
-                ("idx", ET * 2048),
-                ("best", 4096),
-                ("finc", 16 * 8),
-                ("psync", 16 * 2),
-                ("arrb", 16 * max(1, G - 1)),  # (the arrivals' slots in landing order)
-                ("rdy", 16 * 2),
-                ("out", 32 * 4 * K),
-                ("words", 128),
-                ("route", 32 * 4 * 2),
-                ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
-                ("msync", 16),  # (the compute's PACK -> MATH: the BEST page is in L1 - their shares of the rows)
-            ]:
-                off[k], o = o, al(o + v)
-            return off, o
+            return RouterStream.layout_of(G, ET, K, kbr)
 
         # the K block: the largest <= 4 tiles dividing the chip's K whose buffers fit (8: no faster, measured - the
         # matmul is bound by its unpack / math, not by the blocks' L1-accumulated packs)

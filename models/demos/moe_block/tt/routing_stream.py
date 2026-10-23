@@ -423,8 +423,13 @@ class RoutingStream:
         # the planner starts after the joint rows)
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
         self.pl_step = al(self.plan_l1)
-        assert 2 * self.pl_step <= router.off["bias"], "router cores: no room for two planner regions"
-        self.pbases = [router.base + (q // len(router.cores)) * self.pl_step for q in range(M)]
+        # (where two don't fit under the bias - K3 E 896 at 1280 rows on a 4x4 - they go past the router's buffers, in
+        # the rest of the arena's range on the router cores: nothing else there)
+        pl0 = 0 if 2 * self.pl_step <= router.off["bias"] else al(router.bytes)
+        assert (
+            pl0 + 2 * self.pl_step <= abytes
+        ), f"router cores: no room for two planner regions ({self.pl_step} B each past {pl0} B; the arena {abytes} B)"
+        self.pbases = [router.base + pl0 + (q // len(router.cores)) * self.pl_step for q in range(M)]
         self.pbase = self.pbases[0]
         # the senders' packet buffers (the arena's range on their cores): the gather's ports after their logits buffer,
         # each Y sender on the watcher core from the arena's start (the second Y direction after the first); the

@@ -114,7 +114,7 @@ void kernel_main() {
         const float inv = scale / (sum + 1e-20f);
         volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
         for (uint32_t j = 0; j < K; ++j) {
-            o[j] = static_cast<uint16_t>(ti[j]);
+            o[j] = static_cast<uint16_t>(ti[j] / __FOLD__);  // (a fold: candidate c is expert c / fold)
             o[K + j] = static_cast<uint16_t>(bf16_rne(w[j] * inv));
         }
         noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
@@ -124,12 +124,14 @@ void kernel_main() {
 """
 
 
-def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bias_mode=False):
+def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bias_mode=False, fold=1):
     """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 128 K B pages of 32 tokens' joint rows (s / b: [S, E] fp32
     TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather).
     bias_mode: run(bias, b) with bias the [1, E] fp32 row-major correction bias (one read per RISC): only the biased
     scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add). K: even,
-    <= 16 (a token's row 4 K <= 64 B). split: cores per row tile (default: the most of 8 / 4 / 2 the grid holds)."""
+    <= 16 (a token's row 4 K <= 64 B). split: cores per row tile (default: the most of 8 / 4 / 2 the grid holds).
+    fold: E candidates over E / fold experts - a pick's id is its candidate / fold (the bias keeps one candidate of a
+    group eligible, so a token's picks stay distinct experts)."""
     import struct
 
     grid = mesh_device.compute_with_storage_grid_size()
@@ -167,7 +169,7 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bi
         import os
 
         src = _TOPK.replace("__PROBE__", {"noweights": "1", "noscan": "2"}.get(os.environ.get("TOPK_PROBE", ""), "0"))
-        src = src.replace("__BIAS__", "1" if bias_mode else "0")
+        src = src.replace("__BIAS__", "1" if bias_mode else "0").replace("__FOLD__", f"{fold}u")
         dm1 = ttnn.DataMovementConfigDescriptor(
             processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
         )

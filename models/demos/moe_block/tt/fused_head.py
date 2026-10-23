@@ -316,6 +316,10 @@ class HeadSE3:
             assert not {(c.x, c.y) for c in free} & used, "the router cores' rectangle overlaps the movers"
             assert self.rs_mode == "fused"
             ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)
+            # (the router cores carve the same range: at least what they need - the engine's own may be smaller)
+            need = (RouterStream.min_bytes(G, router.E, router.K) + 63) // 64 * 64
+            if self.eng.arena_bytes < need <= self.eng.arena_max:
+                self.eng.arena_bytes = need
             self.eng.alloc_arena(
                 extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)] + [watcher]
             )

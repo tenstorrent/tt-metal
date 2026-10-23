@@ -39,11 +39,14 @@ import torch
 from ttnn.bringup.combine_rf.lin2d import column_split
 
 import ttnn
-from models.demos.moe_block.tt.se_engine3 import _ring_pages
+from models.demos.moe_block.tt.se_engine3 import _ring_pages, l1_free_bytes
 
 CB_W, CB_A, CB_PART, CB_PMY, CB_ONES, CB_ACCM, CB_XSEND, CB_SQM, CB_XRECV, CB_SE, CB_OUT, CB_L0, CB_RM = range(13)
 XT = 4  # (a step's exchange: up to 3 partial tiles + the half's sum of squares)
 ARENA_MAX = 1400 * 1024
+# (L1 the block keeps after the tail is planned - the exchange's and the head's words, their holes FusedHead.HOLE +
+# 2 HOLE_HEAD - all above the tail's arena at its call: K3 768 rows on a 4x4 kept 36 KB, its arena did not fit)
+KEPT_LATER = 44 * 1024
 
 _CT = r"""
 constexpr uint32_t KH = get_compile_time_arg_val(0), PNMAX = get_compile_time_arg_val(1), RT = get_compile_time_arg_val(2);
@@ -775,11 +778,13 @@ class TailEngine:
         self.fid, self.w_dtype = fidelity, w_dtype
         self.wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}[w_dtype]
         # the z ring and the E slots: a slot a step where L1 has room (no slot reused: no FREE waits), else fewer
-        for nslot in range(self.NSTMAX, 1, -1):
+        lo = min(2, self.NSTMAX)  # (two ring slots at least - one when a pair has a single step: 128 rows a mesh row)
+        cap = min(ARENA_MAX, (l1_free_bytes(mesh_device) - KEPT_LATER) // 64 * 64)
+        for nslot in range(self.NSTMAX, lo - 1, -1):
             off, o = self._layout(nslot)
-            if o <= ARENA_MAX:
+            if o <= cap:
                 break
-        assert o <= ARENA_MAX, f"tail_engine: arena {o >> 10} KB > {ARENA_MAX >> 10} KB at 2 ring slots"
+        assert o <= cap, f"tail_engine: arena {o >> 10} KB > {cap >> 10} KB at {lo} ring slots"
         self.NSLOT, self.off, self.arena_bytes = nslot, off, o
         self.crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
         self._gather_plan(topology, num_links)

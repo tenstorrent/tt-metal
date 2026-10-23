@@ -376,19 +376,40 @@ class MoEBlock(LightweightModule):
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
             holes = [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
-            self.fused = FusedHead(
-                mesh_device,
-                g,
-                model,
-                weights,
-                holes,
-                deterministic=options.deterministic,
-                accumulators=acc,
-                router=options.router,
-            )
-            self._warm_up_head()
-            self.fused.head.settle_arena()
+            try:
+                self.fused = FusedHead(
+                    mesh_device,
+                    g,
+                    model,
+                    weights,
+                    holes,
+                    deterministic=options.deterministic,
+                    accumulators=acc,
+                    router=options.router,
+                )
+                self._warm_up_head()
+                self.fused.head.settle_arena()
+            except (AssertionError, ValueError, RuntimeError) as e:
+                # (auto: a fused head that does not build at this shape - its L1 does not fit - falls back to the ops
+                # head; the partial head's buffers go with it)
+                if options.head == "fused":
+                    raise
+                fits = "build: " + " ".join(str(e).split())[:160]
+                from loguru import logger
+
+                logger.warning(f"MoEBlock: the fused head does not build here ({fits}); the ops head")
+                _free_partial_l1([self.fused], e.__traceback__.tb_next)
+                self.fused = None
+                for t in holes:
+                    if t.is_allocated():
+                        ttnn.deallocate(t)
+                del e
+                import gc
+
+                gc.collect()
             ttnn.deallocate(hole)
+            if self.fused is None:
+                self._head_ops_fallback(weights, dtypes, options)
         else:
             self._warm_up()
         self.exchange.build()
@@ -396,12 +417,15 @@ class MoEBlock(LightweightModule):
             self.fused.attach(self.exchange)
         from loguru import logger
 
+        # (the resolved plan in one line: what was picked and why - the generality map reads it)
+        self.summary = (
+            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}; tail "
+            f"{'fused' if self.tail else 'ops'}{'' if tfits is True or model.latent_dim is None else f' (fused: {tfits})'}"
+        )
         logger.info(
             f"MoEBlock: mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens} ({g.tokens_per_row} rows a mesh row, "
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
-            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}; tail "
-            f"{'fused' if self.tail else 'ops'}{'' if tfits is True or model.latent_dim is None else f' (fused: {tfits})'}; flat layout "
-            f"{self.experts.layout_fields}; dtypes {dtypes}; options {options}"
+            f"{self.summary}; flat layout {self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
 
     def _mark(self, name):
@@ -453,6 +477,17 @@ class MoEBlock(LightweightModule):
             self._mark("tail")
             return y
         return self._tail(y_own, se)
+
+    def _head_ops_fallback(self, weights, dtypes, options):
+        """The ops head after a fused head that did not build (auto): its router / shared expert, the exchange planned
+        without the fused head's accumulators, the ops warm-up."""
+        g, m, mesh = self.geometry, self.model, self.mesh_device
+        self.head_mode = "ops"
+        self.router = Router(mesh, g, m, weights.router, dtypes)
+        if m.shared_expert_hidden_dim is not None:
+            self.shared = SharedExpert(mesh, g, m, weights.shared, dtypes)
+        self.exchange = TokenExchange(mesh, g, m, self.experts, dispatch_in_program=options.experts_during_dispatch)
+        self._warm_up()
 
     def _warm_up(self):
         """The head and the tail once on zeros (the exchange skipped): every op they run allocates its one-time L1."""
@@ -709,6 +744,31 @@ def _cfg(fidelity):
     )
 
 
+def _free_partial_l1(roots, tb):
+    """Force-free the L1 tensors of a build that failed part way: those of roots and of the partly built objects on its
+    traceback (their constructors' self) - the moe_block.tt objects, walked through their attributes (programs it
+    cached may still hold them: the ops the fallback runs need that L1)."""
+    while tb is not None:
+        roots.append(tb.tb_frame.f_locals.get("self"))
+        tb = tb.tb_next
+    seen, stack = set(), [r for r in roots if r is not None]
+    while stack:
+        o = stack.pop()
+        if id(o) in seen:
+            continue
+        seen.add(id(o))
+        if isinstance(o, ttnn.Tensor):
+            dev = o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated()
+            if dev and o.memory_config().buffer_type == ttnn.BufferType.L1:
+                ttnn.deallocate(o, force=True)
+        elif isinstance(o, (list, tuple)):
+            stack.extend(o)
+        elif isinstance(o, dict):
+            stack.extend(o.values())
+        elif type(o).__module__.startswith("models.demos.moe_block.tt"):
+            stack.extend(vars(o).values())
+
+
 def _l1_hole(mesh, nbytes):
     """An L1 placeholder of nbytes on every core (freed later: the next allocations of up to that size land there)."""
     grid = mesh.compute_with_storage_grid_size()
@@ -779,8 +839,10 @@ class FusedHead:
         self.g, self.model = g, model
         H, Is, latent = model.emb_dim, model.shared_expert_hidden_dim, model.latent_dim
         E, K, N = model.num_experts, model.top_k, g.chips
+        grid = mesh.compute_with_storage_grid_size()
         self.head = HeadSE3(
             mesh,
+            GX=min(11, grid.x - 1),  # (the engine's columns: the last for the movers - a harvested grid has fewer)
             rows=g.tokens_per_row,
             H=H,
             I=Is // g.tp,
@@ -906,9 +968,9 @@ class Router:
         from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 
         r = model.router
-        if not (r.score_func == "sigmoid" and r.normalize_topk and r.expert_groups == 1 and r.fold == 1):
-            raise NotImplementedError(f"MoEBlock router: sigmoid + bias, normalized, one group, no fold (got {r})")
-        E = model.num_experts
+        if not (r.score_func == "sigmoid" and r.normalize_topk and r.expert_groups == 1):
+            raise NotImplementedError(f"MoEBlock router: sigmoid + bias, normalized, one group (got {r})")
+        E = model.num_experts * r.fold  # (the candidates: a fold picks over E x fold, candidate c is expert c // fold)
         self.w = _weight(mesh, w["weight"].T, dtypes.router_weights, (None, 0))  # [H, E], H over the columns
         self.cfg = _cfg(ttnn.MathFidelity.HiFi4)
         rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -920,7 +982,9 @@ class Router:
             bias, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep
         )  # (each pick's score = biased - bias)
         self.S = g.tokens_per_chip
-        self.rtopk = router_topk_prepare(mesh, S=self.S, E=E, K=model.top_k, route_scale=r.route_scale, bias_mode=True)
+        self.rtopk = router_topk_prepare(
+            mesh, S=self.S, E=E, K=model.top_k, route_scale=r.route_scale, bias_mode=True, fold=r.fold
+        )
 
     def logits(self, x):
         """[1, 1, S/SP, H/TP] -> partial logits [1, 1, S/SP, E] fp32."""
@@ -1038,7 +1102,8 @@ class RoutedExperts:
         assert dtypes.routed_weights == ttnn.bfloat4_b, "bring-up: bfp4 routed weights"
         N, EPC = g.chips, g.experts_per_chip
         self.gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
-        self.cap = g.chunk_tokens  # (an expert sees each token at most once)
+        # (an expert sees each token at most once; the flat op is built for >= 256 tokens an expert: small chunks pad)
+        self.cap = max(g.chunk_tokens, 256)
         # (one x helper: a second one costs ~104 KB of every core's arena, which the exchange's combine needs at the
         # LoudBox's per-chip load - flat_layouts.GLM_FLASH)
         self.layout_fields = dict(rows_hint=round(g.chunk_tokens * model.top_k / model.num_experts), x_helpers=1)

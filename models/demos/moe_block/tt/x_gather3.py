@@ -730,6 +730,12 @@ def shard_order(chips, coord, *, CR, nv, sps, kb, rp):
     return [own] + rest, carry
 
 
+def port_cb_bytes(kb, group=4):
+    """A port core's static circular buffer (the sender's packets: two groups of rp pages) at K step kb."""
+    rp = max(1, min(kb, ttnn.get_tt_fabric_max_payload_size_bytes() // 2048))
+    return 2 * group * rp * 2048
+
+
 class XGather3:
     """The row-chunk-major x all-gather into an SeEngine3's x-own (module docstring); movers on sub_core_grid."""
 
@@ -753,6 +759,7 @@ class XGather3:
         self.klt = e.KT // G
         self.sps = self.klt // e.KB
         self.rp = max(1, min(e.KB, ttnn.get_tt_fabric_max_payload_size_bytes() // 2048))
+        assert port_cb_bytes(e.KB, group) == 2 * group * self.rp * 2048  # (the engine's arena cap counts on it)
         assert group + 1 <= 12, "the sender takes group + 1 packet headers (12 a RISC)"
         self.group, self.nv = group, num_links
         if ring is None:
