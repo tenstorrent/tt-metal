@@ -3431,6 +3431,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
     }
+    // DEV ONLY (perf branch). Resident-mode bisection switch: TT_SOL_RES_CHUNK_MAJOR=1 runs one step per resident
+    // chunk in chunk order instead of one step per group of chunks. Same in-place slot state, so a difference
+    // between the two isolates the grouping from the state handling. Not in the program hash: set it for the whole
+    // process.
+    if (sol_resident && std::getenv("TT_SOL_RES_CHUNK_MAJOR") &&
+        std::string(std::getenv("TT_SOL_RES_CHUNK_MAJOR")) == "1") {
+        compute_kernel.defines.emplace_back("SOL_RES_CHUNK_MAJOR", "1");
+    }
     // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
     // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
     // Any mode: also the per-ring-iteration arrival-semaphore trace ("SYNC ...") in the reader.
@@ -3457,6 +3465,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_FINE", "1");
         }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
+    // DEV ONLY (perf branch). Resident-step ablation, timing only (results wrong): TT_SOL_ABLATE=qk|exp|pack5|pv|
+    // stats|pack1 skips that stage's instructions in the compact step while every CB, DEST and token operation
+    // stays (compute_streaming.hpp, kAblate*). Not hashed: set it for the whole process.
+    if (sol_resident && std::getenv("TT_SOL_ABLATE")) {
+        std::string knob = std::getenv("TT_SOL_ABLATE");
+        for (auto& ch : knob) {
+            ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
+        }
+        if (!knob.empty()) {
+            compute_kernel.defines.emplace_back("SOL_ABLATE_" + knob, "1");
+            log_warning(tt::LogOp, "RingJoint resident: ablation SOL_ABLATE_{} on (timing only, results wrong)", knob);
+        }
     }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
