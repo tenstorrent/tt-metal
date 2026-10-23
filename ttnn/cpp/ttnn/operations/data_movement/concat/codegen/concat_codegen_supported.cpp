@@ -51,12 +51,39 @@ bool interleaved_in_dram_or_l1(const tt::tt_metal::MemoryConfig& config) {
            (config.buffer_type() == BufferType::DRAM || config.buffer_type() == BufferType::L1);
 }
 
+// The factory and the kernels carry stick counts and stick byte sizes as 32-bit values, and cb_pages rounds the output
+// stick up to an alignment in 32 bits, so a geometry past UINT32_MAX would wrap into a smaller, legal-looking plan.
+bool fits_32_bit_geometry(const std::vector<Tensor>& input_tensors, uint32_t dim) {
+    const Tensor& first = input_tensors.front();
+    const ttnn::Shape& first_shape = first.logical_shape();
+    const uint32_t rank = first_shape.rank();
+    uint64_t concat_extent = 0;
+    for (const Tensor& input : input_tensors) {
+        concat_extent += input.logical_shape()[dim];
+    }
+    if (concat_extent > UINT32_MAX) {
+        return false;
+    }
+    uint64_t sticks = 1;
+    for (uint32_t d = 0; d + 1 < rank; ++d) {
+        sticks *= d == dim ? concat_extent : first_shape[d];
+        if (sticks > UINT32_MAX) {
+            return false;
+        }
+    }
+    const uint64_t out_width = dim + 1 == rank ? concat_extent : first_shape[kLastAxis];
+    const uint64_t alignment = std::max(tt::tt_metal::hal::get_l1_alignment(), tt::tt_metal::hal::get_dram_alignment());
+    const uint64_t out_stick_bytes = out_width * first.element_size();
+    return (out_stick_bytes + alignment - 1) / alignment * alignment <= UINT32_MAX;
+}
+
 bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
     if (input_tensors.size() < 2 || input_tensors.size() > kConcatMaxNwayInputs) {
         return false;
     }
     const Tensor& first = input_tensors.front();
-    if (first.storage_type() != ttnn::StorageType::DEVICE || first.buffer() == nullptr) {
+    // buffer() throws on an unallocated tensor instead of returning null, so allocation is tested first.
+    if (first.storage_type() != ttnn::StorageType::DEVICE || !first.is_allocated()) {
         return false;
     }
     // Shared by routing and the forced and primitive entries, so none of them runs the kernels on an unsupported
@@ -69,7 +96,7 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
         return false;
     }
     for (const Tensor& input : input_tensors) {
-        if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr ||
+        if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated() ||
             input.device() != first.device()) {
             return false;
         }
@@ -90,7 +117,7 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
             }
         }
     }
-    return true;
+    return fits_32_bit_geometry(input_tensors, attrs.dim);
 }
 
 uint64_t l1_output_reservation(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {

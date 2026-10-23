@@ -36,7 +36,7 @@ void validate_tensors(const ConcatCodegenParams& operation_attributes, const Con
 
     for (const auto& in_ref : input_tensors) {
         TT_FATAL(in_ref.storage_type() == ttnn::StorageType::DEVICE, "Operand to concat needs to be on device.");
-        TT_FATAL(in_ref.buffer() != nullptr, "Operand to concat needs to be allocated in a buffer on device.");
+        TT_FATAL(in_ref.is_allocated(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.layout() == first_input.layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.dtype() == first_input.dtype(), "All Tensors should have same dtypes.");
@@ -52,7 +52,7 @@ void validate_tensors(const ConcatCodegenParams& operation_attributes, const Con
     if (optional_output.has_value()) {
         TT_FATAL(
             optional_output->storage_type() == ttnn::StorageType::DEVICE, "Output of concat needs to be on device!");
-        TT_FATAL(optional_output->buffer() != nullptr, "Output of concat needs to be allocated in a buffer on device!");
+        TT_FATAL(optional_output->is_allocated(), "Output of concat needs to be allocated in a buffer on device!");
         TT_FATAL(
             optional_output->device() == first_input.device(),
             "Inputs and output of concat must be on the same device");

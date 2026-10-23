@@ -15,7 +15,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 
 # `ttnn.concat` takes no implementation argument -- it routes on its own. The forced legs below are
-# the verification-only entries in the private module; see concat_force.hpp.
+# verification-only bindings on `ttnn._ttnn.operations.data_movement` (concat_nanobind.cpp), not republished
+# as `ttnn.*` operations; see concat_force.hpp.
 _force_native = ttnn._ttnn.operations.data_movement.concat_force_native
 _force_codegen = ttnn._ttnn.operations.data_movement.concat_force_codegen
 
@@ -1247,6 +1248,8 @@ def _capturing(device):
 @pytest.mark.parametrize("device_params", [_TRACE_DEVICE_PARAMS], indirect=True)
 @skip_for_slow_dispatch("trace capture requires fast dispatch")
 def test_concat_codegen_trace_capture_under_pressure(device, pin_before_warmup):
+    # A plan cached by an earlier test would let the capture succeed without warm-up having compiled it.
+    device.clear_program_cache()
     stick = _stick_bytes(device)
     shapes, dim = _L1_CASES["rows_2in"](stick)
     xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
