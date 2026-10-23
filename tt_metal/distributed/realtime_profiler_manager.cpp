@@ -107,6 +107,9 @@ static_assert(
 
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 
+// Set on every consumer thread, so a callback calling back into the API can be caught.
+thread_local bool t_on_consumer_thread = false;
+
 // Compute the RT-profiler L1 carve-out addresses from a base anchored past UNRESERVED (outside the user-space
 // allocator).
 inline RealtimeProfilerCoreL1Addrs compute_rt_profiler_core_l1_addrs(uint32_t base) {
@@ -1018,6 +1021,7 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
             available);
     }
     if (available == 0) {
+        dev_state.empty_fifo_polls->fetch_add(1, std::memory_order_release);
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
@@ -1152,6 +1156,7 @@ void RealtimeProfilerManager::run_receiver() {
 }
 
 void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
+    t_on_consumer_thread = true;
     tracy::SetThreadName(fmt::format("RtProfilerConsumer{}", consumer.handle).c_str());
     std::vector<tt::ProgramRealtimeRecord> records(
         std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size()));
@@ -1180,12 +1185,13 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
         // stop_consumer sets the stop mode then wakes, so waiting on a token sampled only inside wait() could miss that
         // wake and hang
         const auto token = consumer.reader.wait_token();
-        std::span<tt::ProgramRealtimeRecord> batch = consumer.reader.read_batch(records);
-        const uint64_t dropped_total = consumer.reader.dropped();
         const ConsumerStopMode stop_mode = consumer.stop_mode.load(std::memory_order_acquire);
-        if (stop_mode == ConsumerStopMode::StopWithoutDrain) {
+        if (stop_mode == ConsumerStopMode::StopWithoutDrain ||
+            (stop_mode == ConsumerStopMode::DrainThenStop && consumer.reader.position() >= consumer.drain_until)) {
             break;
         }
+        std::span<tt::ProgramRealtimeRecord> batch = consumer.reader.read_batch(records);
+        const uint64_t dropped_total = consumer.reader.dropped();
         if (!batch.empty()) {
             if (consumer.chip_filter.has_value()) {
                 const auto kept_end = std::remove_if(batch.begin(), batch.end(), [&](const auto& record) {
@@ -1196,9 +1202,7 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
             if (!batch.empty()) {
                 deliver_batch(batch, dropped_total);
             }
-        } else if (stop_mode == ConsumerStopMode::DrainThenStop) {
-            break;
-        } else {
+        } else if (stop_mode == ConsumerStopMode::Running) {
             TTZoneScopedDN(RT_PROFILER, "Wait");
             consumer.reader.wait(token);
         }
@@ -1207,6 +1211,8 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
 }
 
 void RealtimeProfilerManager::stop_consumer(Consumer& consumer, ConsumerStopMode stop_mode) {
+    // A drain ends at what is published now, so it finishes even while the receiver keeps publishing.
+    consumer.drain_until = ring_->published();
     consumer.stop_mode.store(stop_mode, std::memory_order_release);
     ring_->writer().wake_readers();
     if (consumer.thread.joinable()) {
@@ -1228,10 +1234,7 @@ void RealtimeProfilerManager::add_consumer(
     tt::ProgramRealtimeProfilerCallback callback,
     std::optional<std::unordered_set<uint32_t>> chip_filter) {
     std::lock_guard<std::mutex> lock(consumers_mutex_);
-    const auto caller = std::this_thread::get_id();
-    const bool from_callback_thread =
-        std::ranges::any_of(consumers_, [caller](const auto& kv) { return kv.second->thread.get_id() == caller; });
-    TT_FATAL(!from_callback_thread, "A real-time profiler callback must not register callbacks");
+    TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not register callbacks");
     if (!ring_.has_value() || consumers_shut_down_) {
         return;
     }
@@ -1250,10 +1253,7 @@ void RealtimeProfilerManager::remove_consumer(tt::ProgramRealtimeProfilerCallbac
         if (it == consumers_.end()) {
             return;
         }
-        const auto caller = std::this_thread::get_id();
-        const bool from_callback_thread =
-            std::ranges::any_of(consumers_, [caller](const auto& kv) { return kv.second->thread.get_id() == caller; });
-        TT_FATAL(!from_callback_thread, "A real-time profiler callback must not unregister callbacks");
+        TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not unregister callbacks");
         consumer = std::move(it->second);
         consumers_.erase(it);
     }
@@ -1261,6 +1261,122 @@ void RealtimeProfilerManager::remove_consumer(tt::ProgramRealtimeProfilerCallbac
     const uint64_t dropped = consumer->dropped;
     if (dropped > 0) {
         log_warning(tt::LogMetal, "[Real-time profiler] Callback {} dropped {} record(s)", handle, dropped);
+    }
+}
+
+void RealtimeProfilerManager::drain_and_remove_consumers(
+    const std::unordered_set<tt::ProgramRealtimeProfilerCallbackHandle>& handles) {
+    std::unordered_set<uint32_t> chip_ids;
+    {
+        std::lock_guard<std::mutex> lock(consumers_mutex_);
+        TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not unregister callbacks");
+        bool found = false;
+        for (const auto handle : handles) {
+            auto it = consumers_.find(handle);
+            if (it == consumers_.end()) {
+                continue;
+            }
+            found = true;
+            if (it->second->chip_filter.has_value()) {
+                chip_ids.insert(it->second->chip_filter->begin(), it->second->chip_filter->end());
+            } else {
+                for (const auto& dev_state : devices_) {
+                    chip_ids.insert(dev_state.chip_id);
+                }
+            }
+        }
+        if (!found) {
+            return;
+        }
+    }
+
+    wait_for_records_in_flight(chip_ids);
+
+    // Stopping under the lock makes a concurrent remove_consumer() of the same handle wait for the drain to finish.
+    std::lock_guard<std::mutex> lock(consumers_mutex_);
+    for (const auto handle : handles) {
+        auto it = consumers_.find(handle);
+        if (it == consumers_.end()) {
+            continue;
+        }
+        stop_consumer(*it->second, ConsumerStopMode::DrainThenStop);
+        const uint64_t dropped = it->second->dropped;
+        if (dropped > 0) {
+            log_warning(tt::LogMetal, "[Real-time profiler] Callback {} dropped {} record(s)", handle, dropped);
+        }
+        consumers_.erase(it);
+    }
+}
+
+bool RealtimeProfilerManager::on_consumer_thread() { return t_on_consumer_thread; }
+
+bool RealtimeProfilerManager::wait_for_push_ring_empty(
+    const DeviceState& dev_state, std::chrono::steady_clock::time_point deadline) const {
+    constexpr auto kPollBackoff = std::chrono::microseconds(50);
+    const uint32_t indices_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index);
+    static_assert(
+        offsetof(RtProfilerRingBuffer, read_index) == offsetof(RtProfilerRingBuffer, write_index) + sizeof(uint32_t),
+        "write_index and read_index must be adjacent to be read in one shot");
+    while (true) {
+        std::vector<uint32_t> indices(2, 0);
+        try {
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                dev_state.device,
+                dev_state.realtime_profiler_core,
+                indices_addr,
+                2 * sizeof(uint32_t),
+                indices,
+                CoreType::WORKER);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Failed to read ring indices while draining device {}: {}",
+                dev_state.chip_id,
+                e.what());
+            return false;
+        }
+        if (indices[0] == indices[1]) {
+            return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} push kernel did not drain in time (write_index={}, read_index={}); "
+                "trailing records may be lost",
+                dev_state.chip_id,
+                indices[0],
+                indices[1]);
+            return false;
+        }
+        std::this_thread::sleep_for(kPollBackoff);
+    }
+}
+
+void RealtimeProfilerManager::wait_for_records_in_flight(const std::unordered_set<uint32_t>& chip_ids) const {
+    constexpr auto kPushRingDrainTimeout = std::chrono::milliseconds(100);
+    constexpr auto kReceiverTimeout = std::chrono::seconds(1);
+    constexpr auto kPollBackoff = std::chrono::microseconds(50);
+    for (const auto& dev_state : devices_) {
+        if (!chip_ids.contains(dev_state.chip_id) || dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        if (!wait_for_push_ring_empty(dev_state, std::chrono::steady_clock::now() + kPushRingDrainTimeout)) {
+            continue;
+        }
+        // Every entry is now in the host FIFO. The poll that bumps the count past `seen` may have started before
+        // that, but the next one started after, so seeing two more empty polls means the receiver published them.
+        const uint64_t seen = dev_state.empty_fifo_polls->load(std::memory_order_acquire);
+        const auto deadline = std::chrono::steady_clock::now() + kReceiverTimeout;
+        while (dev_state.empty_fifo_polls->load(std::memory_order_acquire) < seen + 2) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Receiver did not drain device {} in time; trailing records may be lost",
+                    dev_state.chip_id);
+                break;
+            }
+            std::this_thread::sleep_for(kPollBackoff);
+        }
     }
 }
 
@@ -1275,7 +1391,6 @@ RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
 void RealtimeProfilerManager::shutdown() {
     // Upper bound on the wait for the push kernel to finish draining; see the poll below.
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
-    constexpr auto kShutdownKernelExitPollBackoff = std::chrono::microseconds(50);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
     // The push kernel can only finish once the receiver reads again.
     receiver_paused_.store(false, std::memory_order_release);
@@ -1312,48 +1427,7 @@ void RealtimeProfilerManager::shutdown() {
         if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
             continue;
         }
-        const uint32_t indices_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index);
-        static_assert(
-            offsetof(RtProfilerRingBuffer, read_index) ==
-                offsetof(RtProfilerRingBuffer, write_index) + sizeof(uint32_t),
-            "write_index and read_index must be adjacent to be read in one shot");
-        bool drained = false;
-        while (true) {
-            std::vector<uint32_t> indices(2, 0);
-            try {
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    dev_state.device,
-                    dev_state.realtime_profiler_core,
-                    indices_addr,
-                    2 * sizeof(uint32_t),
-                    indices,
-                    CoreType::WORKER);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Failed to read ring indices while draining device {}: {}",
-                    dev_state.chip_id,
-                    e.what());
-                break;
-            }
-            if (indices[0] == indices[1]) {
-                drained = true;
-                break;
-            }
-            if (std::chrono::steady_clock::now() >= deadline) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} push kernel did not drain within {} ms "
-                    "(write_index={}, read_index={}); trailing records may be lost",
-                    dev_state.chip_id,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(kShutdownKernelExitGrace).count(),
-                    indices[0],
-                    indices[1]);
-                break;
-            }
-            std::this_thread::sleep_for(kShutdownKernelExitPollBackoff);
-        }
-        if (drained) {
+        if (wait_for_push_ring_empty(dev_state, deadline)) {
             log_debug(tt::LogMetal, "[Real-time profiler] Device {} push kernel drained", dev_state.chip_id);
         }
     }

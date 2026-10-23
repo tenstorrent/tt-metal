@@ -75,8 +75,14 @@ public:
     // Blocks until an in-flight invocation of the callback returns. A no-op for an unknown handle. Must not be called
     // from a callback.
     void remove_consumer(tt::ProgramRealtimeProfilerCallbackHandle handle);
+    // Like remove_consumer(), but first delivers the records still in flight from the consumers' chips, for programs
+    // that already completed there. The receiver keeps running for the other consumers. Unknown handles are skipped.
+    // Must not be called from a callback.
+    void drain_and_remove_consumers(const std::unordered_set<tt::ProgramRealtimeProfilerCallbackHandle>& handles);
     // True if any device (restricted to `chip_filter` when given) has a running profiler.
     bool is_active(const std::optional<std::unordered_set<uint32_t>>& chip_filter = std::nullopt) const;
+    // True on the consumer thread of any manager, i.e. inside a callback.
+    static bool on_consumer_thread();
 
     // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
@@ -131,6 +137,9 @@ private:
         FinishSyncPhase finish_sync_phase = FinishSyncPhase::Idle;
         std::chrono::steady_clock::time_point finish_sync_request_at;
         std::chrono::steady_clock::time_point finish_sync_deadline;
+        // Receiver polls that found the D2H FIFO empty; read by wait_for_records_in_flight() on other threads. Boxed
+        // so DeviceState stays movable.
+        std::unique_ptr<std::atomic<uint64_t>> empty_fifo_polls = std::make_unique<std::atomic<uint64_t>>(0);
 
         DeviceState();
         ~DeviceState();
@@ -165,12 +174,18 @@ private:
         tt::ProgramRealtimeProfilerCallbackHandle handle;
         std::optional<std::unordered_set<uint32_t>> chip_filter;
         std::atomic<ConsumerStopMode> stop_mode{ConsumerStopMode::Running};
+        // Ring position DrainThenStop reads up to; written before stop_mode.
+        uint64_t drain_until = 0;
         uint64_t dropped = 0;
         std::thread thread;
     };
 
     void run_consumer(Consumer& consumer);
     void stop_consumer(Consumer& consumer, ConsumerStopMode stop_mode);
+    // Polls the device until the push kernel has sent every ring entry to the host, or `deadline` passes.
+    bool wait_for_push_ring_empty(const DeviceState& dev_state, std::chrono::steady_clock::time_point deadline) const;
+    // Waits until the records of programs that already completed on `chip_ids` have been published to the ring.
+    void wait_for_records_in_flight(const std::unordered_set<uint32_t>& chip_ids) const;
     void on_callback_registered(
         tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) override;
     void on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) override;

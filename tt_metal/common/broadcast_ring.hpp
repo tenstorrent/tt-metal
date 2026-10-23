@@ -299,6 +299,9 @@ public:
          */
         [[nodiscard]] uint64_t dropped() const noexcept { return dropped_; }
 
+        /** @brief Position of the next item this reader will read; items before it were read or dropped. */
+        [[nodiscard]] uint64_t position() const noexcept { return cursor_; }
+
         Reader(const Reader&) = delete;
         Reader& operator=(const Reader&) = delete;
         Reader(Reader&& other) noexcept :

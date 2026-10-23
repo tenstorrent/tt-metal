@@ -6,6 +6,7 @@
 
 #include <tt_stl/span.hpp>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -204,14 +205,30 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
-    // Shared by callback (un)registration and activity queries; exclusive only to install or detach
-    // realtime_profiler_, so close_impl() can shut it down without holding the lock.
+    // Shared by callback (un)registration and activity queries; exclusive only to change the members below, so
+    // close_impl() can shut the manager down, or retire inherited callbacks, without holding the lock.
     mutable std::shared_mutex realtime_profiler_mutex_;
+    enum class RealtimeProfilerState : uint8_t { Open, Closing, Closed };
+    RealtimeProfilerState realtime_profiler_state_ = RealtimeProfilerState::Open;
+    mutable std::condition_variable_any realtime_profiler_closed_cv_;
+    // Callbacks registered through this mesh or its submeshes into an ancestor's manager; close_impl() retires them.
+    // Updated under a shared realtime_profiler_mutex_ plus this mutex.
+    mutable std::mutex inherited_realtime_profiler_handles_mutex_;
+    mutable std::unordered_set<tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle>
+        inherited_realtime_profiler_handles_;
 
-    // Runs f(manager, chip_filter) with the real-time profiler serving this mesh: its own, or for a submesh without
-    // one the nearest ancestor's, with chip_filter restricting delivery to this mesh's chips. Returns false if none.
+    // Runs f(manager, chip_filter, path) with the real-time profiler serving this mesh: its own, or for a submesh
+    // without one the nearest ancestor's. chip_filter then restricts delivery to this mesh's chips, and path lists the
+    // meshes from this one up to that ancestor, excluded. Returns false if there is none, or if this mesh or an
+    // ancestor is closing; with wait_for_close, it first waits for that close to finish.
     template <typename F>
-    bool with_realtime_profiler(F&& f) const;
+    bool with_realtime_profiler(F&& f, bool wait_for_close = false) const;
+    template <typename F>
+    bool with_realtime_profiler(
+        const std::optional<std::unordered_set<uint32_t>>& chip_filter,
+        std::vector<const MeshDeviceImpl*>& path,
+        bool wait_for_close,
+        F&& f) const;
 
     // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
     // close_impl().

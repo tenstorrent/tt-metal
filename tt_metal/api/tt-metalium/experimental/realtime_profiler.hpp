@@ -90,7 +90,8 @@ bool IsProgramRealtimeProfilerActive();
  * ProgramRealtimeRecordBatch::dropped.
  *
  * The callback stays registered until it is unregistered or `mesh_device` is closed; closing first delivers the
- * records still in flight. A callback must not register or unregister callbacks.
+ * records still in flight. This also holds when `mesh_device` is a submesh: closing it removes its callbacks while
+ * its parent keeps running. A callback must not register or unregister callbacks.
  *
  * Return value: ProgramRealtimeProfilerCallbackHandle - handle that can be passed to
  *               UnregisterProgramRealtimeProfilerCallback to remove the callback.
@@ -102,8 +103,8 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
 /**
  * Unregister a callback previously registered on `mesh_device` by its handle.
  *
- * This call blocks until any in-flight invocation of that callback has completed. It is a no-op if `mesh_device`
- * has already been closed.
+ * This call blocks until any in-flight invocation of that callback has completed, including when `mesh_device` is
+ * being closed concurrently. It is a no-op once `mesh_device` has been closed.
  */
 void UnregisterProgramRealtimeProfilerCallback(
     distributed::MeshDevice& mesh_device, ProgramRealtimeProfilerCallbackHandle handle);

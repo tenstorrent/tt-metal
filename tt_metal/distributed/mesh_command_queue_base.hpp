@@ -162,6 +162,12 @@ public:
         bool blocking,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
+    // finish() without the barrier across hosts, for callers that may run on only some of them.
+    void finish_without_barrier() {
+        auto lock = lock_api_function_();
+        finish_nolock();
+    }
+
     virtual void wait_for_completion(bool) {}
     // May only be called after wait_for_completion has been called on both command queues on the device.
     virtual void finish_and_reset_in_use() {}

@@ -1185,6 +1185,31 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
         }
 
+        // Closing a submesh sends no TERMINATE, so dispatch would keep holding the last records for callbacks an
+        // ancestor's profiler serves. Finish flushes them, and the retirement below delivers them.
+        bool has_inherited_realtime_profiler_callbacks = false;
+        {
+            std::shared_lock lock(realtime_profiler_mutex_);
+            std::lock_guard handles_lock(inherited_realtime_profiler_handles_mutex_);
+            has_inherited_realtime_profiler_callbacks = !inherited_realtime_profiler_handles_.empty();
+        }
+        if (has_inherited_realtime_profiler_callbacks) {
+            for (auto& mesh_command_queue : mesh_command_queues_) {
+                if (!mesh_command_queue->in_use()) {
+                    continue;
+                }
+                try {
+                    mesh_command_queue->finish_without_barrier();
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Failed to flush records while closing mesh {}: {}",
+                        id(),
+                        e.what());
+                }
+            }
+        }
+
         mesh_command_queues_.clear();
     }
 
@@ -1201,14 +1226,43 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
+    // Registration and queries see Closing and do nothing, and unregistration waits for Closed, so none of them races
+    // with the shutdown below or returns while it still invokes a callback.
+    bool realtime_profiler_was_open = false;
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler;
+    std::unordered_set<tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle> inherited_handles;
     {
         std::unique_lock lock(realtime_profiler_mutex_);
-        realtime_profiler = std::move(realtime_profiler_);
+        realtime_profiler_was_open = realtime_profiler_state_ == RealtimeProfilerState::Open;
+        if (realtime_profiler_was_open) {
+            realtime_profiler_state_ = RealtimeProfilerState::Closing;
+            realtime_profiler = std::move(realtime_profiler_);
+            inherited_handles = std::move(inherited_realtime_profiler_handles_);
+        }
     }
     if (realtime_profiler) {
         realtime_profiler->shutdown();
         realtime_profiler.reset();
+    }
+    if (!inherited_handles.empty() && parent_mesh_) {
+        // This mesh's programs have finished, but its callbacks live in an ancestor that keeps running.
+        parent_mesh_->impl().with_realtime_profiler(
+            [&](RealtimeProfilerManager& ancestor_profiler, const auto&, const auto& path) {
+                ancestor_profiler.drain_and_remove_consumers(inherited_handles);
+                for (const auto* mesh : path) {
+                    std::lock_guard lock(mesh->inherited_realtime_profiler_handles_mutex_);
+                    for (const auto handle : inherited_handles) {
+                        mesh->inherited_realtime_profiler_handles_.erase(handle);
+                    }
+                }
+            });
+    }
+    if (realtime_profiler_was_open) {
+        {
+            std::unique_lock lock(realtime_profiler_mutex_);
+            realtime_profiler_state_ = RealtimeProfilerState::Closed;
+        }
+        realtime_profiler_closed_cv_.notify_all();
     }
     streaming_profiler_.reset();
 
@@ -1940,31 +1994,58 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
 RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
 template <typename F>
-bool MeshDeviceImpl::with_realtime_profiler(F&& f) const {
-    for (const MeshDeviceImpl* owner = this; owner != nullptr;
-         owner = owner->parent_mesh_ ? &owner->parent_mesh_->impl() : nullptr) {
-        std::shared_lock lock(owner->realtime_profiler_mutex_);
-        if (!owner->realtime_profiler_) {
-            continue;
+bool MeshDeviceImpl::with_realtime_profiler(F&& f, bool wait_for_close) const {
+    std::vector<const MeshDeviceImpl*> path;
+    return with_realtime_profiler(std::nullopt, path, wait_for_close, std::forward<F>(f));
+}
+
+template <typename F>
+bool MeshDeviceImpl::with_realtime_profiler(
+    const std::optional<std::unordered_set<uint32_t>>& chip_filter,
+    std::vector<const MeshDeviceImpl*>& path,
+    bool wait_for_close,
+    F&& f) const {
+    // Held while recursing into the parent: this mesh cannot drop its parent link, or retire the callbacks f adds to
+    // path, until f returns. Locks are taken from descendant to ancestor.
+    std::shared_lock lock(realtime_profiler_mutex_);
+    if (realtime_profiler_state_ != RealtimeProfilerState::Open) {
+        if (wait_for_close) {
+            TT_FATAL(
+                !RealtimeProfilerManager::on_consumer_thread(),
+                "A real-time profiler callback must not unregister callbacks");
+            realtime_profiler_closed_cv_.wait(
+                lock, [this] { return realtime_profiler_state_ == RealtimeProfilerState::Closed; });
         }
-        std::optional<std::unordered_set<uint32_t>> chip_filter;
-        if (owner != this) {
-            chip_filter.emplace();
-            for (const auto* device : view_->get_devices()) {
-                chip_filter->insert(static_cast<uint32_t>(device->id()));
-            }
-        }
-        f(*owner->realtime_profiler_, chip_filter);
+        return false;
+    }
+    if (realtime_profiler_) {
+        f(*realtime_profiler_, chip_filter, std::as_const(path));
         return true;
     }
-    return false;
+    if (!parent_mesh_) {
+        return false;
+    }
+    path.push_back(this);
+    if (chip_filter.has_value()) {
+        return parent_mesh_->impl().with_realtime_profiler(chip_filter, path, wait_for_close, std::forward<F>(f));
+    }
+    std::unordered_set<uint32_t> chip_ids;
+    for (const auto* device : view_->get_devices()) {
+        chip_ids.insert(static_cast<uint32_t>(device->id()));
+    }
+    return parent_mesh_->impl().with_realtime_profiler(
+        std::make_optional(std::move(chip_ids)), path, wait_for_close, std::forward<F>(f));
 }
 
 tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle MeshDeviceImpl::register_realtime_profiler_callback(
     tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) {
     const auto handle = tt::AllocateProgramRealtimeProfilerCallbackHandle();
-    with_realtime_profiler([&](RealtimeProfilerManager& realtime_profiler, const auto& chip_filter) {
+    with_realtime_profiler([&](RealtimeProfilerManager& realtime_profiler, const auto& chip_filter, const auto& path) {
         realtime_profiler.add_consumer(handle, std::move(callback), chip_filter);
+        for (const auto* mesh : path) {
+            std::lock_guard lock(mesh->inherited_realtime_profiler_handles_mutex_);
+            mesh->inherited_realtime_profiler_handles_.insert(handle);
+        }
     });
     return handle;
 }
@@ -1972,12 +2053,19 @@ tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle MeshDeviceImpl
 void MeshDeviceImpl::unregister_realtime_profiler_callback(
     tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle) {
     with_realtime_profiler(
-        [&](RealtimeProfilerManager& realtime_profiler, const auto&) { realtime_profiler.remove_consumer(handle); });
+        [&](RealtimeProfilerManager& realtime_profiler, const auto&, const auto& path) {
+            realtime_profiler.remove_consumer(handle);
+            for (const auto* mesh : path) {
+                std::lock_guard lock(mesh->inherited_realtime_profiler_handles_mutex_);
+                mesh->inherited_realtime_profiler_handles_.erase(handle);
+            }
+        },
+        /*wait_for_close=*/true);
 }
 
 bool MeshDeviceImpl::is_realtime_profiler_active() const {
     bool active = false;
-    with_realtime_profiler([&](const RealtimeProfilerManager& realtime_profiler, const auto& chip_filter) {
+    with_realtime_profiler([&](const RealtimeProfilerManager& realtime_profiler, const auto& chip_filter, const auto&) {
         active = realtime_profiler.is_active(chip_filter);
     });
     return active;
