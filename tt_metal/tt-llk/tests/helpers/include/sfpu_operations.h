@@ -1847,7 +1847,9 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::REQUANT)
     {
-        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
+        // The init macro calls requant_init through a function reference, which ignores default arguments.
+        // This test adds its zero point before rounding. It passes the zero point as zero_point and 0 as out_zero_point.
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point, 0u);
     }
     else if constexpr (BINOP == BinaryOp::DEQUANT)
     {
