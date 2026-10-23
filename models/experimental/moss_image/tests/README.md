@@ -36,7 +36,36 @@ manifests, missing or altered referenced tensors, and checkpoint mismatches
 remain failures. A skip means the corresponding device path was not qualified.
 The integrated test currently uses the same pinned capture to verify checkpoint
 hashes; it also skips without that capture, although generation itself does not
-consume captured activations. Host and attention tests do not need these assets.
+consume captured activations. Host, attention and CPU-reference scheduler tests
+do not need these assets.
+
+## CPU references without CUDA captures
+
+The attention and CFG/Euler tests compare real TT outputs against references
+computed by PyTorch on CPU. They require reserved TT hardware and a matching
+native TTNN build, but no checkpoint download, saved activations or CUDA runtime.
+They do not provide a full-model CPU generation backend.
+
+- `test_attention.py`: dense FP64 PyTorch attention, plus the BF16 probability
+  rounding policy; covers causal GQA, masked MHA and per-head GQA masks.
+- `test_scheduler_cpu.py`: CPU CFG and the pinned vendored MOSS/diffusers
+  scheduler at steps 0, 24 and 49 of the 50-step schedule. Cases cover CFG 1/3,
+  BF16 prediction promotion to FP32, FP32 predictions, and a padded token count.
+  Both guided velocity and updated latents must meet PCC >= 0.999999 and relative
+  RMS <= 0.00001. Both replicas are checked on two cards; this does not exercise
+  tensor-parallel collectives.
+
+```bash
+# One reserved P150; references are calculated on the host CPU.
+pytest models/experimental/moss_image/tests/test_attention.py \
+  models/experimental/moss_image/tests/test_scheduler_cpu.py \
+  --timeout=120 -k '1-card'
+
+# Repeat on an explicitly reserved connected pair.
+pytest models/experimental/moss_image/tests/test_attention.py \
+  models/experimental/moss_image/tests/test_scheduler_cpu.py \
+  --timeout=120 -k '2-cards'
+```
 
 ## Scope and commands
 
