@@ -46,7 +46,8 @@ from helpers.ulp_table import MEASURED_ARCH, Metric
 from helpers.utils import _record_ulp_measurement, passed_test
 
 # `accuracy` is the marker every LLK workflow deselects. Every unkeyed budget is a
-# Wormhole measurement and binds nowhere else, so off Wormhole nothing here can fail.
+# measurement on the table's own architecture and binds nowhere else, so on a chip
+# with no table of its own (Quasar) nothing here can fail.
 pytestmark = [
     pytest.mark.accuracy,
     pytest.mark.skipif(
