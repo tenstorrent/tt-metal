@@ -177,6 +177,10 @@ void kernel_main() {
     const uint32_t mx = get_arg_val<uint32_t>(a++), my = get_arg_val<uint32_t>(a++), py = get_arg_val<uint32_t>(a++);
     const uint32_t words = get_arg_val<uint32_t>(a++), nst = get_arg_val<uint32_t>(a++), nown = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a, xs = ord + NCK, wkb = xs + GX;  // (chunk order; my row's NoC x by column; W' K range bounds)
+    // (the steps I watch: a landed row tile's last share is mine - its port's one fused increment, behind the row's
+    // other shares on that link - so I count it landed for the other cores of its part: s | c0 << 8 | c1 << 16)
+    const uint32_t nrl = get_arg_val<uint32_t>(wkb + PAIRS + 1), rls = wkb + PAIRS + 2;
+    uint32_t rdone = 0;
     auto word = [&](uint32_t kind, uint32_t s) { return words + 16 * (kind * NSTMAX + s); };  // (0 landed, 1 SA, 2 SP)
     auto wv = [&](uint32_t kind, uint32_t s) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word(kind, s)); };
     volatile tt_l1_ptr uint32_t* epw = wv(3, 0);  // (my call count: this call's words are >= ep x their count)
@@ -188,6 +192,13 @@ void kernel_main() {
     uint32_t cs = 0, wr = 0, owned = 0;
     auto pump = [&]() {
         invalidate_l1_cache();
+        for (uint32_t i = 0; i < nrl; ++i) {  // (any order: the directions land their row tiles independently)
+            const uint32_t e = get_arg_val<uint32_t>(rls + i), rs = e & 0xFF;
+            if ((rdone >> i & 1) || *wv(0, rs) < ep) continue;
+            for (uint32_t c = e >> 8 & 0xFF; c < (e >> 16); ++c)
+                if (c != cx) noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(xs + c), my, word(0, rs)), 1);
+            rdone |= 1u << i;
+        }
         while (owned < nown && cb_pages_available_at_front(CB_L0, SHMAX * (owned + 1))) {  // (my own share tilized)
             noc_semaphore_inc(get_noc_addr(word(0, owned)), 1);
             ++owned;
@@ -265,7 +276,7 @@ void kernel_main() {
         if (s > 0) write_out(s - 1);
     }
     if (nst > 0) write_out(nst - 1);
-    while (wr < PAIRS || cs < nst || owned < nown) pump();
+    while (wr < PAIRS || cs < nst || owned < nown || rdone != (nrl ? (2u << (nrl - 1)) - 1 : 0u)) pump();
     noc_async_atomic_barrier();
 }
 """
@@ -455,8 +466,11 @@ void kernel_main() {
 # ---- the latent all-gather's ports (one per direction and link, on the column right of the engine) ----
 # A port (d, l) sends half l of the K tiles of its blocks (own first, then the ones it relays) to the next chip in
 # direction d, straight into the engine cores' landing slots there: share by share (row tile R of the block: its step
-# there, column cx: K tiles kh(l) + ak(cx)), packets of up to RP tiles; a share's last packet a fused write + increment
-# of the owner's landed word of that step. A share (own or relayed) is read from this chip's owner once landed.
+# there, column cx: K tiles kh(l) + ak(cx)), packets of up to RP tiles; a row tile's last packet (its part's last
+# column: the watcher) a fused write + increment of the watcher's landed word of that step - flushed behind the row
+# tile's other packets on that link, so the watcher counts the step landed for its part's other cores (a fused
+# packet a share halved the link: 11.8 GB/s every packet, 18.1 every 2nd, 23.7 every 8th or none). A share (own or
+# relayed) is read from this chip's owner once landed.
 _PORT_CT = r"""
 #include "api/debug/dprint.h"
 constexpr uint32_t RT = get_compile_time_arg_val(0), GX = get_compile_time_arg_val(1), RP = get_compile_time_arg_val(2);
@@ -625,7 +639,10 @@ void kernel_main() {
             noc_async_writes_flushed();  // (the group's packets and headers have left L1)
             cb_pop_front(CBP, PG * RP);
         }
-        cb_wait_front(CBM, 1);
+        {
+            DeviceZoneScopedN("TP-SGWAIT");  // (the reader's next group not read yet)
+            cb_wait_front(CBM, 1);
+        }
         gn = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CBM));
         cb_pop_front(CBM, 1);
         cb_wait_front(CBP, PG * RP);
@@ -639,7 +656,8 @@ void kernel_main() {
             const uint32_t ox = get_arg_val<uint32_t>(xs + cx), oy = get_arg_val<uint32_t>(ys + pr);
             const uint64_t dst = get_noc_addr(ox, oy, land + (s * SHMAX + t0 - k0) * 2048, 0);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* hd = hdrs[gi];
-            if (last) {
+            const uint32_t c0 = part == 2 ? GX / 2 : 0, c1 = part == 1 ? GX / 2 : GX;
+            if (last && ((cx - c0) % WG == WG - 1 || cx == c1 - 1)) {  // (a watcher's share: its group's last packet)  // (the row tile's last packet: its watcher's word)
                 hd->to_noc_fused_unicast_write_atomic_inc(
                     NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(ox, oy, sl + 16 * s, 0), 1, true}, m * 2048);
             } else {
@@ -713,12 +731,14 @@ class TailEngine:
         w_dtype=ttnn.bfloat8_b,
         topology=ttnn.Topology.Linear,
         num_links=2,
+        land_group=3,
     ):
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
         GX = GX or grid.x - 1  # (the last column: the gather's ports)
         assert GY % 2 == 0 and GY <= grid.y
         self.GX, self.GY, self.cx0 = GX, GY, cx0
+        self.WG = land_group  # (a gather's landed shares: one fused increment a WG columns' shares, the watcher's)
         self.rows, self.Hr, self.Ho, self.NCK, self.eps = rows, Hr, Ho, chunks, eps
         self.KT, self.NTO = Hr // 32, Ho // 32
         assert rows % (32 * chunks) == 0, f"{rows} rows: whole row tiles a chunk ({chunks} chunks)"
@@ -783,6 +803,30 @@ class TailEngine:
         return off, o
 
     # ---- the gather's plan ----
+    def _relays(self, coord):
+        """The watchers on chip coord: {(cx, cy): [s | c0 << 8 | c1 << 16]} - every row tile landed here by a port
+        (unit (q, part) from either neighbour, K half h on link h) is watched in groups of WG columns of its part, by
+        each group's last column."""
+        PAIRS, GX = self.PAIRS, self.GX
+        units = set()
+        for c, ch in self.chips.items():
+            rg = ch["rings"][0]
+            for dd, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
+                if peer == coord and rg.get(f"{dd}_links"):
+                    units |= set(rg[dd])
+        order, out = self.chips[coord]["order"], {}
+        for q, part in units:
+            c0, c1 = {0: (0, GX), 1: (0, GX // 2), 2: (GX // 2, GX)}[part]
+            for r in range(self.RT):
+                pr, s = step_of(order.index(q) * self.RT + r, PAIRS)
+                for g0 in range(c0, c1, self.WG):
+                    g1 = min(g0 + self.WG, c1)
+                    for h in range(2):
+                        if g1 - g0 > 1:
+                            out.setdefault((g1 - 1, pr + PAIRS * h), []).append(s | g0 << 8 | g1 << 16)
+        assert all(len(v) <= min(self.NSTMAX, 32) for v in out.values())
+        return {k: sorted(v) for k, v in out.items()}
+
     def _gather_plan(self, topology, num_links):
         """The latent all-gather over TP into the engines' landing slots: fabric_all_gather's plan (line / ring,
         balanced ring: the opposite block half each way) with its ports on the column right of the engine; link l
@@ -933,7 +977,7 @@ class TailEngine:
         # the ports' staging (carved at the arena's start on the port cores) and their poll word after it
         PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151; <= 8: a packet header each, the RISC's pool)
         assert PG <= 12, "a port group's packets take a packet header each: 12 a RISC (16 / 24 hung)"
-        PSTAGE = 2 * PG * self.RP
+        PSTAGE = 3 * PG * self.RP  # (three groups: one sending, one landing, one being issued)
         # (then the poll word, the group counts (CB 1), the shares' polled words: 16 B a (row tile, column))
         assert PSTAGE * 2048 + 64 + 64 + RT * GX * 16 <= self.arena_bytes
         d = ttnn.cb_descriptor_from_sharded_tensor(
@@ -952,6 +996,7 @@ class TailEngine:
         b_rt, n_rt, c_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         g0, g1 = virt(0, 0), virt(GX - 1, GY - 1)  # (the W' gate: lead core (0, 0), the engine's NoC rectangle)
         gate = [g0.x | g0.y << 16, min(g0.x, g1.x), min(g0.y, g1.y), max(g0.x, g1.x), max(g0.y, g1.y), GX * GY]
+        relays = self._relays(coord)
         for cx in range(GX):
             pn = self.pn[cx]
             for cy in range(GY):
@@ -1017,6 +1062,8 @@ class TailEngine:
                     + list(order)
                     + [virt(c2, cy).x for c2 in range(GX)]
                     + wkb
+                    + [len(relays.get((cx, cy), []))]
+                    + (relays.get((cx, cy), []) + [0] * self.NSTMAX)[: self.NSTMAX]  # (a fixed length)
                 )
                 c_rt[cx0 + cx][cy] = [pn, fo, fn, ak0, ak1, self.nst[p], self.nown[p], 0] + wkb[1:]
         # ---- ports ----
@@ -1105,7 +1152,7 @@ class TailEngine:
                 config=dm("RISCV_1", ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=self.dbg + _PORT_SENDER,
+                kernel_source=self.dbg + f"#define WG {self.WG}\n" + _PORT_SENDER,
                 source_type=st,
                 core_ranges=self.port_crs,
                 compile_time_args=pct,

@@ -1417,3 +1417,24 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   its half column's range p - 1): 140.3 / 133.8 -> 124.1 / 121.1. (OUT behind the next step and batched landed-word
   polls: neutral, kept.) Ring tail 640: ~121-125 us (median of 5, slowest chip), 1024: 180 us; soak 400 calls each.
 - Next: W' bandwidth (DRISC job / bank readers ~500 GB/s vs ~150 now), then per-step overhead (S + OUT + SQ ~4-5 us).
+
+### Ring tail: the gather's send rate, fused increments, traced timing
+- Fabric bench (zz_scratch_ring_wire.py, 1x4 TORUS_X, edge e0, 2 links, scatter over 55 receiving cores): every edge
+  ~23.7 GB/s at 6 KB packets. A packet costs at least ~218 ns: 2 KB packets 9.4 GB/s, 4 KB 18.7, 6 KB 23.7. A fused
+  write+inc with flush is ~2 packets (the receiver flushes its writes before the inc): every packet fused 11.8, every
+  2nd 18.1, every 8th 23.7. A separate header-only atomic costs the same as a fused one (12.1 every packet).
+  Bench gotcha: more than 12 packet headers on a RISC hangs by design (PacketHeaderPool exhaustion loops forever).
+- Tail ports: the sender spent ~0.7 us of every ~2.3 us group waiting for the reader. With two staging groups the
+  reader issues group X only once X - 2 was sent, so the next count waits on that issue. Three groups (PSTAGE 3 PG
+  RP): the own block goes 3.3-42 us instead of 3.3-49.
+- Landed increments in groups (TailEngine land_group, default 3). The fused inc goes on the last packet of every WG
+  columns' shares, into that group's last core (the watcher). Its NCRISC pump counts the group's other cores landed;
+  the flushed inc vouches for the earlier packets on the link. Ports end ~4 us sooner at 11 (whole row), but the
+  engine sees a row later. Traced, ring 640, two batches of 20: lg1 127/129, lg2 121/126, lg3 127/118, lg11 130/124
+  us - even within noise. Kept 3: fused ~1 packet in 6, in the free regime of the bench.
+- Traced tail timing: test_tail_engine captures one call and replays it (replay_device_times). Eager medians
+  swung 114-165 us with launch skew.
+- What binds now (zones, 640): own rows tilized <= 9 us; first own packets ~12-15 us; own block ~26 us at ~22 GB/s;
+  the far half lands 51-61 us. Both neighbours' row r land on pair r together, ~5.5 us a row: pair 4's steps 1-3
+  all start after ~50 us. Each step's MM is ~10 us and OUT ~3.5 us, serial: (1, 6) ends 112 us.
+- Next: spread the pairs' arrivals (bwd ports walk the rows in reverse), then step length.

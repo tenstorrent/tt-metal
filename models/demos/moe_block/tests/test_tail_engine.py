@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """tail_engine (K3's fused tail: latent rmsnorm + up projection + the shared expert's add, one program a chip) on the
-LoudBox 2x4 against fp32 torch, each call its own inputs; the program's device time with the profiler
-(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1)."""
+LoudBox 2x4 against fp32 torch, each call its own inputs; with the profiler (TT_METAL_DEVICE_PROFILER=1
+TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1) the program's device time over traced replays."""
 
 import os
-import statistics
 
 import pytest
 import torch
@@ -16,7 +15,7 @@ from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.moe_block.moe_block import KIMI_K3
-from models.demos.moe_block.tests.test_moe_block import pcc, per_chip_programs
+from models.demos.moe_block.tests.test_moe_block import pcc, replay_device_times
 from models.demos.moe_block.tt.tail_engine import TailEngine
 
 # (test-only: MOE_MESH "1x4" with MOE_FABRIC "torus_x" - one 2 x 2 square of the LoudBox as a TP ring of 4, the
@@ -38,15 +37,16 @@ def _fab(**kw):
     indirect=True,
 )
 @pytest.mark.parametrize("ROWS", [640, 1024])  # (rows a mesh row: chunk 1280 / 2048 on the 2x4)
+@pytest.mark.parametrize("LG", [3], ids=lambda g: f"lg{g}")  # (the gather's landed-share groups: 1 2 3 11 even, traced)
 @pytest.mark.timeout(1800)
-def test_tail_engine(mesh_device, device_params, ROWS):
+def test_tail_engine(mesh_device, device_params, ROWS, LG):
     m = KIMI_K3
     H, Hr, Ho = m.emb_dim, m.latent_dim, m.emb_dim // C
     g_ = torch.Generator().manual_seed(0)
     w_up = torch.randn(H, Hr, generator=g_) * 0.02
     gn = 1.0 + torch.randn(Hr, generator=g_) * 0.1
     topo = ttnn.Topology.Ring if _FABRIC else ttnn.Topology.Linear  # (the TP ring of 4: its ring schedule)
-    eng = TailEngine(mesh_device, rows=ROWS, Hr=Hr, Ho=Ho, chunks=C, eps=m.norm_eps, topology=topo)
+    eng = TailEngine(mesh_device, rows=ROWS, Hr=Hr, Ho=Ho, chunks=C, eps=m.norm_eps, topology=topo, land_group=LG)
     logger.info(
         f"tail_engine: {ROWS} rows, grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths "
         f"{sorted(set(eng.pn))}, steps a pair {eng.nst} (own {eng.nown}), ring slots {eng.NSLOT}, arena "
@@ -90,24 +90,14 @@ def test_tail_engine(mesh_device, device_params, ROWS):
         for t in (yt, st, out):
             ttnn.deallocate(t)
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
-        per_chip_programs(mesh_device)
-        ts = []
-        for _ in range(5):
-            z = torch.randn(R, C, ROWS, Hr, generator=g_).to(torch.bfloat16)
-            zt = ttnn.from_torch(
-                z, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
-            )
-            st = ttnn.from_torch(
-                z[..., :Ho], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
-            )
-            ttnn.synchronize_device(mesh_device)
-            per_chip_programs(mesh_device)
-            out = eng.run(zt, w, st)
-            ttnn.synchronize_device(mesh_device)
-            progs = [p for p in per_chip_programs(mesh_device) if p]
-            ts.append(max(sum(p) for p in progs))
-            for t in (zt, st, out):
-                ttnn.deallocate(t)
-        logger.info(
-            f"TAIL device time {statistics.median(ts):.1f} us (slowest chip, median of 5; {[round(t, 1) for t in ts]})"
-        )
+        # (traced: one capture of a call, replayed back to back - no host launch skew between the chips' programs)
+        y, se, yt, st = inputs(1.0)
+        out = eng.run(yt, w, st)
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        eng.run(yt, w, st, out)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        replay_device_times(mesh_device, tid, f"tail {ROWS} lg{LG}", batches=(20, 20))
+        ttnn.release_trace(mesh_device, tid)
+        for t in (yt, st, out):
+            ttnn.deallocate(t)
