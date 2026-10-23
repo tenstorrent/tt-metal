@@ -551,14 +551,17 @@ void kernel_main() {
         const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
         // x_indexed: this M-row's x-row ids for the chunk, read once and reused by every gate/up K-block. Only the
-        // in0 sender reads x. Entries past the expert's count are other rows of the buffer; they are never used.
+        // in0 sender reads x. Only the expert's own tile rows are read: the tail chunk's last core may own fewer than
+        // per_core_M of them, and past the last expert's rows the index vector ends.
         if constexpr (x_indexed) {
             if (is_in0_sender && this_core_first_row < count_tiles) {
+                const uint32_t remaining_tile_rows = count_tiles - this_core_first_row;
+                const uint32_t index_tile_rows = remaining_tile_rows < per_core_M ? remaining_tile_rows : per_core_M;
                 read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
                     noc_read,
                     get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
                     row_idx_l1,
-                    per_core_M * TILE_HEIGHT * static_cast<uint32_t>(sizeof(uint32_t)),
+                    index_tile_rows * TILE_HEIGHT * static_cast<uint32_t>(sizeof(uint32_t)),
                     (x_start_stick + this_core_first_row * TILE_HEIGHT) * static_cast<uint32_t>(sizeof(uint32_t)));
             }
         }

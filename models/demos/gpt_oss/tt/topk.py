@@ -306,7 +306,7 @@ class TopKRouter:
 
     def _dense_route(self, logits):
         """[32, E] BF16 logits tile -> the dense routing weights (dense_route.cpp; K_SEL = top_k, every logit tied with
-        the top_k-th routed, up to 2 top_k)."""
+        the top_k-th routed, as dense_decode's ge(logits, kth))."""
         from .fused_decode.boundary import KERNEL_DIR
 
         mesh = logits.device()
@@ -314,7 +314,7 @@ class TopKRouter:
         cores = ttnn.num_cores_to_corerangeset(ttnn.TILE_SIZE, mesh.compute_with_storage_grid_size(), row_wise=True)
         w = ttnn.empty(list(logits.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
                        memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
-        ct = [0, gx, self.top_k, 2 * self.top_k]  # (up to 2 top_k routed: ge(logits, kth) keeps every tie)
+        ct = [0, gx, self.top_k, self.num_experts]  # (up to every expert routed: ge(logits, kth) keeps every tie)
         for t in (logits, w):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         k = ttnn.KernelDescriptor(

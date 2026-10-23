@@ -652,7 +652,10 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     return decoder_layer
 
 
-@parametrize_mesh_with_fabric([(1, 1), (1, 4), (1, 8), (4, 8)])
+# (1x4 not on a Galaxy: a 1x4 ring submesh does not come up there and breaks the session's fabric, test_factory.py)
+@parametrize_mesh_with_fabric(
+    [shape for shape in [(1, 1), (1, 4), (1, 8), (4, 8)] if shape != (1, 4) or ttnn.get_num_devices() <= 8]
+)
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
