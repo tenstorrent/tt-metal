@@ -8,6 +8,8 @@
 #include <cstdlib>  // std::strtoul
 #include <map>
 #include <regex>
+#include <set>
+#include <tuple>
 #include <string>
 #include <utility>
 #include <vector>
@@ -342,12 +344,43 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
     // address -- and can report a per-core peak that exceeds physical L1 on a passing op. Track
     // usage per core and take the max. L1 tensor buffers report a per-bank size but not which
     // cores, so they are added to a base resident on every participating core.
-    std::map<std::pair<int, int>, size_t> per_core_program_l1;  // CB + dfb + scratchpad per core
-    size_t l1_buffer_base = 0;                                  // resident L1 tensor buffers
-    auto add_program_l1 = [&](const nlohmann::json& node, size_t alloc_size) {
-        for (const auto& c : parse_core_range_set_str(node.at(kParams).at(kCoreRangeSet).get<std::string>())) {
-            per_core_program_l1[c] += alloc_size;
+    //
+    // On a MeshDevice the key is (device, core): each chip has its own L1, so the same core on two
+    // chips must not be summed. A mesh program reports its CBs against every sub-device of the mesh,
+    // so a heterogeneous workload (one program per chip) re-reports the same allocation once per
+    // program; an exact duplicate (device, address, size, cores) within one allocation epoch is the
+    // same physical bytes and is counted once. Placeholder address-0 reports are never deduplicated.
+    std::map<std::tuple<std::string, int, int>, size_t> per_core_program_l1;  // CB + dfb + scratchpad
+    std::set<std::tuple<std::string, std::string, size_t, std::string>> seen_program_l1;
+    size_t l1_buffer_base = 0;  // resident L1 tensor buffers
+    // L1 buffers whose allocation this capture recorded (buffer node id -> per-bank bytes). A buffer allocated
+    // before the capture began was never added to the base, so its deallocation must not be subtracted from it
+    // (the size_t base would wrap and report a ~2^64 peak).
+    std::map<int, size_t> live_l1_buffers;
+    auto param_str = [](const nlohmann::json& params, const char* key) -> std::string {
+        if (!params.contains(key)) {
+            return {};
         }
+        const auto& v = params.at(key);
+        return v.is_string() ? v.get<std::string>() : v.dump();
+    };
+    // Returns false when this allocation duplicates one already counted in this epoch.
+    auto add_program_l1 = [&](const nlohmann::json& node, size_t alloc_size) -> bool {
+        const auto& params = node.at(kParams);
+        const std::string cores = params.at(kCoreRangeSet).get<std::string>();
+        const std::string device = param_str(params, kDeviceId);
+        // Address 0 is the placeholder of NO_DISPATCH / program-scope reports, not a real placement.
+        const std::string address = param_str(params, kAddress);
+        if (!address.empty() && address != "0" && address != "\"0\"") {
+            const std::string kind = node.at(kNodeType).get<std::string>() + "@" + address;
+            if (!seen_program_l1.emplace(device, kind, alloc_size, cores).second) {
+                return false;
+            }
+        }
+        for (const auto& c : parse_core_range_set_str(cores)) {
+            per_core_program_l1[{device, c.first, c.second}] += alloc_size;
+        }
+        return true;
     };
     auto update_peak_total = [&]() {
         size_t max_core = 0;
@@ -370,45 +403,61 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
             bool is_globally_allocated = json_to_int(node.at(kParams).at(kGloballyAllocated)) == 1;
             if (!is_globally_allocated) {
                 uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-                current_cb += alloc_size;
-                peak_cb = std::max(peak_cb, current_cb);
-                add_program_l1(node, alloc_size);
-                update_peak_total();
+                if (add_program_l1(node, alloc_size)) {
+                    current_cb += alloc_size;
+                    peak_cb = std::max(peak_cb, current_cb);
+                    update_peak_total();
+                }
             }
         } else if (node.at(kNodeType) == kNodeDataflowBufferAllocate) {
             // A borrowed buffer is a view onto a tensor's L1, which the tensor already reports.
             bool borrows_memory = json_to_int(node.at(kParams).at(kBorrowsMemory)) == 1;
             if (!borrows_memory) {
                 uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-                current_dfb += alloc_size;
-                peak_dfb = std::max(peak_dfb, current_dfb);
-                add_program_l1(node, alloc_size);
-                update_peak_total();
+                if (add_program_l1(node, alloc_size)) {
+                    current_dfb += alloc_size;
+                    peak_dfb = std::max(peak_dfb, current_dfb);
+                    update_peak_total();
+                }
             }
         } else if (node.at(kNodeType) == kNodeScratchpadAllocate) {
             uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
-            current_scratchpad += alloc_size;
-            peak_scratchpad = std::max(peak_scratchpad, current_scratchpad);
-            add_program_l1(node, alloc_size);
-            update_peak_total();
+            if (add_program_l1(node, alloc_size)) {
+                current_scratchpad += alloc_size;
+                peak_scratchpad = std::max(peak_scratchpad, current_scratchpad);
+                update_peak_total();
+            }
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
             current_cb = 0;
             current_dfb = 0;
             current_scratchpad = 0;
             per_core_program_l1.clear();
+            seen_program_l1.clear();
         } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
             }
             size_t alloc_size = calculate_buffer_allocation_size(node);
+            const auto& conns = node.at(kConnections);
+            const int buffer_node = conns.empty() ? -1 : conns[0].get<int>();
             if (node.at(kNodeType) == kNodeBufferAllocate) {
                 current_l1 += alloc_size;
                 peak_l1 = std::max(peak_l1, current_l1);
                 l1_buffer_base += alloc_size;
+                live_l1_buffers[buffer_node] += alloc_size;
                 update_peak_total();
             } else {  // kNodeBufferDeallocate
-                current_l1 -= alloc_size;
-                l1_buffer_base -= alloc_size;
+                auto it = live_l1_buffers.find(buffer_node);
+                if (it == live_l1_buffers.end()) {
+                    continue;  // allocated before the capture: never counted, so nothing to release
+                }
+                const size_t counted = std::min(alloc_size, it->second);
+                current_l1 -= counted;
+                l1_buffer_base -= counted;
+                it->second -= counted;
+                if (it->second == 0) {
+                    live_l1_buffers.erase(it);
+                }
             }
         }
     }

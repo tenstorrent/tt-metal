@@ -26,6 +26,7 @@
 #include <atomic>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"
@@ -144,7 +145,10 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    if (programs_.size() == 1 || this->is_finalized()) {
+    // GraphTracker processors are thread_local: CB allocations made on a thread-pool worker are invisible
+    // to an active graph capture (peak L1 reads 0 for heterogeneous workloads). Compile on the calling
+    // thread while a capture is active so the capture records every program's CB allocations.
+    if (programs_.size() == 1 || this->is_finalized() || GraphTracker::instance().is_enabled()) {
         // Compile from main thread for homogeneous workloads
         for (auto& [device_range, _] : programs_) {
             this->compile_program(device_range, mesh_device);
