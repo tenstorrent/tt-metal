@@ -25,11 +25,19 @@ TABLE = {
     ),
     "NORM_WEIGHT": Setting(
         "fp32",
-        ("fp32", "fused"),
+        ("fp32", "fp32_gamma", "fused"),
+        "fp32_gamma (manual perf pass): the weight as the fp32 rms_norm's gamma (fp32 out); post norms stay fp32 into "
+        "the fp32 residual add, pre norms are converted to bf16. "
         "fp32: rms_norm without the weight on the fp32-cast input (fp32 out), then one multiply by the weight to bf16; "
         "median row norm -0.00005 vs the golden (layers 14 / 52, golden inputs). fused: the weight inside the bf16 "
         "rms_norm (gemma4_d_p), -0.0005 to -0.0008 per norm, four per layer: the assembled 60-layer residual drifts "
         "past the 0.005 norm bias limit.",
+    ),
+    "NORM_FP32_SHARDED": Setting(
+        False,
+        None,
+        "NORM_WEIGHT=fp32 path block-sharded, one tile row per core row (manual perf pass); False: interleaved "
+        "rms_norm, which runs one core per tile row.",
     ),
     "COMPONENT_FAST_RUNTIME": Setting(
         False,
@@ -39,9 +47,10 @@ TABLE = {
         "ops through ttnn's slow Python dispatch, which runs the hooks.",
     ),
     "ATTN_PROJ_FIDELITY": Setting(
-        "HiFi4",
+        "HiFi2",
         ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
-        "QKV and o_proj matmuls. gemma4_d_p runs them at LoFi from 512 rows per device (a perf choice for later).",
+        "QKV and o_proj matmuls. HiFi2 since the manual perf pass; gemma4_d_p runs them at LoFi from 512 rows per "
+        "device.",
     ),
     "ATTN_PROJ_FP32_ACC": Setting(True, None, "fp32 accumulation for the QKV and o_proj matmuls."),
     "ATTN_SDPA_FIDELITY": Setting(
@@ -58,10 +67,11 @@ TABLE = {
     ),
     "ATTN_HEAD_NORM": Setting(
         "fp32",
-        ("fp32", "rms_norm"),
+        ("fp32", "fp32_fused", "rms_norm"),
         "q/k/v per-head RMS norm. fp32: x * rsqrt(mean(x^2) + eps) * w as fp32 eltwise/reduce ops (matches the "
-        "reference to bf16 input rounding, no norm bias); rms_norm: ttnn.rms_norm, measured -0.08% median row-norm "
-        "bias on q at head_dim 256.",
+        "reference to bf16 input rounding, no norm bias); fp32_fused: one ttnn.rms_norm on the fp32 heads (fp32 out, "
+        "HiFi4 fp32 acc) and the fp32 weight multiply (3 ops instead of 7, the residual norms' fp32 path); rms_norm: "
+        "ttnn.rms_norm, measured -0.08% median row-norm bias on q at head_dim 256.",
     ),
     "ATTN_KV_FP32_WRITE": Setting(
         True,
@@ -150,9 +160,10 @@ TABLE = {
         "Golden trace (token ids + kv_cache/) the prefill producer defaults to (adapter.prefill_trace_default).",
     ),
     "MLP_FIDELITY": Setting(
-        "HiFi4",
+        "HiFi2",
         ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
-        "gate / up / down matmuls. gemma4_d_p runs them at LoFi with fp32 acc (a perf choice for later).",
+        "gate / up / down matmuls. HiFi2 since the manual perf pass (bfp8 weights; with the 2D config the s56320 "
+        "ladder's max rel is 0.127, HiFi4 op by op 0.130); gemma4_d_p runs LoFi.",
     ),
     "MLP_FP32_ACC": Setting(True, None, "fp32 accumulation for the MLP matmuls."),
     "MLP_FP32_INTERMEDIATE": Setting(
@@ -166,6 +177,19 @@ TABLE = {
         "Core grid of every model matmul (projections, MLP, RoPE rotation, composed global SDPA). auto: ttnn's default (the full 12x10 grid), on which a bf16 x bfp8 "
         "HiFi4 fp32-acc linear on chip (4, 0) wrote different values in a few output tiles run to run (the same chunk "
         "sent twice gave different KV bytes); 8x8 and 4x4 were bit-identical over 20 repeats.",
+    ),
+    "MATMUL_PROGRAM": Setting(
+        "2d_all",
+        ("auto", "2d", "2d_all"),
+        "Projection and MLP linears (manual perf pass). auto: ttnn's default program on MATMUL_CORE_GRID; 2d: an "
+        "explicit 2D-multicast config over the whole compute grid (tt/matmul.py, gemma4_d_p's blocking) for every "
+        "linear but the global layers' transposed [out, in] QK and o_proj; 2d_all: for those too.",
+    ),
+    "ACT_MEMORY": Setting(
+        "dram",
+        ("dram", "l1"),
+        "Short-lived activations inside attention and the MLP (manual perf pass): DRAM, or L1 interleaved as "
+        "gemma4_d_p (prefill_short_lived_memcfg). Collective outputs, the KV caches and the residual stream stay in DRAM.",
     ),
     "RESIDUAL_STREAM": Setting(
         "fp32",

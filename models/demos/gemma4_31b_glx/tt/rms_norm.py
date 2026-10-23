@@ -61,6 +61,20 @@ def _block_sharded_program_config(block_h, block_w, grid_y, grid_x):
     )
 
 
+@functools.cache
+def _fp32_shard_geometry(rows, width):
+    """(block_h, block_w, grid_y, grid_x) for the fp32 norm (NORM_FP32_SHARDED): one tile row per core row, the width
+    over 12 (or 8) core columns; None when the shape does not split so."""
+    tile = ttnn.TILE_SIZE
+    if rows % tile or width % tile or rows // tile > 10:
+        return None
+    w_t = width // tile
+    grid_x = next((g for g in (12, 8, 6, 4) if w_t % g == 0), None)
+    if grid_x is None:
+        return None
+    return 1, w_t // grid_x, rows // tile, grid_x
+
+
 class RMSNorm:
     def __init__(self, mesh, weight: torch.Tensor | None, eps: float):
         """weight: [hidden] (None: unscaled norm). Uploaded once, replicated over the mesh."""
@@ -81,6 +95,8 @@ class RMSNorm:
             self.tt_weight = ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, hidden)), ttnn.TILE_LAYOUT)
         self.sharded = settings.get("NORM_SHARDED")
         self.fp32 = self.tt_weight is not None and settings.get("NORM_WEIGHT") == "fp32"
+        self.fp32_gamma = self.tt_weight is not None and settings.get("NORM_WEIGHT") == "fp32_gamma"
+        self.fp32_sharded = settings.get("NORM_FP32_SHARDED")
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, settings.get("NORM_FIDELITY")),
@@ -89,17 +105,33 @@ class RMSNorm:
             packer_l1_acc=settings.get("PACKER_L1_ACC"),
         )
 
-    def __call__(self, x, memory_config=None):
+    def __call__(self, x, memory_config=None, out_dtype=ttnn.bfloat16):
         """x: [1, 1, rows, hidden] bf16 (or fp32: the device model's residual stream) TILE on every chip. Returns the same shape, interleaved in memory_config (DRAM by
         default)."""
         if self.fp32:
             x32 = ttnn.typecast(x, ttnn.float32) if x.dtype != ttnn.float32 else x
-            y = ttnn.rms_norm(
-                x32,
-                epsilon=self.eps,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
-            )
+            geometry = _fp32_shard_geometry(x32.padded_shape[-2], x32.padded_shape[-1]) if self.fp32_sharded else None
+            if geometry is None:
+                y = ttnn.rms_norm(
+                    x32,
+                    epsilon=self.eps,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
+            else:
+                # One tile row per core row: the interleaved norm runs one core per tile row (5 cores for 160 rows).
+                shard_mc = _block_sharded_memory_config(*geometry)
+                xs = ttnn.to_memory_config(x32, shard_mc)
+                ys = ttnn.rms_norm(
+                    xs,
+                    epsilon=self.eps,
+                    program_config=_block_sharded_program_config(*geometry),
+                    memory_config=shard_mc,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
+                ttnn.deallocate(xs)
+                y = ttnn.sharded_to_interleaved(ys, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(ys)
             if x32 is not x:
                 ttnn.deallocate(x32)
             out = ttnn.multiply(
@@ -107,6 +139,8 @@ class RMSNorm:
             )
             ttnn.deallocate(y)
             return out
+        if self.fp32_gamma:
+            return self._fp32_gamma(x, memory_config or ttnn.DRAM_MEMORY_CONFIG, out_dtype)
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1]) if self.sharded else None
         if geometry is None:
             return ttnn.rms_norm(
@@ -130,3 +164,39 @@ class RMSNorm:
         out = ttnn.sharded_to_interleaved(out_sharded, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_sharded)
         return out
+
+    def _fp32_gamma(self, x, memory_config, out_dtype):
+        """NORM_WEIGHT=fp32_gamma: one rms_norm on the fp32 input with the weight as its gamma (fp32 out, fp32
+        accumulation), block-sharded one tile row per core row when NORM_FP32_SHARDED; the output in out_dtype (the
+        sharded path converts while unsharding). Post norms keep fp32 for the fp32 residual add (no bf16 rounding)."""
+        x32 = ttnn.typecast(x, ttnn.float32) if x.dtype != ttnn.float32 else x
+        geometry = _fp32_shard_geometry(x32.padded_shape[-2], x32.padded_shape[-1]) if self.fp32_sharded else None
+        if geometry is None:
+            y = ttnn.rms_norm(
+                x32,
+                weight=self.tt_weight,
+                epsilon=self.eps,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            if out_dtype != ttnn.float32:
+                yd = ttnn.typecast(y, out_dtype)
+                ttnn.deallocate(y)
+                y = yd
+        else:
+            shard_mc = _block_sharded_memory_config(*geometry)
+            xs = ttnn.to_memory_config(x32, shard_mc)
+            ys = ttnn.rms_norm(
+                xs,
+                weight=self.tt_weight,
+                epsilon=self.eps,
+                program_config=_block_sharded_program_config(*geometry),
+                memory_config=shard_mc,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(xs)
+            y = ttnn.sharded_to_interleaved(ys, memory_config, output_dtype=out_dtype)
+            ttnn.deallocate(ys)
+        if x32 is not x:
+            ttnn.deallocate(x32)
+        return y

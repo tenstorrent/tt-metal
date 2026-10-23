@@ -95,7 +95,9 @@ def test_serving_trace(mesh_device):
         for layer in check_layers:
             c = kv.layers[layer]
             for name, t in (("kv", c),) if not isinstance(c, tuple) else (("k", c[0]), ("v", c[1])):
-                part = ttnn.slice(t, (slot, 0, 0, 0), (slot + 1, *tuple(t.shape)[1:]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                part = ttnn.slice(
+                    t, (slot, 0, 0, 0), (slot + 1, *tuple(t.shape)[1:]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
                 out[(layer, name)] = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(part)]
                 ttnn.deallocate(part)
         return out

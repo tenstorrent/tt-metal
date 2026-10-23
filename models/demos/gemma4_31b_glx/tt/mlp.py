@@ -15,8 +15,10 @@ Per chunk (160 rows per chip between blocks, 640 per SP row):
 
 import ttnn
 
-from .attention import matmul_grid
+from .attention import act_memory_config, matmul_grid
+from .matmul import linear_kwargs
 from .settings import settings
+from ..reference._bringup_interface import signpost
 
 TP_AXIS = 1
 
@@ -50,41 +52,47 @@ class MLP:
             packer_l1_acc=settings.get("PACKER_L1_ACC"),
         )
         self.grid = matmul_grid()
+        self.fp32_acc = settings.get("MLP_FP32_ACC")
+        self.act_mc = act_memory_config()
         self.act_dtype = ttnn.float32 if settings.get("MLP_FP32_INTERMEDIATE") else ttnn.bfloat16
 
     def __call__(self, x):
         """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout."""
+        signpost("mlp.gather")
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        signpost("mlp.gate_up")
         gate = ttnn.linear(
             xg,
             self.w_gate,
-            activation="gelu_tanh",
             dtype=self.act_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.cfg,
-            core_grid=self.grid,
+            **linear_kwargs(self.mesh, xg, self.w_gate, activation="gelu_tanh", fp32_acc=self.fp32_acc, grid=self.grid),
         )
         up = ttnn.linear(
             xg,
             self.w_up,
             dtype=self.act_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.cfg,
-            core_grid=self.grid,
+            **linear_kwargs(self.mesh, xg, self.w_up, fp32_acc=self.fp32_acc, grid=self.grid),
         )
         ttnn.deallocate(xg)
-        hidden = ttnn.multiply(gate, up, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        signpost("mlp.mul")
+        hidden = ttnn.multiply(gate, up, dtype=ttnn.bfloat16, memory_config=self.act_mc)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        signpost("mlp.down")
         partial = ttnn.linear(
             hidden,
             self.w_down,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.cfg,
-            core_grid=self.grid,
+            **linear_kwargs(self.mesh, hidden, self.w_down, fp32_acc=self.fp32_acc, grid=self.grid),
         )
         ttnn.deallocate(hidden)
+        signpost("mlp.rs")
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(partial)
         return out

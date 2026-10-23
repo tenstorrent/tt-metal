@@ -357,3 +357,19 @@
   (test_contract's shape).
 - Gates: s56320 min layer PCC 0.99167 (composed: 0.99148), max rel 0.1288 (0.1303), KV PCC by chunk
   0.9754-0.9938; test_contract producer KV PCC global 0.9894, sliding_k 0.9905, sliding_v 0.9864.
+
+## Manual perf pass: projection and MLP matmuls (not pipeline-generated), 2026-10-23
+- `tt/matmul.py` (`MATMUL_PROGRAM` 2d_all): an explicit 2D-multicast program config for every projection and MLP
+  linear over the whole compute grid (gemma4_d_p's blocking: the widest column count dividing N, every core row,
+  K in blocks of up to 16 tiles; the global layers' transposed [out, in] weights too). ttnn's default ran these on
+  the 8x8 MATMUL_CORE_GRID. Output is still deterministic (traced == op by op, bit for bit).
+- `MLP_FIDELITY` / `ATTN_PROJ_FIDELITY` HiFi2 (bfp8 weights). With the 2D config the s56320 ladder's max rel is
+  0.129 (HiFi4 op by op: 0.130).
+- Measured on 6-layer stacks and dropped (no gain or worse): MATMUL_CORE_GRID=auto for the remaining default matmuls
+  (slower), CCL num_links 1/2, Ring topology, gemma4_d_p's short-slab reduce_scatter transport, async all_gather /
+  reduce_scatter on persistent semaphores, ATTN_SDPA_FIDELITY HiFi2 / LoFi for the sliding SDPA, sliding SDPA q64
+  and K splits 2/3, an uneven-N QKV config on all 12 columns.
+- Switches added here, off by default (turned on in the next commit after their own gates): ACT_MEMORY,
+  ATTN_HEAD_NORM=fp32_fused, NORM_FP32_SHARDED, NORM_WEIGHT=fp32_gamma. The modules also mark profile sections
+  (`signpost("attention.s_qkv")` ...), free when nothing profiles.
+- Warm 60-layer chunk, traced: start 0 387.9 -> 200.0 ms, start 51200 430.7 -> 242.7 ms.

@@ -29,7 +29,9 @@ import torch
 
 import ttnn
 
+from .matmul import linear_kwargs
 from .settings import settings
+from ..reference._bringup_interface import signpost
 
 TILE = ttnn.TILE_SIZE
 SP_AXIS, TP_AXIS = 0, 1
@@ -70,6 +72,12 @@ def _compute_config(mesh, fidelity, fp32_acc):
     )
 
 
+def act_memory_config():
+    """Where the layers' short-lived activations live (ACT_MEMORY): DRAM, or L1 interleaved (gemma4_d_p's
+    prefill_short_lived_memcfg). Collective outputs, the caches and the residual stream stay in DRAM."""
+    return ttnn.L1_MEMORY_CONFIG if settings.get("ACT_MEMORY") == "l1" else ttnn.DRAM_MEMORY_CONFIG
+
+
 def matmul_grid():
     """MATMUL_CORE_GRID as a linear's core_grid (None: ttnn's default)."""
     g = settings.get("MATMUL_CORE_GRID")
@@ -106,6 +114,32 @@ def _allocate_ring_cache(mesh, shape, width):
         ttnn.TensorTopology(dist, [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], coords)
     )
     return cache
+
+
+def fp32_fused_head_norm(x, weight, eps, cfg, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Per-head RMS norm over the last dim in fp32 with one ttnn.rms_norm (fp32 in / out, fp32 accumulation) on the
+    heads flattened to rows, then the fp32 weight multiply into dtype. x [1, h, L, d]; weight [1, 1, 1, d] fp32 or
+    None."""
+    _, h, s, d = x.shape
+    x32 = ttnn.typecast(x, ttnn.float32, memory_config=memory_config) if x.dtype != ttnn.float32 else x
+    y = ttnn.rms_norm(
+        ttnn.reshape(x32, (1, 1, h * s, d)),
+        epsilon=eps,
+        memory_config=memory_config,
+        compute_kernel_config=cfg,
+    )
+    if x32 is not x:
+        ttnn.deallocate(x32)
+    y = ttnn.reshape(y, (1, h, s, d))
+    if weight is not None:
+        yw = ttnn.multiply(y, weight, dtype=dtype, memory_config=memory_config)
+        ttnn.deallocate(y)
+        return yw
+    if dtype != ttnn.float32:
+        yd = ttnn.typecast(y, dtype, memory_config=memory_config)
+        ttnn.deallocate(y)
+        return yd
+    return y
 
 
 class SlidingAttention:
@@ -166,7 +200,7 @@ class SlidingAttention:
         self.rope = settings.get("ATTN_ROPE")
 
         def norm_weight(x):
-            fp32 = self.head_norm == "fp32"
+            fp32 = self.head_norm in ("fp32", "fp32_fused")
             return ttnn.from_torch(
                 x[order].reshape(1, 1, 1, d) if fp32 else x[order].reshape(1, 1, d // TILE, TILE).to(torch.bfloat16),
                 device=mesh,
@@ -274,6 +308,8 @@ class SlidingAttention:
 
         self.proj_cfg = _compute_config(mesh, settings.get("ATTN_PROJ_FIDELITY"), settings.get("ATTN_PROJ_FP32_ACC"))
         self.grid = matmul_grid()
+        self.proj_fp32 = settings.get("ATTN_PROJ_FP32_ACC")
+        self.act_mc = act_memory_config()
         self.sdpa_cfg = _compute_config(mesh, settings.get("ATTN_SDPA_FIDELITY"), settings.get("ATTN_SDPA_FP32_ACC"))
         self.norm_cfg = _compute_config(mesh, settings.get("ATTN_AUX_FIDELITY"), settings.get("ATTN_AUX_FP32_ACC"))
 
@@ -333,23 +369,23 @@ class SlidingAttention:
     def _head_norm(self, x, weight, dtype=ttnn.bfloat16):
         """Per-head RMS norm over d, x [1, h, L, d]. ATTN_HEAD_NORM fp32: x * rsqrt(mean(x^2) + eps) * w with every
         op in fp32 (weight [1, 1, 1, d] fp32 TILE); rms_norm: ttnn.rms_norm (weight ROW_MAJOR [1, 1, d / 32, 32])."""
+        if self.head_norm == "fp32_fused":
+            return fp32_fused_head_norm(x, weight, self.eps, self.norm_cfg, dtype, self.act_mc)
         if self.head_norm == "fp32":
             x32 = ttnn.typecast(x, ttnn.float32)
-            sq = ttnn.multiply(x32, x32, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ms = ttnn.mean(
-                sq, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.norm_cfg
-            )
+            sq = ttnn.multiply(x32, x32, dtype=ttnn.float32, memory_config=self.act_mc)
+            ms = ttnn.mean(sq, dim=-1, keepdim=True, memory_config=self.act_mc, compute_kernel_config=self.norm_cfg)
             ttnn.deallocate(sq)
             r = ttnn.rsqrt(
                 ttnn.add(ms, self.eps, dtype=ttnn.float32),
                 fast_and_approximate_mode=settings.get("ELTWISE_FAST_APPROX"),
             )
             ttnn.deallocate(ms)
-            y = ttnn.multiply(x32, r, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            y = ttnn.multiply(x32, r, dtype=ttnn.float32, memory_config=self.act_mc)
             for t in (x32, r):
                 ttnn.deallocate(t)
             if weight is not None:
-                yw = ttnn.multiply(y, weight, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                yw = ttnn.multiply(y, weight, dtype=ttnn.float32, memory_config=self.act_mc)
                 ttnn.deallocate(y)
                 y = yw
             if dtype != ttnn.float32:
@@ -362,30 +398,30 @@ class SlidingAttention:
             ttnn.reshape(x, (1, 1, h * s, d)),
             weight=weight,
             epsilon=self.eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.norm_cfg,
         )
         return ttnn.reshape(y, (1, h, s, d))
 
-    def _rope(self, x, cos, sin, dtype=ttnn.bfloat16):
+    def _rope(self, x, cos, sin, dtype=ttnn.bfloat16, out_mc=None):
         """x [1, h, L, d] (fp32 for elementwise) -> dtype (elementwise only; llama returns bf16)."""
         if self.rope == "llama":
             return ttnn.experimental.rotary_embedding_llama(
-                x, cos, sin, self.trans_mat, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                x, cos, sin, self.trans_mat, is_decode_mode=False, memory_config=self.act_mc
             )
         # x * cos + (x @ R) * sin in fp32; R is the exact +-1 pair rotation.
         rot = ttnn.matmul(
             x,
             self.trans_mat,
             dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.norm_cfg,
             core_grid=self.grid,
         )
-        xc = ttnn.multiply(x, cos, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        rs = ttnn.multiply(rot, sin, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        xc = ttnn.multiply(x, cos, dtype=ttnn.float32, memory_config=self.act_mc)
+        rs = ttnn.multiply(rot, sin, dtype=ttnn.float32, memory_config=self.act_mc)
         ttnn.deallocate(rot)
-        y = ttnn.add(xc, rs, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        y = ttnn.add(xc, rs, dtype=dtype, memory_config=out_mc or self.act_mc)
         ttnn.deallocate(xc)
         ttnn.deallocate(rs)
         return y
@@ -393,14 +429,15 @@ class SlidingAttention:
     def __call__(self, x, start: int, meta=None):
         """x: the residual chunk [1, 1, L / TP, hidden] bf16 per chip. Returns the same layout.
         meta: the device model's ChunkMeta (any tile-aligned start, pad rows); None: chunk-aligned start, own tables."""
+        signpost("attention.s_qkv")
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.linear(
             xg,
             self.wqkv,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.proj_cfg,
-            core_grid=self.grid,
+            **linear_kwargs(self.mesh, xg, self.wqkv, fp32_acc=self.proj_fp32, grid=self.grid),
         )
         ttnn.deallocate(xg)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -408,11 +445,12 @@ class SlidingAttention:
             num_heads=self.n_q_local,
             num_kv_heads=self.n_kv_local,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
         )
         ttnn.deallocate(qkv)
         # q / k stay fp32 into the elementwise RoPE
         qk_dtype = ttnn.float32 if self.rope == "elementwise" else ttnn.bfloat16
+        signpost("attention.s_norm")
         q_n, k_n = self._head_norm(q, self.q_norm_w, qk_dtype), self._head_norm(k, self.k_norm_w, qk_dtype)
         v_n = self._head_norm(v, None, self.kv_dtype)
         for t in (q, k, v):
@@ -430,22 +468,25 @@ class SlidingAttention:
         else:
             cos, sin = meta.sliding_rope  # looked up once per chunk, shared by every sliding layer
             slot, kv_actual = meta.slot, meta.kv_actual
-        q_r, k_r = self._rope(q_n, cos, sin), self._rope(k_n, cos, sin, self.kv_dtype)
+        signpost("attention.s_rope")
+        # the ring SDPA reads Q from DRAM
+        q_r = self._rope(q_n, cos, sin, out_mc=ttnn.DRAM_MEMORY_CONFIG)
+        k_r = self._rope(k_n, cos, sin, self.kv_dtype)
         for t in (q_n, k_n) + ((cos, sin) if meta is None else ()):
             ttnn.deallocate(t)
 
         if meta is not None and meta.keep is not None:
             # Pad rows (positions >= actual_end) reach the cache as exact zeros: the last 32-token record ships whole.
-            k_m, v_m = (
-                ttnn.multiply(t, meta.keep, dtype=t.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in (k_r, v_n)
-            )
+            k_m, v_m = (ttnn.multiply(t, meta.keep, dtype=t.dtype, memory_config=self.act_mc) for t in (k_r, v_n))
             ttnn.deallocate(k_r)
             ttnn.deallocate(v_n)
             k_r, v_n = k_m, v_m
+        signpost("attention.s_kvwrite")
         self.write_kv(k_r, v_n, start, meta)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v_n)
 
+        signpost("attention.s_sdpa")
         attn, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q_r,
             self.cache_k,
@@ -477,15 +518,16 @@ class SlidingAttention:
             sliding_window_size=self.window,
         )
         ttnn.deallocate(q_r)
-        heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        signpost("attention.s_out")
+        heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.act_mc)
         ttnn.deallocate(attn)
         partial = ttnn.linear(
             heads,
             self.wo,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.proj_cfg,
-            core_grid=self.grid,
+            **linear_kwargs(self.mesh, heads, self.wo, fp32_acc=self.proj_fp32, grid=self.grid),
         )
         ttnn.deallocate(heads)
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)

@@ -413,7 +413,9 @@ class Model:
         key = self.chunk_variant(start, end)
         prefix_rows, partial, padded = key
         bufs = {
-            "positions": self._put("positions", pos.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None)),
+            "positions": self._put(
+                "positions", pos.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None)
+            ),
             "slot": self._put("slot", torch.tensor([[[[slot]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             "kv_actual": self._put("kv_actual", torch.tensor([[[[start]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             "valid": self._put("valid", torch.tensor([[[[end]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
@@ -621,7 +623,9 @@ class Model:
     def _component(self, i: int, name: str):
         if name in NORM_WEIGHTS:
             norm = self.norms[i][name]
-            return lambda ctx, x: norm(x)
+            # post norms feed the residual add: in the stream dtype (only NORM_WEIGHT=fp32_gamma produces fp32)
+            dtype = self.stream if name.startswith("post_") else ttnn.bfloat16
+            return lambda ctx, x: norm(x, out_dtype=dtype)
         if name == "attention":
             attn = self.attn[i]
             return lambda ctx, x: attn(x, ctx.start, self.meta)

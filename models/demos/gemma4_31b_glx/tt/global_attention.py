@@ -37,10 +37,14 @@ from .attention import (
     TP_AXIS,
     _allocate_ring_cache,
     _compute_config,
+    act_memory_config,
+    fp32_fused_head_norm,
     matmul_grid,
     rot_transformation_mat,
 )
+from .matmul import linear_kwargs
 from .settings import settings
+from ..reference._bringup_interface import signpost
 
 ROTARY_DIM = 128  # rotating lanes of a 512-wide global head (partial_rotary_factor 0.25 of 512)
 _GATHER_BUFFERS = {}  # (mesh, capacity, width) -> the ring_mla receive buffer the global layers share
@@ -232,6 +236,9 @@ class GlobalAttention:
         self.num_links = settings.get("ATTN_RING_NUM_LINKS")
         self.partial_dtype = ttnn.float32 if settings.get("ATTN_GLOBAL_FP32_REDUCE") else ttnn.bfloat16
         self.qk_dtype = ttnn.float32 if settings.get("ATTN_GLOBAL_FP32_QK") else ttnn.bfloat16
+        self.head_norm = settings.get("ATTN_HEAD_NORM")
+        self.act_mc = act_memory_config()
+        self.proj_fp32 = settings.get("ATTN_PROJ_FP32_ACC")
 
         # Composed SDPA: the current chunk's keys arrive SP-gathered (key row r' * L + i = position start + r' * L + i);
         # SP row r's query j (position start + r * L + j) sees key row i' iff i' <= r * L + j. Prefix keys: all visible.
@@ -305,21 +312,21 @@ class GlobalAttention:
 
     def _norm(self, x, weight):
         """fp32 per-head RMS norm over d: x * rsqrt(mean(x^2) + eps) (* weight), x [1, h, L, d] -> fp32."""
+        if self.head_norm == "fp32_fused":
+            return fp32_fused_head_norm(x, weight, self.eps, self.norm_cfg, ttnn.float32, self.act_mc)
         x32 = ttnn.typecast(x, ttnn.float32)
-        sq = ttnn.multiply(x32, x32, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ms = ttnn.mean(
-            sq, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.norm_cfg
-        )
+        sq = ttnn.multiply(x32, x32, dtype=ttnn.float32, memory_config=self.act_mc)
+        ms = ttnn.mean(sq, dim=-1, keepdim=True, memory_config=self.act_mc, compute_kernel_config=self.norm_cfg)
         ttnn.deallocate(sq)
         r = ttnn.rsqrt(
             ttnn.add(ms, self.eps, dtype=ttnn.float32), fast_and_approximate_mode=settings.get("ELTWISE_FAST_APPROX")
         )
         ttnn.deallocate(ms)
-        y = ttnn.multiply(x32, r, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        y = ttnn.multiply(x32, r, dtype=ttnn.float32, memory_config=self.act_mc)
         for t in (x32, r):
             ttnn.deallocate(t)
         if weight is not None:
-            yw = ttnn.multiply(y, weight, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            yw = ttnn.multiply(y, weight, dtype=ttnn.float32, memory_config=self.act_mc)
             ttnn.deallocate(y)
             y = yw
         return y
@@ -329,18 +336,18 @@ class GlobalAttention:
             x,
             m,
             dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.norm_cfg,
             core_grid=self.grid,
         )
 
-    def _rope(self, x, rot, cos, sin, dtype):
+    def _rope(self, x, rot, cos, sin, dtype, out_mc=None):
         """x * cos + (x @ rot) * sin in fp32 (rot the exact +-1 adjacent-pair rotation) -> dtype."""
         r = self._matmul(x, rot)
-        xc = ttnn.multiply(x, cos, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        rs = ttnn.multiply(r, sin, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        xc = ttnn.multiply(x, cos, dtype=ttnn.float32, memory_config=self.act_mc)
+        rs = ttnn.multiply(r, sin, dtype=ttnn.float32, memory_config=self.act_mc)
         ttnn.deallocate(r)
-        y = ttnn.add(xc, rs, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        y = ttnn.add(xc, rs, dtype=dtype, memory_config=out_mc or self.act_mc)
         ttnn.deallocate(xc)
         ttnn.deallocate(rs)
         return y
@@ -353,15 +360,18 @@ class GlobalAttention:
             cos, sin = self.cos[c], self.sin[c]
         else:
             cos, sin = meta.global_rope
+        signpost("attention.g_qk")
         xg = ttnn.all_gather(x, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qk = ttnn.linear(
             xg,
             self.wqk,
             transpose_b=self.w_transposed,
             dtype=self.qk_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.proj_cfg,
-            core_grid=self.grid,
+            **linear_kwargs(
+                self.mesh, xg, self.wqk, fp32_acc=self.proj_fp32, grid=self.grid, transpose_b=self.w_transposed
+            ),
         )
         ttnn.deallocate(xg)
         q, k_raw, v_raw = ttnn.experimental.nlp_create_qkv_heads(
@@ -369,40 +379,50 @@ class GlobalAttention:
             num_heads=self.n_q_local,
             num_kv_heads=1,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             kv_tied=True,
         )
         ttnn.deallocate(qk)
         ttnn.deallocate(k_raw)
 
         # Q: norm (folded weight), RoPE on the 128 rotary lanes, bf16 for the SDPA.
+        signpost("attention.g_qnorm_rope")
         q_n = self._norm(q, self.q_norm_w)
         ttnn.deallocate(q)
-        q_r = self._rope(q_n, self.rot_q, cos, sin, ttnn.float32 if self.sdpa_mode == "composed" else ttnn.bfloat16)
+        q_r = self._rope(
+            q_n,
+            self.rot_q,
+            cos,
+            sin,
+            ttnn.float32 if self.sdpa_mode == "composed" else ttnn.bfloat16,
+            out_mc=ttnn.DRAM_MEMORY_CONFIG,  # the ring SDPA reads Q from DRAM
+        )
         ttnn.deallocate(q_n)
 
         # V = norm(k_raw) (value order); K rotary from V's last 128 lanes: adjacent pairs, gamma, RoPE.
+        signpost("attention.g_kv")
         v = self._norm(v_raw, None)
         ttnn.deallocate(v_raw)
         _, h, s, d = v.shape
-        v_rot = ttnn.slice(v, (0, 0, 0, d - ROTARY_DIM), (1, h, s, d), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_rot = ttnn.slice(v, (0, 0, 0, d - ROTARY_DIM), (1, h, s, d), memory_config=self.act_mc)
         k_adj = self._matmul(v_rot, self.k_rot_perm)
         ttnn.deallocate(v_rot)
-        k_g = ttnn.multiply(k_adj, self.k_rot_gamma, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_g = ttnn.multiply(k_adj, self.k_rot_gamma, dtype=ttnn.float32, memory_config=self.act_mc)
         ttnn.deallocate(k_adj)
-        cos_k = ttnn.slice(cos, (0, 0, 0, 0), (1, 1, s, ROTARY_DIM), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        sin_k = ttnn.slice(sin, (0, 0, 0, 0), (1, 1, s, ROTARY_DIM), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos_k = ttnn.slice(cos, (0, 0, 0, 0), (1, 1, s, ROTARY_DIM), memory_config=self.act_mc)
+        sin_k = ttnn.slice(sin, (0, 0, 0, 0), (1, 1, s, ROTARY_DIM), memory_config=self.act_mc)
         k_rot = self._rope(k_g, self.rot_k, cos_k, sin_k, ttnn.float32)
         for t in (k_g, cos_k, sin_k):
             ttnn.deallocate(t)
-        packed = ttnn.concat((k_rot, v), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        packed = ttnn.concat((k_rot, v), dim=-1, memory_config=self.act_mc)
         ttnn.deallocate(k_rot)
         ttnn.deallocate(v)
         if meta is not None and meta.keep is not None:
             # Pad rows (positions >= actual_end) reach the cache as exact zeros: the last 32-token record ships whole.
-            kept = ttnn.multiply(packed, meta.keep, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kept = ttnn.multiply(packed, meta.keep, dtype=ttnn.float32, memory_config=self.act_mc)
             ttnn.deallocate(packed)
             packed = kept
+        signpost("attention.g_sdpa")
         if self.sdpa_mode == "composed":
             # The cache keeps bfp8; the chunk attends its own fresh K / V in bf16 (as the reference, whose state only
             # rounds what later chunks read).
@@ -424,16 +444,19 @@ class GlobalAttention:
             else:
                 attn = self._ring_mla(q_r, meta.slot, meta.kv_actual)
         ttnn.deallocate(q_r)
-        heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        signpost("attention.g_out")
+        heads = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.act_mc)
         ttnn.deallocate(attn)
         partial = ttnn.linear(
             heads,
             self.wo,
             transpose_b=self.w_transposed,
             dtype=self.partial_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.act_mc,
             compute_kernel_config=self.proj_cfg,
-            core_grid=self.grid,
+            **linear_kwargs(
+                self.mesh, heads, self.wo, fp32_acc=self.proj_fp32, grid=self.grid, transpose_b=self.w_transposed
+            ),
         )
         ttnn.deallocate(heads)
         out = ttnn.reduce_scatter(partial, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
