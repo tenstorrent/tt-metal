@@ -1,0 +1,221 @@
+# Dashboard section metadata (F181): per-stage parallel split on this run's mesh (quietbox_2x2, scaled model).
+profile_sections:
+  attn_hc:
+    what: 'mHC mixes. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip projects its 2560 of 5120 hidden columns of the 4 streams; the 25-wide partial mixes are all-gathered over the 2 columns,
+      Sinkhorn fp32.'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_hc:
+    what: 'mHC mixes. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip projects its 2560 of 5120 hidden columns of the 4 streams; the 25-wide partial mixes are all-gathered over the 2 columns,
+      Sinkhorn fp32.'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_collapse:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_collapse:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_residual:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_residual:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  moe_add:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  engram_add:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_norm:
+    what: 'RMSNorm. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 columns, the sum of squares all-gathered over the 2 columns (ffn_norm then all-gathers the output to full 5120 for
+      the router and experts).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_norm:
+    what: 'RMSNorm. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 columns, the sum of squares all-gathered over the 2 columns (ffn_norm then all-gathers the output to full 5120 for
+      the router and experts).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  q_a:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  kv:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  compressor:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  engram_kv:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  attention:
+    what: 'Attention. wq_b / RoPE: TP over heads, 16 of 32 heads per chip x 1024 tokens (SP row). head->seq all-to-all over the columns: sparse_sdpa then runs all 32 heads on 512 tokens per chip; back,
+      wo_a: 2 of 4 groups of 8 heads per chip, wo_b K-split, reduce-scatter over the columns.'
+    cells:
+    - - heads 0–15
+      - sdpa tok 0–511
+    - - heads 16–31
+      - sdpa tok 512–1023
+    - - heads 0–15
+      - sdpa tok 1024–1535
+    - - heads 16–31
+      - sdpa tok 1536–2047
+  indexer:
+    what: 'Indexer. Queries split over SP x TP: 512 query rows per chip, all 32 index heads (score summed over heads); keys: the whole compressed history, ring over the SP rows; top-k per query row.'
+    cells:
+    - - q 0–511
+      - 32 idx heads
+    - - q 512–1023
+      - 32 idx heads
+    - - q 1024–1535
+      - 32 idx heads
+    - - q 1536–2047
+      - 32 idx heads
+  router:
+    what: 'Router (fused moe_grouped_topk). Replicated over each mesh row: 1024 tokens x full 5120 hidden x 96 expert logits, top 6.'
+    cells:
+    - - tok 0–1023
+      - 96 logits
+    - - tok 0–1023
+      - 96 logits
+    - - tok 1024–2047
+      - 96 logits
+    - - tok 1024–2047
+      - 96 logits
+  experts:
+    what: 'Routed experts. EP over all 4 chips: 24 of 96 experts per chip; tokens dispatched to the chips owning their top-6 experts: ~3072 token x expert pairs per chip (2048 tokens x 6 / 4). bfp4 weights.'
+    cells:
+    - - experts 0–23
+      - ~3072 tok×exp
+    - - experts 24–47
+      - ~3072 tok×exp
+    - - experts 48–71
+      - ~3072 tok×exp
+    - - experts 72–95
+      - ~3072 tok×exp
+  shared_expert:
+    what: 'Shared expert. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows) (full 5120 input after the ffn_norm gather); TP by intermediate: 1152 of 2304 columns (w1/w3 column-, w2 row-parallel), summed
+      with the experts'' reduce-scatter.'
+    cells:
+    - - tok 0–1023
+      - inter 0–1151
+    - - tok 0–1023
+      - inter 1152–2303
+    - - tok 1024–2047
+      - inter 0–1151
+    - - tok 1024–2047
+      - inter 1152–2303
