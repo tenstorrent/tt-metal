@@ -226,7 +226,7 @@ def test_wan_dbcache_ab(
         "split_nocache": DBCacheConfig(residual_diff_threshold=0.0, max_warmup_steps=0),
         # The shipped default preset (asserted on below); also what a call with no cache_config gets.
         "dbcache": WanDBCacheConfig.default(**shared),
-        # Matrix: plain residual reuse vs. TaylorSeer forecasting orders, and cache-dit's 0.08 threshold.
+        # Matrix: plain residual reuse vs. TaylorSeer forecasting orders, and the earlier 0.08 threshold.
         "dbcache_ts0": WanDBCacheConfig.default(**shared, taylorseer_order=0),
         "dbcache_ts1": WanDBCacheConfig.default(**shared, taylorseer_order=1),
         "dbcache_ts2": WanDBCacheConfig.default(**shared, taylorseer_order=2),

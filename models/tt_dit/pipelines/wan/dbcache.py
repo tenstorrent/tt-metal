@@ -46,14 +46,16 @@ class WanDBCacheConfig:
 
     @classmethod
     def default(cls, **shared: object) -> WanDBCacheConfig:
-        """Default preset: cache-dit's Wan 2.2 example settings (F1B0, threshold 0.08, at most 2
-        consecutive cached steps; the high-noise expert warms up for 4 steps and caches at most 8, the
-        low-noise expert warms up for 2 and caches at most 20), plus ``cfg_diff_compute_separate=False``
-        (the unconditional branch's diff tracks the conditional one to 3 decimals, so it reuses that
-        decision and skips one host readback per step).
+        """Default preset: cache-dit's Wan 2.2 example settings with its CLI defaults, as the
+        nvidia-benchmark GPU runs use them (F1B0, threshold 0.12, at most 3 consecutive cached steps;
+        the high-noise expert warms up for 4 steps and caches at most 8, the low-noise expert warms
+        up for 2 and caches at most 20), plus ``cfg_diff_compute_separate=False`` (the unconditional
+        branch's diff tracks the conditional one to 3 decimals, so it reuses that decision and skips
+        one host readback per step).
 
-        Measured with the pipeline's default ``flow_shift=5`` schedule (BH 4x8, 81 frames, 40 steps):
-        480p 1.60x denoising speedup at PCC 0.91 against the uncached video, 720p 1.52x at PCC 0.89.
+        Measured with the earlier preset (threshold 0.08, at most 2 consecutive) and the pipeline's
+        default ``flow_shift=5`` schedule (BH 4x8, 81 frames, 40 steps): 480p 1.60x denoising speedup
+        at PCC 0.91 against the uncached video, 720p 1.52x at PCC 0.89.
         With ``flow_shift=12`` (the official Wan 2.2 A14B T2V schedule) 0.08 caches the fast-changing
         early high-noise steps and drifts to a different trajectory (PCC ~0.85); use
         ``default(residual_diff_threshold=0.05)`` there for PCC > 0.95 at ~1.2x.
@@ -63,8 +65,8 @@ class WanDBCacheConfig:
         base = DBCacheConfig(
             Fn_compute_blocks=1,
             Bn_compute_blocks=0,
-            residual_diff_threshold=0.08,
-            max_continuous_cached_steps=2,
+            residual_diff_threshold=0.12,
+            max_continuous_cached_steps=3,
             cfg_diff_compute_separate=False,
         ).replace(**shared)
         return cls(

@@ -140,7 +140,7 @@ independently, mirroring cache-dit's `has_separate_cfg=True` dual-transformer se
 from models.tt_dit.pipelines.wan.dbcache import WanDBCacheConfig
 from models.tt_dit.utils.dbcache import DBCacheConfig
 
-# Default (nothing to pass): cache-dit's Wan 2.2 preset, F1B0, threshold 0.08, <= 2 consecutive
+# Default (nothing to pass): cache-dit's Wan 2.2 preset, F1B0, threshold 0.12, <= 3 consecutive
 # cached steps, high-noise expert: 4 warmup steps / max 8 cached, low-noise expert: 2 warmup /
 # max 20 cached. See `WanDBCacheConfig.default` for the rationale.
 frames = pipeline(prompts=[...], num_inference_steps=40)
