@@ -729,6 +729,9 @@ void append_to_descriptor(
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
 
+    // h's rectangle and rotating sender list span the whole grid, so they are the same on every core: one copy in the
+    // reader's common runtime args, after the shared block. Per core it was most of the program's runtime args.
+    const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
             const CoreCoord core{x, OY + y};
@@ -736,10 +739,8 @@ void append_to_descriptor(
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY + y, hgroups - 1, OY + y);
-            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
             reader_args.reserve(
-                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
-                h_group_rect_args[y / blocking.mgroup_rows].size());
+                17 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
             // Slots 1-5 and 16 once held buffer bases, which are common runtime args now (see
             // routed_expert_common_args). Kept, zeroed, so the offsets after them stay put; plain values, so no
             // binding re-patches them on a program-cache hit.
@@ -764,7 +765,6 @@ void append_to_descriptor(
                 reader_args.push_back(vy);
             }
             reader_args.append(x_mcast_args);
-            reader_args.append(h_mcast_args);
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
             }
@@ -826,7 +826,9 @@ void append_to_descriptor(
         tensor_arguments.up_biases,
         tensor_arguments.down_biases,
         operation_arguments.fuse_bias);
-    reader_descriptor.emplace_common_runtime_args(common_args);
+    auto reader_common_args = common_args;
+    reader_common_args.append(h_mcast_args);
+    reader_descriptor.emplace_common_runtime_args(reader_common_args);
     writer_descriptor.emplace_common_runtime_args(common_args);
 
     descriptor.kernels.push_back(std::move(reader_descriptor));

@@ -184,7 +184,7 @@ ResolvedBindings resolve_bindings(
     //     otherwise rebuild the descriptor.
     //   - WorkloadDescriptor variant: always fast-path; no rebuild fallback.
     {
-        auto program_cbs = program.circular_buffers();
+        const auto program_cbs = program.impl().circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             const auto& cb_desc = desc.cbs[ci];
             TT_FATAL(
@@ -199,7 +199,10 @@ ResolvedBindings resolve_bindings(
                 auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
                 if (it != tensor_buffers.end()) {
                     result.cbs.push_back(
-                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
+                        {program_cbs[ci]->id(),
+                         static_cast<uint32_t>(it - tensor_buffers.begin()),
+                         cb_desc.address_offset,
+                         program_cbs[ci].get()});
                 }
                 // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
@@ -262,8 +265,16 @@ void apply_resolved_bindings(
         (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
-        UpdateDynamicCircularBufferAddress(
-            program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+        if (cb.circular_buffer == nullptr) {
+            UpdateDynamicCircularBufferAddress(
+                program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+            continue;
+        }
+        // UpdateDynamicCircularBufferAddress without the by-handle lookup, which a CB-heavy program pays per CB.
+        TT_FATAL(
+            !cb.circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+        cb.circular_buffer->set_global_buffer(
+            *current_buffers[cb.tensor_buffer_idx], cb.circular_buffer->size(), cb.address_offset);
     }
 }
 

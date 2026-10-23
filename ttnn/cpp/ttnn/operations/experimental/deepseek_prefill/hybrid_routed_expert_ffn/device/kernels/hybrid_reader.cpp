@@ -70,8 +70,11 @@
 // After both halves, so it sees the dataflow API they pulled in; compiles to nothing on a compute
 // kernel, which has no NoC of its own.
 #include "hybrid_pass_barrier.hpp"
+#include "hybrid_rt_expand.hpp"
 
 void kernel_main() {
+    // Before anything reads a runtime argument: the host sent only what differs between cores.
+    hybrid_expand_runtime_args();
     // First pass: every expert above the threshold, on the whole grid.
     hyb_unified::kernel_main();
 #ifdef HYB_RUN_FUSED_PASS

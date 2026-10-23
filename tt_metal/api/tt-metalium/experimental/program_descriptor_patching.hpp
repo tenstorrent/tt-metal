@@ -51,6 +51,7 @@ namespace tt::tt_metal {
 
 class Program;
 struct ProgramDescriptor;
+class CircularBufferImpl;
 
 // ---------------------------------------------------------------------------
 // Resolved binding types — index-based, no raw Buffer* or RuntimeArgsData*
@@ -69,11 +70,13 @@ struct ResolvedRtArgBinding {
 };
 
 // Maps one dynamic CB to its CBHandle and tensor slot.
-// cb_id is CBHandle (uintptr_t — 64-bit, not an index).
+// cb_id is CBHandle (uintptr_t — 64-bit, not an index). circular_buffer is the same CB, owned by the program the
+// bindings were resolved against, so a cache hit skips the by-handle lookup.
 struct ResolvedCbBinding {
     uintptr_t cb_id = 0;
     uint32_t tensor_buffer_idx = 0;
     uint32_t address_offset = 0;
+    CircularBufferImpl* circular_buffer = nullptr;
 };
 
 // All resolved bindings for one cached program. Non-empty when the factory

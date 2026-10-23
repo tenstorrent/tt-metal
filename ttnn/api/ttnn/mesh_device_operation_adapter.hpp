@@ -647,6 +647,9 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            // WorkloadDescriptor variant: every program's shared variables hold a copy of the one workload
+            // descriptor, so the buffer enumeration is the same for all of them -- collected once, not per program.
+            std::optional<CollectedTensorBuffers> workload_buffers;
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
@@ -658,9 +661,11 @@ public:
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        if (!workload_buffers.has_value()) {
+                            workload_buffers =
+                                collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        }
+                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, workload_buffers->buffers);
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {

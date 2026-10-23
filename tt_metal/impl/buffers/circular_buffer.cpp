@@ -199,6 +199,16 @@ void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_
     // Resolve first so a rejected buffer leaves the CB unchanged.
     const DeviceAddr base_address =
         experimental::per_core_allocation::get_shard_base_address(buffer, this->core_ranges_);
+    // A program-cache hit rebinds every dynamic CB, usually to a buffer laid out exactly where the last one was (a
+    // per-call scratch reallocated in place, a tensor of the same spec). Nothing the device reads changes then, so
+    // only the backing pointer moves: the config generation stays and the next enqueue does not re-encode this CB.
+    if (config_.shadow_global_buffer != nullptr && config_.dynamic_cb() && buffer.is_l1() &&
+        globally_allocated_address_ == base_address + address_offset && config_.address_offset() == address_offset &&
+        config_.total_size() == total_size && config_.buffer_size() == buffer.aligned_size() &&
+        config_.max_size() + address_offset == buffer.aligned_size_per_bank()) {
+        config_.shadow_global_buffer = &buffer;
+        return;
+    }
     config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
     set_global_base_address(base_address);
 }

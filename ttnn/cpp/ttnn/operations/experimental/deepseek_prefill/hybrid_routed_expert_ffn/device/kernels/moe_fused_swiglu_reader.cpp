@@ -194,10 +194,11 @@ constexpr uint32_t NEXT_X_TRID = 15;
 
 // Runtime-arg layout: the 17-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
 // order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
-// makes the slice ownership agree grid-wide.
+// makes the slice ownership agree grid-wide. Then this row's x descriptor and h's grouped rectangle;
+// h's own descriptor spans the whole grid, so it is a common runtime arg (CRT_HMCAST, below).
 constexpr uint32_t RT_PEERS = 17;
 constexpr uint32_t RT_XMCAST = RT_PEERS + 2 * KGROUPS;
-constexpr uint32_t RT_HMCAST = RT_XMCAST + 4 + 2 * HGROUPS;
+constexpr uint32_t RT_HGROUP_RECT = RT_XMCAST + 4 + 2 * HGROUPS;
 
 // The host emits the same five-word mcast descriptor used by kernel_lib:
 // active, data-ready semaphore, consumer-ready semaphore, active consumers,
@@ -209,7 +210,6 @@ constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
 constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
 // h's descriptor has a rotating sender list of the whole grid.  The grouped
 // rectangle follows that list; only the rectangles are used by this raw path.
-constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
 // Every buffer base this kernel reads is a COMMON runtime arg, one block shared by every dataflow kernel of both
 // halves (host: routed_expert_common_args): [0] x, [1] counts, [2] global_expert_idx_table, [3] start
 // (expert_region_offsets), [4] output, [5] expert_offsets (overlap only), then from [6] the per-expert weight and
@@ -223,6 +223,13 @@ constexpr uint32_t CRT_START = 3;
 constexpr uint32_t CRT_WEIGHTS = 6;
 constexpr uint32_t CRT_GATE = CRT_WEIGHTS + 0 * EXPERTS_PER_CHIP;
 constexpr uint32_t CRT_DOWN = CRT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+// After the shared block, this kernel's own: h's descriptor -- the whole grid's rectangle, then its rotating sender
+// list, one (vx, vy) pair per core in row-major order -- the same on every core.
+#ifdef FUSE_BIAS
+constexpr uint32_t CRT_HMCAST = CRT_WEIGHTS + 6 * EXPERTS_PER_CHIP;
+#else
+constexpr uint32_t CRT_HMCAST = CRT_WEIGHTS + 3 * EXPERTS_PER_CHIP;
+#endif
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
 // non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
@@ -239,10 +246,10 @@ inline void h_slot_send_posted(uint32_t slot, uint32_t l1, uint32_t size, bool g
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 2),
                                      get_arg_val<uint32_t>(RT_HGROUP_RECT + 3))
                                : moe_fused_swiglu::McastRect<noc_index>(
-                                     get_arg_val<uint32_t>(RT_HMCAST + 0),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 1),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 2),
-                                     get_arg_val<uint32_t>(RT_HMCAST + 3));
+                                     get_common_arg_val<uint32_t>(CRT_HMCAST + 0),
+                                     get_common_arg_val<uint32_t>(CRT_HMCAST + 1),
+                                     get_common_arg_val<uint32_t>(CRT_HMCAST + 2),
+                                     get_common_arg_val<uint32_t>(CRT_HMCAST + 3));
     const auto& rb = hrect.bounds();
     // EXCLUDE-source: `src == dst` on this send (the self-copy already placed this core's own copy),
     // so the fan-out is the rect area minus this core — the same count SenderPipe's
@@ -660,8 +667,8 @@ void kernel_main() {
                 Semaphore<> hrow_free(SEM_HROW_FREE);
                 for (uint32_t x = 0; x < HGROUPS; ++x) {
                     const uint32_t sidx = my_row * HGROUPS + x;
-                    const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                    const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                    const uint32_t vx = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 0);
+                    const uint32_t vy = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 1);
                     hrow_free.up(noc, vx, vy, 1);
                 }
                 noc.async_atomic_barrier();
@@ -1079,8 +1086,8 @@ void kernel_main() {
                         while (next_ack < lr + ahead && next_ack < round_count) {
                             const uint32_t gr = round_base + next_ack;
                             const uint32_t sidx = gr * HGROUPS + gr;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                            const uint32_t svx = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 0);
+                            const uint32_t svy = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 1);
                             Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }
@@ -1173,8 +1180,8 @@ void kernel_main() {
                         // from a core that has already reserved, so no core waits on a core waiting on it.
                         while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
                             const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                            const uint32_t svx = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 0);
+                            const uint32_t svy = get_common_arg_val<uint32_t>(CRT_HMCAST + 4 + 2 * sidx + 1);
                             Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
                             ++next_ack;
                         }
