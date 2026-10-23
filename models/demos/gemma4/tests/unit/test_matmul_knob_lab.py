@@ -23,7 +23,10 @@ qkv / out_proj / gate_up / down, the 1D-multicast lm_head config), the op's auto
 (tt/decode_matmul.py), the 2D prefill config on one row tile, the DRAM-sharded family (K block, fidelity / fp32
 Dest, the multi-core pipeline workers per bank, the kernel alone, the row view below one tile) and the 1D-multicast
 family (K block, fidelity / fp32 Dest, grid and per-core N / output subblock). ``KnobSpace`` enumerates the knobs
-device-free, bounded by the L1 budget and the per-core DRAM stream bound; the device sweep walks it by coordinate
+device-free, bounded by the L1 budget and the per-core DRAM stream bound; grids come from the device's
+``compute_with_storage_grid_size`` (the whole grid and its divisor sub-grids, never a literal list), so the same
+lab runs on a Wormhole 8x8 and a Blackhole 13x10, and the resolver table (``DecodeMMConfig``) carries grids as
+fractions of the device grid or per-arch entries clamped to the largest fitting grid; the device sweep walks it by coordinate
 descent (K block, then fidelity, then grid). A candidate whose output differs from the baseline's at
 PCC < ``GEMMA4_LAB_PCC`` (0.9999) is rejected (``ok=0``) and never ``best``.
 
@@ -38,6 +41,7 @@ import math
 import os
 import time
 from contextlib import contextmanager
+from typing import NamedTuple, Optional
 
 import pytest
 import torch
@@ -173,6 +177,152 @@ def _l1_1d(bw: int, pcn: int, wdtype) -> int:
     return 2 * bw * 2048 + 2 * bw * pcn * TILE_BYTES[wdtype] + 2 * pcn * 2048
 
 
+def candidate_grids(gx: int, gy: int, min_fraction: float = 0.25):
+    """The device grid and its divisor sub-grids ``(gx / dx, gy / dy)`` holding at least ``min_fraction`` of its
+    cores, largest first: the one rule gives 13x10 / 13x5 on a Blackhole P150 and 8x8 / 8x4 / 4x8 / 4x4 / 8x2 /
+    2x8 on a Wormhole; no grid is ever enumerated from a literal list."""
+    grids = set()
+    for dx in _divisors(gx):
+        for dy in _divisors(gy):
+            vx, vy = gx // dx, gy // dy
+            if vx * vy >= min_fraction * gx * gy:
+                grids.add((vx, vy))
+    return sorted(grids, key=lambda g: (-g[0] * g[1], -g[0]))
+
+
+def grid_spec_of(vx: int, vy: int, gx: int, gy: int) -> str:
+    """A grid as a fraction of the device grid (``full``, ``x/2``, ``y/5``, ``x/2+y/5``) when it is a divisor
+    sub-grid, else the explicit ``VXxVY`` (which the resolver table carries as a per-arch entry)."""
+    if (vx, vy) == (gx, gy):
+        return "full"
+    if gx % vx == 0 and gy % vy == 0:
+        parts = [f"x/{gx // vx}"] if gx // vx > 1 else []
+        if gy // vy > 1:
+            parts.append(f"y/{gy // vy}")
+        return "+".join(parts)
+    return f"{vx}x{vy}"
+
+
+def resolve_grid(spec, gx: int, gy: int, arch: str = "blackhole"):
+    """``spec`` on a ``gx x gy`` device grid -> ``(x, y)``: ``full``; fractions ``x/D``, ``y/D``, ``x/D+y/D``
+    (``gx // D``, at least 1); an explicit ``VXxVY`` string, a ``(x, y)`` pair or a per-arch dict
+    ``{"blackhole": (13, 10), "wormhole_b0": (8, 8)}`` (the entry of ``arch``, else the first) clamped to the
+    largest fitting grid: a row tuned on 13x10 resolves to 8x8 on a Wormhole, never to None."""
+    if isinstance(spec, dict):
+        spec = spec.get(arch) or next(iter(spec.values()))
+    if isinstance(spec, (tuple, list)):
+        return max(1, min(int(spec[0]), gx)), max(1, min(int(spec[1]), gy))
+    spec = str(spec)
+    if spec == "full":
+        return gx, gy
+    if "/" in spec:
+        vx, vy = gx, gy
+        for part in spec.split("+"):
+            axis, _, d = part.partition("/")
+            if axis == "x":
+                vx = max(1, gx // int(d))
+            elif axis == "y":
+                vy = max(1, gy // int(d))
+            else:
+                raise ValueError(f"grid spec {spec!r}")
+        return vx, vy
+    vx, vy = (int(v) for v in spec.split("x"))
+    return max(1, min(vx, gx)), max(1, min(vy, gy))
+
+
+# ---- resolver table format (proposal: moves verbatim into tt/decode_matmul.py on the coordinator's go) ----------
+
+
+class DecodeMMConfig(NamedTuple):
+    """One row of the decode matmul resolver table, keyed on ``(model, op, tp, batch bucket)``."""
+
+    family: str  # "1d": 1D multicast on the interleaved weight | "ds": the DRAM-width-sharded kernel (Blackhole-only)
+    grid: object  # resolve_grid spec ("full", "x/2+y/5", "13x10", per-arch dict); "ds" = the kernel's own gcd grid
+    in0_block_w: int
+    per_core_N: Optional[int]  # None = ceil(N tiles / cores) on the resolved grid; a value is raised to cover N
+    out_subblock_w: int  # upper bound; the resolver takes the largest divisor of per-core N that fits Dest
+    fidelity: str  # "lofi" | "hifi2" | "hifi4"
+    fp32_acc: bool
+    workers_per_bank: int = 0  # ds multi-core pipeline workers per DRAM bank (0 = single reader)
+    out: str = "dram"  # "dram" | "l1" | "ws"
+    arch: str = "any"  # "blackhole": the family exists only there (can_dram_shard is Blackhole-only) -> None elsewhere
+
+
+ENV_PREFIX = (
+    "GEMMA4_DECODE_MM_CFG_"  # GEMMA4_DECODE_MM_CFG_QKV="1d:grid=y/2,bw=24,pc=2,osw=1,fid=hifi2,acc=1,wpb=0,out=dram"
+)
+BATCH_BUCKETS = (1, 32)
+
+
+def batch_bucket(batch: int) -> int:
+    return 1 if batch <= 1 else 32
+
+
+def parse_config_spec(spec: str) -> DecodeMMConfig:
+    """The ``config=`` string of a ``RESULT best`` line (or the env override) -> a table row."""
+    family, _, rest = spec.partition(":")
+    kv = dict(item.split("=", 1) for item in rest.split(",") if item)
+    pc = kv.get("pc", "")
+    return DecodeMMConfig(
+        family,
+        kv.get("grid", "full"),
+        int(kv.get("bw", 8)),
+        int(pc) if pc.isdigit() else None,
+        int(kv.get("osw", 1)),
+        kv.get("fid", "hifi2"),
+        kv.get("acc", "1") == "1",
+        int(kv.get("wpb", 0)),
+        kv.get("out", "dram"),
+        "blackhole" if family == "ds" else "any",
+    )
+
+
+def resolve_1d_knobs(cfg: DecodeMMConfig, gx: int, gy: int, n_tiles: int, arch: str = "blackhole"):
+    """``(x, y, per_core_N, out_subblock_w)`` of a 1D row on a device grid: the grid per ``resolve_grid``, the
+    per-core N raised to cover N tiles on that many cores, the subblock the largest divisor of the per-core N not
+    above the row's bound nor Dest."""
+    vx, vy = resolve_grid(cfg.grid, gx, gy, arch)
+    pcn = max(1, math.ceil(n_tiles / (vx * vy)))
+    if cfg.per_core_N:
+        pcn = max(pcn, int(cfg.per_core_N))
+    osw = _largest_divisor(pcn, max(1, min(int(cfg.out_subblock_w), _dest_tiles(cfg.fp32_acc))))
+    return vx, vy, pcn, osw
+
+
+def resolve_decode_mm_config(table, model: str, op: str, tp: int, batch: int, arch: str):
+    """The env override when set, else the table row; None = today's path. A row of a Blackhole-only family
+    resolves to None on any other arch (that kernel does not exist there; the row says so in ``arch``)."""
+    env = os.environ.get(ENV_PREFIX + op.upper())
+    cfg = parse_config_spec(env) if env else table.get((model, op, tp, batch_bucket(batch)))
+    if cfg is not None and cfg.arch != "any" and cfg.arch != arch:
+        return None
+    return cfg
+
+
+def current_config_rows():
+    """Today's served configs in the table format (the lab's baselines): the DRAM-sharded kernel for qkv /
+    out_proj / gate_up / down (LoFi, Blackhole-only) and the 1D lm_head config (K block = the largest power of two
+    dividing the K tiles, subblock <= 4, LoFi, whole grid)."""
+    rows = {}
+    for model, d in MODELS.items():
+        kt = d["hidden"] // TILE_SIZE
+        bw = 32
+        while bw > 1 and kt % bw:
+            bw //= 2
+        for tp in (4, 8):
+            for b in BATCH_BUCKETS:
+                for op in ("qkv", "out_proj", "gate_up", "down"):
+                    rows[(model, op, tp, b)] = DecodeMMConfig(
+                        "ds", "ds", 8, None, 1, "lofi", False, 0, "dram", "blackhole"
+                    )
+                rows[(model, "lm_head", tp, b)] = DecodeMMConfig("1d", "full", bw, None, 4, "lofi", False)
+    return rows
+
+
+# The proposed best rows (filled from the sweeps' RESULT best lines; empty until then, no default changes).
+DECODE_MM_TABLE = {}
+
+
 class KnobSpace:
     """Device-free enumeration of the program-config knobs of one ``[32, K] @ [K, N]`` decode matmul on a
     ``grid_xy`` worker grid, bounded by the L1 budget and the per-core DRAM stream bound.
@@ -247,12 +397,13 @@ class KnobSpace:
         ]
 
     def one_d_grids(self, bw: int, fp32: bool):
-        """(gx, gy, per_core_N, out_subblock_w) variants: the whole grid at the minimum / +1 / double per-core N,
-        the 8x8, full-width x 8 and 10x10 sub-grids, each with the widest subblock that fits Dest and with 1."""
+        """(gx, gy, per_core_N, out_subblock_w) variants: the whole grid at the minimum / +1 / double per-core N and
+        the divisor sub-grids of the device grid (``candidate_grids``), each with the widest subblock that fits
+        Dest and with 1."""
         base = self.one_d_pcn(self.gx * self.gy)
         shapes = [(self.gx, self.gy, base), (self.gx, self.gy, base + 1), (self.gx, self.gy, 2 * base)]
-        for vx, vy in ((8, 8), (self.gx, 8), (10, 10)):
-            if vx <= self.gx and vy <= self.gy and (vx, vy) != (self.gx, self.gy):
+        for vx, vy in candidate_grids(self.gx, self.gy):
+            if (vx, vy) != (self.gx, self.gy):
                 shapes.append((vx, vy, self.one_d_pcn(vx * vy)))
         out, seen = [], set()
         for vx, vy, pcn in shapes:
@@ -497,6 +648,7 @@ class ShapeLab:
     def knobs_1d(self, gx, gy, bw, pcn, osw, fidelity, fp32, out=None):
         return dict(
             grid=f"{gx}x{gy}",
+            gspec=grid_spec_of(gx, gy, self.grid.x, self.grid.y),
             cores=min(gx * gy, math.ceil(self.nt / pcn)),
             bw=bw,
             osub=f"1x{osw}",
@@ -535,6 +687,7 @@ class ShapeLab:
         pipeline = bool(getattr(pc, "use_multicore_pipeline", False))
         return dict(
             grid=f"{cols}x{rows}",
+            gspec="ds",
             cores=cores,
             bw=int(pc.in0_block_w),
             osub="1x1",
@@ -665,7 +818,7 @@ class ShapeLab:
         runs = "/".join(f"{m:.1f}" for m in res["runs"])
         ratio = res["us"] / self.roofline_us if math.isfinite(res["us"]) else float("nan")
         print(
-            f"RESULT lab {self.tag} cand={res['cand']} family={res['family']} grid={k['grid']} cores={k['cores']} "
+            f"RESULT lab {self.tag} cand={res['cand']} family={res['family']} grid={k['grid']} gridspec={k['gspec']} cores={k['cores']} "
             f"in0_block_w={k['bw']} out_subblock={k['osub']} per_core={k['pc']} fidelity={k['fid']} fp32acc={k['acc']} "
             f"in1={k['in1']} out={k['out']} workers_per_bank={k['wpb']} form={k['form']} ok={res['ok']} "
             f"pcc_base={res['pcc_base']:.6f} pcc_golden={res['pcc_golden']:.6f} us={res['us']:.2f} runs={runs} "
@@ -690,7 +843,7 @@ class ShapeLab:
             return
         k = best["knobs"]
         cfg = (
-            f"{best['family']}:grid={k['grid']},bw={k['bw']},osub={k['osub']},pc={k['pc']},fid={k['fid']},"
+            f"{best['family']}:grid={k['gspec']},bw={k['bw']},osub={k['osub']},pc={k['pc']},fid={k['fid']},"
             f"acc={k['acc']},in1={k['in1']},out={k['out']},wpb={k['wpb']},form={k['form']}"
         )
         gain = (base["us"] - best["us"]) / base["us"] * 100
@@ -732,6 +885,7 @@ class ShapeLab:
         x, w, out_mc = self.x_act, self.w_il, self.out_mc()
         knobs = dict(
             grid="auto",
+            gspec="auto",
             cores=0,
             bw=0,
             osub="auto",
@@ -767,6 +921,7 @@ class ShapeLab:
             x, out_mc = self.x_act, self.out_mc()
             knobs = dict(
                 grid=f"{gx}x{gy}",
+                gspec=grid_spec_of(gx, gy, self.grid.x, self.grid.y),
                 cores=min(gx, math.ceil(self.nt / int(pc.per_core_N))),
                 bw=int(pc.in0_block_w),
                 osub=f"{int(pc.out_subblock_h)}x{int(pc.out_subblock_w)}",
@@ -929,21 +1084,23 @@ def test_op_shapes_host(model, op, tp, expected):
     assert dtypes == {ttnn.bfloat16 if op == "lm_head" else ttnn.bfloat8_b}
 
 
+@pytest.mark.parametrize("gx, gy", [(13, 10), (12, 10), (8, 8)], ids=["bh13x10", "bh12x10", "wh8x8"])
 @pytest.mark.parametrize(
     "k, n, wdtype, act_cores",
     [(5376, 4096, ttnn.bfloat8_b, None), (5376, 10752, ttnn.bfloat8_b, None), (5376, 4096, ttnn.bfloat8_b, 8)],
     ids=["wqkv31b_tp4", "gateup31b_tp4", "wqkv31b_tp4_actws8"],
 )
-def test_knob_space_host(k, n, wdtype, act_cores):
-    """The device-free knob enumeration: every entry divides K, fits the L1 estimate and the per-core stream bound,
-    the resolver's block and the DRAM-sharded grid's blocks are in it, and the cross product stays bounded."""
+def test_knob_space_host(k, n, wdtype, act_cores, gx, gy):
+    """The device-free knob enumeration on a Blackhole and a Wormhole grid: every entry divides K, fits the L1
+    estimate and the per-core stream bound, the resolver's block and the DRAM-sharded grid's blocks are in it,
+    the grids are the device grid and its divisor sub-grids, and the cross product stays bounded."""
     ds_cores = _decode_core_grid(k, n)[2]
-    space = KnobSpace(k, n, wdtype, (12, 10), ds_cores=ds_cores, act_cores=act_cores)
+    space = KnobSpace(k, n, wdtype, (gx, gy), ds_cores=ds_cores, act_cores=act_cores)
     kt = k // TILE_SIZE
     ds_blocks = space.ds_blocks()
     assert ds_blocks and all(kt % bw == 0 for bw in ds_blocks)
     assert all(_estimate_decode_l1_bytes_for_in0(_padded_n_tiles(n), bw, wdtype) <= L1_BUDGET for bw in ds_blocks)
-    pcn = space.one_d_pcn(120)
+    pcn = space.one_d_pcn(gx * gy)
     blocks = space.one_d_blocks(pcn)
     assert all(kt % bw == 0 and _l1_1d(bw, pcn, wdtype) <= L1_BUDGET for bw in blocks)
     if act_cores:
@@ -952,10 +1109,58 @@ def test_knob_space_host(k, n, wdtype, act_cores):
     else:
         assert decode_in0_block_w(k) in blocks
     grids = space.one_d_grids(blocks[0], True)
-    assert (12, 10, pcn, 1) in grids
-    assert all(math.ceil(space.nt / p) <= gx * gy and osw <= 4 and p % osw == 0 for gx, gy, p, osw in grids)
+    assert (gx, gy, pcn, 1) in grids
+    assert all(math.ceil(space.nt / p) <= vx * vy and osw <= 4 and p % osw == 0 for vx, vy, p, osw in grids)
+    assert all(gx % vx == 0 and gy % vy == 0 for vx, vy, _p, _o in grids)  # divisor sub-grids of the device grid
+    assert candidate_grids(13, 10) == [(13, 10), (13, 5)]
+    assert {(8, 4), (4, 8), (4, 4)} <= set(candidate_grids(8, 8))
     cands = space.enumerate()
     assert 20 <= len(cands) <= 2000
     assert all(c["cores"] >= 1 and space.core_bound_ok(c["cores"]) or c["family"] == "ds" for c in cands)
     # the per-core stream bound prunes a one-core 1D config of a 22 MB weight
     assert not space.core_bound_ok(1)
+
+
+# Sample rows exercising every grid-spec form on both grids (not a proposal; the sweeps fill DECODE_MM_TABLE).
+SAMPLE_TABLE_ROWS = {
+    ("31B", "qkv", 4, 32): DecodeMMConfig("1d", "y/2", 24, None, 1, "hifi2", True),
+    ("12B", "gate_up", 8, 32): DecodeMMConfig(
+        "1d", {"blackhole": (13, 10), "wormhole_b0": (8, 8)}, 12, 2, 2, "hifi2", True
+    ),
+    ("31B", "down", 4, 1): DecodeMMConfig("1d", "13x10", 8, None, 4, "lofi", False),
+}
+
+
+@pytest.mark.parametrize("gx, gy, arch", [(13, 10, "blackhole"), (8, 8, "wormhole_b0")], ids=["bh13x10", "wh8x8"])
+def test_resolver_table_both_grids(gx, gy, arch, monkeypatch):
+    """Every row of the resolver table (today's configs, the proposed rows, the sample grid-spec forms) resolves on
+    a Blackhole 13x10 and a Wormhole 8x8 grid: 1D rows to a grid that fits, a per-core N that covers N, a subblock
+    that divides it within Dest, a K block dividing K and CBs within L1; an explicit grid larger than the device
+    clamps to the largest fitting grid (never None); a Blackhole-only family resolves to None on Wormhole and the
+    row says so; the env override wins and round-trips the RESULT best config string."""
+    rows = dict(current_config_rows())
+    rows.update(DECODE_MM_TABLE)
+    rows.update(SAMPLE_TABLE_ROWS)
+    for (model, op, tp, batch), cfg in rows.items():
+        monkeypatch.delenv(ENV_PREFIX + op.upper(), raising=False)
+        got = resolve_decode_mm_config(rows, model, op, tp, batch, arch)
+        if cfg.arch != "any" and cfg.arch != arch:
+            assert got is None and cfg.family == "ds" and cfg.arch == "blackhole"
+            continue
+        assert got == cfg
+        if cfg.family == "ds":
+            continue  # its grid is the kernel's own gcd grid (_decode_core_grid), not a device-grid fraction
+        for _tag, k, n, wdtype, _per in op_shapes(model, op, tp):
+            nt = n // TILE_SIZE
+            vx, vy, pcn, osw = resolve_1d_knobs(cfg, gx, gy, nt, arch)
+            assert 1 <= vx <= gx and 1 <= vy <= gy, (model, op, tp, cfg)
+            assert pcn * vx * vy >= nt and pcn % osw == 0 and osw <= _dest_tiles(cfg.fp32_acc)
+            assert (k // TILE_SIZE) % cfg.in0_block_w == 0
+            assert _l1_1d(cfg.in0_block_w, pcn, wdtype) <= L1_BUDGET, (model, op, tp, cfg, gx, gy, pcn)
+    assert resolve_grid("13x10", gx, gy, arch) == (min(13, gx), min(10, gy))
+    assert resolve_grid({"blackhole": (13, 10), "wormhole_b0": (8, 8)}, gx, gy, arch) == (gx, gy)
+    assert resolve_grid("x/2+y/5", gx, gy, arch) == (gx // 2, max(1, gy // 5))
+    assert grid_spec_of(gx, gy // 2, gx, gy) == "y/2" and grid_spec_of(gx, gy, gx, gy) == "full"
+    monkeypatch.setenv(ENV_PREFIX + "QKV", "1d:grid=y/2,bw=24,pc=2,osw=1,fid=hifi2,acc=1,wpb=0,out=dram")
+    cfg = resolve_decode_mm_config(rows, "31B", "qkv", 4, 32, arch)
+    assert cfg.in0_block_w == 24 and cfg.per_core_N == 2 and resolve_grid(cfg.grid, gx, gy, arch) == (gx, gy // 2)
