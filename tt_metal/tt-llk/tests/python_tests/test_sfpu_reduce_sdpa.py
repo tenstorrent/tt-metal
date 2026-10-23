@@ -33,11 +33,7 @@ MATHOP = MathOperation.ReduceColumn
 REDUCE_POOL = ReducePool.Max
 INPUT_DIMENSIONS = [512, 64]  # four independent 4x2 subblocks
 
-# The kernel seeds its running maxima with a -inf immediate before folding the
-# column in. Against the default stimuli (0.1 .. 1.1) any seed below 0.1 passes
-# for -inf; the all-negative stimuli are what check the seed really is -inf: a
-# seed of +0 (or any positive value) wins every swap against negative data and
-# the column maximum comes back as 0.0.
+# all_negative catches a max seed that is not really -inf.
 STIMULI = {
     "default": None,
     "all_negative": StimuliSpec.uniform(low=-2.0, high=-0.5),

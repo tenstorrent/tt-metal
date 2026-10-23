@@ -240,22 +240,7 @@ def test_sfpu_generic_moe_gate_partial_face(
 def test_sfpu_generic_moe_gate_partial_face_negative_keys(
     num_total_experts, num_selected_experts, normalize
 ):
-    """Every active key is negative, so the inactive-expert padding must be -inf.
-
-    The partial-face sweep above uses keys >= 1.0, which any padding value below
-    1.0 loses to, -inf or not. Softmax router logits are mostly negative, and
-    against those only a true -inf padding stays out of the top-k: a +0 padding
-    (or any positive value) outranks every active expert. Which winners come
-    back then depends on where the padding sits:
-
-    * Experts padded in the bias tile -- 32 and 80 (partial 4-row padding), and
-      64 on the top-16 path (full 4-row padding up to 128) -- come back as
-      phantom winners with ids >= num_total_experts.
-    * A 64-expert remainder on the top-8 path (64 with top-4 here, which pads
-      nothing) is sorted through the quarter-face network, whose unused half
-      is filled with the same -inf constant but carries id 0 / score 0, so the
-      fillers come back as the winners.
-    """
+    """Every active key is negative, so the inactive-expert padding must be -inf."""
     _check_moe_gate(
         num_selected_experts,
         full_sort=True,
