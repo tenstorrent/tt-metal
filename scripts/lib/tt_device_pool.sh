@@ -363,7 +363,11 @@ ttpool_clear_dirty() {
 }
 
 ttpool_reset() {
-    if [[ "$TTPOOL_IS_MESH" == true ]]; then
+    # A Galaxy (32 chips) is reset as a whole through its trays, never with a bare tt-smi -r
+    local chips=(/dev/tenstorrent/[0-9]*)
+    if [[ ${#chips[@]} -ge 32 ]]; then
+        tt-smi -glx_reset
+    elif [[ "$TTPOOL_IS_MESH" == true ]]; then
         tt-smi -r   # whole box, exactly as before the pool
     else
         # shellcheck disable=SC2086
