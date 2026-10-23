@@ -149,6 +149,33 @@ def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
     torch.testing.assert_close(loaded[1], first_replica, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_dump_device_shard(tmp_path, mesh_device):
+    """A shard taken out of a distributed tensor with get_device_tensors is the one-device tensor it holds and is
+    labelled as such, so it dumps and loads on its own; the tensor it was taken from keeps its label."""
+    torch_tensor = torch.arange(2 * 32 * 32, dtype=torch.float32).reshape(2, 32, 32)
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )
+    label = tensor.tensor_topology()
+
+    shards = ttnn.get_device_tensors(tensor)
+    assert [shard.tensor_topology() for shard in shards] == [
+        ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementReplicate()], [ttnn.MeshCoordinate(0, i)])
+        for i in range(2)
+    ]
+    assert tensor.tensor_topology() == label
+
+    file_name = tmp_path / "shard.tensorbin"
+    ttnn.dump_tensor(file_name, shards[1])
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 1
+    torch.testing.assert_close(loaded[0], torch_tensor[1:2], rtol=0, atol=0)
+
+
 def test_verify_shards_match_topology(expect_error):
     """The write-side check is callable on its own, on the host copy of a tensor, for callers that gather a tensor by
     its label: it refuses the mislabelled tensor, passes it on sizes alone when asked to, and passes once the label is

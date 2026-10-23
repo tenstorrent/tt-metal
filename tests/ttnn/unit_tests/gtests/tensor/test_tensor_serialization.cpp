@@ -237,6 +237,52 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
     }
 }
 
+TEST_F(TensorSerializationFlatbufferTest, DeviceShardIsLabelledAsOneDeviceTensorAndDumps) {
+    const int num_devices = mesh_device_->num_devices();
+    if (num_devices < 2) {
+        GTEST_SKIP() << "A shard taken out of a distributed tensor needs a mesh with more than one device";
+    }
+    TemporaryFile test_file("device_shard_flatbuffer.tensorbin");
+    constexpr int kNumElements = 64;
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return static_cast<float>(i); });
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{num_devices, kNumElements}, DataType::FLOAT32));
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, /*dim=*/0);
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    ASSERT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::DEVICE);
+    const TensorTopology sharded_label = sharded_tensor.tensor_topology();
+
+    // Each shard is labelled as the one-device tensor it is, on the device and on the host, and the tensor it was
+    // taken from keeps its label.
+    std::vector<Tensor> shards = ttnn::distributed::get_device_tensors(sharded_tensor);
+    ASSERT_THAT(shards, SizeIs(num_devices));
+    const auto coords = sharded_tensor.device_storage().get_coords();
+    for (int i = 0; i < num_devices; i++) {
+        const TensorTopology expected_label(
+            MeshShape(1), {ttnn::distributed::MeshMapperConfig::Replicate{}}, std::vector<MeshCoordinate>{coords[i]});
+        EXPECT_EQ(shards[i].tensor_topology(), expected_label) << "shard " << i;
+        EXPECT_EQ(shards[i].cpu().tensor_topology(), expected_label) << "shard " << i;
+    }
+    EXPECT_EQ(sharded_tensor.tensor_topology(), sharded_label);
+
+    // A shard dumps on its own and loads back as that shard.
+    dump_tensor_flatbuffer(test_file.string(), shards[1]);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), (ttnn::Shape{1, kNumElements}));
+    std::vector<Tensor> loaded_shards = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_shards, SizeIs(1));
+    EXPECT_THAT(loaded_shards[0].to_vector<float>(), Each(FloatEq(1.0F)));
+
+    // The shards still combine back into the tensor they were taken from.
+    Tensor combined = ttnn::distributed::combine_device_tensors(shards, /*shard_dim=*/0);
+    auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+    EXPECT_THAT(
+        ttnn::distributed::aggregate_tensor(combined, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
+}
+
 using TensorSerializationFlatbuffer2x4Test = MeshDevice2x4Fixture;
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {

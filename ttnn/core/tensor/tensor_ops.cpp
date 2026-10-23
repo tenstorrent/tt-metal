@@ -239,6 +239,9 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
             cq, input_tensor.mesh_tensor(), coords, blocking));
     }
+    // The read labels the host tensor with the MeshTensor's topology; a storage that labels its own shards
+    // (get_device_tensors) carries that label to the host instead.
+    output.update_tensor_topology(input_tensor.tensor_topology());
     output = ttnn::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
