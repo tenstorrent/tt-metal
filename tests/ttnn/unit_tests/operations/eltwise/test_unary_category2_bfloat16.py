@@ -191,17 +191,36 @@ def test_silu_swish_ops(device, ttnn_op):
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Torch's BF16 silu overflows exp(-x) in FP32 below x = -88.7; its float64 result is the exact one.
+        lanes = input_tensor.float() < -88.5
+        exact = golden_function(input_tensor[lanes].double(), device=device).to(torch.bfloat16)
+        golden[lanes] = torch.where(exact.abs() < SMALLEST_NORMAL_BF16, torch.zeros_like(exact), exact).to(golden.dtype)
 
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
     # (1) near-zero output FTZ: |x/2| <= smallest normal, i.e. |x| <= 2*SNB.
     near_zero_ftz = input_tensor.abs().float() <= 2 * SMALLEST_NORMAL_BF16
-    assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
+        # flushes to 0; it is checked as the BF16 pack stores it.
+        expected = golden[near_zero_ftz]
+        tiny = torch.finfo(torch.bfloat16).tiny
+        assert_equal(torch.where(expected.abs() < tiny, torch.zeros_like(expected), expected), result[near_zero_ftz])
+    else:
+        assert_ftz_band(result, near_zero_ftz, "near-zero FTZ band")
 
     # (2) negative sigmoid-underflow sliver: device must FTZ to exactly 0.
     neg_ftz_band = (input_tensor.float() >= -88.5) & (input_tensor.float() <= -87.5) & ~near_zero_ftz
-    assert_ftz_band(result, neg_ftz_band, "negative sigmoid-underflow sliver")
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
+        # flushes to 0; it is checked as the BF16 pack stores it.
+        expected = golden[neg_ftz_band]
+        tiny = torch.finfo(torch.bfloat16).tiny
+        assert_equal(torch.where(expected.abs() < tiny, torch.zeros_like(expected), expected), result[neg_ftz_band])
+    else:
+        assert_ftz_band(result, neg_ftz_band, "negative sigmoid-underflow sliver")
 
     remaining = ~near_zero_ftz & ~neg_ftz_band
     assert_with_ulp(expected_result=golden[remaining], actual_result=result[remaining], ulp_threshold=2)
