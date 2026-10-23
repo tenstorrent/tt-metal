@@ -167,8 +167,6 @@ class TPAttention:
         self.wo_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
-        # bf8 paged KV cache (QWEN_SDPA_BF8 or the cache-only QWEN36_KV_BF8, which keeps prefill Q in bf16)
-        self._kv_bf8 = tpc.kv_cache_bf8_enabled()
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -1309,12 +1307,13 @@ class TPAttention:
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
         if not sp_windowed:  # windowed: k/v stay as gathered, the SDPA reads them directly (no cache fill)
-            # bf8 KV cache: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
-            if self._kv_bf8:
-                _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
+            # paged_fill_cache doesn't cast: cast K/V to the bound cache's dtype (bf8 when the model allocated it under
+            # kv_cache_bf8_enabled(); a caller-allocated bf16 cache is filled as bf16)
+            if k.dtype != k_paged.dtype:
+                _k8 = ttnn.typecast(k, k_paged.dtype)
                 ttnn.deallocate(k)
                 k = _k8
-                _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
+                _v8 = ttnn.typecast(v, v_paged.dtype)
                 ttnn.deallocate(v)
                 v = _v8
 
