@@ -208,7 +208,9 @@ class Model:
         self.chunk, self.max_seq = int(spec.get("target.chunk")), int(spec.get("target.seq"))
         self.slab = self.chunk // sp
         self.layers = list(layers)
+        self.num_layers = cfg["num_hidden_layers"]
         self.hidden = cfg["hidden_size"]
+        self.global_sdpa = settings.get("ATTN_GLOBAL_SDPA")
         replicate = ttnn.ReplicateTensorToMesh(mesh)
 
         # Embedding: bf16 ROW_MAJOR (ttnn.embedding's only weight format), hidden split over TP.
@@ -295,8 +297,9 @@ class Model:
                 for v in (1.0, 0.0)
             ]
 
-        self.slot = self._scalar(0)
-        self.slot_scalars = {0: self.slot}  # slot index -> its replicated scalar, uploaded once per slot
+        self._inputs = {}  # (name, shape) -> persistent input buffer (_put)
+        self.traces = {}  # chunk variant -> (trace id, output)
+        self.staged = None
         self.meta = None
         self.next_start = 0
 
@@ -325,6 +328,11 @@ class Model:
         self.load_seconds = time.time() - t0
 
     # ---- staging (harness / server boundary) ---------------------------------------------------------------------
+    # A chunk's host-side inputs (positions, scalars, small masks) are written into persistent device buffers
+    # (Model._inputs), one per name and shape, allocated once and rewritten by every later chunk. The device ops that
+    # derive the per-chunk tensors from them (RoPE lookups, causal masks: _derive) read only those buffers, so the
+    # whole chunk forward is a fixed op graph per variant (chunk_variant) and can be captured as a ttnn trace and
+    # replayed after restaging (capture_chunk / replay_chunk, and tt/serving.py).
     def _scalar(self, value: int):
         return ttnn.from_torch(
             torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
@@ -335,15 +343,31 @@ class Model:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
 
+    def _mapper(self, dims):
+        if dims is None:
+            return ttnn.ReplicateTensorToMesh(self.mesh)
+        return ttnn.ShardTensor2dMesh(self.mesh, (self.sp, self.tp), dims=dims)
+
     def _upload(self, x, dtype, layout, dims=None):
-        mapper = (
-            ttnn.ReplicateTensorToMesh(self.mesh)
-            if dims is None
-            else ttnn.ShardTensor2dMesh(self.mesh, (self.sp, self.tp), dims=dims)
-        )
         return ttnn.from_torch(
-            x, device=self.mesh, dtype=dtype, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mapper
+            x,
+            device=self.mesh,
+            dtype=dtype,
+            layout=layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mapper(dims),
         )
+
+    def _put(self, name, x, dtype, layout, dims=None):
+        """Write x into the persistent input buffer `name` (allocated on first use) and return it."""
+        key = (name, tuple(x.shape))
+        host = ttnn.from_torch(x, dtype=dtype, layout=layout, mesh_mapper=self._mapper(dims))
+        buf = self._inputs.get(key)
+        if buf is None:
+            buf = self._inputs[key] = ttnn.to_device(host, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            ttnn.copy_host_to_device_tensor(host, buf)
+        return buf
 
     def _lookup(self, positions, parts, fp32: bool):
         """RoPE values of this chip's rows: [1, 1, L, width], fp32 (head + remainder) or bf16 (head only)."""
@@ -369,24 +393,65 @@ class Model:
                 ttnn.deallocate(t)
             self.meta = None
 
-    def _stage(self, start: int, end: int, slot: int = 0):
-        """The chunk's ChunkMeta (module docstring), writing KV slot `slot`."""
+    @property
+    def global_composed(self) -> bool:
+        return self.has_global and self.global_sdpa == "composed"
+
+    def chunk_variant(self, start: int, end: int) -> tuple:
+        """What of a chunk changes the forward's op graph (one trace each): the composed global attention's prefix rows
+        and its key mask for a start inside a slab, and the pad-row keep mask."""
+        prefix_rows = -(-start // self.chunk) * self.slab if self.global_composed else 0
+        return (prefix_rows, bool(prefix_rows and start % self.chunk), end < start + self.chunk)
+
+    def _stage_host(self, start: int, end: int, slot: int = 0):
+        """Write the chunk's host-side inputs into the persistent buffers (no device op) and remember the chunk
+        (self.staged). The device ops of _derive build the ChunkMeta from them."""
         assert start % ttnn.TILE_SIZE == 0 and 0 <= start < end <= start + self.chunk, (start, end)
-        if slot not in self.slot_scalars:
-            self.slot_scalars[slot] = self._scalar(slot)
         assert start + self.chunk <= self.max_seq, (start, self.max_seq)  # the server pulls the last chunk back
-        self._free_meta()
+        assert 0 <= slot, slot
         pos = chunk_positions(start, self.chunk, self.sp)
+        key = self.chunk_variant(start, end)
+        prefix_rows, partial, padded = key
+        bufs = {
+            "positions": self._put("positions", pos.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None)),
+            "slot": self._put("slot", torch.tensor([[[[slot]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "kv_actual": self._put("kv_actual", torch.tensor([[[[start]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            "valid": self._put("valid", torch.tensor([[[[end]]]]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        }
+        if padded:
+            keep = (pos < end).float().reshape(1, 1, self.chunk, 1)
+            bufs["keep"] = self._put("keep", keep, ttnn.float32, ttnn.TILE_LAYOUT, (2, None))
+        if self.global_composed:
+            # Query (this chip's row) vs key (the SP-gathered chunk rows, SP row major = device row order).
+            bufs["qpos"] = self._put(
+                "qpos", pos.float().reshape(1, 1, self.chunk, 1), ttnn.float32, ttnn.TILE_LAYOUT, (2, None)
+            )
+            bufs["kpos"] = self._put("kpos", pos.float().reshape(1, 1, 1, self.chunk), ttnn.float32, ttnn.TILE_LAYOUT)
+            if partial:
+                # Cache keys of the prefix slabs, SP-gathered: SP row r' local row lr holds position
+                # (lr // L) * C + r' * L + lr % L; this chunk's own rows (written before the attention) are masked.
+                lr = torch.arange(prefix_rows)
+                cpos = torch.cat(
+                    [(lr // self.slab) * self.chunk + r * self.slab + lr % self.slab for r in range(self.sp)]
+                )
+                pm = torch.where(cpos >= start, torch.tensor(MASK, dtype=torch.float32), torch.tensor(0.0))
+                bufs["prefix_mask"] = self._put("prefix_mask", pm.reshape(1, 1, 1, -1), ttnn.float32, ttnn.TILE_LAYOUT)
+        self.staged = dict(start=start, end=end, slot=slot, key=key, order=pos - start, bufs=bufs)
+        return self.staged
+
+    def _derive(self):
+        """The staged chunk's ChunkMeta: device ops only, reading the persistent input buffers (trace-safe)."""
+        self._free_meta()
+        st = self.staged
+        b = st["bufs"]
+        prefix_rows, _, _ = st["key"]
         owned = []
 
         def keep(t):
             owned.append(t)
             return t
 
-        positions = keep(self._upload(pos.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None)))
-        qpos = keep(self._upload(pos.float().reshape(1, 1, self.chunk, 1), ttnn.float32, ttnn.TILE_LAYOUT, (2, None)))
-        kv_actual, valid = keep(self._scalar(start)), keep(self._scalar(end))
-
+        positions = b["positions"]
         sliding_rope = global_rope = ()
         if self.has_sliding:
             sliding_rope = tuple(keep(self._lookup(positions, p, self.sliding_fp32)) for p in self.sliding_tables)
@@ -398,55 +463,49 @@ class Model:
             )
             for t in rot:
                 ttnn.deallocate(t)
-
-        pad_keep = None
-        if end < start + self.chunk:
-            pad_keep = keep(ttnn.lt(qpos, float(end), dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-
-        chunk_mask, prefix_rows, prefix_mask = None, -(-start // self.chunk) * self.slab, None
-        if self.has_global:
-            # Query (this chip's row) vs key (the SP-gathered chunk rows, SP row major = device row order).
-            kpos = self._upload(pos.float().reshape(1, 1, 1, self.chunk), ttnn.float32, ttnn.TILE_LAYOUT)
-            later = ttnn.gt(kpos, qpos, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        chunk_mask = None
+        if self.global_composed:
+            later = ttnn.gt(b["kpos"], b["qpos"], dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             chunk_mask = keep(ttnn.multiply(later, MASK, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            for t in (kpos, later):
-                ttnn.deallocate(t)
-            if start % self.chunk:
-                # Cache keys of the prefix slabs, SP-gathered: SP row r' local row lr holds position
-                # (lr // L) * C + r' * L + lr % L; this chunk's own rows (written before the attention) are masked.
-                lr = torch.arange(prefix_rows)
-                cpos = torch.cat(
-                    [(lr // self.slab) * self.chunk + r * self.slab + lr % self.slab for r in range(self.sp)]
-                )
-                ck = self._upload(cpos.float().reshape(1, 1, 1, -1), ttnn.float32, ttnn.TILE_LAYOUT)
-                late = ttnn.ge(ck, float(start), dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                prefix_mask = keep(ttnn.multiply(late, MASK, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                for t in (ck, late):
-                    ttnn.deallocate(t)
-
+            ttnn.deallocate(later)
         self.meta = ChunkMeta(
-            start=start,
-            end=end,
-            order=pos - start,
-            slot=self.slot_scalars[slot],
-            kv_actual=kv_actual,
-            valid=valid,
+            start=st["start"],
+            end=st["end"],
+            order=st["order"],
+            slot=b["slot"],
+            kv_actual=b["kv_actual"],
+            valid=b["valid"],
             sliding_rope=sliding_rope,
             global_rope=global_rope,
-            keep=pad_keep,
+            keep=b.get("keep"),
             chunk_mask=chunk_mask,
-            prefix_rows=prefix_rows,
-            prefix_mask=prefix_mask,
+            prefix_rows=prefix_rows if self.global_composed else -(-st["start"] // self.chunk) * self.slab,
+            prefix_mask=b.get("prefix_mask"),
             owned=owned,
-            slot_index=slot,
+            slot_index=st["slot"],
         )
-        return positions
+        return self.meta
+
+    def _stage(self, start: int, end: int, slot: int = 0):
+        """The chunk's ChunkMeta (module docstring), writing KV slot `slot`."""
+        self._stage_host(start, end, slot)
+        self._derive()
 
     # ---- the ladder / server interface ---------------------------------------------------------------------------
     def new_state(self, max_seq: int) -> State:
         assert max_seq <= self.max_seq, (max_seq, self.max_seq)
         self.next_start = 0
         return State(self, max_seq)
+
+    def _token_ids(self, tokens, start):
+        """(ids in device row order with PAD_ID -> 0, n_real) of one natural-order chunk at start."""
+        tokens = torch.as_tensor(tokens).long().flatten()
+        assert tokens.numel() == self.chunk, (tokens.numel(), self.chunk)
+        pad = tokens == PAD_ID
+        n_real = int(pad.int().argmax()) if bool(pad.any()) else self.chunk
+        assert not bool((~pad[n_real:]).any()), "PAD_ID only after the real tokens"
+        order = chunk_positions(start, self.chunk, self.sp) - start
+        return torch.where(pad, 0, tokens)[order], n_real
 
     def embed(self, tokens, start: int | None = None):
         """One chunk of token ids (natural order, PAD_ID past the real tokens) at absolute start -> the residual.
@@ -456,16 +515,11 @@ class Model:
         """
         if start is None:
             start = self.next_start if self.next_start + self.chunk <= self.max_seq else 0
-        tokens = torch.as_tensor(tokens).long().flatten()
-        assert tokens.numel() == self.chunk, (tokens.numel(), self.chunk)
-        pad = tokens == PAD_ID
-        n_real = int(pad.int().argmax()) if bool(pad.any()) else self.chunk
-        assert not bool((~pad[n_real:]).any()), "PAD_ID only after the real tokens"
+        ids, n_real = self._token_ids(tokens, start)
         self._stage(start, start + n_real)
         self.next_start = start + self.chunk
-        ids = torch.where(pad, 0, tokens)[self.meta.order]
-        tok = self._upload(ids.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None))
-        return self._embed_ids(tok)
+        tok = self._put("tokens", ids.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None))
+        return self._embed_ids(tok, consume=False)
 
     def embed_device(self, payload, start: int, end: int, slot: int = 0):
         """The server's chunk input, already on the device -> the residual. payload: [SP, 1, C / SP] uint32 sharded
@@ -474,13 +528,17 @@ class Model:
         tt_parallel_embedding): its rows never reach a real token (causal) and the keep mask zeroes their K / V."""
         self._stage(start, end, slot)
         self.next_start = start + self.chunk
+        return self._embed_payload(payload)
+
+    def _embed_payload(self, payload):
         ids = ttnn.reshape(payload, (1, self.slab))
         return self._embed_ids(ttnn.minimum(ids, self.vocab - 1))
 
-    def _embed_ids(self, tok):
-        """[1, L] uint32 ids per chip (device row order; consumed) -> the residual."""
+    def _embed_ids(self, tok, consume: bool = True):
+        """[1, L] uint32 ids per chip (device row order; consumed unless consume=False) -> the residual."""
         e = ttnn.embedding(tok, self.embed_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        ttnn.deallocate(tok)
+        if consume:
+            ttnn.deallocate(tok)
         # * sqrt(H) in fp32 (a bf16 scalar would be 73.5, not 73.32), into the residual stream dtype.
         e32 = ttnn.typecast(ttnn.unsqueeze_to_4D(e), ttnn.float32)
         ttnn.deallocate(e)
@@ -491,6 +549,74 @@ class Model:
         h = ttnn.mesh_partition(full, dim=2, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(full)
         return h
+
+    # ---- one whole chunk, eager or traced --------------------------------------------------------------------------
+    def chunk_body(self, embed_fn, after_layer=None, final_norm: bool = False):
+        """The staged chunk's device forward: ChunkMeta, embedding (embed_fn() -> the residual), every layer
+        (after_layer(i) after each: the server's layer ack), optionally the final norm. Device ops only, so it runs
+        eagerly or inside a trace capture. Returns the last residual."""
+        self._derive()
+        h = embed_fn()
+        start, end = self.meta.start, self.meta.end
+        for i in self.layers:
+            out = self.layer(i, h, start, None, end)
+            ttnn.deallocate(h)
+            h = out
+            if after_layer is not None:
+                after_layer(i)
+        if final_norm:
+            out = self.final(h)
+            ttnn.deallocate(h)
+            h = out
+        self._free_meta()
+        return h
+
+    def capture(self, key, body):
+        """Capture body() (device ops only, already run once eagerly for this variant so its programs are compiled)
+        as the trace of variant key. The trace's output stays allocated (replays write it)."""
+        assert key not in self.traces, key
+        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        try:
+            out = body()
+        finally:
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+        self.traces[key] = (tid, out)
+        return out
+
+    def replay(self, key, blocking: bool = False):
+        tid, out = self.traces[key]
+        ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=blocking)
+        return out
+
+    def release_traces(self):
+        for tid, out in self.traces.values():
+            ttnn.release_trace(self.mesh, tid)
+            ttnn.deallocate(out)
+        self.traces = {}
+
+    def _bench_tokens(self, tokens, start):
+        ids, n_real = self._token_ids(tokens, start)
+        self._stage_host(start, start + n_real)
+        tok = self._put("tokens", ids.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None))
+        return lambda: self._embed_ids(tok, consume=False)
+
+    def capture_chunk(self, tokens, start: int):
+        """Benchmark helper: run one chunk eagerly (compiles), then capture it as its variant's trace."""
+        embed = self._bench_tokens(tokens, start)
+        final = self.layers[-1] == self.num_layers - 1
+        ttnn.deallocate(self.chunk_body(embed, final_norm=final))
+        key = self.staged["key"]
+        if key not in self.traces:
+            self.capture(key, lambda: self.chunk_body(embed, final_norm=final))
+        return key
+
+    def replay_chunk(self, tokens, start: int):
+        """Benchmark helper: restage the chunk's inputs and replay its variant's trace (non-blocking)."""
+        self._bench_tokens(tokens, start)
+        return self.replay(self.staged["key"])
+
+    def release_chunk_traces(self):
+        self.release_traces()
 
     def _component(self, i: int, name: str):
         if name in NORM_WEIGHTS:

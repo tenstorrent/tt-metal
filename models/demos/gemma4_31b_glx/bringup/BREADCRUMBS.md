@@ -325,3 +325,22 @@
 - Re-run: `bfw job check --task Z.1`.
 - Result: `bfw job check --task Z.1` PASS (ladder 817 s): settings_violations 0; pcc_final_hidden 0.999149 and
   pcc_state_min 0.998889 (same as the earlier Z.1 ladder run), top5 1.0; every C.*/S.*/M.1/L.*/K.1 regression PASS.
+
+## Manual perf pass: trace (not pipeline-generated), 2026-10-23
+- A manual performance pass by a Claude agent outside the prefill-stepwise flow (frozen tests and goldens untouched).
+- `tt/model.py`: a chunk's host-side inputs (positions, slot / start / end scalars, pad keep mask, the composed global
+  attention's query/key positions and partial-slab key mask, token ids) go into persistent device buffers
+  (`Model._put`); `_derive` builds the ChunkMeta from them with device ops only. So the whole chunk
+  (`Model.chunk_body`: meta, embedding, 60 layers) is one fixed op graph per `chunk_variant` (pad mask present; with the
+  composed global attention also its prefix rows and partial-slab mask) and can be captured (`Model.capture`) and
+  replayed (`Model.replay`) after restaging. Numerics are unchanged: L.s5120 metrics are identical to the pipeline's.
+- `tt/serving.py`: `params.use_trace` (PREFILL_USE_TRACE=1) runs a variant's first chunk op by op and captures it, then
+  replays it (payload and ack metadata copied into persistent buffers first). PREFILL_USE_TRACE=0 keeps the op-by-op
+  path. D2H acks are recorded in the trace; the host sink acks every layer after a replay.
+- Persistent inputs must be allocated before the trace that reads them is captured (a later allocation may overlap a
+  trace's freed intermediates, which every replay writes); every input is rewritten before each replay.
+- Benchmarks (`tests/perf/test_chunk_perf.py`, warm 60-layer chunk, zero KV prefix, random ids): op by op 459 ms at
+  start 0 and 1163 ms at 51200; traced 423 / 1127 ms (bit-identical outputs). The X.1 wall time (3075 ms) was taken
+  with the device profiler on; without it host dispatch is only ~35 ms of the chunk: the chunk is device-bound.
+- `tests/perf/test_serving_trace.py`: op-by-op slot 0 vs traced slot 1 (capture pass, then replay pass): KV bytes of
+  layers 0, 5, 59 identical, acks one per layer per chunk in order.

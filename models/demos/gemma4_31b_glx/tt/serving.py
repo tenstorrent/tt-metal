@@ -16,6 +16,11 @@ head h; a config maps only its own layer type. One device group per chip (each c
 
 Acks: one per layer per chunk, after the layer's cache writes: the runner's D2H socket record when it passes a
 d2h_service, else synchronize_device and the host sink (set_layer_completion_sink).
+
+Trace (PREFILL_USE_TRACE=1, the mesh opened with a trace region): the runtime captures one trace per chunk variant
+(Model.chunk_variant) after running that variant's first chunk op by op, then replays it for every later chunk of the
+variant. The D2H ack records are inside the trace; with the host sink a replay acks every layer after it completes.
+PREFILL_USE_TRACE=0 keeps the op-by-op path.
 """
 
 from __future__ import annotations
@@ -258,7 +263,11 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir) 
 
 # ---------------------------------------------------------------- the runtime
 class Gemma431bGlxRuntime:
-    """One chunk at a time, op by op (no trace), into the engine-owned caches."""
+    """One chunk at a time into the engine-owned caches: op by op, or (params.use_trace, PREFILL_USE_TRACE=1) as a
+    ttnn trace per chunk variant (Model.chunk_variant: the pad mask, and with the composed global attention the
+    prefix length). A variant's first chunk runs op by op, which compiles it, and is then captured; later chunks of
+    that variant restage the inputs (host -> persistent device buffers, device copies of the payload and the ack
+    metadata) and replay it."""
 
     def __init__(self, *, mesh_device, ckpt: str, params):
         self.mesh_device, self.ckpt, self.config = mesh_device, ckpt, params
@@ -266,6 +275,8 @@ class Gemma431bGlxRuntime:
         self.kv = None
         self.layer_completion_sink = None
         self.d2h_service = None
+        self.payload_buf = None  # traced: the persistent copies of the chunk input and the ack metadata
+        self.metadata_buf = None
 
     def compile(self, kv_cache):
         """Load the model's weights over the given caches. No warm-up chunk: it would write slot 0."""
@@ -294,6 +305,30 @@ class Gemma431bGlxRuntime:
     def set_d2h_ack_service(self, service):
         self.d2h_service = service
 
+    def capture_trace(self, kv_cache):
+        """The runner's hook before the first chunk (traced mode). Each variant is captured after its first chunk
+        ran op by op (prefill_chunk), so nothing runs here and no warm-up ack is sent."""
+        self._check(kv_cache)
+
+    def warmup_ack_count(self):
+        return 0
+
+    def _acks(self, d2h, metadata, sink, request_id, traced):
+        """after_layer for chunk_body: the D2H ack record (inside a trace too), or the host sink after a full sync
+        (op by op only; a replay acks every layer after it completes)."""
+        import ttnn
+
+        if d2h is not None:
+            return lambda i: ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata)
+        if sink is not None and not traced:
+
+            def ack(i):
+                ttnn.synchronize_device(self.mesh_device)
+                sink(i, request_id)
+
+            return ack
+        return None
+
     def prefill_chunk(
         self,
         input_tensor,
@@ -321,18 +356,32 @@ class Gemma431bGlxRuntime:
         d2h = d2h_service if d2h_service is not None else self.d2h_service
         if d2h is not None and metadata_msg is None:
             raise ValueError("D2H layer acks need the chunk's metadata_msg")
-        h = m.embed_device(input_tensor, actual_start, actual_end, slot_id)
-        for i in m.layers:
-            out = m.layer(i, h, actual_start, None, actual_end)
-            m.free(h)
-            h = out
-            # The ack follows the layer's cache writes (same command queue; the host sink after a full sync).
-            if d2h is not None:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
-            elif self.layer_completion_sink is not None:
+        sink = self.layer_completion_sink
+        m._stage_host(actual_start, actual_end, slot_id)
+        m.next_start = actual_start + p.chunk_size
+        key = m.staged["key"]
+        if p.use_trace and key in m.traces:
+            ttnn.copy(input_tensor, self.payload_buf)
+            if metadata_msg is not None:
+                ttnn.copy(metadata_msg, self.metadata_buf)
+            m.replay(key)
+            if d2h is None and sink is not None:
                 ttnn.synchronize_device(self.mesh_device)
-                self.layer_completion_sink(i, request_id)
-        m.free(h)
+                for i in m.layers:
+                    sink(i, request_id)
+        else:
+            if p.use_trace and self.payload_buf is None:
+                # allocated before the first capture, so no trace's intermediates overlap them
+                self.payload_buf = ttnn.clone(input_tensor, memory_config=input_tensor.memory_config())
+                if metadata_msg is not None:
+                    self.metadata_buf = ttnn.clone(metadata_msg, memory_config=metadata_msg.memory_config())
+            # The ack follows the layer's cache writes (same command queue; the host sink after a full sync).
+            acks = self._acks(d2h, metadata_msg, sink, request_id, traced=False)
+            ttnn.deallocate(m.chunk_body(lambda: m._embed_payload(input_tensor), acks))
+            if p.use_trace:
+                md = self.metadata_buf if metadata_msg is not None else None
+                acks = self._acks(d2h, md, sink, request_id, traced=True)
+                m.capture(key, lambda: m.chunk_body(lambda: m._embed_payload(self.payload_buf), acks))
         ttnn.deallocate(input_tensor)
         if metadata_msg is not None:
             ttnn.deallocate(metadata_msg)
@@ -377,6 +426,8 @@ class Gemma431bGlxRuntime:
         return str(path)
 
     def release_trace(self):
+        if self.model is not None:
+            self.model.release_traces()
         self.d2h_service = None
         self.layer_completion_sink = None
 
@@ -387,8 +438,6 @@ def _validate(params):
         raise ValueError(f"gemma4_31b_glx needs the SP8 x TP4 mesh, got {params.mesh_shape}")
     if params.first_layer_idx != 0 or not (params.is_first_rank and params.is_last_rank):
         raise ValueError("gemma4_31b_glx serves its layers on one rank")
-    if params.use_trace:
-        raise ValueError("gemma4_31b_glx runs op by op: PREFILL_USE_TRACE=0")
     if params.max_seq_len % params.chunk_size or params.chunk_size % (MESH_SHAPE[0] * MESH_SHAPE[1] * TILE):
         raise ValueError(f"max_seq {params.max_seq_len} / chunk {params.chunk_size}: not the served geometry")
     if settings.get("ATTN_GLOBAL_SDPA") != "composed":
