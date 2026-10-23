@@ -75,11 +75,12 @@ std::optional<bool> logical_values_equal_in_place(
     const size_t E = *elem;
     const size_t H = logical[-2], W = logical[-1], PH = padded[-2], PW = padded[-1];
     size_t batch = 1;
-    for (size_t i = 0; i + 2 < rank; ++i) {
-        if (logical[static_cast<int32_t>(i)] != padded[static_cast<int32_t>(i)]) {
+    // Shape indexes with int32_t (a negative index counts from the end).
+    for (int32_t i = 0; i < static_cast<int32_t>(rank) - 2; ++i) {
+        if (logical[i] != padded[i]) {
             return std::nullopt;
         }
-        batch *= logical[static_cast<int32_t>(i)];
+        batch *= logical[i];
     }
     const auto bytes_a = a.view_bytes();
     const auto bytes_b = b.view_bytes();
