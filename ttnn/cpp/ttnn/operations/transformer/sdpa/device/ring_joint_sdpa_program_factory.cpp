@@ -3470,7 +3470,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the 70,656 B kernel config buffer (M9's and M10's first builds overflowed it; M10 with its flushes outlined
     // was still 336 B over), and O2 cuts the three TRISC binaries by ~30 %. Every profiled resident run (which set
     // O2 through TT_SOL_STEP_PROFILE) showed the same per-piece compute as the unprofiled timings, so O2 costs no
-    // measurable step time here: the step is bound by Tensix instruction throughput, not by RISC issue.
+    // measurable step time here: the step is bound by Tensix instruction throughput, not by RISC issue. The
+    // kernel's build hash carries the level (ComputeKernel::config_hash), so the JIT cache cannot serve the O3
+    // binary for it.
     if (sol_resident) {
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }

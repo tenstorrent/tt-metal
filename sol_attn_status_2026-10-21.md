@@ -1008,6 +1008,10 @@ compute kernel was being built at the framework default O3 except under `TT_SOL_
 factory now sets O2 for every resident build (~30 % smaller TRISC binaries). Every profiled resident run was at O2
 and showed the same per-piece compute as the unprofiled O3 timings (the step is bound by Tensix instruction
 throughput, not RISC issue), so no step-time cost is expected; the `m10t` traced numbers will say.
+**Third build (02:06):** still 70992 B, byte for byte, with the JIT cache reporting 335/335 hits: the kernel build
+hash (`ComputeKernel::config_hash`) did not include the optimization level, so the cache served the O3 binary.
+Fixed in `tt_metal/impl/kernels/kernel.cpp` (the level is appended to the hash when it differs from the compute
+default O3, so existing hashes are unchanged). A host rebuild is needed for both the factory and this fix.
 
 **Expected:** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
 −0.25 to −0.35 ms traced at tau 1, i.e. ~4.65 ms (1.58x) from 4.97. The pooled steps use the same code and gain
