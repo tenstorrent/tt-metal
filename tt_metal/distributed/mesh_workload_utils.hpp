@@ -31,8 +31,8 @@ HostMemDeviceCommand build_go_signal_sequence(
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
+    uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count);
 
@@ -42,8 +42,8 @@ void write_go_signal_sequence(
     SubDeviceId sub_device_id,
     SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
+    uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count);
 

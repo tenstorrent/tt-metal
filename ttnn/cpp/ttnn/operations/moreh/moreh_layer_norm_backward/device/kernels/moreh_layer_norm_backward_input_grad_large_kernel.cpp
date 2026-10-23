@@ -127,14 +127,14 @@ void kernel_main() {
         // Compute y
         // y = (x - mean) * rstd
         constexpr auto dfb_dyadd = dfb::tmp1;
-        DataflowBuffer& dfb_dyadd_obj = dfb_tmp1_obj;
+        auto& dfb_dyadd_obj = dfb_tmp1_obj;
         constexpr auto dfb_ydyadd = dfb::tmp2;
-        DataflowBuffer& dfb_ydyadd_obj = dfb_tmp2_obj;
+        auto& dfb_ydyadd_obj = dfb_tmp2_obj;
         for (uint32_t wt = 0; wt < Wt; wt++) {
             // Compute xmm
             // x - mean
             constexpr auto dfb_xmm = dfb::tmp3;
-            DataflowBuffer& dfb_xmm_obj = dfb_tmp3_obj;
+            auto& dfb_xmm_obj = dfb_tmp3_obj;
             ckl::sub<
                 ckl::input(dfb::x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -189,7 +189,7 @@ void kernel_main() {
 
             // Compute ydy and ydyadd
             constexpr auto dfb_ydy = dfb::tmp3;
-            DataflowBuffer& dfb_ydy_obj = dfb_tmp3_obj;
+            auto& dfb_ydy_obj = dfb_tmp3_obj;
             // Compute ydy
             ckl::mul<
                 ckl::input(dfb::y, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
@@ -225,7 +225,7 @@ void kernel_main() {
         // Compute recip_nrstd
         // rstd / n -> tmp3
         constexpr auto dfb_recip_nrstd = dfb::tmp3;
-        DataflowBuffer& dfb_recip_nrstd_obj = dfb_tmp3_obj;
+        auto& dfb_recip_nrstd_obj = dfb_tmp3_obj;
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
@@ -266,7 +266,7 @@ void kernel_main() {
             // Compute ndy
             // n * dy
             constexpr auto dfb_ndy = dfb::tmp1;
-            DataflowBuffer& dfb_ndy_obj = dfb_tmp1_obj;
+            auto& dfb_ndy_obj = dfb_tmp1_obj;
             ckl::mul<
                 ckl::input(dfb::n_recip_n, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::input(dfb::dycopy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
@@ -276,7 +276,7 @@ void kernel_main() {
             // Compute ndymdysum
             // n * dy - Sum[dy]
             constexpr auto dfb_ndymdysum = dfb::tmp2;
-            DataflowBuffer& dfb_ndymdysum_obj = dfb_tmp2_obj;
+            auto& dfb_ndymdysum_obj = dfb_tmp2_obj;
             ckl::sub<
                 ckl::input(dfb_ndy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -291,7 +291,7 @@ void kernel_main() {
             // Compute xmm
             // x - mean and mask(optional)
             constexpr auto dfb_xmm = dfb::tmp1;
-            DataflowBuffer& dfb_xmm_obj = dfb_tmp1_obj;
+            auto& dfb_xmm_obj = dfb_tmp1_obj;
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -321,7 +321,7 @@ void kernel_main() {
             // Compute yydysum
             // y * Sum[y * dy]
             constexpr auto dfb_yydysum = dfb::tmp1;
-            DataflowBuffer& dfb_yydysum_obj = dfb_tmp1_obj;
+            auto& dfb_yydysum_obj = dfb_tmp1_obj;
             ckl::mul<
                 ckl::input(dfb::y, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -336,7 +336,7 @@ void kernel_main() {
             // Compute tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             constexpr auto dfb_tmp4 = dfb::y;
-            DataflowBuffer& dfb_tmp4_obj = dfb_y_obj;
+            auto& dfb_tmp4_obj = dfb_y_obj;
             ckl::sub<
                 ckl::input(dfb_ndymdysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb_yydysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),

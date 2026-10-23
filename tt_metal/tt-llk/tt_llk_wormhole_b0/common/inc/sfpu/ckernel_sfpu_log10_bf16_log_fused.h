@@ -5,12 +5,12 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_log10_bf16_replay_window.h"
 #include "sfpi.h"
 
-namespace ckernel::sfpu::bf16
+namespace ckernel::sfpu::bf16::log10
 {
-constexpr std::uint32_t kLogFusedHold    = ADDR_MOD_3;
-constexpr std::uint32_t kLogFusedAdvance = ADDR_MOD_2;
+constexpr std::uint32_t kLogFusedHold = ADDR_MOD_3;
 
 template <std::uint32_t Register, std::uint32_t Bits>
 inline void log_fused_load_constant()
@@ -43,44 +43,54 @@ inline void calculate_log_fused()
     {
         log_fused_load_constant<p_sfpu::LREG7, Config::kScaleBits ^ 0x80000000u>();
     }
-    TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    TTI_SFPLOAD(p_sfpu::LREG2, 0, kLogFusedHold, 0); // x
-    // TT-NN's datacopy keeps -0 and subnormals in DEST; x*1 + 0 sends both to +0, so log is -Inf.
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-    TTI_SFPLOADI(p_sfpu::LREG3, 0, 0x7FC0);                                      // NaN for x < 0, -Inf and -NaN
-    TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPEXEXP_MOD1_NODEBIAS); // biased b
-    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);            // x >= 0
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                              // log(x) = x for +Inf and +NaN; finite x overwrites it below
-    TTI_SFPIADD(0xF01, p_sfpu::LREG1, p_sfpu::LREG1,
-                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0); // b - 255 < 0: x finite
-    // After x*1 + 0, zeros and subnormals of either sign are +0, the only input left open with x == 0.
-    TTI_SFPLOADI(p_sfpu::LREG3, 0, 0xFF80); // log(0) = -Inf
-    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-    TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG2, 1);                                // m
-    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);                                     // 255 - b
-    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG2, 0); // u = m - 1
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);                                       // u-gap filler
-    TTI_SFPMAD(c[0], p_sfpu::LREG2, c[1], p_sfpu::LREG3, 0);                            // h = c[D]*u + c[D-1]
-    TTI_SFPADDI(0xC300, p_sfpu::LREG1, 0);                                              // -e = 127 - b, exact; h-gap filler
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[2], p_sfpu::LREG3, 0);                   // + c[D-2]
-    TTI_SFPMUL(p_sfpu::LREG1, negative_scale, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);      // e*scale; gap filler
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[3], p_sfpu::LREG3, 0);                   // + c[D-3]
-    if constexpr (D == 5u)
+    auto row_head = [&]
     {
+        TTI_SFPLOAD(p_sfpu::LREG2, 0, kLogFusedHold, 0); // x
+        // TT-NN's datacopy keeps -0 and subnormals in DEST; x*1 + 0 sends both to +0, so log is -Inf.
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPLOADI(p_sfpu::LREG3, 0, 0x7FC0);                                      // NaN for x < 0, -Inf and -NaN
+        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPEXEXP_MOD1_NODEBIAS); // biased b
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);            // x >= 0
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);                              // log(x) = x for +Inf and +NaN; finite x overwrites it below
+        TTI_SFPIADD(0xF01, p_sfpu::LREG1, p_sfpu::LREG1,
+                    sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0); // b - 255 < 0: x finite
+        // After x*1 + 0, zeros and subnormals of either sign are +0, the only input left open with x == 0.
+        TTI_SFPLOADI(p_sfpu::LREG3, 0, 0xFF80); // log(0) = -Inf
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG2, 1);                                // m
+        TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);                                     // 255 - b
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG2, 0); // u = m - 1
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);                                       // u-gap filler
+        TTI_SFPMAD(c[0], p_sfpu::LREG2, c[1], p_sfpu::LREG3, 0);                            // h = c[D]*u + c[D-1]
+        TTI_SFPADDI(0xC300, p_sfpu::LREG1, 0);                                              // -e = 127 - b, exact; h-gap filler
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[2], p_sfpu::LREG3, 0);                   // + c[D-2]
+    };
+    auto row_tail = [&]
+    {
+        TTI_SFPMUL(p_sfpu::LREG1, negative_scale, p_sfpu::LCONST_0, p_sfpu::LREG1, 0); // e*scale; gap filler
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[3], p_sfpu::LREG3, 0);              // + c[D-3]
+        if constexpr (D == 5u)
+        {
+            TTI_SFPNOP;
+            TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[4], p_sfpu::LREG3, 0); // + c1
+        }
         TTI_SFPNOP;
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, c[4], p_sfpu::LREG3, 0); // + c1
-    }
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3, 0); // y = h*u + e*scale
-    TTI_SFPENCC(0, 0, 0, 0);
-    // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3,
-                      sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, kLogFusedAdvance, 0);     // dest += 2
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3, 0); // y = h*u + e*scale
+        TTI_SFPENCC(0, 0, 0, 0);
+        // FP32 -> BF16 reads no VB; ttsim rejects a nonzero one, so VB is L0.
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG3,
+                          sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
+        TTI_SFPSTORE(p_sfpu::LREG3, 0, kLogFusedHold, 0);
+    };
+    record_split<0, Config::kBodySlots, 16>(row_head, row_tail);
+    // DEST is addressed only through the hold mode, which every SFPU init leaves at zero and no FPU
+    // op sets; the counter steps to the next row outside the record, so the replay keeps its length.
+    TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        replay_split<0, Config::kBodySlots, 16>(row_head, row_tail);
+        TTI_INCRWC(0, 2, 0, 0);
     }
 }
-} // namespace ckernel::sfpu::bf16
+} // namespace ckernel::sfpu::bf16::log10
