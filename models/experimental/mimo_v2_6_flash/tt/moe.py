@@ -39,6 +39,7 @@ from .moe_stream import (
     fabric_row_gather,
     fabric_transport_noc,
     is_dram_interleaved,
+    stick_buffer,
 )
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
@@ -277,21 +278,12 @@ class TtMiMoMoE:
                 norm_topk_prob=self.cfg.norm_topk_prob,
                 routed_scaling_factor=self.cfg.routed_scaling_factor,
             )
-            # Same row-major uint16 [1, 1, 1, pairs] stick the routing glue used to build with typecast.
-            ids32 = ttnn.from_torch(
-                torch.zeros(1, 1, 1, pairs, dtype=torch.int32),
-                device=self.plan.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep,
-            )
-            self.ids_buf = ttnn.typecast(ids32, ttnn.uint16)
-            ids32.deallocate(True)
+            # The row-major uint16 expert stick (the pairs' ids, or deduplicated [count, distinct ids...]).
+            self.ids_buf = stick_buffer(self.plan, pairs, self.gate_up_stream.dedup)
             # Down + sum over pairs, bank-local from the interleaved w_down, into a persistent compact
             # [1, 1, 32, hidden / 8] output holding only the user rows; one row all-gather of it, then ReduceExpand
             # sums the chips' copies and restores [1, 1, 32, hidden] with zero padding rows.
-            self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs)
+            self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs, self.gate_up_stream.dedup)
             self.act_buf = self.down_stream.activation_buffer(self.plan)
             self.out_buf = self.down_stream.compact_output(self.plan)
             self.reduce_expand = ReduceExpand(

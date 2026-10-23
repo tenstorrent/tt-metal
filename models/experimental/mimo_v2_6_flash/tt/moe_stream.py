@@ -10,6 +10,7 @@ bank cores; its device kernels live in ``tt/kernels/`` and are JIT-compiled from
 """
 
 import math
+import os
 
 import torch
 
@@ -18,6 +19,8 @@ import ttnn
 from .common import TILE, pad_to
 
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels"
+# MIMO_MOE_DEDUP=0: stream every (user, top-k) pair's expert, as before the deduplicated stream (GateUpStream).
+DEDUP = os.environ.get("MIMO_MOE_DEDUP", "1") == "1"
 
 
 _BANK_CORES = {}  # device ids of a (sub)mesh -> bank cores registered by set_dram_bank_cores
@@ -97,6 +100,30 @@ def bank_vcs(cores):
     return vcs
 
 
+def stick_bytes(num_pairs):
+    """Bytes of the deduplicated stream's expert stick (uint16 [count, ids...] for up to ``num_pairs`` experts), whole
+    64-byte DRAM write units."""
+    return pad_to(2 * (num_pairs + 1), 64)
+
+
+def stick_buffer(plan, num_pairs, dedup=None):
+    """The row-major uint16 [1, 1, 1, n] DRAM stick GateUpStream writes the experts into and DownStream reads: the
+    pairs' ids, or deduplicated [count, distinct ids...]."""
+    dedup = DEDUP if dedup is None else dedup
+    n = stick_bytes(num_pairs) // 2 if dedup else num_pairs
+    ids32 = ttnn.from_torch(
+        torch.zeros(1, 1, 1, n, dtype=torch.int32),
+        device=plan.mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=plan.replicate(),
+    )
+    out = ttnn.typecast(ids32, ttnn.uint16)
+    ids32.deallocate(True)
+    return out
+
+
 class GateUpStream:
     """Top-k routing, then silu(x @ gate) * (x @ up) * w for every decode pair, streamed bank-locally from the
     interleaved w_gate_up.
@@ -112,6 +139,14 @@ class GateUpStream:
     column b and up column b of every expert, contiguous per expert as [kt][gate, up]. Core b streams bank b and
     writes row u of pair (u, k)'s [4, 32] h tile b into page p of the zeroed row-major ``out`` (DownStream's
     activation: page p = pair p's 8 tiny tiles; the other rows stay zero).
+
+    Deduplicated (``dedup``, the default; MIMO_MOE_DEDUP=0 turns it off): every distinct expert the active users (the
+    token mask's nonzero rows) selected is streamed once. The users of one step are often one request at consecutive
+    positions (a speculative verify), whose top-8 sets overlap (4 consecutive tokens select ~23 distinct experts, 8
+    ~37), and an idle slot selects nothing. The reader routes users [0, users / 2) and streams their experts while the
+    writer routes the rest; both list the distinct experts in user order. Expert j's h tile carries every user's row,
+    scaled by that user's routing weight of j (0 when it did not select j: the writer's weight tile), so page j of
+    ``out`` is expert j's whole [4, 32] tiny tiles, and ``ids_out`` is the stick [count, ids...] DownStream reads.
     """
 
     BLOCK_K = 16  # K tiles per block: 16 x (gate, up) x 576 B = 18 KB
@@ -123,9 +158,19 @@ class GateUpStream:
     FP32_TILE_BYTES = 4096
 
     def __init__(
-        self, plan, hidden, inter_local, num_pairs, topk, num_experts, norm_topk_prob=True, routed_scaling_factor=1.0
+        self,
+        plan,
+        hidden,
+        inter_local,
+        num_pairs,
+        topk,
+        num_experts,
+        norm_topk_prob=True,
+        routed_scaling_factor=1.0,
+        dedup=None,
     ):
         device = plan.mesh_device
+        self.dedup = DEDUP if dedup is None else dedup
         self.cores = list(dram_bank_cores(device))
         self.banks = device.dram_grid_size().x
         assert len(self.cores) == self.banks, (len(self.cores), self.banks)
@@ -137,14 +182,17 @@ class GateUpStream:
         assert num_pairs * 4 <= 1024
         assert self.IN_FLIGHT < self.NUM_BUFFERS <= 15
         self.num_pairs, self.topk = num_pairs, topk
-        # The reader routes user 0 and streams its pairs while the writer routes the others.
-        self.reader_users = 1
+        # The reader routes user 0 and streams its pairs while the writer routes the others; deduplicated, every
+        # weight waits for every user's routing, so the two split it.
+        self.reader_users = (self.users + 1) // 2 if self.dedup else 1
+        self.rows = DownStream.TINY_ROWS
+        self.stick_bytes = stick_bytes(num_pairs) if self.dedup else 2 * num_pairs
         self.expert_tiles = num_experts // TILE
         self.norm = 1 if norm_topk_prob else 0
         self.has_scale = 0 if routed_scaling_factor == 1.0 else 1
         self.scale_bits = fp32_bits(routed_scaling_factor)
         # rows 0-3 of biased and score tiles, 256 B of mask rows, the uint16 id stick
-        stage_bytes = 2 * self.expert_tiles * 512 + 256 + 2 * num_pairs
+        stage_bytes = 2 * self.expert_tiles * 512 + 256 + self.stick_bytes
         self.stage_pages = math.ceil(stage_bytes / self.FP32_TILE_BYTES)
 
         self.kt = hidden // TILE
@@ -187,6 +235,15 @@ class GateUpStream:
             cb(self.cb_wstage, ttnn.float32, full, self.stage_pages),
             cb(self.cb_sel, ttnn.float32, full, 1),
         ]
+        # Deduplicated: the reader's users' selections for the writer, the distinct-expert count for compute, and one
+        # routing-weight tile per distinct expert.
+        self.cb_local, self.cb_cnt, self.cb_wt = 7, 8, 9
+        if self.dedup:
+            self.cbs += [
+                cb(self.cb_local, ttnn.float32, full, 1),
+                cb(self.cb_cnt, ttnn.float32, full, 1),
+                cb(self.cb_wt, ttnn.bfloat16, full, num_pairs),
+            ]
         self.compute_config = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -207,7 +264,7 @@ class GateUpStream:
             assert token_mask.layout == ttnn.TILE_LAYOUT and token_mask.dtype == ttnn.bfloat16
             assert is_dram_interleaved(token_mask)
         assert ids_out.layout == ttnn.ROW_MAJOR_LAYOUT and ids_out.dtype == ttnn.uint16 and is_dram_interleaved(ids_out)
-        assert ids_out.shape[-1] == self.num_pairs
+        assert ids_out.shape[-1] * 2 == self.stick_bytes
         mask_addr = token_mask.buffer_address() if has_mask else 0
 
         route_ct = [self.expert_tiles, self.norm, self.has_scale, self.scale_bits, 1 if has_mask else 0]
@@ -252,6 +309,22 @@ class GateUpStream:
             self.BLOCK_K,
             self.reader_users * self.topk,
         ]
+        sources = ("moe_gate_up_reader.cpp", "moe_gate_up_writer.cpp", "moe_gate_up_compute.cpp")
+        if self.dedup:
+            sources = ("moe_gate_up_uniq_reader.cpp", "moe_gate_up_uniq_writer.cpp", "moe_gate_up_uniq_compute.cpp")
+            reader_ct[1] = self.cb_local
+            reader_ct.append(self.stick_bytes)
+            writer_ct += [self.cb_local, self.cb_cnt, self.cb_wt, self.rows]
+            compute_ct = [
+                self.cb_x,
+                self.cb_w,
+                self.cb_h,
+                self.cb_cnt,
+                self.cb_wt,
+                self.blocks_per_pair,
+                self.BLOCK_K,
+                self.rows,
+            ]
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for bank, core in enumerate(self.cores):
@@ -275,7 +348,7 @@ class GateUpStream:
             compute_rt[core.x][core.y] = []
 
         reader = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_gate_up_reader.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[0]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=reader_ct,
@@ -285,7 +358,7 @@ class GateUpStream:
             ),
         )
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_gate_up_writer.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[1]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=writer_ct,
@@ -295,7 +368,7 @@ class GateUpStream:
             ),
         )
         compute = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_gate_up_compute.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[2]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=compute_ct,
@@ -325,8 +398,9 @@ class DownStream:
     IN_FLIGHT = 6
     TINY_ROWS = 4
 
-    def __init__(self, plan, hidden, inter_local, num_pairs):
+    def __init__(self, plan, hidden, inter_local, num_pairs, dedup=None):
         device = plan.mesh_device
+        self.dedup = DEDUP if dedup is None else dedup
         self.cores = list(dram_bank_cores(device))
         self.banks = device.dram_grid_size().x
         assert len(self.cores) == self.banks, (len(self.cores), self.banks)
@@ -355,8 +429,8 @@ class DownStream:
         full = ttnn.Tile([TILE, TILE])
         self.tiny_bytes = tiny.get_tile_size(ttnn.bfloat16)
         self.act_page_bytes = self.kt * self.tiny_bytes
-        self.ids_bytes = pad_to(2 * num_pairs, 64)
-        assert self.ids_bytes <= 4096
+        self.ids_bytes = stick_bytes(num_pairs) if self.dedup else pad_to(2 * num_pairs, 64)
+        assert self.ids_bytes <= 2048  # the reader's and the writer's copies share cb_ids
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         self.vcs = bank_vcs(self.cores)
 
@@ -367,13 +441,15 @@ class DownStream:
             )
             return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.core_ranges, format_descriptors=[fmt])
 
-        self.cb_h, self.cb_w, self.cb_out, self.cb_ids = 0, 1, 2, 3
+        self.cb_h, self.cb_w, self.cb_out, self.cb_ids, self.cb_cnt = 0, 1, 2, 3, 4
         self.cbs = [
             cb(self.cb_h, ttnn.bfloat16, tiny, num_pairs * self.kt),
             cb(self.cb_w, ttnn.bfloat4_b, full, self.NUM_BUFFERS * self.block_tiles),
             cb(self.cb_out, ttnn.bfloat16, tiny, self.cols),
             cb(self.cb_ids, ttnn.float32, full, 1),
         ]
+        if self.dedup:  # the distinct experts' count, reader -> compute
+            self.cbs.append(cb(self.cb_cnt, ttnn.float32, full, 1))
         self.compute_config = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
@@ -405,7 +481,7 @@ class DownStream:
         assert act.layout == ttnn.ROW_MAJOR_LAYOUT and act.dtype == ttnn.bfloat16
         assert act.shape[-2] == self.num_pairs and act.shape[-1] * 2 == self.act_page_bytes
         assert ids.layout == ttnn.ROW_MAJOR_LAYOUT and ids.dtype == ttnn.uint16 and is_dram_interleaved(ids)
-        assert ids.shape[-1] == self.num_pairs
+        assert ids.shape[-1] == (self.ids_bytes // 2 if self.dedup else self.num_pairs)
         assert w_down.layout == ttnn.TILE_LAYOUT and w_down.dtype == ttnn.bfloat4_b and is_dram_interleaved(w_down)
         assert w_down.shape[-2] == self.inter_local and w_down.shape[-1] == self.hidden
         assert out.layout == ttnn.TILE_LAYOUT and out.dtype == ttnn.bfloat16 and is_dram_interleaved(out)
@@ -437,7 +513,7 @@ class DownStream:
             self.banks,
             self.tiny_bytes,
             self.compact_tiles,
-            3 if signal else 0,  # signal args follow the writer's 3 runtime args
+            (4 if self.dedup else 3) if signal else 0,  # signal args follow the writer's other runtime args
             0,
         ]
         compute_ct = [
@@ -449,18 +525,26 @@ class DownStream:
             self.BLOCK_COLS,
             self.groups,
         ]
+        sources = ("moe_down_reader.cpp", "moe_down_writer.cpp", "moe_down_compute.cpp")
+        if self.dedup:
+            sources = ("moe_down_uniq_reader.cpp", "moe_down_uniq_writer.cpp", "moe_down_uniq_compute.cpp")
+            reader_ct.append(self.cb_cnt)
+            writer_ct += [self.ids_bytes, self.cb_ids]
+            compute_ct.append(self.cb_cnt)
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for bank, core in enumerate(self.cores):
             reader_rt[core.x][core.y] = [bank, self.vcs[bank], w_down.buffer_address(), ids.buffer_address()]
             args = [act.buffer_address(), out.buffer_address(), bank]
+            if self.dedup:
+                args.append(ids.buffer_address())
             if signal:
                 args += [len(signal)] + [v for c in signal for v in (c.x, c.y)]
             writer_rt[core.x][core.y] = args
             compute_rt[core.x][core.y] = []
 
         reader = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_down_reader.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[0]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=reader_ct,
@@ -470,7 +554,7 @@ class DownStream:
             ),
         )
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_down_writer.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[1]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=writer_ct,
@@ -480,7 +564,7 @@ class DownStream:
             ),
         )
         compute = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/moe_down_compute.cpp",
+            kernel_source=f"{KERNEL_DIR}/{sources[2]}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=self.core_ranges,
             compile_time_args=compute_ct,

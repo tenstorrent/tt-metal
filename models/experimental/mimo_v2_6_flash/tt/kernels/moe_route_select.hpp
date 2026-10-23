@@ -20,7 +20,7 @@ constexpr uint32_t kStageFaceBytes = kStagedRows * kStageRowBytes;  // rows 0-3 
 constexpr uint32_t kStageTileBytes = 2 * kStageFaceBytes;           // faces 0 and 1 (tile columns 0-31)
 
 // Staging area: rows 0-3 of every biased tile, then of every score tile, then rows 0-3 of face 0 of the mask
-// tile, then the uint16 expert-id stick.
+// tile, then the uint16 expert-id stick ([count, unique expert ids...] with the deduplicated stream).
 template <uint32_t expert_tiles>
 struct RouteStage {
     static constexpr uint32_t scores = expert_tiles * kStageTileBytes;
@@ -131,6 +131,34 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
         }
         weight_bits[i] = wb;
     }
+}
+
+// Whether user u decodes this step: its token-mask element (u, 0) is nonzero (every user without a mask).
+template <uint32_t expert_tiles, bool has_mask>
+inline bool user_active(uint32_t stage, uint32_t u) {
+    if constexpr (!has_mask) {
+        return true;
+    }
+    volatile tt_l1_ptr uint16_t* mask =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + RouteStage<expert_tiles>::mask);
+    return (mask[u * 16] & 0x7fffu) != 0;
+}
+
+// Appends the experts of ``ids`` not yet in ``uniq[0, n)`` (in top-k order); returns the new count. Every RISC that
+// builds the list appends the active users in user order, so they all get the same order.
+template <uint32_t topk>
+inline uint32_t append_unique(uint32_t* uniq, uint32_t n, const uint32_t* ids) {
+    for (uint32_t i = 0; i < topk; i++) {
+        const uint32_t e = ids[i];
+        bool seen = false;
+        for (uint32_t j = 0; j < n; j++) {
+            seen = seen || uniq[j] == e;
+        }
+        if (!seen) {
+            uniq[n++] = e;
+        }
+    }
+    return n;
 }
 
 }  // namespace mimo_moe

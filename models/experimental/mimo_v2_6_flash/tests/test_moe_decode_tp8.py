@@ -15,7 +15,9 @@ is checked:
   bit-identical.
 
 Several steps run back to back and each decodes before its prefill, so an output that depends on what ran before
-fails (an unwritten output buffer can otherwise hold the last freed tensor of the same size). Every decode output
+fails (an unwritten output buffer can otherwise hold the last freed tensor of the same size). Besides the golden
+steps (4 different tokens), two steps exercise the deduplicated stream (tt/moe_stream.py): users that select the
+same experts (rows 0 / 2 and 1 / 3 equal), and a masked user (its row is zero, and it streams nothing). Every decode output
 must be bit-identical on the 8 chips of the row (the fixed-order chip sum). Last, the fabric variant runs every step
 again with no host read in between, so the chips drift up to a gather phase apart and both gather buffers are in
 use, and must reproduce the per-step results bit for bit.
@@ -108,14 +110,21 @@ def test_moe_decode_vs_prefill(mesh_device):
     eps = cfg.layernorm_epsilon
     norm_out = zero_output(plan, cfg.hidden_size)
     norm = (red.compact_gamma(plan, gamma), norm_out, eps)
-    mask = to_device(plan, (torch.arange(TILE) < USERS).float().reshape(TILE, 1))
+    # Per step: the users' rows and the token mask's users.
+    cases = [(inputs[step * USERS : (step + 1) * USERS], [1] * USERS) for step in range(STEPS)]
+    cases.append((inputs[[0, 1, 0, 1]], [1] * USERS))  # users 0 / 2 and 1 / 3 select the same experts
+    cases.append((inputs[4:8], [1, 1, 0, 1]))  # user 2 masked
 
     worst_pcc, worst_ulps = 1.0, 0.0
-    steps = []  # (x, r, y_fab, h_fab) per step, for the back-to-back run
-    for step in range(STEPS):
+    steps = []  # (x, r, mask, y_fab, h_fab) per step, for the back-to-back run
+    for step, (rows, live) in enumerate(cases):
         x = torch.zeros(TILE, cfg.hidden_size)
-        x[:USERS] = inputs[step * USERS : (step + 1) * USERS]
+        x[:USERS] = rows
         x_tt = to_device(plan, x)
+        m = torch.zeros(TILE, 1)
+        m[:USERS, 0] = torch.tensor(live, dtype=torch.float32)
+        mask = to_device(plan, m)
+        active = [u for u in range(USERS) if live[u]]
         r = (torch.randn(TILE, cfg.hidden_size) * RESIDUAL_STD).bfloat16().float()
         r_tt = to_device(plan, r)
 
@@ -132,7 +141,9 @@ def test_moe_decode_vs_prefill(mesh_device):
 
         for name, t in (("out", out), ("y", y), ("y_ag", y_ag), ("h_ag", h_ag), ("y_fab", y_fab), ("h_fab", h_fab)):
             assert torch.isfinite(t).all(), f"step {step}: {name} is not finite"
-        user_pcc = [pcc(out[u], expected[u]) for u in range(USERS)]
+        user_pcc = [pcc(out[u], expected[u]) for u in active]
+        for u in set(range(USERS)) - set(active):
+            assert torch.count_nonzero(out[u]) == 0 and torch.count_nonzero(expected[u]) == 0, f"step {step}: user {u}"
         # bf16(residual + the bf16-rounded sum); the fused reductions sum the chips with FPU adds instead of SFPU
         res_ulps = ulps(y[:USERS], (r[:USERS] + out[:USERS]).bfloat16().float())
         fused_ulps = ulps(y_ag[:USERS], y[:USERS])
@@ -149,9 +160,9 @@ def test_moe_decode_vs_prefill(mesh_device):
         assert norm_pcc >= 0.9999, f"step {step}"
         # Down inside the fabric launch must give exactly what Down alone + all_gather gives.
         assert torch.equal(y_fab, y_ag) and torch.equal(h_fab, h_ag), f"step {step}: fabric and all_gather differ"
-        for t in (x_tt, r_tt):
+        for t in (x_tt, r_tt, mask):
             t.deallocate(True)
-        steps.append((x, r, y_fab, h_fab))
+        steps.append((x, r, m, y_fab, h_fab))
 
     logger.info(f"worst decode vs prefill user pcc {worst_pcc:.6f}, worst residual / fused ulps {worst_ulps:g}")
     assert worst_pcc >= 0.999
@@ -159,14 +170,15 @@ def test_moe_decode_vs_prefill(mesh_device):
     # Every step's fabric decode enqueued before any read, each with its own norm buffer.
     moe.fabric_gather = True
     pending = []
-    for x, r, _, _ in steps:
+    for x, r, m, _, _ in steps:
         x_tt, r_tt, h_buf = to_device(plan, x), to_device(plan, r), zero_output(plan, cfg.hidden_size)
-        y_tt, h_tt = moe.forward_decode(x_tt, mask, residual=r_tt, norm=(norm[0], h_buf, eps))
-        pending.append((y_tt, h_tt, x_tt, r_tt))
+        m_tt = to_device(plan, m)
+        y_tt, h_tt = moe.forward_decode(x_tt, m_tt, residual=r_tt, norm=(norm[0], h_buf, eps))
+        pending.append((y_tt, h_tt, x_tt, r_tt, m_tt))
     moe.fabric_gather = False
-    for step, ((y_tt, h_tt, x_tt, r_tt), (_, _, y_fab, h_fab)) in enumerate(zip(pending, steps)):
+    for step, ((y_tt, h_tt, x_tt, r_tt, m_tt), (_, _, _, y_fab, h_fab)) in enumerate(zip(pending, steps)):
         y_b, h_b = read(plan, y_tt), read(plan, h_tt)
         assert torch.equal(y_b, y_fab) and torch.equal(h_b, h_fab), f"step {step}: back-to-back fabric run differs"
-        for t in (x_tt, r_tt):
+        for t in (x_tt, r_tt, m_tt):
             t.deallocate(True)
     logger.info(f"{len(steps)} fabric decodes back to back: bit-identical to the per-step runs on every chip")
