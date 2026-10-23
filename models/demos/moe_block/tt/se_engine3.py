@@ -779,6 +779,9 @@ void kernel_main() {
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 #endif
 #endif
+#ifdef SE_PROBE_GUWAIT
+    uint32_t gu_wx = 0, gu_ww = 0;  // (the unpacker's cycles waiting for x / W in gate / up: SE-GUWX / SE-GUWW)
+#endif
     uint32_t opos = 0;  // (OUTF tiles pushed: its blocks end at multiples of 8 - the NCRISC reads it page by page,
                         // pack_tile does not wrap; the chunks' fins continue where the last one left it)
     for (uint32_t m = 0; m < NCH; ++m) {
@@ -805,6 +808,16 @@ void kernel_main() {
                 }
                 matmul_block_init(XIN, WIN, 0, pw, MT, KB);
                 for (uint32_t st = 0; st < SPS; ++st) {
+#ifdef SE_PROBE_GUWAIT
+                    UNPACK(({
+                        const uint32_t t0_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(XIN, MT * KB);
+                        const uint32_t t1_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(WIN, WSLOT);
+                        const uint32_t t2_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        gu_wx += t1_ - t0_, gu_ww += t2_ - t1_;
+                    }));
+#endif
                     cb_wait_front(XIN, MT * KB);
                     cb_wait_front(WIN, WSLOT);
 #ifndef SE_PROBE_NOMATH
@@ -854,6 +867,10 @@ void kernel_main() {
             }
         }
         cb_push_back(HOWN, MT * POMAX);
+#ifdef SE_PROBE_GUWAIT
+        UNPACK((DeviceTimestampedData("SE-GUWX", gu_wx)));
+        UNPACK((DeviceTimestampedData("SE-GUWW", gu_ww)));
+#endif
 #ifdef SE_LAT
         cb_reserve_back(SE_LAT, SE_LATP);  // (the latent: the BRISC hands it to the ports, the NCRISC writes mine;
         cb_push_back(SE_LAT, SE_LATP);     // with chunks a chunk's LAT + LATZ, the next chunk's packed past them)
@@ -1051,7 +1068,8 @@ void kernel_main() {
 def _probes():
     """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
     DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
-    head: GU_ALONE at the head's shapes) - the results are wrong."""
+    head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
+    waiting for x / W a core, SE-GUWX / SE-GUWW."""
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)

@@ -1464,3 +1464,27 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - One replay, slow chip: router MM on the engine 0-48, gate / up 48-324 (~275 us), chain (RPLAN) ends ~276-294,
   down + RS 320-476 (127-156 us). Down's compute ~74 us. The RS is 1.72 MB a link: ~73 us at 23.6 GB/s, ~90 at the
   audit's ~19. The latent all-to-all is ~215 KB a link (<= 5 us to gain).
+- RS on the ring is not link-bound. Sender probe (SE_PROBE=RSSTAT, extended locally): ~249 packets a port in 90-118
+  us (~13 GB/s a link). Waits: reader 4-23 us, fabric slot 5-14, batch flushes 7-20, stream polls 5-34; the rest
+  ~230 ns a packet of NoC write into the EDM. A/Bs: poll every 4th packet 476 / 481 us, three staging batches
+  474 / 487, vs 480 - the waits move, the end doesn't (paced by the engine's down + reduce chain). Not kept. The
+  la_send lever is <= 5 us.
+- Gate / up (K3, ring, traced): 36.4 GF a chip (28.2 gate / up + 8.2 latent down passes). The heaviest core has 12
+  tile columns (124 / 11), 5376 tile multiplies, 127 us at HiFi2 peak; it measures ~276 us (46%). Probes (gate / up,
+  head): none 275 / 480, NOMATH 255 / 450-454, NOX,NOW 235 / 456, NOXWAIT 254 / 447-454 - math and the data / sync
+  rounds are each nearly the whole time. Math ~50 cycles a tile multiply (2 x 4, matmul_block a K tile a call); the
+  shard-major ACC round trips ~18 us; a round (x 56 KB along the row, W ~60 KB down the column) ~4.8 us.
+  Options: pass-major after the first pass (-10-12 us), KB 28 / lighter W handshake (-30-50 on the data side), math
+  toward ~36 cycles (-50-70); Galaxy's 12 columns ~-8% for free.
+- Correction: the earlier "~50 cycles a tile multiply (2 x 4 sub-blocks, HiFi2), MT 2 / DEST bound" reading of
+  gate / up was wrong. zz_scratch_gu_mm.py runs the engine's exact call pattern on one core, x and W resident
+  (matmul_block a K tile a call, KB 14, K 224 in fp32 DEST, full sync): 34.3 cycles a tile at HiFi2 (93% of
+  peak) for 2x4, 4x2, 1x8, 8x1, 2x2 and 1x4 alike; LoFi 17.3, HiFi4 66.3; bf8 = bf16 W. The LLK is math-bound and
+  fine. Gate / up is bound by waits: SE_PROBE=GUWAIT (unpacker cycles in its x / W cb waits, a core): x 46-171 us,
+  W 7-75; the heavy columns (13 tiles: 5 pairs + 3 latent; the rest 10-11) wait least.
+- K3 on the ring runs KB 7 (KB 14's arena is 1388 KB > 1344, even with the W ring at 5 slots): 4 passes x 32 steps =
+  128 x rounds a call. KB 14 with a 4-slot W ring fits (1361 KB) but is slower: 494-500 us.
+- Not kept: pass-major after the own shard (480.6 / 483.7, PCC same); x receivers acking ahead (kernel_lib
+  SenderPipe send<_, ACK_AHEAD> with an atomic decrement of the acks, ReceiverPipe ack / wait_data, Counter
+  data-ready, 4 XIN slots, arena 1369 KB): 479.5-490 us, x waits unchanged (patch in moe_block_runs/x_ack_ahead.patch).
+  The ack -> send -> land chain is not what holds x back.
