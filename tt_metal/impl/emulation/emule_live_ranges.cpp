@@ -43,11 +43,8 @@ void remove_from(OwnedRangeRegistry& reg, int device_id, uint64_t owner) {
     if (it == reg.per_device.end()) {
         return;
     }
-    auto& v = it->second;
-    auto match = std::find_if(v.begin(), v.end(), [owner](const OwnedRange& r) { return r.owner == owner; });
-    if (match != v.end()) {
-        v.erase(match);
-    }
+    // A per-core allocated buffer registers one range per distinct per-core address.
+    std::erase_if(it->second, [owner](const OwnedRange& r) { return r.owner == owner; });
 }
 
 std::vector<uint64_t> snapshot_of(OwnedRangeRegistry& reg, int device_id) {

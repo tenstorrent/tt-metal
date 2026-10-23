@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <set>
 #include <unordered_set>
 #include <utility>
 #include "context/context_types.hpp"
@@ -676,12 +677,19 @@ void BufferImpl::allocate_impl(Buffer& self) {
 
         if (is_emule_device(device_)) {
             if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                // Per-core footprint, not the aggregate size_ (spans all banks).
-                tt::tt_metal::emule::LiveL1Ranges::add(
-                    device_->id(),
-                    static_cast<uint32_t>(address_),
-                    static_cast<uint32_t>(address_ + self.aligned_size_per_bank()),
-                    unique_id_);
+                // Per-core footprint, not the aggregate size_ (spans all banks). A per-core allocated
+                // buffer sits at a different address on each core, so each address is registered.
+                std::set<DeviceAddr> starts{address_};
+                for (const auto& [core, addr] : per_core_addresses_) {
+                    starts.insert(addr);
+                }
+                for (DeviceAddr start : starts) {
+                    tt::tt_metal::emule::LiveL1Ranges::add(
+                        device_->id(),
+                        static_cast<uint32_t>(start),
+                        static_cast<uint32_t>(start + self.aligned_size_per_bank()),
+                        unique_id_);
+                }
             } else if (buffer_type_ == BufferType::DRAM) {
                 tt::tt_metal::emule::LiveDramRanges::add(
                     device_->id(),
