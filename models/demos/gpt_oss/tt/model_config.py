@@ -130,7 +130,12 @@ class ModelArgs:
             self.batched_prefill_groups = {
                 int(k): int(v) for k, v in (item.split(":") for item in groups_env.split(",") if item.strip())
             }
-        self.capped_warmup_seq_len = 2048
+        # QuietBox 2 (vLLM serves up to 128K-token prompts): warm every prefill bucket up to 32K (filter_warmup_seq_lens
+        # stops below 64K), so no request waits on a bucket's first program build (13-16 s at 4K, measured).
+        if determine_device_name(self.mesh_device) == "P150x4":
+            self.capped_warmup_seq_len = 1 << (min(32 * 1024, self.max_seq_len).bit_length() - 1)
+        else:
+            self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def batched_prefill_group_size(self, padded_len, batch_size):
