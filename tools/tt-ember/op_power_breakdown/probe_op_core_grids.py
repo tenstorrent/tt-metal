@@ -26,7 +26,6 @@ so they go with the legacy list:
 """
 import argparse
 import csv
-import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -42,6 +41,7 @@ if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
 os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 
 import ttnn  # noqa: E402
+import ttnn_ops_workload as wl  # noqa: E402
 
 # Where tt-metal writes the CSV: $TT_METAL_PROFILER_DIR (relative to this process's cwd, as
 # tt-metal resolves it), else <tt-metal root>/generated/profiler.
@@ -53,13 +53,6 @@ CSV_PATH = (
 )
 
 
-def load_workload(path: Path):
-    spec = importlib.util.spec_from_file_location("ttnn_ops_workload", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def cores_in_rows(rows, hdr):
     ix, iy = hdr.index("core_x"), hdr.index("core_y")
     return {(r[ix].strip(), r[iy].strip()) for r in rows if len(r) > max(ix, iy)}
@@ -68,7 +61,9 @@ def cores_in_rows(rows, hdr):
 def read_csv_rows():
     if not CSV_PATH.exists():
         return [], []
-    rows = list(csv.reader(open(CSV_PATH)))
+    with CSV_PATH.open(newline="") as f:
+        rows = list(csv.reader(f))
+    # Row 0 is the "ARCH: ..., CHIP_FREQ[MHz]: ..." line, row 1 the header, then the records.
     if len(rows) < 2:
         return [], []
     return [h.strip() for h in rows[1]], rows[2:]
@@ -76,7 +71,6 @@ def read_csv_rows():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workload", type=Path, default=Path(__file__).with_name("ttnn_ops_workload.py"))
     ap.add_argument("--seq", type=int, default=1024)
     ap.add_argument("--hidden", type=int, default=2048)
     ap.add_argument("--ffn", type=int, default=8192)
@@ -91,7 +85,6 @@ def main():
     ap.add_argument("--device-id", type=int, default=0)
     args = ap.parse_args()
 
-    wl = load_workload(args.workload)
     legacy = wl.legacy_mode()
 
     if CSV_PATH.exists():

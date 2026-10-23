@@ -43,6 +43,14 @@ RE_OP = re.compile(
 )
 
 BAR_WIDTH = 0.8
+LABEL_FONTSIZE = 8
+
+
+def figure_width(rows) -> float:
+    """Wide enough for one labelled bar per op."""
+    return max(10, len(rows) * 1.05)
+
+
 # Log-axis margins: below the smallest bar and above the largest, so the labels fit.
 LOG_BOTTOM_MARGIN = 0.4
 LOG_TOP_MARGIN = 3
@@ -80,8 +88,6 @@ def load(run_dir: Path, legacy: bool):
             {
                 "idx": int(idx),
                 "name": name,
-                "iters": iters,
-                "flops": flops,
                 "batch": batch,
                 "t1_us": t1_us,
                 "total_w": total_w,
@@ -116,7 +122,13 @@ def log_bar_panel(ax, x, values, **bar_kwargs):
     for i, v in enumerate(heights):
         if v > 0:
             ax.annotate(
-                f"{v:.3g}", (i, v), ha="center", va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points"
+                f"{v:.3g}",
+                (i, v),
+                ha="center",
+                va="bottom",
+                fontsize=LABEL_FONTSIZE,
+                xytext=(0, 2),
+                textcoords="offset points",
             )
     ax.grid(axis="y", alpha=0.3)
     return bars
@@ -131,7 +143,7 @@ def normalised_chart(rows, out_path, board, dpi=150):
     """
     names = [r["name"] for r in rows]
     x = np.arange(len(rows))
-    fig, axes = plt.subplots(2, 1, figsize=(max(10, len(rows) * 1.05), 9), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(figure_width(rows), 9), sharex=True)
 
     for ax, key, ylab, colour in [
         (axes[0], "pj_per_flop", "Energy per FLOP [pJ], log", "tab:blue"),
@@ -149,7 +161,7 @@ def normalised_chart(rows, out_path, board, dpi=150):
         [f"{n}\n{r['intensity']:.3g} F/B" if r["intensity"] else n for n, r in zip(names, rows)],
         rotation=45,
         ha="right",
-        fontsize=8,
+        fontsize=LABEL_FONTSIZE,
     )
     axes[1].set_xlabel("Operation, with arithmetic intensity in FLOP/byte")
     save_figure(fig, out_path, dpi)
@@ -170,7 +182,7 @@ def energy_chart(rows, out_path, board, dpi=150):
     idle = np.array([r["idle_mj_per_activ"] for r in rows])
     tot = dyn + idle
 
-    fig, ax = plt.subplots(figsize=(max(10, len(rows) * 1.05), 6.5))
+    fig, ax = plt.subplots(figsize=(figure_width(rows), 6.5))
     ax.bar(x, dyn, BAR_WIDTH, label="dynamic (work the op caused)")
     ax.bar(x, idle, BAR_WIDTH, bottom=dyn, label="idle floor held during the op")
     for i, t in enumerate(tot):
@@ -179,7 +191,7 @@ def energy_chart(rows, out_path, board, dpi=150):
             (i, t),
             ha="center",
             va="bottom",
-            fontsize=8,
+            fontsize=LABEL_FONTSIZE,
             xytext=(0, 2),
             textcoords="offset points",
         )
@@ -208,7 +220,7 @@ def chart(rows, out_path, subtitle, board, dpi=150):
     """
     names = [r["name"] for r in rows]
     x = np.arange(len(rows))
-    fig, axes = plt.subplots(3, 1, figsize=(max(10, len(rows) * 1.05), 12), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(figure_width(rows), 12), sharex=True)
 
     ax = axes[0]
     # pJ/FLOP spans more than two orders of magnitude between the matmuls and the elementwise
@@ -226,7 +238,7 @@ def chart(rows, out_path, subtitle, board, dpi=150):
                 plt.Rectangle((0, 0), 1, 1, fc=bars[0].get_facecolor(), hatch="//"),
             ],
             labels=["matmul: exact 2*M*N*K", "other: per-element convention (see workload script)"],
-            fontsize=8,
+            fontsize=LABEL_FONTSIZE,
             loc="upper left",
         )
     ax.set_ylabel("Energy per FLOP [pJ], log scale")
@@ -252,7 +264,12 @@ def chart(rows, out_path, subtitle, board, dpi=150):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", type=Path)
-    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Path for op_power_breakdown.png. The other two figures always go to <run_dir>/Figures.",
+    )
     ap.add_argument("--board", default="", help="Board name for the chart titles, e.g. 'Blackhole p100a'")
     ap.add_argument(
         "--mode",

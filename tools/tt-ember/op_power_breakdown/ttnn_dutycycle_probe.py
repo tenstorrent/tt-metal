@@ -25,13 +25,12 @@ import time
 # Checks TT_METAL_HOME and imports ttnn and torch.
 import ttnn_ops_workload as wl  # noqa: E402
 
-torch = wl.torch
 ttnn = wl.ttnn
 
 
 def build_cases(device):
     def T(*shape):
-        return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return wl.make_tensor(device, *shape)
 
     cases = []
     # Elementwise: cost scales with element count, so size sweeps call duration directly.
@@ -52,6 +51,7 @@ def main():
     args = ap.parse_args()
 
     print("=== Duty-cycle probe: power vs per-call duration ===", flush=True)
+    wl.refuse_profiler()
     device = ttnn.open_device(device_id=0)
     rows = []
     try:
