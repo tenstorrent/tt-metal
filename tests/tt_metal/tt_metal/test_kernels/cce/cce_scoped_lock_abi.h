@@ -25,9 +25,15 @@ inline constexpr uint32_t kOldBase = 0xBB00, kNewBase = 0xAA00;
 // producer) and kArgPublishedFlagOffset (producer -> consumer) are flag lines the host zeroes; each flag is set to 1.
 // kArgResultOffset is the consumer's kNumResultLines result lines. kArgPollBudget* is rdcycle cycles per bounded wait
 // or poll and must be nonzero.
+// MM41 args. kArgConsumerCount and kArgConsumerIndex (kModeMultiConsumer): consumer c sets the warmed flag line
+// kArgWarmedFlagOffset + c * kLineBytes. kArgRingSlots, kArgSlotLines and kArgRounds (kModeRingWrap): the ring is
+// kArgRingSlots slots of kArgSlotLines lines from kArgRegionOffset, at most kNumLines lines, and kArgRounds rounds
+// fill slot round % kArgRingSlots. kArgTargetCce (kModeNonSnoopingProducer): the consumer's CCE.
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo = 2, kArgPollBudgetHi = 3,
                           kArgRegionOffset = 4, kArgLockFirstLine = 5, kArgLockNumLines = 6, kArgWarmedFlagOffset = 7,
-                          kArgPublishedFlagOffset = 8, kArgResultOffset = 9, kNumArgs = 10;
+                          kArgPublishedFlagOffset = 8, kArgResultOffset = 9, kArgConsumerCount = 10,
+                          kArgConsumerIndex = 11, kArgRingSlots = 12, kArgSlotLines = 13, kArgRounds = 14,
+                          kArgTargetCce = 15, kNumArgs = 16;
 
 // The values match ScopedLockCacheMode (scoped_lock_cache_common.h). The lock's acquire is
 // scoped_lock_acquire_cache_ops and its release scoped_lock_release_cache_ops over the locked lines, as
@@ -41,7 +47,27 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo =
 // (kFlagLandedAtFirstRead if they hold NEW), polls them, discards every probe line from its caches and sets published.
 // The consumer reads every probe word through the uncached alias: locked lines must read NEW in TL1, unlocked lines
 // OLD.
-inline constexpr uint32_t kModeInvalidateOnAcquire = 0, kModeFlushOnRelease = 1;
+// kModeMultiConsumer (MM41): kArgConsumerCount consumers on harts of the producer's CCE. Each consumer reads every
+// probe word through the cache and sets its own warmed flag line. The producer waits for every warmed flag, acquires
+// the lock, stores NEW to the locked lines' probe words through the cache, releases the lock, polls the locked lines
+// through the uncached alias until they read NEW, and sets published. Each consumer then acquires and releases the
+// lock and reads as in kModeInvalidateOnAcquire.
+// kModeRingWrap (MM41): for each round r the producer waits until the consumer's read pointer (the warmed flag line)
+// is at least r + 1 - kArgRingSlots, acquires slot r % kArgRingSlots, stores ring_word(r, w) to every word w of the
+// slot through the cache, releases the slot, polls the slot through the uncached alias until it reads those values
+// (the release flush has no completion register) and sets its write pointer (the published flag line) to r + 1. The
+// consumer waits for the write pointer to pass r, acquires the slot, reads every word through the cache and counts the
+// words that are not ring_word(r, w) (kStatusMismatchedWords), releases the slot and sets its read pointer to r + 1.
+// kModeNonSnoopingProducer (MM41): the producer runs on another CCE and reaches the consumer's TL1 (CCE
+// kArgTargetCce) by SPA only: it waits for warmed by SPA load, stores NEW to every probe word, `fence`, then sets
+// published, all by SPA store, which the consumer's caches do not snoop by default. The consumer runs as in
+// kModeInvalidateOnAcquire, except that after published it polls every probe word through the uncached alias until
+// all read NEW (the producer's stores have landed) before it acquires the lock and before any store of its own.
+inline constexpr uint32_t kModeInvalidateOnAcquire = 0, kModeFlushOnRelease = 1, kModeMultiConsumer = 2,
+                          kModeRingWrap = 3, kModeNonSnoopingProducer = 4;
+inline constexpr uint32_t kMaxConsumers = 7;
+
+constexpr uint32_t ring_word(uint32_t round, uint32_t word) { return (kNewBase << 16) | (round << 8) | word; }
 
 // Consumer result lines, written through the uncached alias: word l of a line is line l's probe word.
 // kResultWarm: the cached reads before the lock (kModeInvalidateOnAcquire). kResultCached: the cached reads after the
@@ -53,19 +79,23 @@ inline constexpr uint32_t kResultWarm = 0, kResultCached = 1, kResultUncached = 
 // kFlag* bits of the waits and polls that succeeded. kStatusLastPoll is the last wait or poll that ran and
 // kStatusLastPollReady is 1 if it succeeded, 0 if it used its budget. kStatusFlagObserved is the last flag value the
 // hart's wait read. On a data timeout the mismatch words describe the last pass. The consumer has no data poll and
-// writes 0 to kStatusPollCycles and the mismatch words.
+// writes 0 to kStatusPollCycles and the mismatch words, except in kModeRingWrap and kModeNonSnoopingProducer, where
+// they describe its own check. kStatusRounds counts kModeRingWrap's completed rounds.
 inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusFlags = 2, kStatusWaitCycles = 3,
                           kStatusPollCycles = 4, kStatusLastPoll = 5, kStatusLastPollReady = 6, kStatusFlagObserved = 7,
                           kStatusMismatchedWords = 8, kStatusFirstMismatchWord = 9, kStatusObserved = 10,
-                          kStatusExpected = 11, kStatusWords = 12;
+                          kStatusExpected = 11, kStatusRounds = 12, kStatusWords = 13;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
 inline constexpr uint32_t kProducerDoneMagic = 0x5C0FE0DEu, kConsumerDoneMagic = 0x5C0C50DEu,
                           kStatusPoison = 0xBADD0E00u;
 inline constexpr uint32_t kFlagPeerSignalled = 1u << 0, kFlagLanded = 1u << 1, kFlagLandedAtFirstRead = 1u << 2;
-// kPollPeer: the wait for the other hart's flag. kPollData: the producer's poll of the locked lines through the
-// uncached alias after the release flush (kModeFlushOnRelease).
+// kPollPeer: the wait for the other hart's flag. kPollData: the producer's poll of the locked lines (kModeRingWrap: the
+// slot) through the uncached alias after the release flush (kModeFlushOnRelease, kModeMultiConsumer, kModeRingWrap),
+// or the consumer's poll of the probe words for the external producer's stores (kModeNonSnoopingProducer).
 inline constexpr uint32_t kPollNone = 0, kPollPeer = 1, kPollData = 2;
 
+// A status offset that is not a 64 B aligned line between the end of the harts' kernel text and the end of the
+// hart-cacheable port gets no status line at all, so the host deadline reports it.
 // kCodeDone: every wait and poll succeeded. Otherwise the code names the first that used its budget, and the hart
 // stops there.
 inline constexpr uint32_t kCodeDone = 1, kCodePeerTimeout = 2, kCodeDataTimeout = 3, kCodeBadArgs = 4;

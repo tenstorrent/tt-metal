@@ -4,6 +4,7 @@
 set(MIMIR_TESTS_SRC
     mimir_hw_state.cpp
     mimir_fw_loader.cpp
+    mimir_snoop_ctl.cpp
     test_mimir_host_dram.cpp
     test_mimir_host_tl1.cpp
     test_mimir_fw_load.cpp
@@ -18,4 +19,6 @@ set(MIMIR_TESTS_SRC
     test_mimir_dm_mesh_buffer.cpp
     test_mimir_dm_dram_unary.cpp
     test_mimir_dm_scoped_lock.cpp
+    test_mimir_atomics.cpp
+    test_mimir_trid.cpp
 )
