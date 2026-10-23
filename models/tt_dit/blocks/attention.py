@@ -14,6 +14,7 @@ from ..layers.linear import ColParallelLinear
 from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
+from ..utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, resolve_recipe
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
+
     def __init__(
         self,
         *,
@@ -42,14 +45,16 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        k_chunk_size: int = 512,
-        q_chunk_size: int = 128,
         is_fsdp: bool = False,
-        exp_approx_mode: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
         self.head_dim = head_dim
+        self.sdpa_precision, self.sdpa_kv_dtype = resolve_recipe(
+            sdpa_precision, sdpa_kv_dtype, default=self.sdpa_precision_default, head_dim=head_dim, model="Attention"
+        )
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -73,20 +78,7 @@ class Attention(Module):
             self.mesh_device.compute_with_storage_grid_size().y - 1,
         )
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=k_chunk_size,
-            # Only the joint SDPA kernel (sequence_parallel.factor == 1) honours this flag; the streaming
-            # ring-joint kernel used when factor > 1 always runs the approximate exponential. False is more
-            # accurate, but on Wormhole the bf16-dest accurate exponential costs ~10x per QK tile (#57180).
-            exp_approx_mode=exp_approx_mode,
-        )
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
@@ -257,6 +249,9 @@ class Attention(Module):
             q = _apply_rope(q, spatial_rope)
             k = _apply_rope(k, spatial_rope)
 
+        # FAST: prepare spatial inputs after norm/RoPE, before the ring all-gather.
+        q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
+
         if self.add_qkv_proj is not None:
             add_qkv = self.add_qkv_proj(prompt)
             add_q, add_k, add_v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -271,9 +266,15 @@ class Attention(Module):
 
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
+
+            # FAST: prepare the joint inputs separately, after norm/RoPE/head scaling.
+            add_q, add_k, add_v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, add_q, add_k, add_v)
         else:
+            # Empty joint inputs (SDPA drops them); typed like the prepared spatial Q/K/V.
             shape = [1, self.n_local_heads, 0, self.head_dim]
-            add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
+            add_q = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
+            add_k = ttnn.zeros(shape, device=self.mesh_device, layout=k.layout, dtype=k.dtype)
+            add_v = ttnn.zeros(shape, device=self.mesh_device, layout=v.layout, dtype=v.dtype)
 
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -284,15 +285,15 @@ class Attention(Module):
                 add_k,
                 add_v,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k.dtype
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v.dtype
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -318,8 +319,11 @@ class Attention(Module):
                 add_v,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
+
+        if add_q.shape[2] == 0:
+            prompt = None  # an empty joint has no prompt output
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
         if prompt is not None:

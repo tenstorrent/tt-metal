@@ -42,6 +42,7 @@ import ttnn
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import LayerNorm, RMSNorm
+from ....utils import sdpa_recipe
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.tensor import bf16_tensor
@@ -82,6 +83,10 @@ class MiniMaxH3ViTAttention(Module):
     single projection at load time, and the q/k halves carry the RoPE lane permute.
     """
 
+    # Named SDPA recipe. The legacy setup was HiFi2 / BF16 dest / exact exp at Q192/K192;
+    # BALANCED (FP32 state) is more accurate than it and ~2x faster at [1, 32, 1824, 64].
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
+
     def __init__(
         self,
         dim: int,
@@ -103,25 +108,8 @@ class MiniMaxH3ViTAttention(Module):
         self.to_qkv = Linear(dim, 3 * inner, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.to_out = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
 
-        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure their SDPA; this
-        # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
-        # there, and it roughly doubles matmul throughput against the HiFi4 default.
-        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a single-op
-        # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
-        # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
-        # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=192,
-            k_chunk_size=192,
-            exp_approx_mode=False,  # False is more correct, matching wan/ltx
-        )
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+        self.sdpa_precision = self.sdpa_precision_default
+        self.sdpa_program_config = sdpa_recipe.recipe_config(mesh_device.compute_with_storage_grid_size())
 
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
@@ -218,6 +206,8 @@ class MiniMaxH3ViTAttention(Module):
             logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
             query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
+        # The recipe writes [b, h, s, d] (it masks the sub-tile valid_len keys itself), and the heads are
+        # concatenated after it.
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -225,9 +215,11 @@ class MiniMaxH3ViTAttention(Module):
             attn_mask=None,
             is_causal=False,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-            output_concat_heads=True,
+            precision=self.sdpa_precision,
         )
+        if attended.shape[-2] != seq_len:
+            attended = ttnn.reshape(attended, padded, padded)
+        attended = ttnn.experimental.nlp_concat_heads(attended)
         dim = self.num_heads * self.head_dim
         full = ttnn.Shape([batch, 1, seq_len, dim])
         if attended.shape[-2] != seq_len:

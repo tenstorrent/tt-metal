@@ -14,21 +14,14 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import sdpa_recipe
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (288, 512),
-        (True, 32, 4): (224, 512),
-    }
-    default_sdpa_chunk_size = (256, 256)
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
 
     def __init__(
         self,
@@ -42,8 +35,9 @@ class WanAttention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_self: bool = True,
-        sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -58,6 +52,9 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
+        self.sdpa_precision, self.sdpa_kv_dtype = sdpa_recipe.resolve_recipe(
+            sdpa_precision, sdpa_kv_dtype, default=self.sdpa_precision_default, head_dim=self.head_dim, model="Wan"
+        )
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -117,49 +114,12 @@ class WanAttention(Module):
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        ring_sdpa_chunk_size = chunk_lookup.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-
         self.use_exp_ring_sdpa = (
             self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
         )
-
-        if self.use_exp_ring_sdpa:
-            self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid,
-                q_chunk_size=ring_sdpa_chunk_size[0],
-                k_chunk_size=ring_sdpa_chunk_size[1],
-                exp_approx_mode=False,
-            )
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        self.sdpa_program_config = sdpa_recipe.recipe_config(full_grid)
+        self.ring_sdpa_program_config = sdpa_recipe.recipe_config(self.sdpa_worker_grid)
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -374,11 +334,6 @@ class WanAttention(Module):
             )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # Set norm output dtype to the input dtype required for ring self-attn.
-        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
-        use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
-        norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
-
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
             q_1BNF,
@@ -386,7 +341,6 @@ class WanAttention(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=trans_mat,
-            dtype=norm_output_dtype,
         )
         k_BHNE = self.norm_k(
             k_1BNF,
@@ -394,7 +348,6 @@ class WanAttention(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=trans_mat,
-            dtype=norm_output_dtype,
         )
 
         def create_heads(inp):
@@ -407,17 +360,14 @@ class WanAttention(Module):
             return out
 
         v_BHNE = create_heads(v_1BNF)
+        q_BHNE, k_BHNE, v_BHNE = sdpa_recipe.prepare_recipe_inputs(
+            self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE
+        )
 
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
-                # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
                 dummy_joint = self.dummy_joint_input
-                if sdpa_input_dtype is not None:
-                    if v_BHNE.dtype != sdpa_input_dtype:
-                        v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
-                    if dummy_joint.dtype != sdpa_input_dtype:
-                        dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
@@ -436,8 +386,8 @@ class WanAttention(Module):
                         ),
                         joint_strategy="rear",
                         logical_n=N,
-                        program_config=self.exp_ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        program_config=self.sdpa_program_config,
+                        precision=self.sdpa_precision,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -467,7 +417,7 @@ class WanAttention(Module):
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        precision=self.sdpa_precision,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -487,7 +437,7 @@ class WanAttention(Module):
                     v_BHNE,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    precision=self.sdpa_precision,
                 )
         else:
             # Cross attention
@@ -498,7 +448,7 @@ class WanAttention(Module):
                 is_causal=False,
                 attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)

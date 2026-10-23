@@ -11,7 +11,6 @@ import torch
 from diffusers import FluxTransformer2DModel
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock, _chunk_time3d
@@ -42,8 +41,8 @@ class Flux1SingleTransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        attention_k_chunk_size: int = 512,
-        attention_q_chunk_size: int = 128,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -65,8 +64,8 @@ class Flux1SingleTransformerBlock(Module):
             parallel_config=parallel_config,
             padding_config=padding_config,
             use_spatial_weights_for_prompt=True,
-            k_chunk_size=attention_k_chunk_size,
-            q_chunk_size=attention_q_chunk_size,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm = DistributedLayerNorm(
@@ -228,14 +227,6 @@ def _re_fuse_proj_out_weight(
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
 class Flux1Transformer(Module):
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (128, 512),
-        (False, 8, 4): (128, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (64, 512),
-    }
-    default_sdpa_chunk_size = (128, 512)
-
     def __init__(
         self,
         *,
@@ -254,6 +245,8 @@ class Flux1Transformer(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -263,15 +256,6 @@ class Flux1Transformer(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-
-        q_chunk_size, k_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
 
         # self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=list(axes_dims_rope))
 
@@ -307,8 +291,8 @@ class Flux1Transformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=k_chunk_size,
-                attention_q_chunk_size=q_chunk_size,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_layers)
         )
@@ -322,8 +306,8 @@ class Flux1Transformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=k_chunk_size,
-                attention_q_chunk_size=q_chunk_size,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_single_layers)
         )
@@ -453,6 +437,8 @@ class Flux1Checkpoint:
         *,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> Flux1Transformer:
         """Construct a ``Flux1Transformer`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
@@ -483,6 +469,8 @@ class Flux1Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         cache.load_model(
             model,
