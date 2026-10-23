@@ -10,6 +10,8 @@ from mpmath import cosh as mp_cosh
 from mpmath import mp
 
 from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
@@ -58,6 +60,68 @@ def flush_to_zero(tensor):
     """Flush values at or below the smallest normal bfloat16 to zero. |x| ≤ 2^{-126}"""
     tensor[torch.abs(tensor) <= SMALLEST_NORMAL_BF16] = 0.0
     return tensor
+
+
+def assert_ftz_band(result, band_mask, band_desc):
+    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
+
+    The band is a deterministic slice of the exhaustive sweep, so the
+    non-emptiness assertion guards against a future golden/kernel change that
+    shifts a boundary and silently empties the band (which would otherwise let
+    the test pass without ever checking the documented FTZ behavior).
+    """
+    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
+    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
+
+
+def assert_ftz_then_ulp(golden, result, ulp_threshold, reference=None, allow_nonfinite=False):
+    """Exactly 0 where |reference| < SNB, within ulp_threshold of golden elsewhere.
+
+    reference defaults to golden. Pass a float64 reference when float32
+    rounding of the golden can lift a truly subnormal result to SNB itself.
+    Unlike assert_ftz_band, the FTZ region may be empty.
+    """
+    if reference is None:
+        reference = golden
+    ftz = reference.abs() < SMALLEST_NORMAL_BF16
+    assert_equal(torch.zeros_like(result[ftz]), result[ftz])
+    assert_with_ulp(
+        expected_result=golden[~ftz],
+        actual_result=result[~ftz],
+        ulp_threshold=ulp_threshold,
+        allow_nonfinite=allow_nonfinite,
+    )
+
+
+def assert_all_nonfinite(result, desc):
+    """Every element must be non-finite. NaN or ±inf both pass, since bfloat16 packing can turn NaN into inf."""
+    nonfinite = ~torch.isfinite(result)
+    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
+
+
+def assert_finite_matches_golden(golden, result, desc):
+    """Wherever the golden is finite, the device output must be finite too.
+
+    PCC zeroes non-finite values on both sides, so on its own it can hide a stray NaN or inf.
+    """
+    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
+    assert (
+        not unexpected_nonfinite.any()
+    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
+
+
+def bf16_binade_samples(min_magnitude):
+    """Positive magnitudes from min_magnitude to MAX_BF16, as float32.
+
+    Takes the first, middle and last bfloat16 mantissa of every binade (power-of-two
+    interval) from 2^6 up, plus min_magnitude and MAX_BF16 themselves. Binades below
+    2^6 are not sampled, so min_magnitude should be at least 64.
+    """
+    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
+    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
+    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
+    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([min_magnitude, MAX_BF16])]).unique()
+    return magnitudes[magnitudes >= min_magnitude]
 
 
 def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
@@ -404,20 +468,25 @@ def to_tt_tensor(
     )
 
 
-def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.float32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
+
+
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, input_dtype=ttnn.bfloat16, **op_kwargs):
     """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
 
     Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
     are inplace: they write into lhs and the result is read back from that
     tensor rather than the return value.
 
-    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
-    ``fast_and_approximate_mode``) are forwarded only to the device op.
-    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
-    ``golden_kwargs`` and are also passed to the device op.
+    Inputs are uploaded as ``input_dtype`` (``ttnn.bfloat16`` by default).
+    ``op_kwargs`` (e.g. ``fast_and_approximate_mode``) are forwarded only to
+    the device op. Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``)
+    go in ``golden_kwargs`` and are also passed to the device op.
     """
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
+    tt_a = to_tt_tensor(input_a, device, dtype=input_dtype)
+    tt_b = to_tt_tensor(input_b, device, dtype=input_dtype)
 
     golden_kwargs = golden_kwargs or {}
     golden_function = ttnn.get_golden_function(ttnn_op)

@@ -71,7 +71,7 @@ FORCE_INLINE void add_bias(uint32_t a, uint32_t b_tile, uint32_t out) {
     CircularBuffer cb_a(a), cb_out(out);
     cb_a.wait_front(1);
     reconfig_data_format(a, CB_CONSTS);
-    add_tiles_init(a, CB_CONSTS);
+    add_init(a, CB_CONSTS);
     tile_regs_acquire();
     add_tiles(a, CB_CONSTS, 0, b_tile, 0);
     tile_regs_commit();
@@ -89,7 +89,7 @@ FORCE_INLINE void mul(uint32_t a, uint32_t b, uint32_t out) {
     cb_a.wait_front(1);
     cb_b.wait_front(1);
     reconfig_data_format(a, b);
-    mul_tiles_init(a, b);
+    mul_init(a, b);
     tile_regs_acquire();
     mul_tiles(a, b, 0, 0, 0);
     tile_regs_commit();

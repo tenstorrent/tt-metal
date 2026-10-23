@@ -256,10 +256,9 @@ struct RingStreamingMaskCtx {
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
-// BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
-// width-4 blocked-pack reconfiguration costs more than it saves there.
+// WH keeps 8: blocked pack reconfiguration costs more than it saves at smaller widths.
 #ifdef ARCH_BLACKHOLE
-constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = 2;
 #else
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
@@ -2593,7 +2592,9 @@ void sdpa_ring_v2(
     const uint32_t* packed_source_ids = nullptr,
     const uint32_t packed_source_count = 0,
     // Rows of newest slabs this pass appends (packed_kv_pass_rows).
-    const uint32_t packed_newest_rows = 0) {
+    const uint32_t packed_newest_rows = 0,
+    // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
+    const uint32_t padded_q_slots = 0) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
@@ -3245,6 +3246,36 @@ void sdpa_ring_v2(
             sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
+    }
+
+    // Padded multicast slots: the reader pushes every K (and V) entry it receives so this core's CB
+    // advances with the injector's. Drain them in reader order with the same skips as a real Q chunk;
+    // padded_slot_flat_q decodes the chunk each slot stands for, exactly as the reader does.
+    if constexpr (!has_sliding_window) {
+        for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+            const uint32_t owned = global_q_end - global_q_start;
+            const uint32_t q_flat = padded_slot_flat_q<rotated_q_split_enabled>(
+                rotated_slots, global_q_start, owned, owned + slot, use_zigzag_balancing ? 2 : 1);
+            const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+            if constexpr (is_balanced_sdpa) {
+                if (skip_first_half_q && q_chunk < num_q_chunks / 2) {
+                    continue;
+                }
+            }
+            const uint32_t padded_k_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
+            for (uint32_t k_chunk = 0; k_chunk < padded_k_chunks; ++k_chunk) {
+                if (!packed_sources && try_skip_oob_kv(ring_id, k_chunk, k_chunk >= num_local_k_chunks)) {
+                    continue;
+                }
+                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                if constexpr (!kt_inplace_v) {
+                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
+                KV_chunks_processed_in_iter++;
+            }
+        }
     }
 
     // Dummy KV traffic exists only to align chained readers. Sliding mode uses independent

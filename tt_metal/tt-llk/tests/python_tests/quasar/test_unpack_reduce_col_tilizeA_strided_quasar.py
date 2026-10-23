@@ -20,7 +20,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -42,7 +41,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -197,10 +195,6 @@ PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
 )
 
 
-def unpack_reduce_col_tilizeA_strided_implied_math_formats():
-    return [ImpliedMathFormat.No]
-
-
 def generate_reduce_scaler(
     pool_type: ReducePool, tile_shape: TileShape, tile_dimensions: Tuple[int, int]
 ) -> torch.Tensor:
@@ -212,13 +206,11 @@ def generate_reduce_scaler(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
-    implied_math_format=unpack_reduce_col_tilizeA_strided_implied_math_formats,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
-    implied_math_format,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -292,7 +284,6 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "test_name": "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),

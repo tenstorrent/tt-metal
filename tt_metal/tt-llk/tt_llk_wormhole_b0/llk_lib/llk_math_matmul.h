@@ -626,6 +626,49 @@ void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
     }
 }
 
+/**
+ * @brief Whether the throttled matmul MOP supports this operand geometry.
+ *
+ * Its replay sequences are hand-written for a full 32x32 tile; on any other geometry the recorded
+ * window and the emitted sequence disagree. Single source of truth for both the assert inside
+ * matmul_configure_mop_throttled and the dispatch guard in _llk_math_matmul_init_.
+ *
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ * @return True when the throttled MOP may be used for this geometry.
+ */
+inline constexpr bool matmul_throttle_supports_tile(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    return (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) &&
+           !partial_face;
+}
+
+/**
+ * @brief Whether the execute path issues one MOP run per fidelity phase rather than one per tile.
+ *
+ * Above throttle level 3 at high fidelity, @ref _llk_math_matmul_ drives the fidelity phases
+ * itself, while the unthrottled MOP walks them in its own inner loop. Single source of truth for
+ * that branch and for the init-side guard that must not fall back to the unthrottled MOP wherever
+ * it holds -- the two have to agree or the phases execute math_fidelity times over.
+ *
+ * @tparam math_fidelity: Math fidelity the matmul is configured for.
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level.
+ * @return True when the execute path runs the MOP once per fidelity phase.
+ */
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
+inline constexpr bool matmul_throttle_drives_phases()
+{
+    return (THROTTLE_LEVEL > 3) && is_high_fidelity(math_fidelity);
+}
+
 /*
  * Programming of the MOP for the case we limit matmul compute throughput
  * Done by inserting NOP instructions between MVMUL instructions of matmul kernel
@@ -675,7 +718,7 @@ inline void matmul_configure_mop_throttled(
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
     LLK_ASSERT(
-        (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
+        matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
         "MM throttling only enabled for full 32x32 tile size");
 
     const bool reuse_a        = ct_dim >= rt_dim;
@@ -745,10 +788,17 @@ inline void matmul_configure_mop_throttled(
  * @brief Configure the math (FPU/matrix engine) thread for a matmul: programs address mods and the MVMUL MOP.
  *
  * Computes D = in0 * in1, where in0 is loaded to SrcB and in1 to SrcA. When THROTTLE_LEVEL > 0, builds the
- * throttled MOP variant that inserts NOPs between MVMULs to cap matmul throughput.
+ * throttled MOP variant that inserts NOPs between MVMULs to cap matmul throughput -- except where
+ * @ref matmul_throttle_supports_tile rejects the geometry and the fallback below applies.
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is {1,2,3,4,5}.
+ *         Throttling is a throughput cap, not a correctness input, so a requested level is silently
+ *         dropped where the throttled MOP cannot serve the geometry: levels 1-3 fall back to the
+ *         unthrottled MOP on any tile @ref matmul_throttle_supports_tile rejects. Levels 4-5 at high
+ *         fidelity do NOT -- @ref matmul_throttle_drives_phases holds there, so the fallback would
+ *         execute every fidelity phase math_fidelity times over, and those levels keep the throttled
+ *         MOP. Pairing them with a tile the throttled MOP does not support wedges the math thread.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
@@ -799,8 +849,27 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
-            ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
+        // throttling is only a throughput cap, and the throttled sequence wedges there.
+        //
+        // Sound only while the execute path is a single ckernel_template::run(). Where
+        // matmul_throttle_drives_phases holds, _llk_math_matmul_ runs the MOP once per fidelity
+        // phase, whereas the unthrottled MOP already walks the phases in its own inner loop -- so
+        // falling back there would execute every phase math_fidelity times over. Those levels keep
+        // the throttled path, which the geometry cannot serve: measured on Blackhole, throttle 5 at
+        // HiFi4 on a tiny tile wedges the math thread with or without LLK asserts. Closing it needs
+        // the execute side told which MOP is live, which is a wider change than this guard.
+        constexpr bool fallback_matches_execute = !matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>();
+
+        if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
+        {
+            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
+        else
+        {
+            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
+                ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        }
     }
     else
     {
@@ -857,10 +926,9 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
-    const bool reuse_a           = ct_dim >= rt_dim;
-    const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
-    const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim
-    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    const bool reuse_a          = ct_dim >= rt_dim;
+    const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
@@ -870,7 +938,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
 
             if (t_dim == 1)
             {
-                if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
                 {
                     for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                     {
@@ -905,7 +973,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             }
             else
             {
-                if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
                 {
                     for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                     {
@@ -950,7 +1018,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
 
                     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(
                         dst_index + (reuse_a ? ct_dim * (t + 1) + rut : t + 1 + rut * ct_dim));
-                    if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                    if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
                     {
                         for (std::uint32_t phase = 0; phase < to_underlying(math_fidelity); phase++)
                         {

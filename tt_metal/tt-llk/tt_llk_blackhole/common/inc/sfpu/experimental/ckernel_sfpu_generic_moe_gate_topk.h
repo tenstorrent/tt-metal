@@ -27,7 +27,7 @@ static constexpr std::uint32_t generic_moe_gate_indices_tile    = 1 * generic_mo
 static constexpr std::uint32_t generic_moe_gate_bias_tile       = 2 * generic_moe_gate_dst_tile_offset;
 static constexpr std::uint32_t generic_moe_gate_interm_tile     = 3 * generic_moe_gate_dst_tile_offset;
 
-static constexpr std::uint16_t generic_moe_gate_neg_inf_bf16 = 0xFF80;
+static constexpr std::uint16_t generic_moe_gate_neg_inf_bf16 = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
 // Load a full 16-row face. LREG0-3 hold biased scores; LREG4-7 pack
 // indices into LO16 and original scores into HI16.
@@ -280,22 +280,22 @@ inline void _generic_moe_gate_pad_partial_4_rows_()
     static_assert(first_padding_row >= 1 && first_padding_row <= 3);
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
-    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 2);
-    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
 
     // Turn the four physical rows into four LREGs, replace the trailing rows,
     // then restore the normal row-within-LREG layout.
     TTI_SFPTRANSP(0, 0, 0, 0);
     if constexpr (first_padding_row <= 1)
     {
-        TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     }
     if constexpr (first_padding_row <= 2)
     {
-        TTI_SFPLOADI(p_sfpu::LREG2, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     }
-    TTI_SFPLOADI(p_sfpu::LREG3, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
@@ -305,7 +305,7 @@ inline void _generic_moe_gate_pad_partial_4_rows_()
 template <std::uint32_t offset>
 inline void _generic_moe_gate_pad_full_4_rows_()
 {
-    TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, generic_moe_gate_neg_inf_bf16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, generic_moe_gate_neg_inf_bf16);
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, generic_moe_gate_bias_tile + offset + 2);
 }

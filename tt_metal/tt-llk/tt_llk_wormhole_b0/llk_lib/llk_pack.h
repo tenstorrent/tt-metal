@@ -316,7 +316,10 @@ inline void _llk_pack_reconfig_data_format_(
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
  * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
- * before the init/execute sequence.
+ * before the init/execute sequence, or again when a later op needs a different packer configuration.
+ *
+ * @note Drains the packer and blocks this RISC until it is idle before any register is rewritten, so it
+ *       is safe to call while a pack from the previous op is still in flight.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
@@ -342,6 +345,7 @@ inline void _llk_pack_hw_configure_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 

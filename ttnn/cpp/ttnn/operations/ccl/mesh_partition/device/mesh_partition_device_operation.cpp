@@ -3,14 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "ttnn/tensor/types.hpp"
 #include "mesh_partition_device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -93,6 +100,27 @@ MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation
 
     auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
     return tensor;
+}
+
+std::vector<tt::tt_metal::TensorTopology> MeshPartitionDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Runs before validation, which is where a host-resident input is rejected: do not reach for its device here.
+    const auto& input_tensor = tensor_args.input_tensor;
+    if (!ttnn::is_device_tensor(input_tensor)) {
+        return {input_tensor.tensor_topology()};
+    }
+    // The partition rules are the CCL topology helper's (ccl_topology_utils.hpp): the reduce_scatter rule where
+    // nothing is summed -- Shard{dim} on the partitioned axis, the input's placement elsewhere, the collapsed
+    // {N}, [Shard{dim}] for a whole-mesh partition or row-major hierarchical sharding, and a refusal for the layouts no
+    // label states (a Shard of another dim on the partitioned axis or, over the whole mesh, on any non-trivial axis;
+    // a label that does not cover the devices the partition reaches; a same-dim partition along an outer axis). A
+    // refusal is reported by the helper (one log line per distinct message; a TT_FATAL under
+    // ttnn.CONFIG.strict_ccl_topology) and leaves the input's label on the output, the convention the helper
+    // documents. The whole-mesh label is spelled over the storage's coordinates, the row-major order the program
+    // factory partitions in.
+    return {ttnn::operations::ccl::common::mesh_partition_output_topology(
+                input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+                .value_or(input_tensor.tensor_topology())};
 }
 
 }  // namespace ttnn::operations::ccl
