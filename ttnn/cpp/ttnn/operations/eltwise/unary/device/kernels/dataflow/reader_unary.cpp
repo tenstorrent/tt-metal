@@ -7,6 +7,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#if DRAM_FLOW
+#include "dram_read.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
@@ -52,12 +55,38 @@ void kernel_main() {
     }
 #else
     const uint32_t page_bytes = dfb_src.get_entry_size();
+#if DRAM_FLOW
+    // Reads in the flow's page order, several pages per barrier. Bursts grow 1, 1, 2, 4, ... up to READ_BURST, so the
+    // first tiles reach compute early.
+    auto order = dram_read::RotatedPages::from_args();
+    dram_read::DfbGroups groups{.depth = dfb_src.get_total_num_entries()};
+    uint32_t burst = 1, next_burst = 1;
+    auto max_burst = [&] {
+        const uint32_t current = burst;
+        burst = next_burst;
+        next_burst = std::min(2 * next_burst, uint32_t{READ_BURST});
+        return current;
+    };
+    auto read_group = [&](uint32_t n) {
+        dfb_src.reserve_back(n);
+        for (uint32_t k = 0; k < n; ++k) {
+            noc.async_read(src, dfb_src, page_bytes, {.page_id = order.next()}, {.offset_bytes = k * page_bytes});
+        }
+        noc.async_read_barrier();
+        dfb_src.push_back(n);
+    };
+    auto read_pages = [&](uint32_t first, uint32_t count) {
+        dram_read::for_each_group(order, groups, first, count, max_burst, read_group);
+    };
+    dram_read::WorkSource::from_args(noc).for_each_chunk(read_pages);
+#else
     for (uint32_t i = start_id; i < end_id; ++i) {
         dfb_src.reserve_back(onepage);
         noc.async_read(src, dfb_src, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
         dfb_src.push_back(onepage);
     }
+#endif  // DRAM_FLOW
 #endif
 #endif
 }

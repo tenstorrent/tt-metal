@@ -30,6 +30,7 @@
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
@@ -201,21 +202,15 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
-    ProgramBinaryStatus program_binary_status,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 TraceNode create_trace_node(
     detail::ProgramImpl& program,
@@ -260,8 +255,8 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
@@ -285,7 +280,6 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
 // Immutable setup batches, each bounded by the device's maximum fetch size.
 std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
-    uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state);

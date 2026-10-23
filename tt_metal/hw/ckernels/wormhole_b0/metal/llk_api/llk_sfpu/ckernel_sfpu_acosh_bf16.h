@@ -93,7 +93,7 @@ inline void calculate_acosh_bf16_body() {
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 template <int ITERATIONS = 32>
-inline void calculate_acosh_bf16() {
+__attribute__((noinline)) inline void calculate_acosh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3ea57ebbu);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3fba2e90u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x4007c1f2u);
@@ -102,11 +102,7 @@ inline void calculate_acosh_bf16() {
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);
 }
-inline void init_acosh_bf16() {
-    ckernel::sfpu::bf16::acosh::init_core_bridge_rational<ckernel::sfpu::AcoshBf16Config>();
-    sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x33b17218u);
-    sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, 0x3eba2000u);
-    sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0xbf004000u);
-}
+// The call sets the constants it holds and puts stock's back, so the init leaves them to stock's.
+inline void init_acosh_bf16() {}
 
 }  // namespace ckernel::sfpu
