@@ -487,9 +487,21 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
-def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
-    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
+def run_warm_generation(
+    pipeline,
+    prompt: str,
+    *,
+    seed: int,
+    profiler=None,
+    profiler_iteration: int = 0,
+    warmup_steps: int | None = 3,
+    **gen_kwargs,
+):
+    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`.
+
+    `warmup_steps=None` warms at the measured step count, for pipelines with fixed steps.
+    """
+    warmup_kwargs = gen_kwargs if warmup_steps is None else {**gen_kwargs, "num_inference_steps": warmup_steps}
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
     # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
