@@ -65,6 +65,13 @@ TRACED = os.environ.get("GEMMA4_ROOFLINE_TRACE", "0") == "1"
 # hides the device step; it is kept as the baseline of earlier runs. (A plain ``ttnn.argmax`` over the 262144-wide
 # replicated logits took 140 ms per step on a P150: not usable for timing.)
 DEVICE_ARGMAX = os.environ.get("GEMMA4_ROOFLINE_DEVICE_ARGMAX", "0") == "1"
+# Traced steps under the device profiler follow the recipe of the traced prefill tracy session
+# (tracy_prefill_common.py): no graph capture of a step (the capture of a replay names nothing) and no profiler
+# read-back between the measured steps (one before the start signpost, one after stop), so the tracy report
+# attributes every replayed program. GEMMA4_ROOFLINE_SKIP_CAPTURE / GEMMA4_ROOFLINE_FLUSH_PER_STEP override.
+_PROFILED_TRACE = TRACED and os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+SKIP_CAPTURE = os.environ.get("GEMMA4_ROOFLINE_SKIP_CAPTURE", "1" if _PROFILED_TRACE else "0") == "1"
+FLUSH_PER_STEP = os.environ.get("GEMMA4_ROOFLINE_FLUSH_PER_STEP", "0" if _PROFILED_TRACE else "1") == "1"
 
 
 def _device_ops_in_order(captured):
@@ -202,16 +209,17 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
     ops_json = os.path.join(
         os.environ.get("TT_METAL_HOME", "."), "generated", "profiler", f"roofline_ops_{batch_size}.json"
     )
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-    tok = step(tok)
-    current_pos += 1
-    ttnn.synchronize_device(mesh_device)
-    captured = ttnn.graph.end_graph_capture()
-    ops = _device_ops_in_order(captured)
-    os.makedirs(os.path.dirname(ops_json), exist_ok=True)
-    with open(ops_json, "w") as f:
-        json.dump({"batch_size": batch_size, "ops": ops}, f)
-    logger.info(f"captured {len(ops)} device ops for one decode step -> {ops_json}")
+    if not SKIP_CAPTURE:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        tok = step(tok)
+        current_pos += 1
+        ttnn.synchronize_device(mesh_device)
+        captured = ttnn.graph.end_graph_capture()
+        ops = _device_ops_in_order(captured)
+        os.makedirs(os.path.dirname(ops_json), exist_ok=True)
+        with open(ops_json, "w") as f:
+            json.dump({"batch_size": batch_size, "ops": ops}, f)
+        logger.info(f"captured {len(ops)} device ops for one decode step -> {ops_json}")
 
     def _flush():
         # The device-side profiler buffers hold a bounded number of op records per
@@ -232,7 +240,7 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         row0_tokens.append(int(tok[0, 0]))
         current_pos += 1
         ttnn.synchronize_device(mesh_device)
-        if profiler_on:
+        if profiler_on and FLUSH_PER_STEP:
             _flush()
     wall_ms = (time.perf_counter() - t0) / N_STEPS * 1e3
     _signpost("stop")
