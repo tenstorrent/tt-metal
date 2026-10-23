@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_credit_counter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
@@ -77,7 +78,7 @@ public:
             get_semaphore<ProgrammableCoreType::TENSIX>(flow_control_sem_id));
         sender.teardown_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_semaphore<ProgrammableCoreType::TENSIX>(teardown_sem_id));
-        sender.credit_stream_reg_write_addr = get_stream_reg_write_addr(sender.logical_channel_id);
+        sender.credit_counter = make_fabric_credit_counter(sender.logical_channel_id);
         return sender;
     }
 
@@ -202,10 +203,8 @@ public:
         ncrisc_noc_write_set_state</*posted=*/posted, /*one_packet=*/false>(
             noc, this->data_noc_cmd_buf, mux_core_noc_addr, 0, NOC_UNICAST_WRITE_VC);
 
-        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc);
-        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
-            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
+        fabric_credit_counter_add_set_state</*posted=*/false>(
+            mux_noc_x, mux_noc_y, credit_counter, -1, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
         stateful_setup_done = true;
     }
 
@@ -304,15 +303,13 @@ private:
     }
 
     FORCE_INLINE void signal_pending_non_stateful(uint32_t count) {
-        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc_index);
-        const int32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-static_cast<int32_t>(count));
-        noc_inline_dw_write<InlineWriteDst::REG>(credit_noc_addr, packed_val, 0xf, noc_index);
+        fabric_credit_counter_add(mux_noc_x, mux_noc_y, credit_counter, -static_cast<int32_t>(count), noc_index);
     }
 
     FORCE_INLINE void signal_pending_stateful(uint32_t count, uint8_t noc) {
         if (count == 1) {
-            noc_inline_dw_write_with_state</*posted=*/false, /*update=*/true, false, false, false, InlineWriteDst::REG>(
-                0, 0, this->sync_noc_cmd_buf, noc);
+            fabric_credit_counter_add_with_state</*update_counter=*/true, /*posted=*/false>(
+                this->sync_noc_cmd_buf, noc);
         } else {
             // Batched credit notify (open_finish); SYNC is reprogrammed afterward if needed.
             signal_pending_non_stateful(count);
@@ -462,10 +459,8 @@ private:
     }
 
     void reprogram_stateful_sync_cmd_buf() {
-        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc_index);
-        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
-            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc_index, NOC_UNICAST_WRITE_VC);
+        fabric_credit_counter_add_set_state</*posted=*/false>(
+            mux_noc_x, mux_noc_y, credit_counter, -1, this->sync_noc_cmd_buf, noc_index, NOC_UNICAST_WRITE_VC);
     }
 
     uint8_t mux_noc_x = 0;
@@ -477,7 +472,7 @@ private:
     uint32_t connection_info_address = 0;
     uint32_t connection_handshake_address = 0;
     uint32_t mux_status_address = 0;
-    uint32_t credit_stream_reg_write_addr = 0;
+    FabricCreditCounter credit_counter = {};
 
     // flow_control: manager-published read counter. teardown: close ack; also READY scratch.
     volatile tt_l1_ptr uint32_t* flow_control_ptr = nullptr;
