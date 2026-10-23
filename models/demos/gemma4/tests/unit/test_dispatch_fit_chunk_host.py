@@ -17,15 +17,30 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv(dp.FIT_CHUNK_ENV, raising=False)
 
 
-def test_fit_chunk_off_by_default():
-    assert not dp.fit_chunk_enabled()
-    assert dp.fit_chunk_tokens(128, 4, 4096) == 4096
-    assert dp.fit_chunk_tokens(4096, 4, 4096) == 4096
+def test_fit_chunk_default_follows_the_dispatch_default():
+    from models.demos.gemma4.tt.mesh_orientation import fit_chunk_default
+
+    assert fit_chunk_default((4, 1), blackhole=True)  # the QB2 column mesh: the validated configuration
+    assert not fit_chunk_default((1, 4), blackhole=True)
+    assert not fit_chunk_default((4, 1), blackhole=False)
+    assert not fit_chunk_default((8, 4), blackhole=True)
+    assert dp.fit_chunk_tokens(128, 4, 4096, fit=False) == 4096
+    assert dp.fit_chunk_tokens(4096, 4, 4096, fit=True) == 4096
+
+
+def test_fit_chunk_env_overrides_the_default(monkeypatch):
+    from models.demos.gemma4.tt.mesh_orientation import fit_chunk_default
+
+    monkeypatch.setenv(dp.FIT_CHUNK_ENV, "0")
+    assert not fit_chunk_default((4, 1), blackhole=True)
+    monkeypatch.setenv(dp.FIT_CHUNK_ENV, "1")
+    assert fit_chunk_default((1, 4), blackhole=True)
+    assert fit_chunk_default((8, 4), blackhole=False)
 
 
 def test_fit_chunk_rounds_to_the_dispatch_group_tile(monkeypatch):
     monkeypatch.setenv(dp.FIT_CHUNK_ENV, "1")
-    assert dp.fit_chunk_enabled()
+    assert dp.fit_chunk_enabled((1, 4))
     assert dp.fit_chunk_tokens(128, 4, 4096) == 256  # 64 rows per chip of the group (masked_bincount's grid)
     assert dp.fit_chunk_tokens(32, 4, 4096) == 256  # never below 64 rows per chip
     assert dp.fit_chunk_tokens(256, 4, 4096) == 256

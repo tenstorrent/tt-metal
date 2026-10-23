@@ -14,7 +14,9 @@ Defaults (every one overridable):
   (``should_reshape_to_column``); ``0`` keeps the row mesh;
 * ``GEMMA4_TP_AXIS``: unset -> 0 on a column mesh (rows > 1, one column), else 1 (``tp_axis_for``);
 * ``GEMMA4_MOE_DISPATCH_PREFILL``: unset -> on for a Blackhole (4,1) mesh (``dispatch_prefill_default``), with
-  ``GEMMA4_MOE_DISPATCH_MIN_TOKENS`` defaulting to 128 there (the measured configuration) and 256 elsewhere.
+  ``GEMMA4_MOE_DISPATCH_MIN_TOKENS`` defaulting to 128 there (the measured configuration) and 256 elsewhere;
+* ``GEMMA4_MOE_DISPATCH_FIT_CHUNK``: unset -> on wherever the dispatch path is the default (``fit_chunk_default``):
+  a short call runs on a dispatch chunk of its own length instead of the 4096-row padded chunk.
 """
 
 import os
@@ -69,6 +71,20 @@ def dispatch_prefill_default(shape, *, blackhole: bool) -> bool:
     if env is not None and env.strip() != "":
         return env.strip() == "1"
     return bool(blackhole) and _shape(shape) == COLUMN_MESH_SHAPE
+
+
+FIT_CHUNK_ENV = "GEMMA4_MOE_DISPATCH_FIT_CHUNK"
+
+
+def fit_chunk_default(shape, *, blackhole: bool) -> bool:
+    """Whether a dispatch-prefill call shorter than the full chunk runs on a chunk of its own length:
+    ``GEMMA4_MOE_DISPATCH_FIT_CHUNK`` when set, else on wherever the dispatch path is the default (the Blackhole (4,1)
+    column mesh: 128-token TTFT 213 -> 151 ms, 2048-token 382 -> 303 ms, logits PCC 1.000, 2026-10-23) and off elsewhere.
+    """
+    env = os.environ.get(FIT_CHUNK_ENV)
+    if env is not None and env.strip() != "":
+        return env.strip() == "1"
+    return dispatch_prefill_default(shape, blackhole=blackhole)
 
 
 def dispatch_min_tokens_default(shape, *, blackhole: bool) -> int:

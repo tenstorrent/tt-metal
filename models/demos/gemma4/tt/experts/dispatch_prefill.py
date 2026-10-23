@@ -48,8 +48,13 @@ FIT_CHUNK_ENV = "GEMMA4_MOE_DISPATCH_FIT_CHUNK"
 MIN_ROWS_PER_CHIP = 64
 
 
-def fit_chunk_enabled() -> bool:
-    return os.environ.get(FIT_CHUNK_ENV, "0") == "1"
+def fit_chunk_enabled(mesh_shape=None) -> bool:
+    """Effective switch: ``GEMMA4_MOE_DISPATCH_FIT_CHUNK`` when set, else the mesh-shape default (on wherever the
+    dispatch path is the default; tt/mesh_orientation.py)."""
+    from models.common.utility_functions import is_blackhole
+    from models.demos.gemma4.tt.mesh_orientation import fit_chunk_default
+
+    return fit_chunk_default(mesh_shape, blackhole=is_blackhole())
 
 
 def fit_chunk_tokens(rows: int, dispatch_group_size: int, max_chunk: int = None, *, fit: bool = None) -> int:
@@ -284,13 +289,14 @@ class Gemma4DispatchExperts:
         # buffers): one plan per distinct chunk size, the full chunk's plan built here, shorter ones on demand
         # (fit_chunk_tokens). The full plan's members keep their historical attribute names.
         self._plans: dict = {}
+        self.fit_chunk = fit_chunk_enabled(tuple(mesh_device.shape))
         plan = self._plan(CHUNK_TOKENS)
         self.seq_per_chip, self.metadata_len, self.max_buf = plan.seq_per_chip, plan.metadata_len, plan.max_buf
         self.dispatch, self.combine, self.geglu_op = plan.dispatch, plan.combine, plan.geglu_op
         logger.info(
             f"Gemma4DispatchExperts: mesh {rows}x{cols} axis {self.dispatch_axis} {'ring' if self.ring else 'direct'}, "
             f"{experts_per_chip} experts/chip, chunk {CHUNK_TOKENS} "
-            f"({self.seq_per_chip}/chip, fit {'on' if fit_chunk_enabled() else 'off'}), dispatch buffer "
+            f"({self.seq_per_chip}/chip, fit {'on' if self.fit_chunk else 'off'}), dispatch buffer "
             f"{self.max_buf} rows, max {plan.max_tok} tokens/expert"
         )
 
@@ -492,7 +498,7 @@ class Gemma4DispatchExperts:
         start = 0
         while start < n:
             end = min(start + CHUNK_TOKENS, n)
-            plan = self._plan(fit_chunk_tokens(end - start, self.dgs))
+            plan = self._plan(fit_chunk_tokens(end - start, self.dgs, fit=self.fit_chunk))
             T = plan.chunk_tokens
             h = self._rows(hidden, start, end, self.hidden)
             if sparse:
