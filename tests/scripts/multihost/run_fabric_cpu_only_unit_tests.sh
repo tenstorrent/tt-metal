@@ -84,8 +84,11 @@ fi
 # detection, and peers inherit it as the topology mapper's wait for rank 0's chip-info broadcast. On
 # these oversubscribed mock runs a healthy rank 0 of a 16-64 rank group can legitimately take longer
 # than that on a small runner, so peers falsely declare the controller dead. Floor it for CPU-only
-# runs; commands that need even longer still set their own value.
-if (( ${TT_METAL_OPERATION_TIMEOUT_SECONDS:-0} < 300 )); then
+# runs; commands that need even longer still set their own value. The value may be fractional
+# (verify-changed-tests exports 5.0), so compare its integer part.
+op_timeout=${TT_METAL_OPERATION_TIMEOUT_SECONDS:-0}
+op_timeout=${op_timeout%%.*}
+if (( ${op_timeout:-0} < 300 )); then
   export TT_METAL_OPERATION_TIMEOUT_SECONDS=300
 fi
 
