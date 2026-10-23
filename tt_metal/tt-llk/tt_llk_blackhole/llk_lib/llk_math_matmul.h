@@ -670,6 +670,10 @@ constexpr bool matmul_math_row_form()
 // DEST stride (rows) the default row form was programmed with; zero when the last matmul init programmed another MOP.
 inline std::uint32_t matmul_rows_dest_stride = 0;
 
+// Whether the default row form's last MVMUL of a reuse row also frees the reused source and carries the DEST on, so the rows
+// of a block run back to back (reuse_a only: its rows are contiguous in DEST).
+inline bool matmul_rows_fold = false;
+
 // Default form for full 32x32 tiles: one MOP per reuse row, its tile count carried in the MOP instruction. Only
 // ADDR_MOD_3 and ADDR_MOD_5 change, so SFPU ops initialised once around matmul calls keep ADDR_MOD_6 and 7.
 template <MathFidelity math_fidelity>
@@ -695,9 +699,15 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     ckernel_template tmp(
         reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
-    tmp.set_last_outer_loop_instr(tile_end);
+    // LoFi rows are unpack or pack bound and ran no faster, a few slower
+    const bool fold = reuse_a && high_fidelity;
+    tmp.set_last_outer_loop_instr(fold ? TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0) : tile_end);
     tmp.program();
     matmul_rows_dest_stride = dest_stride;
+    if constexpr (high_fidelity)
+    {
+        matmul_rows_fold = fold;
+    }
 }
 
 // Whether the row form serves the in0 tiles of at most 16 rows by 32 columns: one MOP per reuse row, the body of
@@ -751,6 +761,10 @@ inline void matmul_configure_mop_rows_tiny(
     tmp.set_last_outer_loop_instr(tile_end);
     tmp.program();
     matmul_rows_dest_stride = dest_stride;
+    if constexpr (high_fidelity)
+    {
+        matmul_rows_fold = false;
+    }
 }
 
 template <MathFidelity math_fidelity>
@@ -767,6 +781,17 @@ inline void matmul_run_mop_rows(std::uint32_t dst_index, const std::uint32_t ct_
     const std::uint32_t t_step = reuse_a ? ct_dim : 1;
     // a non-zero count in bits 10 to 19 of a math MOP replaces the programmed outer loop (tt_mop_decode.sv:113-115)
     const std::uint32_t row_mop = TT_OP_MOP(1, 0, (reuse_a ? ct_dim : rt_dim) << 10);
+    if (is_high_fidelity(math_fidelity) && matmul_rows_fold)
+    {
+        // each row ends on the DEST carriage return of the next, so one base and back to back MOPs serve the block
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+        for (std::uint32_t t = 0; t < t_dim; t++)
+        {
+            TT_INSN(row_mop);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        return;
+    }
     for (std::uint32_t t = 0; t < t_dim; t++, dst_index += t_step)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
