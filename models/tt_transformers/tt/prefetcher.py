@@ -373,6 +373,8 @@ class Prefetcher(LightweightModule):
             if self.mode != Mode.PREFILL or not self.init_prefill_done:
                 self.mesh_device.clear_loaded_sub_device_manager()
                 self.mesh_device.reset_sub_device_stall_group()
+            # The default manager has one sub-device; prefill CCLs must not keep decode's worker id.
+            self.worker_sub_device_id = ttnn.SubDeviceId(0)
             self.mode = Mode.PREFILL
             self.init_prefill_done = True
             return
@@ -389,6 +391,7 @@ class Prefetcher(LightweightModule):
                     self.mesh_device.clear_loaded_sub_device_manager()
                     self.mesh_device.reset_sub_device_stall_group()
                     raise
+                self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
                 self.mode = Mode.DECODE
             return
         self.mode = mode

@@ -50,6 +50,15 @@ def test_prefill_before_decode_uses_default_manager(prefetcher):
     ttnn.create_global_circular_buffer.assert_not_called()
 
 
+def test_worker_sub_device_follows_the_loaded_manager(prefetcher, monkeypatch):
+    monkeypatch.setattr(ttnn, "SubDeviceId", lambda index: ("SubDeviceId", index))
+    prefetcher.worker_sub_device_id = 1
+    prefetcher.init(Mode.PREFILL)
+    assert prefetcher.worker_sub_device_id == ("SubDeviceId", 0)
+    prefetcher.init(Mode.DECODE)
+    assert prefetcher.worker_sub_device_id == 1
+
+
 def test_warmup_can_move_gcb_then_capture_fixes_both_addresses(prefetcher):
     prefetcher._create_global_cb()
     warmup_cb = prefetcher.global_cb
