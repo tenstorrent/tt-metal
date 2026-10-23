@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -84,6 +85,15 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf);
 // Gives a call site another process described the next id, and returns it. The site's names may point at the caller's
 // memory; the registry keeps its own copies.
 uint32_t add_call_site(CallSite site);
+
+// Has `listener` called with each image's call-site ids [first, end) once find_call_site finds them, on the thread that
+// loads the image, before the image can run. An empty listener removes it, and returns once no call to the last one is
+// in flight.
+void set_call_site_listener(std::function<void(uint32_t first, uint32_t end)> listener);
+
+// The ids the process has handed out so far, [0, call_site_ids_taken()). An image's ids are taken before its call sites
+// are read, so the newest few may not have a call site yet.
+uint32_t call_site_ids_taken();
 
 // The call site with id `id`, or null when no loaded image holds it. A call site lives for the process.
 const CallSite* find_call_site(uint32_t id);

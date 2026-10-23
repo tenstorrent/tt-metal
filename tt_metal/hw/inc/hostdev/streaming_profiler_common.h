@@ -142,6 +142,8 @@ struct ResidentCtrl {
         std::uint32_t attached;
         std::uint32_t copied;
     } external;
+    // Only the relays read this. The profiled process's ingest thread moves it while it drains the relay's FIFOs.
+    std::uint32_t keepalive;
 };
 // Each core a DRISC relay drains has a record of this many bytes in the relay's L1 scratch. It is a power of two so the
 // relay indexes records with a shift.
@@ -212,6 +214,10 @@ constexpr static std::uint32_t SPSC_SPAN_TO_EXTERNAL = 1u << 0;
 constexpr static std::uint32_t SPSC_SPAN_ROUTED_FIRST_SHIFT = 1;
 constexpr static std::uint32_t SPSC_SPAN_ROUTED_END_SHIFT = 10;
 constexpr static std::uint32_t SPSC_SPAN_ROUTED_PAGE_MASK = 0x1FFu;
+// The eth relay sends the external process a frame of clock sync records instead while the profiled process is gone:
+// its word 0 holds SPSC_SPAN_SYNC and the frame's pages as the end of a span that starts at page 0, so a reader sizes
+// it as it sizes a copy.
+constexpr static std::uint32_t SPSC_SPAN_SYNC = 1u << 19;
 
 // Control block of a packed frame: control-vector words SPSC_WIRE_CV_BASE..+16 exactly as the relay's one 64 B NoC
 // read of them lands in the frame -- the lanes' state slots and their tails. The heads and XY the relay adds go in

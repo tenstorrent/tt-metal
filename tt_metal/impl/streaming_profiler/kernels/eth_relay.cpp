@@ -53,12 +53,18 @@ inline volatile tt_l1_ptr uint32_t* read_block(uint32_t xy, uint32_t src) {
     return l1_words(kStageBody);
 }
 
+// While the profiled process is gone (metal.gone), the relay writes nothing to its sockets and drops what it drains,
+// but still copies routed lanes and sync records to the external process.
+static MetalLiveness metal;
+
 __attribute__((noinline)) void ship(SocketSenderInterface& sender, uint32_t xy, uint32_t frame_words) {
     l1_words(kStageAddr)[kernel_profiler::SPSC_PREFIX_XY] = xy;
     l1_words(kStageAddr)[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] = frame_words - kPrefixWords;
     const uint32_t bytes = page_round(frame_words * 4u);
     const uint32_t pages = bytes / kPageBytes;
-    socket_reserve_pages(sender, pages);
+    if (metal.gone || !reserve_unless_gone(sender, bytes, metal)) {
+        return;
+    }
     staged_store_fence();
     push_fifo(sender, kStageAddr, sender.write_ptr, bytes);
     socket_push_pages(sender, pages);
@@ -140,11 +146,36 @@ struct EthRelay {
             const uint32_t batch = std::min({left, kernel_profiler::kSyncFrameRecords, ring.capacity - slot});
             noc_async_read(noc_at(ring.xy, ring.addr + slot * kSyncRecordBytes), kStageBody, batch * kSyncRecordBytes);
             noc_async_read_barrier();
-            ship(sockets[kSync], ring.xy, kPrefixWords + batch * kernel_profiler::kSyncRecordWords);
+            ship_sync(ring.xy, kPrefixWords + batch * kernel_profiler::kSyncRecordWords);
             head += batch;
             write_word(ring.xy, ring.head_addr, head);
         }
         return head != first;
+    }
+
+    // A sync frame goes to the profiled process and, unless it holds the sync check's readings, to the external
+    // process, which builds a clock map of its own from these records.
+    void ship_sync(uint32_t xy, uint32_t frame_words) {
+        ship(sockets[kSync], xy, frame_words);
+        if constexpr (kExternal) {
+            if (external_attach != 0 && (!kSyncCheck || xy != kCheckXy)) {
+                copy_sync(xy, frame_words);
+            }
+        }
+    }
+
+    __attribute__((noinline)) void copy_sync(uint32_t xy, uint32_t frame_words) {
+        volatile tt_l1_ptr uint32_t* frame = l1_words(kStageAddr);
+        const uint32_t bytes = page_round(frame_words * 4u);
+        frame[kernel_profiler::SPSC_PREFIX_XY] = xy;
+        frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] = frame_words - kPrefixWords;
+        frame[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_SYNC |
+                   (bytes / kPageBytes) << kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT;
+        staged_store_fence();
+        push_fifo(external, kStageAddr, external.write_ptr, bytes);
+        socket_push_pages(external, bytes / kPageBytes);
+        notify_bytes_sent(external);
+        frame[0] = kernel_profiler::spsc_span_w0();
     }
 
     // Ships the new records in the sync ring of the wall-clock or check core at `xy`, and returns whether it shipped
@@ -372,11 +403,13 @@ void kernel_main() {
         ctrl->heartbeat++;
         invalidate_l1_cache();
     }
+    metal.start(&ctrl->keepalive);
     uint32_t gap = 0;
     for (bool stop = false; !stop;) {
         invalidate_l1_cache();
         // By the time stop is set, the check and wall-clock cores have stopped, so their tails are final.
         stop = ctrl->stop != 0u;
+        metal.observe();
         if constexpr (kExternal) {
             const uint32_t attach = ctrl->external.attach;
             if (attach != relay.external_attach) {

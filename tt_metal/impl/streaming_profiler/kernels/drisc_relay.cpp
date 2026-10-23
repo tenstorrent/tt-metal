@@ -143,6 +143,11 @@ static_assert(
         kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
     "packed-gather congruence broken");
 
+// While the profiled process is gone (metal.gone), the relay writes nothing to its FIFO and drops what it gathers, but
+// still copies routed lanes to the external process. Out of line and in statics, so the sweep loop keeps no liveness
+// state in registers.
+static MetalLiveness metal;
+__attribute__((noinline, cold)) static void observe_metal() { metal.observe(); }
 static uint32_t external_copied;    // routed records copied to the external process
 static uint32_t external_notified;  // the external socket's bytes_sent as the host last saw it
 // In spool mode, the external socket's bytes_sent where its last whole copy ended, which is all the host is told: the
@@ -267,7 +272,7 @@ struct SpoolPump {
     uint32_t dma_issued = 0;  // cumulative ship-stream writes: the caller's per-generation completion gate
     uint32_t dma_rd_issued = 0;
     uint32_t chunks = 0;  // refills so far; also the sequence number the oldest-first ship compares
-    Bounce b[2] = {};
+    Bounce b[2];  // a bounce's other fields are set when it refills
     uint32_t notified = 0;    // bytes_sent as the host last saw it
     uint32_t acked_seen = 0;  // the downstream's bytes_acked as last read
     uint32_t level = kLevelIdle;
@@ -276,7 +281,9 @@ struct SpoolPump {
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
     explicit SpoolPump(SocketSenderInterface& sender) :
-        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {}
+        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {
+        b[0].state = b[1].state = kEmpty;
+    }
 
     uint32_t occupancy() const { return static_cast<uint32_t>(wr - rd); }
     bool has_room(uint32_t bytes) const { return kSpoolBytes - occupancy() >= bytes; }
@@ -284,13 +291,16 @@ struct SpoolPump {
     bool drained() const { return rd_iss == wr && both_empty(); }
     uint32_t first_empty() const { return b[0].state == kEmpty ? 0u : (b[1].state == kEmpty ? 1u : kNone); }
     // Oldest bounce first: the socket is a byte stream.
-    uint32_t oldest_ready() const {
+    // The ready bounce to ship next, the older when both are, or kNone. With the profiled process gone, ready bounces
+    // go only to the external process, through drop(), and none is shipped.
+    __attribute__((noinline)) uint32_t next_to_ship() {
         const bool r0 = b[0].state == kReady;
         const bool r1 = b[1].state == kReady;
+        uint32_t i = r0 ? 0u : (r1 ? 1u : kNone);
         if (r0 && r1) {
-            return static_cast<int32_t>(b[0].seq - b[1].seq) < 0 ? 0u : 1u;
+            i = static_cast<int32_t>(b[0].seq - b[1].seq) < 0 ? 0u : 1u;
         }
-        return r0 ? 0u : (r1 ? 1u : kNone);
+        return metal.gone ? drop(i) : i;
     }
 
     // Call wherever wr or rd advance.
@@ -391,7 +401,7 @@ struct SpoolPump {
             if (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
                 return false;
             }
-            notify_external(*external);
+            notify_now();
         }
         // The drain DMA wrote the bounce behind the cache.
         invalidate_l1_cache();
@@ -474,8 +484,26 @@ struct SpoolPump {
         return true;
     }
 
+    // Copies ready bounce `rdy`'s routed lanes to the external process and retires it unshipped, then the other one's,
+    // and returns kNone.
+    __attribute__((noinline, cold)) uint32_t drop(uint32_t rdy) {
+        if (rdy == kNone) {
+            return kNone;
+        }
+        if constexpr (kExternal) {
+            if (b[rdy].off == 0 && routed_pending != 0 &&
+                static_cast<int32_t>(walk_at - static_cast<uint32_t>(b[rdy].rd_end)) < 0 && !ship_routed(rdy)) {
+                return kNone;
+            }
+        }
+        b[rdy].state = kShipping;
+        b[rdy].off = 0;
+        b[rdy].ack_target = noc_nonposted_writes_acked[NOC_INDEX];
+        return next_to_ship();
+    }
+
     FORCE_INLINE void ship(bool& did) {
-        const uint32_t rdy = oldest_ready();
+        const uint32_t rdy = next_to_ship();
         if (rdy != kNone) {
             // bytes_acked only advances, so a copy that shows room is still right; it is re-read (an L1 invalidate
             // the next record reads pay for) only when it does not.
@@ -536,8 +564,12 @@ struct SpoolPump {
 
     // The external socket's bytes_sent goes out with the profiler's own, under the same flush.
     __attribute__((noinline)) void notify_now() {
-        notify_bytes_sent(sender_);
-        notified = sender_.bytes_sent;
+        while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+        }
+        if (!metal.gone) {
+            send_bytes_sent(sender_);
+            notified = sender_.bytes_sent;
+        }
         if (external_pending()) {
             const uint32_t sent = external_sent();
             send_bytes_sent(*external, sent);
@@ -1048,9 +1080,12 @@ static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& send
     }
     const uint32_t bytes = len0 + len1;
     if constexpr (kSpool) {
-        // The spool's back-pressure; it holds through quiesce.
+        // The spool's back-pressure; it holds through quiesce. A spool that stays full may mean the profiled process is
+        // gone, after which the pump drops what it drains.
         while (!pump.has_room(bytes)) {
             pump.pass_cold();
+            invalidate_l1_cache();
+            observe_metal();
         }
         staged_store_fence();
         if constexpr (kExternal) {
@@ -1076,17 +1111,20 @@ static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& send
         // next batch's record reads pay for) only when it does not. Credit only returns for bytes the host has been
         // told about, so a FIFO without room is notified before the wait; otherwise bytes_sent goes out once per
         // sweep, as the pump's does.
-        if (sender.downstream_fifo_total_size - (sender.bytes_sent - acked_seen) < bytes) {
+        if (!metal.gone && sender.downstream_fifo_total_size - (sender.bytes_sent - acked_seen) < bytes) {
             pump.notify();
-            socket_reserve_pages(sender, bytes / kPageBytes);
-            acked_seen = *pump.acked_;
+            if (reserve_unless_gone(sender, bytes, metal)) {
+                acked_seen = *pump.acked_;
+            }
         }
-        pump.notify_if_cap(bytes);
-        push_fifo(sender, base, sender.write_ptr, raw0);
-        if (len1 != 0) {
-            push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
+        if (!metal.gone) {
+            pump.notify_if_cap(bytes);
+            push_fifo(sender, base, sender.write_ptr, raw0);
+            if (len1 != 0) {
+                push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
+            }
+            socket_push_pages(sender, bytes / kPageBytes);
         }
-        socket_push_pages(sender, bytes / kPageBytes);
         if constexpr (kExternal) {
             if (marked != 0 && pump.external != nullptr) {
                 if (marked & 1u) {
@@ -1119,29 +1157,24 @@ void kernel_main() {
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
     set_sender_socket_page_size(sender, kPageBytes);
     // The external socket's config is the host's to write while the relay runs: it follows relay_ctrl()->external.
-    SocketSenderInterface external{};
+    SocketSenderInterface external;
     uint32_t external_attach = 0;
     if constexpr (kExternal) {
-        external_copied = 0;
-        routed_marked[0] = routed_marked[1] = 0;
-        routed_pending = 0;
         relay_ctrl()->external.attached = 0;
     }
 
     volatile tt_l1_ptr uint32_t* stop = &relay_ctrl()->stop;
+    metal.start(&relay_ctrl()->keepalive);
     // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
     // silently.
     volatile tt_l1_ptr uint32_t* heartbeat = &relay_ctrl()->heartbeat;
 
     zero_stage_prefixes();
 
-    // Statics persist across launches, so everything the loop trusts is re-initialised.
-    n_list = 0;
+    // _start zeroes the statics on every launch; these start nonzero.
     n_probe = num_cores;
-    acked_seen = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         probe_list[i] = static_cast<uint8_t>(i);
-        deferred[i] = 0;
     }
     seed_heads(num_cores, coords, tails_seen);
     if constexpr (kExternal) {
@@ -1179,6 +1212,9 @@ void kernel_main() {
         }
         sweeps++;
         *heartbeat = sweeps;
+        if ((sweeps & 63u) == 0) {
+            observe_metal();
+        }
         if constexpr (kExternal) {
             const uint32_t attach = relay_ctrl()->external.attach;
             if (attach != external_attach) {

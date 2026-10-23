@@ -27,6 +27,7 @@
 #include <umd/device/io_window/io_window.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/io_window_config.hpp>
 
@@ -46,6 +47,8 @@ constexpr uint32_t kPageBytes = kPageWords * 4;
 // Idle probe period: credits are returned as soon as pages are walked, so a sleep only delays the frames that land
 // during it, never a credit the device is short of (the FIFO holds over a millisecond of egress).
 constexpr uint32_t kProbeSleepCapUs = 100;
+// How often the ingest thread moves its relays' keepalive. They take a second without a move as this process gone.
+constexpr double kKeepalivePeriodNs = 100e6;
 // The PCIe tile's SII register block in its own address space, and the timer inside it that counts from reset (tables 4
 // and 12 of the Blackhole PCIE_SS spec).
 constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
@@ -102,10 +105,17 @@ std::pair<int64_t, uint64_t> read_wall_clock(tt::umd::IoWindow& window) {
 }  // namespace
 
 RootRefclkWindow::RootRefclkWindow(tt::Cluster& cluster, uint32_t chip_id) :
-    numa_node_(static_cast<int>(cluster.get_numa_node_for_device(chip_id))),
-    window_(open_sii_window(cluster, chip_id)),
-    lo_(mapped_word(*window_, kCfrLo)),
-    hi_(mapped_word(*window_, kCfrHi)) {
+    RootRefclkWindow(static_cast<int>(cluster.get_numa_node_for_device(chip_id)), open_sii_window(cluster, chip_id)) {}
+
+RootRefclkWindow::RootRefclkWindow(tt::umd::TTDevice& device, tt_xy_pair pcie) :
+    RootRefclkWindow(
+        -1,
+        device.create_io_window(
+            tt::umd::TargetIoWindowConfig{.core_start = pcie, .addr = kSiiBase},
+            tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::UC, .size = kCfrHi + sizeof(uint32_t)})) {}
+
+RootRefclkWindow::RootRefclkWindow(int numa_node, std::unique_ptr<tt::umd::IoWindow> window) :
+    numa_node_(numa_node), window_(std::move(window)), lo_(mapped_word(*window_, kCfrLo)), hi_(mapped_word(*window_, kCfrHi)) {
     // Reading LO holds HI until LO is read again, and nothing else reads this timer, so the pair is consistent.
     const uint32_t lo = *lo_;
     const uint32_t hi = *hi_;
@@ -187,17 +197,21 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
     std::unique_ptr<DeviceReceiver> receiver(new DeviceReceiver(mc.get_cluster(), std::move(programs)));
     if (const auto& relays = receiver->programs_->external_relays(); !relays.empty()) {
         DevicePrograms& programs_ref = *receiver->programs_;
+        const auto root_pcie =
+            mc.get_cluster()
+                .get_soc_desc(receiver->capture_context().devices[CaptureContext::kRootDevice].chip_id)
+                .get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)
+                .front();
         receiver->external_ = std::make_unique<external::ProfiledEnd>(
             external::Hello{
                 .relays = relays,
                 .devices = receiver->capture_context().devices,
-                .bases = receiver->root_refclk_.bases()},
-            [&programs_ref](const external::RelayBuffer& buffer) {
-                return programs_ref.attach_external(buffer.relay, buffer.noc_addr, buffer.bytes);
-            },
+                .links = receiver->capture_context().links,
+                .bases = receiver->root_refclk_.bases(),
+                .root_pcie_x = static_cast<uint32_t>(root_pcie.x),
+                .root_pcie_y = static_cast<uint32_t>(root_pcie.y),
+                .l1_alignment = mc.hal().get_alignment(HalMemType::L1)},
             [&programs_ref](uint32_t relay) { programs_ref.detach_external(relay); });
-        receiver->clock_solver_.mirror_map(
-            [link = receiver->external_.get()](const ClockUpdate& update) { link->send(update); });
     }
     service().attach_receiver(*receiver);
     for (uint32_t d = 0; d < receiver->capture_context().devices.size(); d++) {
@@ -229,7 +243,7 @@ DeviceReceiver::~DeviceReceiver() {
     sync_thread_.request_stop();
     wake_sync_thread();
     sync_thread_.join();
-    // The sync thread has finished the clock map, and the link sends the external process its last changes.
+    // The relays have stopped, which the external process checks when the link closes.
     external_.reset();
     service().detach_receiver(*this);
     for (uint32_t d = 0; d < capture_context().devices.size(); d++) {
@@ -345,7 +359,17 @@ void DeviceReceiver::ingest_thread(std::vector<Stream*> streams) {
     IdleBackoff backoff(kProbeSleepCapUs, 0);
     // Frames published since the consumers, and since the sync thread, were last woken.
     uint64_t unwoken = 0, unwoken_sync = 0;
+    // The relays take this thread's keepalive standing still as the process having died or hung, and stop writing its
+    // FIFOs, so it comes from the thread that drains them.
+    const uint32_t device = streams.front()->captured.device_index;
+    const auto keepalive_period = static_cast<int64_t>(kKeepalivePeriodNs / ns_per_tsc_tick());
+    int64_t next_keepalive = 0;
+    uint32_t keepalive = 0;
     while (true) {
+        if (const int64_t now = tsc_now(); now >= next_keepalive) {
+            programs_->keep_alive(device, ++keepalive);
+            next_keepalive = now + keepalive_period;
+        }
         bool any = false;
         for (Stream* s : streams) {
             any |= poll(*s);

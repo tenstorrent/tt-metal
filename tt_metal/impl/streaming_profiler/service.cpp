@@ -51,6 +51,7 @@ struct AttachedStream {
     // Decoded frames held back until the receiver's clock map has final host times up to their newest record.
     std::deque<DecodedFrames> pending;
     int64_t final_through = std::numeric_limits<int64_t>::min();
+    bool unreadable = false;  // an external receiver's stream the decoder failed on
 };
 struct Attached {
     Receiver* receiver = nullptr;
@@ -310,6 +311,9 @@ private:
     }
 
     bool take_batch(Attached& attached, AttachedStream& stream) {
+        if (stream.unreadable) {
+            return false;
+        }
         const ReceiverStream& source = attached.receiver->streams()[stream.index];
         const Walked walked = walk_frames(
             source.fifo,
@@ -325,11 +329,27 @@ private:
         stream.cursor = walked.cursor;
         attached.dropped += walked.dropped;
         dropped_since_callback_ += walked.dropped;
-        DecodedFrames frames = batches_.decode(
-            stream.decoder,
-            stream.pending.size(),
-            reinterpret_cast<const uint32_t*>(frames_buf_.get()),
-            std::span<const uint32_t>(frame_words_.data(), walked.frames));
+        DecodedFrames frames;
+        try {
+            frames = batches_.decode(
+                stream.decoder,
+                stream.pending.size(),
+                reinterpret_cast<const uint32_t*>(frames_buf_.get()),
+                std::span<const uint32_t>(frame_words_.data(), walked.frames));
+        } catch (const std::exception& e) {
+            // The external process stops reading a profiled process's stream it can't decode, and goes on.
+            if (!attached.receiver->external()) {
+                throw;
+            }
+            log_error(
+                tt::LogMetal,
+                "[streaming profiler] consumer \"{}\" stops reading device {} of an external capture: {}",
+                consumer_.name,
+                stream.dev,
+                e.what());
+            stream.unreadable = true;
+            return false;
+        }
         attached.order_regressions += frames.produced.order_regressions;
         stream.pending.push_back(std::move(frames));
         return true;

@@ -344,11 +344,23 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
         // The external process opens the chip by its PCIe device number, which every process on the host shares.
         const auto pcie_device = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(ctx.chip_id));
         TT_FATAL(pcie_device.has_value(), "streaming profiler: device {} has no PCIe device number", ctx.chip_id);
-        // The DRISC relays, then the eth relay.
-        external_relays_.insert(
-            external_relays_.end(),
-            ctx.relays.size() + 1,
-            {.pcie_device = static_cast<uint32_t>(*pcie_device), .dev = ctx.index});
+        const auto pcie = cluster.get_soc_desc(ctx.chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED).front();
+        const auto add = [&](const ResidentCore& relay, uint64_t config) {
+            external_relays_.push_back(
+                {.pcie_device = static_cast<uint32_t>(*pcie_device),
+                 .dev = ctx.index,
+                 .core_x = static_cast<uint32_t>(relay.core.virt.x),
+                 .core_y = static_cast<uint32_t>(relay.core.virt.y),
+                 .ctrl = relay.ctrl,
+                 .config = config,
+                 .pcie_encoding = hal.noc_xy_pcie64_encoding(pcie.x, pcie.y)});
+        };
+        // The DRISC relays, then the eth relay. A DRISC's L1 sits at an offset in its NoC address space, which its
+        // control block's address already holds.
+        for (const ResidentCore& relay : ctx.relays) {
+            add(relay, drisc_l1_.external_cfg + (drisc_l1_.host_ctrl - drisc_l1_.ctrl));
+        }
+        add(ctx.eth_relay, eth_l1_.external_cfg);
     }
     plan_links();
     log_info(
@@ -1026,45 +1038,18 @@ std::pair<const DevicePrograms::DeviceCtx*, const DevicePrograms::ResidentCore*>
     return {nullptr, nullptr};
 }
 
-bool DevicePrograms::attach_external(uint32_t relay, uint64_t noc_addr, uint32_t bytes) {
-    const auto [ctx, resident] = external_relay(relay);
-    if (ctx == nullptr || bytes % kPageBytes != 0) {
-        return false;
-    }
+void DevicePrograms::keep_alive(uint32_t device_index, uint32_t count) {
+    const DeviceCtx& ctx = devices_[device_index];
     auto& cluster = mc_->get_cluster();
-    const Hal& hal = mc_->hal();
-    // A D2H socket's sender config (distributed/d2h_socket.cpp), aimed at the buffer, with the relay's bytes_sent in
-    // the word after it.
-    const distributed::SocketSenderSize size(hal.get_alignment(HalMemType::L1));
-    std::vector<uint32_t> config(
-        (size.md_size_bytes + size.ack_size_bytes + size.enc_size_bytes) / sizeof(uint32_t), 0);
-    const uint64_t bytes_sent_addr = noc_addr + bytes;
-    const auto pcie = cluster.get_soc_desc(ctx->chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED).front();
-    config[offsetof(sender_socket_md, num_downstreams) / sizeof(uint32_t)] = 1;
-    config[offsetof(sender_socket_md, downstream_bytes_sent_addr) / sizeof(uint32_t)] = uint32_t(bytes_sent_addr);
-    config[offsetof(sender_socket_md, downstream_fifo_addr) / sizeof(uint32_t)] = uint32_t(noc_addr);
-    config[offsetof(sender_socket_md, downstream_fifo_total_size) / sizeof(uint32_t)] = bytes;
-    config[offsetof(sender_socket_md, is_d2h) / sizeof(uint32_t)] = 1;
-    uint32_t* encoding = config.data() + (size.md_size_bytes + size.ack_size_bytes) / sizeof(uint32_t);
-    encoding[0] = uint32_t(bytes_sent_addr >> 32);
-    encoding[1] = uint32_t(noc_addr >> 32);
-    encoding[2] = hal.noc_xy_pcie64_encoding(pcie.x, pcie.y);
-    const tt_cxy_pair core(ctx->chip_id, resident->core.virt);
-    const uint32_t config_addr = resident == &ctx->eth_relay ? eth_l1_.external_cfg : drisc_l1_.external_cfg;
-    cluster.write_core(config.data(), config.size() * sizeof(uint32_t), core, config_addr);
-    const uint32_t generation = ++external_generation_;
+    for (const ResidentCore& relay : ctx.relays) {
+        write_u32(cluster, ctx.chip_id, relay.core.virt, relay.ctrl + offsetof(kernel_profiler::ResidentCtrl, keepalive), count);
+    }
     write_u32(
         cluster,
-        ctx->chip_id,
-        resident->core.virt,
-        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attach),
-        generation);
-    return poll_word(
-        cluster,
-        core,
-        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attached),
-        std::chrono::seconds(1),
-        [&](uint32_t word) { return word == generation; });
+        ctx.chip_id,
+        ctx.eth_relay.core.virt,
+        ctx.eth_relay.ctrl + offsetof(kernel_profiler::ResidentCtrl, keepalive),
+        count);
 }
 
 void DevicePrograms::detach_external(uint32_t relay) {

@@ -188,27 +188,9 @@ ClockMap::ClockMap(size_t devices, ClockBases bases) : chips_(devices), tsc_base
 
 ClockMap::Reader ClockMap::reader() const { return Reader(chips_.size(), tsc_base_); }
 
-void ClockMap::append(uint32_t dev, SyncNode node) {
-    chips_[dev].append(node);
-    if (mirror_) {
-        mirror_({.kind = ClockUpdate::Kind::Chip, .dev = dev, .chip = node});
-    }
-}
+void ClockMap::append(uint32_t dev, SyncNode node) { chips_[dev].append(node); }
 
-void ClockMap::finish(uint32_t dev) {
-    chips_[dev].extend(std::numeric_limits<int64_t>::max());
-    if (mirror_) {
-        mirror_({.kind = ClockUpdate::Kind::Finish, .dev = dev});
-    }
-}
-
-void ClockMap::apply(const ClockUpdate& update) {
-    switch (update.kind) {
-        case ClockUpdate::Kind::Chip: append(update.dev, update.chip); break;
-        case ClockUpdate::Kind::Host: append_host(update.host, update.until); break;
-        case ClockUpdate::Kind::Finish: finish(update.dev); break;
-    }
-}
+void ClockMap::finish(uint32_t dev) { chips_[dev].extend(std::numeric_limits<int64_t>::max()); }
 
 void ClockMap::append_host(HostNode node, double until) {
     TT_FATAL(
@@ -219,9 +201,6 @@ void ClockMap::append_host(HostNode node, double until) {
         node.tangent);
     host_.append(node);
     host_.extend(until);
-    if (mirror_) {
-        mirror_({.kind = ClockUpdate::Kind::Host, .host = node, .until = until});
-    }
 }
 
 bool ClockMap::is_final(Reader& reader, uint32_t dev, int64_t wall) const noexcept {

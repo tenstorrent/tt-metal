@@ -119,8 +119,9 @@ public:
     ClockSolver& operator=(const ClockSolver&) = delete;
 
     const ClockMap& map() const { return map_; }
-    // Hands each later change to the map to `mirror` too, on the thread that feeds the solver.
-    void mirror_map(std::function<void(const ClockUpdate&)> mirror) { map_.mirror(std::move(mirror)); }
+    // Joins a capture its bases started: the root chip's refclk words widen from `root_refclk_now` rather than from the
+    // capture's start.
+    void resume(int64_t root_refclk_now) { chips_[CaptureContext::kRootDevice].last_refclk = root_refclk_now; }
 
     void on_record(uint32_t dev, uint32_t core, const kernel_profiler::SyncRecord& record);
     // Publishes what the batch's records added to the map, and returns whether anything was published.

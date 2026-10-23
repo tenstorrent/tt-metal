@@ -24,6 +24,7 @@ namespace tt {
 class Cluster;
 namespace umd {
 class IoWindow;
+class TTDevice;
 }
 }  // namespace tt
 
@@ -142,6 +143,8 @@ struct ReceiverStream {
 class RootRefclkWindow {
 public:
     RootRefclkWindow(tt::Cluster& cluster, uint32_t chip_id);
+    // The window on `device`, the root chip opened by its PCIe device number, whose PCIe tile is at `pcie` (translated).
+    RootRefclkWindow(tt::umd::TTDevice& device, tt_xy_pair pcie);
     ~RootRefclkWindow();
 
     // The refclk and the host TSC when the window opened.
@@ -152,6 +155,8 @@ public:
     RefclkBurst read_burst();
 
 private:
+    RootRefclkWindow(int numa_node, std::unique_ptr<tt::umd::IoWindow> window);
+
     const int numa_node_;
     std::unique_ptr<tt::umd::IoWindow> window_;
     // The timer's low and high words in the window's mapping.
@@ -177,6 +182,8 @@ public:
     // The absolute byte position up to which stream `stream`'s FIFO has been written. Callable from any thread.
     virtual uint64_t live_head(uint32_t stream) const = 0;
     virtual const ClockMap& clock_map() const = 0;
+    // Whether this is the external process's receiver of a profiled process, whose bad records cost only its own.
+    virtual bool external() const { return false; }
 };
 
 // The receiver of this process's own capture, which reads its devices' sockets and solves its clock map.

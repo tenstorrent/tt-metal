@@ -93,6 +93,53 @@ FORCE_INLINE void idle_wait(uint32_t& gap, bool worked, Idle&& idle) {
     }
 }
 
+// Whether the profiled process still drains this relay's FIFOs. Its ingest thread moves ResidentCtrl::keepalive every
+// 100 ms; one that holds still for kGoneCycles means the process died or hung, and the relay writes nothing more to its
+// FIFOs, whose memory may be freed by then, until the keepalive moves again. Gone holds by itself, since the 32-bit
+// timer would wrap a long silence back under the threshold.
+struct MetalLiveness {
+    static constexpr uint32_t kGoneCycles = 1350u * 1000u * 1000u;  // 1 s at the 1.35 GHz AICLK
+    const volatile tt_l1_ptr uint32_t* keepalive_word = nullptr;
+    uint32_t keepalive = 0;
+    uint32_t moved_at = 0;
+    bool gone = false;
+
+    // Starts the clock on a zeroed MetalLiveness, whose keepalive moves on the first one the host has written.
+    FORCE_INLINE void start(const volatile tt_l1_ptr uint32_t* word) {
+        keepalive_word = word;
+        moved_at = get_timestamp_32b();
+    }
+    // Reads the keepalive, which the caller has invalidated the cache for.
+    FORCE_INLINE void observe() {
+        const uint32_t keepalive_now = *keepalive_word;
+        const uint32_t now = get_timestamp_32b();
+        if (keepalive_now != keepalive) {
+            keepalive = keepalive_now;
+            moved_at = now;
+            gone = false;
+        } else if (now - moved_at > kGoneCycles) {
+            gone = true;
+        }
+    }
+};
+
+// Waits for room for `bytes` in the socket's FIFO and returns true, or returns false once the profiled process is gone,
+// which returns no more credit. The relays' sockets have the host as their one downstream.
+inline bool reserve_unless_gone(const SocketSenderInterface& socket, uint32_t bytes, MetalLiveness& metal) {
+    const volatile tt_l1_ptr uint32_t* acked =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    while (true) {
+        invalidate_l1_cache();
+        if (socket.downstream_fifo_total_size - (socket.bytes_sent - *acked) >= bytes) {
+            return true;
+        }
+        metal.observe();
+        if (metal.gone) {
+            return false;
+        }
+    }
+}
+
 // Writes `size` bytes from L1 to host memory through write_cmd_buf, which is programmed once at relay init and which
 // nothing else on the core touches.
 inline void write_to_host(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {

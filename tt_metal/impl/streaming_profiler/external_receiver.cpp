@@ -8,16 +8,23 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/chip_helpers/silicon_sysmem_manager.hpp>
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
+#include <umd/device/io_window/io_window.hpp>
+#include <umd/device/types/io_window_config.hpp>
+#include <unistd.h>
 #include <tt_stl/assert.hpp>
 
+#include "distributed/mesh_socket_utils.hpp"
+#include "hostdev/socket.h"
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/spsc_marker_decode.hpp"
@@ -45,6 +52,10 @@ constexpr uint32_t kLandedPastBytesSent = 2 * (kp::SPSC_NOTIFY_CAP_BYTES + profi
 // Each device's stream of repacked frames, which the consumers read like a device's FIFO.
 constexpr uint64_t kStreamBytes = 16u << 20;
 constexpr auto kSteadySamplePeriod = std::chrono::milliseconds(100);
+// The reach of the window onto a relay's L1. A DRISC's L1 sits high in its NoC address space, so the window starts at
+// the aligned block holding the relay's control block.
+constexpr uint64_t kRelayL1Bytes = uint64_t{1} << 20;
+uint64_t relay_l1_base(const external::Hello::Relay& relay) { return relay.ctrl & ~(kRelayL1Bytes - 1); }
 
 // A copy's word 0 holds its pages [first, end) of the frame it was copied from, in words here.
 uint32_t span_words(uint32_t w0, uint32_t shift) {
@@ -79,10 +90,27 @@ struct ExternalReceiver::Stream {
     std::vector<uint32_t> lane_tails;
 };
 
+// This process's own clock solver, which builds the map from the sync records the eth relays copy here and from its own
+// reads of the root chip's refclk. It joins the capture when this process attaches.
+struct ExternalReceiver::Clock {
+    RootRefclkWindow refclk;
+    ClockSolver solver;
+    std::chrono::steady_clock::time_point next_burst{};
+
+    Clock(tt::umd::TTDevice& root, tt_xy_pair pcie, const CaptureContext& ctx, const ClockBases& bases) :
+        refclk(root, pcie), solver(ctx, bases) {
+        solver.resume(refclk.bases().root_refclk);
+    }
+};
+
 ExternalReceiver::ExternalReceiver(std::unique_ptr<external::ExternalEnd> link) : link_(std::move(link)) {
     const external::Hello& hello = *link_->hello();
     capture_.devices = hello.devices;
-    clock_map_ = std::make_unique<ClockMap>(hello.devices.size(), hello.bases);
+    capture_.links = hello.links;
+    bases_ = hello.bases;
+    root_pcie_ = {hello.root_pcie_x, hello.root_pcie_y};
+    relays_ = hello.relays;
+    l1_alignment_ = hello.l1_alignment;
     for (uint32_t dev = 0; dev < hello.devices.size(); dev++) {
         auto stream = std::make_unique<Stream>();
         stream->fifo = std::make_unique_for_overwrite<std::byte[]>(kStreamBytes);
@@ -98,13 +126,7 @@ ExternalReceiver::ExternalReceiver(std::unique_ptr<external::ExternalEnd> link) 
             .marks = stream->marks});
         streams_.push_back(std::move(stream));
     }
-    link_->start([this](std::span<const ClockUpdate> updates) {
-        for (const ClockUpdate& update : updates) {
-            clock_map_->apply(update);
-        }
-        service().wake_consumers();
-    });
-    std::vector<external::RelayBuffer> buffers;
+    link_->start();
     rings_.resize(hello.relays.size());
     for (uint32_t r = 0; r < rings_.size(); r++) {
         const external::Hello::Relay& relay = hello.relays[r];
@@ -113,20 +135,28 @@ ExternalReceiver::ExternalReceiver(std::unique_ptr<external::ExternalEnd> link) 
             tt_device = tt::umd::TTDevice::create(static_cast<int>(relay.pcie_device));
             sysmem = std::make_unique<tt::umd::SiliconSysmemManager>(tt_device.get(), 0);
         }
+        if (relay.dev == CaptureContext::kRootDevice) {
+            root_pcie_device_ = relay.pcie_device;
+        }
         Ring& ring = rings_[r];
         ring.dev = relay.dev;
         ring.buffer = sysmem->allocate_sysmem_buffer(kRingBufferBytes, /*map_to_noc=*/true);
         ring.data = static_cast<const volatile uint32_t*>(ring.buffer->get_va());
         ring.bytes_sent = ring.data + kRingBytes / 4;
         const_cast<volatile uint32_t*>(ring.bytes_sent)[0] = 0;
-        buffers.push_back({.relay = r, .noc_addr = ring.buffer->get_noc_address().value(), .bytes = kRingBytes});
+        // Its offset 0 is NoC address relay_l1_base(relay).
+        relay_l1_.push_back(tt_device->create_io_window(
+            tt::umd::TargetIoWindowConfig{
+                .core_start = {relay.core_x, relay.core_y}, .addr = relay_l1_base(relay), .noc = tt::umd::NocId::NOC0},
+            tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::UC, .size = kRelayL1Bytes}));
     }
+    clock_ = std::make_unique<Clock>(*pcie_devices_.at(root_pcie_device_).first, root_pcie_, capture_, bases_);
     // A consumer reading a record's time() needs the steady clock's map, so it has a sample before any record arrives.
     service().steady().sample();
     service().attach_receiver(*this);
-    if (!link_->attach(buffers)) {
-        log_warning(tt::LogMetal, "[streaming profiler] the profiled process couldn't point every relay at this process");
-    }
+    // A generation no earlier external process gave a relay, which follows only a change.
+    static std::atomic<uint32_t> attaches{0};
+    point_relays(static_cast<uint32_t>(::getpid()) << 8 | (++attaches & 0xFFu));
     log_info(
         tt::LogMetal,
         "[streaming profiler] receiving external from {} relay(s) on {} device(s)",
@@ -135,12 +165,17 @@ ExternalReceiver::ExternalReceiver(std::unique_ptr<external::ExternalEnd> link) 
 }
 
 ExternalReceiver::~ExternalReceiver() {
-    // A profiled process that ended its capture has finished the clock map already; one that died hasn't.
-    for (uint32_t dev = 0; dev < capture_.devices.size(); dev++) {
-        clock_map_->finish(dev);
+    // run() has finished the map of a profiled process that ended its capture, but not of one that died.
+    try {
+        end_capture();
+    } catch (const std::exception& e) {
+        log_error(tt::LogMetal, "[streaming profiler] Metal process {}'s clock map: {}", link_->pid(), e.what());
     }
     service().detach_receiver(*this);
-    link_->detach();
+    // Relays that finished the capture copy nothing more, and their cores are the next profiled process's.
+    if (!relays_done_) {
+        point_relays(0);
+    }
     if (lost_bytes_ != 0) {
         log_warning(
             tt::LogMetal,
@@ -153,25 +188,53 @@ uint64_t ExternalReceiver::live_head(uint32_t stream) const {
     return streams_[stream]->head.load(std::memory_order_acquire);
 }
 
-void ExternalReceiver::run() {
+const ClockMap& ExternalReceiver::clock_map() const { return clock_->solver.map(); }
+
+void ExternalReceiver::drop(const std::exception& failure) {
+    log_error(
+        tt::LogMetal, "[streaming profiler] dropping the link to Metal process {}: {}", link_->pid(), failure.what());
+    link_->drop();
+}
+
+void ExternalReceiver::run(const std::stop_token& stop) {
     auto next_sample = std::chrono::steady_clock::now();
-    while (true) {
-        // A pass that starts after the link closed reads every copy that landed before, since the profiled process
-        // stops its relays' copies before it closes the link.
-        const bool closed = link_->closed();
+    bool linked = true;
+    while (!stop.stop_requested()) {
+        // A profiled process that ends its capture stops the relays, whose last copies have landed by then, before it
+        // closes the link; one that dies leaves them running. The link is checked before the rings are read, so that
+        // read covers every copy made before the close.
+        const bool closing = linked && link_->closed();
         bool any = false;
         for (Ring& ring : rings_) {
             any |= read_ring(ring);
         }
+        if (closing) {
+            linked = false;
+            if (relays_finished()) {
+                relays_done_ = true;
+                end_capture();
+                service().wake_consumers();
+                return;
+            }
+            log_info(
+                tt::LogMetal, "[streaming profiler] the profiled process is gone; its relays and this clock map go on");
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= clock_->next_burst) {
+            clock_->next_burst = now + kRefclkBurstPeriod;
+            clock_->solver.on_refclk_burst(clock_->refclk.read_burst());
+            solver_pending_ = true;
+        }
+        if (solver_pending_) {
+            solver_pending_ = false;
+            any |= clock_->solver.on_batch_end();
+        }
         if (any) {
             service().wake_consumers();
         }
-        if (const auto now = std::chrono::steady_clock::now(); now >= next_sample) {
+        if (now >= next_sample) {
             next_sample = now + kSteadySamplePeriod;
             service().steady().sample();
-        }
-        if (closed && !any) {
-            return;
         }
         if (!any) {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -210,7 +273,11 @@ bool ExternalReceiver::read_ring(Ring& ring) {
                 if (n == 0 || at + n > words_.size()) {
                     break;
                 }
-                repack(&words_[at], ring.dev);
+                if (words_[at] & kp::SPSC_SPAN_SYNC) {
+                    on_sync(&words_[at], ring.dev);
+                } else {
+                    repack(&words_[at], ring.dev);
+                }
                 at += n;
             }
             read = ring.read + static_cast<uint32_t>(at * sizeof(uint32_t));
@@ -317,15 +384,127 @@ void ExternalReceiver::write(Stream& stream) {
     stream.walked.store(at + bytes, std::memory_order_release);
 }
 
+void ExternalReceiver::point_relays(uint32_t attach) {
+    constexpr uint64_t kAttach = offsetof(kp::ResidentCtrl, external.attach);
+    constexpr uint64_t kAttached = offsetof(kp::ResidentCtrl, external.attached);
+    for (uint32_t r = 0; r < relays_.size(); r++) {
+        const external::Hello::Relay& relay = relays_[r];
+        tt::umd::IoWindow& l1 = *relay_l1_[r];
+        if (attach != 0) {
+            // A D2H socket's sender config (distributed/d2h_socket.cpp), aimed at the ring, with the relay's
+            // bytes_sent in the word after it.
+            const uint64_t noc_addr = rings_[r].buffer->get_noc_address().value();
+            const uint64_t bytes_sent_addr = noc_addr + kRingBytes;
+            const distributed::SocketSenderSize size(l1_alignment_);
+            std::vector<uint32_t> config((size.md_size_bytes + size.ack_size_bytes + size.enc_size_bytes) / 4, 0);
+            config[offsetof(sender_socket_md, num_downstreams) / 4] = 1;
+            config[offsetof(sender_socket_md, downstream_bytes_sent_addr) / 4] = static_cast<uint32_t>(bytes_sent_addr);
+            config[offsetof(sender_socket_md, downstream_fifo_addr) / 4] = static_cast<uint32_t>(noc_addr);
+            config[offsetof(sender_socket_md, downstream_fifo_total_size) / 4] = kRingBytes;
+            config[offsetof(sender_socket_md, is_d2h) / 4] = 1;
+            uint32_t* encoding = config.data() + (size.md_size_bytes + size.ack_size_bytes) / 4;
+            encoding[0] = static_cast<uint32_t>(bytes_sent_addr >> 32);
+            encoding[1] = static_cast<uint32_t>(noc_addr >> 32);
+            encoding[2] = relay.pcie_encoding;
+            l1.write_block(relay.config - relay_l1_base(relay), config.data(), config.size() * sizeof(uint32_t));
+        }
+        l1.write32(relay.ctrl - relay_l1_base(relay) + kAttach, attach);
+    }
+    // A relay echoes the generation once it follows; turning copies off, it first waits for its last one to land.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    uint32_t followed = 0;
+    for (uint32_t r = 0; r < relays_.size(); r++) {
+        const external::Hello::Relay& relay = relays_[r];
+        tt::umd::IoWindow& l1 = *relay_l1_[r];
+        const uint64_t attached = relay.ctrl - relay_l1_base(relay) + kAttached;
+        while (l1.read32(attached) != attach && std::chrono::steady_clock::now() < deadline) {
+        }
+        followed += l1.read32(attached) == attach;
+    }
+    if (attach != 0 && followed != relays_.size()) {
+        log_warning(tt::LogMetal, "[streaming profiler] {} of {} relays took this process's rings", followed, relays_.size());
+    }
+}
+
+// Feeds a frame of clock sync records an eth relay copied here to this process's solver.
+void ExternalReceiver::on_sync(const uint32_t* frame, uint32_t dev) {
+    const uint32_t core = capture_.devices[dev].core_of_xy.find(frame[kp::SPSC_PREFIX_XY]);
+    const uint32_t records = frame[kp::SPSC_PREFIX_PAYLOAD_WORDS] / kp::kSyncRecordWords;
+    const auto* record = reinterpret_cast<const kp::SyncRecord*>(frame + kp::SPSC_SPAN_PREFIX_WORDS);
+    for (uint32_t r = 0; r < records; r++) {
+        clock_->solver.on_record(dev, core, record[r]);
+    }
+    solver_pending_ = true;
+}
+
+bool ExternalReceiver::relays_finished() {
+    for (uint32_t r = 0; r < relays_.size(); r++) {
+        const uint64_t done = relays_[r].ctrl - relay_l1_base(relays_[r]) + offsetof(kp::ResidentCtrl, done);
+        if (relay_l1_[r]->read32(done) != kp::kResidentDoneWord) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ExternalReceiver::end_capture() {
+    if (std::exchange(ended_, true)) {
+        return;
+    }
+    if (solver_pending_) {
+        solver_pending_ = false;
+        clock_->solver.on_batch_end();
+    }
+    // Bursts after the capture's last records extend the refclk-to-TSC map past them, until enough exist to fit it.
+    while (!clock_->solver.on_refclk_burst(clock_->refclk.read_burst())) {
+    }
+    clock_->solver.on_capture_end();
+}
+
 std::optional<uint32_t> ExternalReceiver::local_id(uint32_t id) {
     auto [it, inserted] = sites_.try_emplace(id);
     if (inserted) {
-        it->second = link_->add_site(id);
+        it->second = link_->local_id(id);
+        if (!it->second) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Metal process {}'s link ended without its call site {}, whose records are "
+                "skipped",
+                link_->pid(),
+                id);
+        }
     }
     return it->second;
 }
 
 namespace {
+
+// The receiver of the profiled process this process serves now, and the thread reading its rings. Its relays copy into
+// the rings until it is destroyed, so the process destroys it before it exits.
+struct Serving {
+    std::mutex mu;
+    std::unique_ptr<ExternalReceiver> receiver;
+    std::jthread reading;
+
+    void replace(std::unique_ptr<ExternalReceiver> next) {
+        std::lock_guard lock(mu);
+        reading = {};
+        receiver = std::move(next);
+        if (receiver) {
+            reading = std::jthread([r = receiver.get()](const std::stop_token& stop) {
+                try {
+                    r->run(stop);
+                } catch (const std::exception& e) {
+                    r->drop(e);
+                }
+            });
+        }
+    }
+};
+Serving& serving() {
+    static auto* instance = new Serving;
+    return *instance;
+}
 
 // This process's socket, which it listens on until it creates a MetalContext of its own.
 struct Listening {
@@ -357,6 +536,7 @@ void serve_profiled_processes() {
     static std::once_flag once;
     std::call_once(once, [] {
         serve_started.store(true, std::memory_order_release);
+        std::atexit([] { serving().replace(nullptr); });
         // The first try is made here, so a process that finds the name free listens before its RegisterCallback
         // returns.
         bool listening_now = false;
@@ -373,13 +553,20 @@ void serve_profiled_processes() {
             if (!listening_now && !listen_when_free(l)) {
                 return;
             }
+            // A link that fails is dropped, and this process goes on to serve the next profiled process.
             for (int fd = l.listener.accept(); fd >= 0; fd = l.listener.accept()) {
-                auto link = std::make_unique<external::ExternalEnd>(fd);
-                if (!link->hello()) {
-                    continue;
+                try {
+                    auto link = std::make_unique<external::ExternalEnd>(fd);
+                    if (!link->hello()) {
+                        continue;
+                    }
+                    // A profiled process that connects has booted the devices' relays anew, so the last one's receiver
+                    // goes.
+                    serving().replace(nullptr);
+                    serving().replace(std::make_unique<ExternalReceiver>(std::move(link)));
+                } catch (const std::exception& e) {
+                    log_error(tt::LogMetal, "[streaming profiler] couldn't serve a Metal process: {}", e.what());
                 }
-                ExternalReceiver receiver(std::move(link));
-                receiver.run();
             }
         }).detach();
     });
@@ -396,6 +583,7 @@ void stop_serving_profiled_processes() {
         l.listener.stop();
     }
     l.cv.notify_all();
+    serving().replace(nullptr);
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

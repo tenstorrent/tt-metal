@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -53,9 +54,11 @@ constexpr std::string_view kNames[] = {"metal", "both"};
 constexpr int64_t kSteadyAgreementNs = 1000;
 
 // The file the external process creates once it listens, which the profiled process waits for before it opens the
-// device; the one the profiled process creates once it has closed the device; and where the external process leaves
-// what it saw of the "both" readings.
+// device; the one it creates once a "probe" reading reaches it, which the profiled process waits for before it runs
+// the kernel; the one the profiled process creates once it has closed the device; and where the external process
+// leaves what it saw of the "both" readings.
 std::string ready_path(const std::string& path) { return path + ".ready"; }
+std::string attached_path(const std::string& path) { return path + ".attached"; }
 std::string closed_path(const std::string& path) { return path + ".closed"; }
 std::string both_path(const std::string& path) { return path + ".both"; }
 
@@ -91,9 +94,14 @@ struct Readings {
     std::array<uint64_t, 2> counts{};
     uint64_t wrong = 0;
     BothSeen both;
+    bool probed = false;  // a "probe" reading arrived
 
     void add(const sp::Record<Reading, Name>& record) {
         const Reading& reading = record.payload();
+        if (record.metadata().name == "probe") {
+            probed = true;
+            return;
+        }
         if (reading.destination > 1 || record.metadata().name != kNames[reading.destination] ||
             reading.value != reading_value(reading.destination, reading.iteration)) {
             wrong++;
@@ -115,6 +123,9 @@ int run_reader(const std::string& path, bool drain) {
             std::lock_guard lock(readings.mutex);
             for (const auto& record : batch.records<sp::Record<Reading, Name>>()) {
                 readings.add(record);
+            }
+            if (std::exchange(readings.probed, false)) {
+                std::ofstream(attached_path(path)) << 1;
             }
         },
         "external-reader");
@@ -159,7 +170,7 @@ int main(int argc, char** argv) {
         ::execl("/proc/self/exe", argv[0], "--reader", path.c_str(), nullptr);
         ::_exit(127);
     }
-    // Once the external process listens, opening the device connects to it and waits for it to attach.
+    // Once the external process listens, opening the device connects to it.
     wait_for_file(ready_path(path), std::chrono::seconds(120));
     std::remove(ready_path(path).c_str());
 
@@ -179,21 +190,31 @@ int main(int argc, char** argv) {
             }
         },
         "external-test");
-    Program program = CreateProgram();
-    const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
-    for (const auto& [processor, noc] : kDmRiscs) {
-        CreateKernel(
-            program,
-            "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
-            cores,
-            DataMovementConfig{
-                .processor = processor, .noc = noc, .defines = {{"N_ITERS", std::to_string(kIterations) + "u"}}});
-    }
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    distributed::Finish(cq);
+    const auto run = [&](const std::map<std::string, std::string>& defines) {
+        Program program = CreateProgram();
+        const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
+        for (const auto& [processor, noc] : kDmRiscs) {
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
+                cores,
+                DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+        }
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+    };
+    // The external process attaches the relays a moment after the device opens: probe readings go out until one
+    // reaches it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (!std::ifstream(attached_path(path)) && std::chrono::steady_clock::now() < deadline) {
+        run({{"PROBE", "1"}});
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::remove(attached_path(path).c_str());
+    run({{"N_ITERS", std::to_string(kIterations) + "u"}});
     mesh_device->close();
     callback.reset();
     std::ofstream(closed_path(path)) << 1;

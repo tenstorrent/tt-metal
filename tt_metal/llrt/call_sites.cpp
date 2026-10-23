@@ -107,6 +107,8 @@ struct Registry {
     std::array<std::atomic<const CallSite*>, TT_ZONE_ID_COUNT> by_id{};
     TypeLayouts types;
     std::set<std::string, std::less<>> names;  // the names of sites another process described, which no image holds
+    std::mutex listener_mutex;  // held through each call, so removing the listener waits out the calls in flight
+    std::function<void(uint32_t, uint32_t)> listener;
 };
 
 Registry& call_site_registry() {
@@ -381,11 +383,23 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     elf.RebaseCallSiteIds(base);
 
     std::vector<std::pair<uint32_t, CallSite>> sites = read_call_sites(elf_path, elf);
-    const std::lock_guard lock(registry.mutex);
-    for (auto& [id, site] : sites) {
-        add_site(registry, id, std::move(site));
+    {
+        const std::lock_guard lock(registry.mutex);
+        for (auto& [id, site] : sites) {
+            add_site(registry, id, std::move(site));
+        }
     }
     log_debug(tt::LogLLRuntime, "streaming profiler: '{}' -> call site ids [{}, {})", elf_path, base, base + count);
+    const std::lock_guard listening(registry.listener_mutex);
+    if (registry.listener) {
+        registry.listener(base, base + static_cast<uint32_t>(count));
+    }
+}
+
+void set_call_site_listener(std::function<void(uint32_t first, uint32_t end)> listener) {
+    Registry& registry = call_site_registry();
+    const std::lock_guard listening(registry.listener_mutex);
+    registry.listener = std::move(listener);
 }
 
 uint32_t add_call_site(CallSite site) {
@@ -405,6 +419,12 @@ uint32_t add_call_site(CallSite site) {
     const uint32_t id = registry.next_id++;
     add_site(registry, id, std::move(site));
     return id;
+}
+
+uint32_t call_site_ids_taken() {
+    Registry& registry = call_site_registry();
+    const std::lock_guard lock(registry.mutex);
+    return registry.next_id;
 }
 
 const CallSite* find_call_site(uint32_t id) { return call_site_registry().by_id[id].load(std::memory_order_acquire); }

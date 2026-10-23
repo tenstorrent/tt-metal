@@ -100,8 +100,10 @@ public:
     // Each relay that can copy records to an external process, in device, then relay order; empty when the capture has
     // no external socket.
     const std::vector<external::Hello::Relay>& external_relays() const { return external_relays_; }
-    // Points relay `relay` at an external process's buffer, or turns its copies off, and waits for the relay to follow.
-    bool attach_external(uint32_t relay, uint64_t noc_addr, uint32_t bytes);
+    // Writes `count` to the keepalive of each of the device's relays, which treat it standing still as this process
+    // having died or hung.
+    void keep_alive(uint32_t device_index, uint32_t count);
+    // Turns relay `relay`'s copies to the external process off, and waits for the relay to follow.
     void detach_external(uint32_t relay);
 
 private:
@@ -222,8 +224,6 @@ private:
     bool links_running_ = false;
     bool quiesced_ = false;
     std::vector<external::Hello::Relay> external_relays_;
-    // The attach generations handed to the relays.
-    uint32_t external_generation_ = 0;
     // Set once quiesce has stopped every relay, after which a detach has nothing to wait for.
     std::atomic<bool> relays_stopped_ = false;
 };
