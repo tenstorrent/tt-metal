@@ -45,7 +45,7 @@ inline bool bf16_dest_asin() {
 #endif
 }
 template <int ITERATIONS = 32>
-inline void calculate_asin_bf16() {
+__attribute__((noinline)) inline void calculate_asin_bf16() {
     ckernel::sfpu::bf16::asin::calculate_half_angle_ratio<ckernel::sfpu::AsinBf16Config, ITERATIONS>();
 }
 inline void init_asin_bf16() { ckernel::sfpu::bf16::asin::init_half_angle_ratio<ckernel::sfpu::AsinBf16Config>(); }

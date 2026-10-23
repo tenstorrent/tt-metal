@@ -46,7 +46,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tile.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 

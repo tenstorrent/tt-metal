@@ -628,10 +628,64 @@ def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh
     )
 
 
+def _shard_dims(tensor):
+    """Shard dim per placement of `tensor`'s label (None for Replicate)."""
+    return [
+        placement.dim if isinstance(placement, ttnn.PlacementShard) else None
+        for placement in tensor.tensor_topology().placements()
+    ]
+
+
+def _assert_rows_per_mesh_row(gathered, host_input, mesh_device):
+    """Every device of mesh row r holds rows [r * S / R, (r + 1) * S / R) of dim 2: the result of gathering
+    dim 2 along the columns of a row-major split over the whole mesh."""
+    rows_per_mesh_row = host_input.shape[2] // mesh_device.shape[0]
+    for device_idx, actual in enumerate(ttnn.get_device_tensors(gathered)):
+        mesh_row = device_idx // mesh_device.shape[1]
+        expected = host_input[:, :, mesh_row * rows_per_mesh_row : (mesh_row + 1) * rows_per_mesh_row, :]
+        assert torch.equal(ttnn.to_torch(actual), expected)
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_mesh_partition_output_on_tp_axis(mesh_device):
+    """The DeepSeek-V4 indexer pattern on a Galaxy: a tensor sharded on SP is split along TP by mesh_partition,
+    which labels the result collapsed (`{32},[Shard(2)]`) because both mesh axes now shard dim 2, and is then
+    gathered back along TP. The gather must accept the collapsed label and leave `[Shard(2), Replicate]`."""
+    global_shape = (1, 1, 32 * mesh_device.get_num_devices(), 32)
+    torch.manual_seed(0)
+    host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    sp_sharded = [ttnn.PlacementShard(2), ttnn.PlacementReplicate()]
+
+    source = _make_tensor(
+        mesh_device,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(sp_sharded, mesh_device.shape)),
+    )
+    partitioned = ttnn.mesh_partition(source, dim=2, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert len(partitioned.tensor_topology().placements()) == 1, "expected mesh_partition's collapsed label"
+
+    output = _make_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(sp_sharded, mesh_device.shape)),
+    )
+    gathered = ttnn.experimental.high_bw_all_gather(partitioned, dim=2, output_tensor=output, cluster_axis=1)
+    ttnn.synchronize_device(mesh_device)
+
+    assert _shard_dims(gathered) == [2, None]
+    _assert_rows_per_mesh_row(gathered, host_input, mesh_device)
+
+
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device, expect_error):
+def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device):
     """Gathering TP must preserve SP when both mesh axes shard the same tensor dimension."""
     global_shape = (1, 4, 256, 32)
     torch.manual_seed(0)
@@ -662,13 +716,24 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
         ttnn.TILE_LAYOUT,
         ttnn.ShardTensorToMesh(mesh_device, dim=2),
     )
-    with expect_error(RuntimeError, "tensor distribution axes to match the device mesh axes"):
-        ttnn.experimental.high_bw_all_gather(
-            flattened_source,
-            dim=2,
-            output_tensor=inverse_output,
-            cluster_axis=1,
-        )
+    # The collapsed `{8},[Shard(2)]` label is a row-major split of dim 2 over the mesh, i.e. dim 2 sharded on both
+    # axes. Gathering the inner axis is contiguous, so the output is honestly `[Shard(2), Replicate]`.
+    flattened_output = _make_tensor(
+        mesh_device,
+        torch.zeros(global_shape, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(gathered_placements, mesh_device.shape)),
+    )
+    flattened_gathered = ttnn.experimental.high_bw_all_gather(
+        flattened_source,
+        dim=2,
+        output_tensor=flattened_output,
+        cluster_axis=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert _shard_dims(flattened_gathered) == [2, None]
+    _assert_rows_per_mesh_row(flattened_gathered, host_input, mesh_device)
 
     inverse_output = ttnn.experimental.high_bw_all_gather(
         source,
@@ -684,8 +749,8 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
     )
     duplicate_topology = duplicate_sharded_input.tensor_topology()
     # mesh_partition labels this result `{8},[Shard(2)]`: a row-major split of dim 2 over the whole mesh, spelt the
-    # collapsed way because both mesh axes now shard the same tensor dimension. high_bw_all_gather requires one
-    # placement per mesh axis, so re-spell the same layout as `[Shard(2), Shard(2)]` on the device mesh shape.
+    # collapsed way because both mesh axes now shard the same tensor dimension. The collapsed spelling is covered
+    # above; re-spell the same layout as `[Shard(2), Shard(2)]` here to cover the N-D spelling too.
     duplicate_sharded_input.update_tensor_topology(
         ttnn.TensorTopology(
             mesh_device.shape,

@@ -44,6 +44,7 @@
 # generated bf16 op: atan
 # generated bf16 op: atanh
 # generated bf16 op: atanh_bw
+# generated bf16 op: cbrt
 # generated bf16 op: celu
 # generated bf16 op: celu_bw
 # generated bf16 op: cosh
@@ -68,9 +69,11 @@
 # generated bf16 op: hardshrink_bw
 # generated bf16 op: hardsigmoid
 # generated bf16 op: hardsigmoid_bw
+# generated bf16 op: hardswish
 # generated bf16 op: hardswish_bw
 # generated bf16 op: hardtanh_bw
 # generated bf16 op: i1
+# generated bf16 op: leaky_relu
 # generated bf16 op: leaky_relu_bw
 # generated bf16 op: lgamma
 # generated bf16 op: log
@@ -101,6 +104,7 @@
 # generated bf16 op: selu_bw
 # generated bf16 op: sigmoid
 # generated bf16 op: sigmoid_bw
+# generated bf16 op: silu
 # generated bf16 op: silu_bw
 # generated bf16 op: sinh_bw
 # generated bf16 op: situ_glu
