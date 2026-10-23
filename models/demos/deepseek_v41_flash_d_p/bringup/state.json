@@ -5670,7 +5670,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 1.3,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
