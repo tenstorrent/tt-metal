@@ -30,6 +30,33 @@ ttsl::hash::hash_t full_spec(const OptionalTensor& tensor) {
                               : ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
 }
 
+// Shared by the miss and hit validators so a call that built the program is never refused on a
+// later hit. Folded tile rows: rows past M are never read, so a and a full b may be taller.
+void validate_addcmul_rows(uint32_t M, const Tensor& a, const Tensor& b) {
+    const uint32_t a_rows = operations::common::folded_rows(a);
+    const uint32_t b_rows = operations::common::folded_rows(b);
+    TT_FATAL(
+        a_rows >= M,
+        "addcmul_input_tensor1 must hold M={} rows with its upper dims folded in, got {} (shape {})",
+        M,
+        a_rows,
+        a.logical_shape());
+    if (b.logical_shape()[-2] <= 1) {
+        // A [..., 1, N] gate is broadcast from tile row 0 (ADDCMUL_B_BROADCAST), so it cannot carry one per batch.
+        TT_FATAL(
+            b_rows == tt::constants::TILE_HEIGHT,
+            "addcmul_input_tensor2 broadcasts over the rows only when every upper dim is 1, got shape {}",
+            b.logical_shape());
+    } else {
+        TT_FATAL(
+            b_rows >= M,
+            "addcmul_input_tensor2 must hold M={} rows with its upper dims folded in, got {} (shape {})",
+            M,
+            b_rows,
+            b.logical_shape());
+    }
+}
+
 }  // namespace
 
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
@@ -91,17 +118,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
             M);
     }
     if (attributes.fused_ternary_scalar.has_value()) {
-        TT_FATAL(
-            tensor_args.addcmul_input_tensor1->logical_shape()[-2] >= M,
-            "addcmul_input_tensor1 rows ({}) must hold the activation rows ({})",
-            tensor_args.addcmul_input_tensor1->logical_shape()[-2],
-            M);
-        const uint32_t b_rows = tensor_args.addcmul_input_tensor2->logical_shape()[-2];
-        TT_FATAL(
-            b_rows == 1 || b_rows >= M,
-            "addcmul_input_tensor2 rows ({}) must be 1 or hold the activation rows ({})",
-            b_rows,
-            M);
+        validate_addcmul_rows(M, tensor_args.addcmul_input_tensor1.value(), tensor_args.addcmul_input_tensor2.value());
     }
 }
 
@@ -174,27 +191,18 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
         const uint32_t N_rs = tensor_args.weight_tensor.padded_shape()[-1] / attributes.ring_size;
 
-        const auto& ta_shape = ta.logical_shape();
-        const auto& tb_shape = tb.logical_shape();
-
-        // Rows beyond M are never read: a and a full-row b may be taller than the activations
-        // (capacity-sized buffers), they only need the same width.
+        // The addcmul inputs match the RS output width N/ring_size, not the matmul's N.
         TT_FATAL(
-            ta_shape[-2] >= M && ta_shape[-1] == N_rs,
-            "addcmul_input_tensor1 shape must hold the RS output [M={}, N/ring_size={}], got [{}, {}]",
-            M,
-            N_rs,
-            ta_shape[-2],
-            ta_shape[-1]);
+            ta.logical_shape()[-1] == N_rs,
+            "addcmul_input_tensor1 width ({}) must match the RS output width N/ring_size ({})",
+            ta.logical_shape()[-1],
+            N_rs);
         TT_FATAL(
-            (tb_shape[-2] == 1 || tb_shape[-2] >= M) && tb_shape[-1] == N_rs,
-            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or hold [M={}, N/ring_size={}], got "
-            "[{}, {}]",
-            N_rs,
-            M,
-            N_rs,
-            tb_shape[-2],
-            tb_shape[-1]);
+            tb.logical_shape()[-1] == N_rs,
+            "addcmul_input_tensor2 width ({}) must match the RS output width N/ring_size ({})",
+            tb.logical_shape()[-1],
+            N_rs);
+        validate_addcmul_rows(M, ta, tb);
     }
 
     // Caller-owned RS buffers: same width/dtype/layout as the op would allocate, at least M rows

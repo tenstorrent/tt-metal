@@ -915,6 +915,85 @@ def test_program_cache_hit_fused_ternary(device):
     _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_ternary")
 
 
+@pytest.mark.parametrize(
+    "input_shape",
+    [(2, 1, 256, 512), (2, 256, 512), (8, 1, 32, 512)],
+    ids=["rank4_batch2", "rank3_batch2", "rank4_batch8_one_tile_row"],
+)
+@pytest.mark.parametrize("full_gate", [False, True], ids=["broadcast_gate", "full_gate"])
+def test_program_cache_hit_fused_ternary_batched(device, input_shape, full_gate):
+    """A batched activation folds its upper dims into the rows the kernels see; the row checks and the
+    gate's broadcast flag must fold the residual and the gate the same way, which a rank-2 case cannot
+    tell apart. One tile row per batch is the edge where an unfolded flag would broadcast a full gate."""
+    *batch, M, K = input_shape
+    N = 1024
+    scalar = 1.0
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+    gate_shape = (*batch, M, N) if full_gate else (1,) * len(batch) + (1, N)
+
+    def make_inputs():
+        torch_input = torch.randn((*batch, M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        addcmul_a = torch.randn((*batch, M, N), dtype=torch.float32)
+        addcmul_b = torch.randn(gate_shape, dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, addcmul_a, addcmul_b),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_addcmul_a, tt_addcmul_b = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_input,
+                    tt_weight,
+                    scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, addcmul_a, addcmul_b = torch_args
+        with torch.no_grad():
+            return [torch.addcmul(addcmul_a, torch_input @ weight_input, addcmul_b, value=scalar)]
+
+    shape_id = "x".join(str(d) for d in input_shape)
+    gate_id = "full_gate" if full_gate else "broadcast_gate"
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, f"fused_ternary_batched_{shape_id}_{gate_id}")
+
+
+def test_fused_ternary_per_batch_gate_refused(device, expect_error):
+    """A [B, 1, 1, N] gate would be broadcast from its first batch only, so the op refuses it up front."""
+    B, M, K, N = 2, 256, 512, 1024
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+
+    def to_device(shape):
+        return ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_input, tt_weight = to_device((B, 1, M, K)), to_device((K, N))
+    tt_addcmul_a, tt_addcmul_b = to_device((B, 1, M, N)), to_device((B, 1, 1, N))
+    with expect_error(RuntimeError, "fused_ternary_input_b broadcasts over the rows only when every upper dim is 1"):
+        ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            tt_input,
+            tt_weight,
+            1.0,
+            tt_addcmul_a,
+            tt_addcmul_b,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+
 def test_run_performance(device):
     core_grid = ttnn.CoreCoord(8, 8)
     M, K, N = 4096, 4096, 4096

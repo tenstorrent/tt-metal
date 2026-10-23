@@ -102,9 +102,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
 
-    // Interleaved input and output: the program owns the full grid and every core derives its row
-    // range on device from the common row count, so one program serves every height.
-    const bool runtime_rows = !input_is_sharded && !output.is_sharded();
+    // Opt-in with interleaved input and output: the program owns the full grid and every core derives
+    // its row range on device from the common row count, so one program serves every height.
+    const bool runtime_rows = operation_attributes.runtime_rows && !input_is_sharded && !output.is_sharded();
     if (runtime_rows) {
         num_compute_cores = grid_size.x * grid_size.y;
         compute_core_range = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
@@ -188,13 +188,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .data_format_metadata = output_data_format,
     };
 
-    // Runtime rows: the hash drops the height; the row-major output keeps its width as a static page size.
-    TensorParameter input_param{
-        .unique_id = INPUT, .spec = a.tensor_spec(), .relaxations = {.dynamic_tensor_shape = runtime_rows}};
-    TensorParameter output_param{
-        .unique_id = OUTPUT,
-        .spec = output.tensor_spec(),
-        .relaxations = {.dynamic_tensor_shape = runtime_rows, .match_page_size = true}};
+    TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
+    if (runtime_rows) {
+        // The hash drops the height; the row-major output keeps its width as a static page size.
+        input_param.relaxations = {.dynamic_tensor_shape = true};
+        output_param.relaxations = {.dynamic_tensor_shape = true, .match_page_size = true};
+    }
 
     // Split inputs of the runtime-rows kernels: static per-core index, common row count.
     const KernelSpec::RuntimeArgSchema split_runtime_arg_schema = {
@@ -219,7 +219,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     } else if (runtime_rows) {
         reader_spec.source = std::filesystem::path{READER_INTERLEAVED_RUNTIME_SRC};
         reader_spec.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
-        reader_spec.compile_time_args = {{"tiles_per_row", num_tiles_per_input_block}, {"num_cores", num_compute_cores}};
+        reader_spec.compile_time_args = {
+            {"tiles_per_row", num_tiles_per_input_block}, {"num_cores", num_compute_cores}};
         reader_spec.runtime_arg_schema = split_runtime_arg_schema;
     } else {
         reader_spec.source = std::filesystem::path{READER_INTERLEAVED_SRC};
@@ -465,15 +466,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// A hit re-binds the two tensors and, with interleaved input and output, rewrites the common row
-// count the three kernels derive their per-core ranges from (the hash leaves the row count out).
+// A hit re-binds the two tensors and, under runtime rows, rewrites the common row count the three
+// kernels derive their per-core ranges from (the hash leaves the row count out).
 tt::tt_metal::experimental::ProgramRunArgs UntilizeMultiCoreProgramFactory::override_runtime_arguments(
-    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     ProgramRunArgs params;
-    if (!tensor_args.input.is_sharded() && !output.is_sharded()) {
+    if (operation_attributes.runtime_rows && !tensor_args.input.is_sharded() && !output.is_sharded()) {
         const uint32_t num_tile_rows = untilize_num_tile_rows(tensor_args.input);
         for (const char* kernel : {"reader", "writer", "compute_full"}) {
             params.kernel_run_args.push_back(KernelRunArgs{

@@ -9204,11 +9204,13 @@ def _h3_dynamic_shard_dims(runtime):
     return dims
 
 
-def _h3_dynamic_gather_buffers(runtime, mesh_config, head_dim):
+def _h3_dynamic_gather_buffers(
+    runtime, mesh_config, head_dim, heads_per_chip=H3_DYNAMIC_HEADS_PER_CHIP, capacity_tiles=H3_DYNAMIC_CAPACITY_TILES
+):
     """Capacity-sized persistent K/V gather pair, sharded over TP heads and replicated along the SP ring."""
     mesh = runtime.mesh_device
-    heads = H3_DYNAMIC_HEADS_PER_CHIP * mesh_config.tp_size
-    capacity = H3_DYNAMIC_CAPACITY_TILES * 32 * mesh_config.sp_size
+    heads = heads_per_chip * mesh_config.tp_size
+    capacity = capacity_tiles * 32 * mesh_config.sp_size
     dims = [None, None]
     dims[runtime.tp_axis] = 1
     mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims)
@@ -9290,6 +9292,103 @@ def _h3_dynamic_check(q, k, v, out, logical_n, heads, label):
         pcc, rmse = compute_pcc_rmse(ref, live[0, h])
         logger.info(f"{label} head {h}: PCC={pcc:.5f} RMSE={rmse:.5f}")
         assert pcc >= H3_DYNAMIC_PCC_THRESHOLD, f"{label} head {h}: PCC {pcc} below {H3_DYNAMIC_PCC_THRESHOLD}"
+
+
+# Two heads per chip and a 40-tile capacity with the "long" chunks (q_chunk = 8 tiles): at 8 tile rows every
+# head sits on one core (no multi-core K/V chain), from 16 rows the chains span several cores.
+H3_DYNAMIC_CHAIN_HEADS_PER_CHIP = 2
+H3_DYNAMIC_CHAIN_CAPACITY_TILES = 40
+# (per-chip tile rows, pad rows below the padded total); the first entry is the warm point.
+H3_DYNAMIC_CHAIN_ORDERS = {
+    "chain_free_first": [(8, 0), (16, 100), (40, 0), (8, 0)],
+    "capacity_first": [(40, 0), (8, 100), (16, 0), (40, 0)],
+}
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("order", list(H3_DYNAMIC_CHAIN_ORDERS))
+def test_ring_joint_attention_dynamic_local_n_chain_lengths(order):
+    """The K/V chain words are rebuilt per length on the cached program: a program warmed at a chain-free
+    length serves the chain-bearing ones and the mirror order. The reader's multicast flag is compile-time;
+    chain_free_first hangs if a later length rebuilds its chains multicast."""
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh = runtime.mesh_device
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        heads = H3_DYNAMIC_CHAIN_HEADS_PER_CHIP * tp
+        capacity = H3_DYNAMIC_CHAIN_CAPACITY_TILES * 32 * sp
+        torch.manual_seed(4321)
+        q_cap, k_cap, v_cap = (
+            torch.randn(1, heads, capacity, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3)
+        )
+        gather_k, gather_v = _h3_dynamic_gather_buffers(
+            runtime,
+            mesh_config,
+            H3_DYNAMIC_HEAD_DIM,
+            heads_per_chip=H3_DYNAMIC_CHAIN_HEADS_PER_CHIP,
+            capacity_tiles=H3_DYNAMIC_CHAIN_CAPACITY_TILES,
+        )
+
+        def run(variant):
+            tile_rows, pad_rows = variant
+            sq = tile_rows * 32 * sp
+            logical_n = sq - pad_rows
+            q, k, v = (t[:, :, :sq].clone() for t in (q_cap, k_cap, v_cap))
+            tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, logical_n)
+            out = _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS["long"],
+            )
+            _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), logical_n, range(heads), f"{variant}")
+
+        assert_program_cache_flat(mesh, run, H3_DYNAMIC_CHAIN_ORDERS[order])
+        assert mesh.num_program_cache_entries() == 1
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.timeout(1800)
+def test_ring_joint_attention_dynamic_local_n_rejects_single_head(expect_error):
+    """One K head per chip selects the shared-K batch chain, which is host-built per length and never rewritten
+    on a cache hit: validation must reject it before any program is built."""
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh = runtime.mesh_device
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        heads = 1 * tp
+        gather_k, gather_v = _h3_dynamic_gather_buffers(runtime, mesh_config, H3_DYNAMIC_HEAD_DIM, heads_per_chip=1)
+        sq = 148 * 32 * sp
+        torch.manual_seed(7)
+        q, k, v = (torch.randn(1, heads, sq, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3))
+        tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, sq - 100)
+        mesh.disable_and_clear_program_cache()
+        mesh.enable_program_cache()
+        with expect_error(RuntimeError, "dynamic_local_n requires more than one K head per chip"):
+            _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS["long"],
+            )
+        assert mesh.num_program_cache_entries() == 0
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 # (per-chip tile rows, pad rows below the padded total, semaphore set) per length class; every pad stays

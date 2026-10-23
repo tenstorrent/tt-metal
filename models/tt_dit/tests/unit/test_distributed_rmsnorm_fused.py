@@ -2037,6 +2037,62 @@ def test_h3_dynamic_rows_stats_scratch(mesh_device):
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("capacity_first", [False, True], ids=["none_then_capacity", "capacity_then_none"])
+def test_h3_row_capacity_separate_program(mesh_device, capacity_first):
+    """Raw op at the capacity row count with and without row_capacity, each on its own stats scratch: the
+    worker split differs, so either order must compile two programs (the capacity one also serving shorter
+    rows) and every call must match the reference."""
+    tp_axis = 0
+    links = 2
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+    top = _H3_ROW_CAPACITY // 32
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=False) for t in (top, 427, 148)}  # built up front
+    probe = inputs[top]
+    pobs = {
+        cap: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+            probe["x"], tp_axis, mesh_device, num_links=links, weight=probe["weight"], row_capacity=cap
+        )
+        for cap in (None, _H3_ROW_CAPACITY)
+    }
+    logger.info(f"H3 stats pages: none={pobs[None].shape[2]} capacity={pobs[_H3_ROW_CAPACITY].shape[2]}")
+    calls = 0
+
+    def run(variant):
+        nonlocal calls
+        row_capacity, tile_rows = variant
+        inp = inputs[tile_rows]
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            inp["x"],
+            tp_axis,
+            mesh_device,
+            sems[calls % _PINGPONG],
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            weight=inp["weight"],
+            bias=inp["bias"],
+            persistent_output_buffer=pobs[row_capacity],
+            num_preferred_links=links,
+            row_capacity=row_capacity,
+        )
+        calls += 1
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 row_capacity={row_capacity} tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"{variant}: pcc={pcc}"
+
+    capacity_calls = [(_H3_ROW_CAPACITY, t) for t in (top, 427, 148)]
+    if capacity_first:
+        variants, miss = capacity_calls + [(None, top)], (3,)
+    else:
+        variants, miss = [(None, top)] + capacity_calls, (1,)
+    entries = assert_program_cache_flat(mesh_device, run, variants, miss_indices=miss)
+    assert entries == 2, f"expected one program per row_capacity mode, got {entries}"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
 def test_h3_dynamic_rows_per_head_rope(mesh_device):
     """norm_q/norm_k form: per-head RMSNorm over 14 x 128 per chip with fused RoPE, full grid with
     zero-row workers at the short lengths; one program across the envelope, fp32 input must miss."""

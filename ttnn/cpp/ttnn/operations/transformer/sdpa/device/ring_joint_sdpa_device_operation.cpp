@@ -431,6 +431,12 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         q_shape[1],
         k_shape[1],
         v_shape[1]);
+    // The one-K-head shared-K batch chain is host-built per length; the hit path cannot rebuild it.
+    TT_FATAL(
+        tensor_args.gathered_k.logical_shape()[1] > 1,
+        "dynamic_local_n requires more than one K head per chip (the shared-K batch chain is built per length). "
+        "Got {}",
+        tensor_args.gathered_k.logical_shape()[1]);
     TT_FATAL(
         tensor_args.input_q.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
             tensor_args.input_k.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
@@ -1239,9 +1245,8 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device),
-    // and on the tensor path from logical_n_tensor, so logical_n leaves the key and one program serves every
-    // length on those paths.
+    // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device), and on
+    // the tensor path from logical_n_tensor, so logical_n leaves the key and one program serves every length there.
     const bool kv_pad_rotation_enabled = kv_pad_rotation_active(args, tensor_args);
     const auto cache_key_logical_n =
         (kv_pad_rotation_enabled || tensor_args.has_logical_n_tensor()) ? 0 : args.logical_n;
@@ -1257,8 +1262,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
             hash_spec_without_rows(tensor_args.input_k, kSalt),
             hash_spec_without_rows(tensor_args.input_v, kSalt),
             tensor_args.gathered_k.tensor_spec(),
-            tensor_args.gathered_v.has_value() ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.gathered_v->tensor_spec())
-                                               : std::nullopt,
+            tensor_args.gathered_v.has_value()
+                ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.gathered_v->tensor_spec())
+                : std::nullopt,
             tensor_args.logical_n_tensor.has_value()
                 ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.logical_n_tensor->tensor_spec())
                 : std::nullopt,

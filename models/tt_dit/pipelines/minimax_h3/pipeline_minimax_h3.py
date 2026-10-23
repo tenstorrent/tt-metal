@@ -153,7 +153,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
+# Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
+# need other shifts.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -174,6 +175,83 @@ def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAUL
         return int(raw), True
     except ValueError:
         raise ValueError(f"{_AUDIO_T_FACTOR_ENV}={raw!r} must be an integer T-shard factor") from None
+
+
+_DYNAMIC_LENGTH_ENV = "MINIMAX_H3_DYNAMIC_LENGTH"
+
+
+def _requested_dynamic_length(dynamic_length: bool | None, default: bool) -> tuple[bool, bool]:
+    """Explicit kwarg wins; else MINIMAX_H3_DYNAMIC_LENGTH=0|1; else `default`. Returns (dynamic, from_env)."""
+    if dynamic_length is not None:
+        return bool(dynamic_length), False
+    raw = os.environ.get(_DYNAMIC_LENGTH_ENV)
+    if raw is None:
+        return default, False
+    if raw not in ("0", "1"):
+        raise ValueError(f"{_DYNAMIC_LENGTH_ENV}={raw!r} must be '0' or '1'")
+    return raw == "1", True
+
+
+class _DenoisePath(NamedTuple):
+    trace_denoise: bool
+    bucket_denoise: bool
+    dynamic_length: bool
+    dynamic_from_env: bool
+
+    @property
+    def name(self) -> str:
+        if self.dynamic_length:
+            return "dynamic length"
+        if self.trace_denoise:
+            return "bucketed, traced"
+        return "bucketed" if self.bucket_denoise else "unbucketed"
+
+
+def _resolve_denoise_path(
+    preset: Mapping,
+    *,
+    trace_denoise: bool | None,
+    bucket_denoise: bool | None,
+    bucket_ladder: tuple[int, ...] | None,
+    dynamic_length: bool | None,
+    coresident: bool,
+) -> _DenoisePath:
+    """The denoise path the constructor kwargs select on `preset`.
+
+    `dynamic_length` resolves kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset, and the preset's dynamic default
+    yields to a caller that pinned the bucketed path by any of `trace_denoise`, `bucket_denoise` or
+    `bucket_ladder`. A dynamic request (kwarg or env) with `trace_denoise` or `bucket_denoise=True` is
+    contradictory and raises; a ladder beside it only supplies the default `max_sequence_length`.
+    """
+    trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
+    pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
+    dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
+    if dynamic and trace:
+        raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
+    if dynamic and bucket_denoise:
+        raise ValueError("dynamic_length and bucket_denoise=True select both denoise paths; pass one of them")
+    bucket = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
+    return _DenoisePath(bool(trace), bool(trace or (bucket and not dynamic)), dynamic, from_env)
+
+
+_DIT_FSDP_ENV = "MINIMAX_H3_DIT_FSDP"
+
+
+def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dynamic_length: bool) -> tuple[bool, str]:
+    """MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset; else on for dynamic-length ref2va only, whose cap-sized gather
+    pair does not fit beside unsharded weights on a 4x8. Returns (dit_fsdp, source) for the construction log."""
+    raw = os.environ.get(_DIT_FSDP_ENV)
+    if raw is not None:
+        if raw not in ("0", "1"):
+            raise ValueError(f"{_DIT_FSDP_ENV} must be '0' or '1'")
+        return raw == "1", f"from {_DIT_FSDP_ENV}"
+    if dit_fsdp is not None:
+        return bool(dit_fsdp), "kwarg"
+    if "dit_fsdp" in preset:
+        return bool(preset["dit_fsdp"]), "preset"
+    if dynamic_length and task == "ref2va":
+        return True, "dynamic ref2va"
+    return False, "default"
 
 
 def _resolve_audio_t_shard(
@@ -305,6 +383,9 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "num_links": 2,
         "topology": ttnn.Topology.Ring,
         "coresident": True,
+        # Dynamic length by default; the ladder and `bucket_denoise` stay as the backup path (any bucketed
+        # kwarg or MINIMAX_H3_DYNAMIC_LENGTH=0 selects it) and the top rung is the default admission cap.
+        "dynamic_length": True,
         "bucket_denoise": True,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
@@ -315,7 +396,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     #
     # `trace_denoise` is quad-only, mirroring Wan's `traced = mesh_shape == (4, 32)`: at SP=32 a step
     # is dispatch-bound, so the trace is what makes the extra devices pay. 4x8 has enough work per
-    # chip to not need it. Both meshes bucket.
+    # chip to not need it and serves the length dynamically; the quad buckets, since a trace freezes it.
     (4, 32): {
         "tp_axis": 0,
         "sp_axis": 1,
@@ -360,6 +441,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        # Bucketed: dynamic length is unmeasured on Wormhole.
         "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
@@ -404,6 +486,13 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
             "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
+    # Overridden here because servers open their fabric from this preset; fabric and CCLs must agree.
+    override = os.environ.get("MINIMAX_H3_TOPOLOGY")
+    if override:
+        topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+        if override.lower() not in topologies:
+            raise ValueError(f"MINIMAX_H3_TOPOLOGY must be one of {sorted(topologies)}, got {override!r}")
+        preset = {**preset, "topology": topologies[override.lower()]}
     return preset
 
 
@@ -501,6 +590,8 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -517,28 +608,44 @@ class MiniMaxH3Pipeline:
         max_sequence_length: int | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
-        length class (eager only; off by default)."""
+        length class (eager only). It is the Blackhole 4x8 preset's default; `_resolve_denoise_path` has the
+        precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
+        self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
-        topology = preset["topology"] if topology is None else topology
+        if topology is None:
+            # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
+            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
-        self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
         )
         self.coresident = coresident
-        self.trace_denoise = self.trace_denoise and self.coresident
-        self.dynamic_length = preset.get("dynamic_length", False) if dynamic_length is None else bool(dynamic_length)
-        if self.dynamic_length and self.trace_denoise:
-            raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
-        bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
-        self.bucket_denoise = self.trace_denoise or (bucket_denoise and not self.dynamic_length)
+        path = _resolve_denoise_path(
+            preset,
+            trace_denoise=trace_denoise,
+            bucket_denoise=bucket_denoise,
+            bucket_ladder=bucket_ladder,
+            dynamic_length=dynamic_length,
+            coresident=coresident,
+        )
+        self.trace_denoise = path.trace_denoise
+        self.bucket_denoise = path.bucket_denoise
+        self.dynamic_length = path.dynamic_length
+        self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
+            preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
+        )
+        source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
+        fsdp = "on" if self.dit_fsdp else "off"
+        self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -562,7 +669,10 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
+        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # True during `warmup`, whose output is discarded.
+        self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -680,20 +790,11 @@ class MiniMaxH3Pipeline:
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        # `None` takes the preset (Wormhole's 12 GB/chip needs the DiT sharded above 5 s; Blackhole does
-        # not), and MINIMAX_H3_DIT_FSDP=0/1 overrides both, like MINIMAX_H3_AUDIO_T_SHARD above.
-        self.dit_fsdp = preset.get("dit_fsdp", False) if dit_fsdp is None else dit_fsdp
-        env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
-        if env_dit_fsdp is not None:
-            if env_dit_fsdp not in ("0", "1"):
-                raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
-            self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
         self.last_program_cache_misses: dict[str, int] = {}
 
-        # Gather the packed sequence per SP shard instead of whole-then-partition: identical values, but
-        # the transformer never holds the full `[pad_to, hidden/TP]` sequence on every device, and no
-        # length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
+        # Per-SP-shard gather instead of whole-then-partition: identical values, no full `[pad_to, hidden/TP]` sequence
+        # on every device and no length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
         self._shard_assembly_indices = (is_wormhole_b0() or self.dynamic_length) and self.sp_factor > 1
 
         self._host_log("building the Qwen3-VL text encoder")
@@ -760,6 +861,8 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -775,6 +878,7 @@ class MiniMaxH3Pipeline:
         coresident: bool | None = None,
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
+        **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -782,8 +886,10 @@ class MiniMaxH3Pipeline:
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
-        `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length=True` replaces the
-        bucket ladder by the live padded length up to `max_sequence_length` (see `__init__`).
+        `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the Blackhole 4x8
+        preset's default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
+        padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
+        (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
@@ -801,6 +907,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             trace_audio=trace_audio,
             audio_t_factor=audio_t_factor,
@@ -816,6 +924,7 @@ class MiniMaxH3Pipeline:
             coresident=coresident,
             dynamic_length=dynamic_length,
             max_sequence_length=max_sequence_length,
+            **subclass_kwargs,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1465,8 +1574,8 @@ class MiniMaxH3Pipeline:
         return seq_sharded(cos), seq_sharded(sin)
 
     def _row_indices(self, values: torch.Tensor, padded_len: int) -> ttnn.Tensor:
-        """A per-row index tensor, ROW_MAJOR uint32 (what `ttnn.embedding` reads, so no typecast on
-        device) and sharded on SP along the row axis."""
+        """A per-row index tensor, ROW_MAJOR uint32 (what `ttnn.embedding` takes, so no device typecast; the
+        builders emit only values >= 0, so the bits equal int32's) and sharded on SP along the row axis."""
         pad = padded_len - values.shape[0]
         if pad:
             values = torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
@@ -1919,10 +2028,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -2050,10 +2156,7 @@ class MiniMaxH3Pipeline:
         with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
@@ -2147,6 +2250,20 @@ class MiniMaxH3Pipeline:
             on_event=on_event,
             condition_spec=condition_spec,
         )
+
+    def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The video and audio schedules for one request."""
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        scheduler.set_timesteps(num_inference_steps)
+        audio_scheduler.set_timesteps(num_inference_steps)
+        return scheduler, audio_scheduler
+
+    def _step_endpoints(
+        self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Each step's video and audio endpoint `r` for two-time conditioning; None for single-time."""
+        return None
 
     def _denoise_and_decode(
         self,
@@ -2253,14 +2370,7 @@ class MiniMaxH3Pipeline:
             audio=waveform,
             sample_rate=sample_rate,
         )
-        rung_requests = {
-            ladder[0]: dict(
-                references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
-                num_frames=full_frames,
-                height=height,
-                width=width,
-            )
-        }
+        rung_requests: dict[int, dict] = {}
         if len(ladder) > 1:
             images = [MiniMaxH3Reference(image=self._warmup_image()) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)]
             rung_requests[ladder[1]] = dict(
@@ -2276,6 +2386,13 @@ class MiniMaxH3Pipeline:
                 height=height,
                 width=width,
             )
+        # Last: the full-duration request owns the cap (the top rung, or a dynamic cap that lands on a lower rung).
+        rung_requests[self.max_sequence_length] = dict(
+            references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
+            num_frames=full_frames,
+            height=height,
+            width=width,
+        )
         self.warmup(
             references=[MiniMaxH3Reference(image=self._warmup_image())],
             num_frames=num_frames,
@@ -2319,6 +2436,7 @@ class MiniMaxH3Pipeline:
         trace_audio = self.trace_audio
         self.trace_audio = False
         self._log_generation = False
+        self._warming = True
         try:
             # The ladder walk goes first: it is the only stage that can run out of DRAM (each rung's
             # forced request binds the DiT's buffers and compiles its own decodes on the way), and on a
@@ -2341,6 +2459,7 @@ class MiniMaxH3Pipeline:
         finally:
             self.trace_audio = trace_audio
             self._log_generation = True
+            self._warming = False
 
     def _warm_denoise_buckets(
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
@@ -2842,6 +2961,7 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        endpoints = self._step_endpoints(scheduler, audio_scheduler)
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
@@ -2954,19 +3074,32 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
 
-        def step_levels(i: int) -> torch.Tensor:
+        def step_levels(i: int) -> tuple[torch.Tensor, torch.Tensor | None]:
             t = float(timesteps[i])
             level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
             if "condition_video" in slot_roles:
                 level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            return slot_levels(slot_roles, **level_kwargs)
+            if endpoints is None:
+                return slot_levels(slot_roles, **level_kwargs), None
+            # Conditioning slots are anchors with nowhere to go, so their interval is empty: r == t.
+            endpoint_kwargs = {
+                **level_kwargs,
+                "video_timestep": float(endpoints[0][i]),
+                "audio_timestep": float(endpoints[1][i]),
+            }
+            return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: torch.Tensor) -> None:
+        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
+            timestep, endpoint = levels
             self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                timestep.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
+            if endpoint is not None:
+                self._tt_endpoint_timestep.update(
+                    endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
 
         upload_levels(step_levels(0))
         if _is_host_rank():
@@ -3005,6 +3138,7 @@ class MiniMaxH3Pipeline:
                         pad_to=rung,
                         traced=traced,
                         **tilerow_kwargs,
+                        **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                     )
                 except RuntimeError as err:
                     if "Out of Memory" in str(err):

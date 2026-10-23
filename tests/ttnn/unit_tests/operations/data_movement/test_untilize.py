@@ -3484,11 +3484,33 @@ def _h3_untilize_rows():
     return [rows * 32 * 8 for rows in (148, 74, 287, 427, 470)]
 
 
-# These two drive the native multi-core prim directly (what ttnn.embedding calls for a TILE table); the
-# routed ttnn.untilize may take the codegen prim, which hashes the full shape.
+# These drive the native multi-core prim directly (what ttnn.embedding calls for a TILE table); the
+# routed ttnn.untilize may take the codegen prim, which hashes the full shape. `runtime_rows` opts in.
 @pytest.mark.parametrize("width", [96, 32])
 def test_untilize_multi_core_dynamic_rows_flat_cache(device, width):
     """The H3 output select untilizes [pad_to, 96] / [pad_to, 32] tables: one program over every served length."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(rows):
+        torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = _force_native(
+            tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True, runtime_rows=True
+        )
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, _h3_untilize_rows())
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("width", [96, 32])
+def test_untilize_multi_core_default_rows_miss_bit_exact(device, width):
+    """Without the flag the row count stays in the hash (main's program and split): every new height
+    misses, down to a one-tile-row input, and the output is bit-exact."""
     torch.manual_seed(0)
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
@@ -3499,10 +3521,11 @@ def test_untilize_multi_core_dynamic_rows_flat_cache(device, width):
         assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
         assert_equal(torch_input, ttnn.to_torch(tt_output))
 
+    rows = _h3_untilize_rows()[:3] + [32]
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
-    assert_program_cache_flat(device, run, _h3_untilize_rows())
-    assert device.num_program_cache_entries() == 1
+    assert_program_cache_flat(device, run, rows, miss_indices=tuple(range(1, len(rows))))
+    assert device.num_program_cache_entries() == len(rows)
 
 
 def test_untilize_multi_core_width_or_dtype_change_misses(device):
@@ -3514,7 +3537,7 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
         rows, width, dtype, out_mem = variant
         torch_input = torch.randn((2, rows, width), dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_output = _force_native(tt_input, memory_config=out_mem, use_multicore=True)
+        tt_output = _force_native(tt_input, memory_config=out_mem, use_multicore=True, runtime_rows=True)
         assert_quality(ttnn.to_torch(tt_input), ttnn.to_torch(tt_output), dtype)
 
     variants = [

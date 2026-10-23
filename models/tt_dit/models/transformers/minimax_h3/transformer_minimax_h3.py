@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from dataclasses import dataclass
 
 import torch
 
@@ -19,7 +19,6 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
-from .time_dispatch import DispatchTimer, timed_block_index
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
@@ -53,6 +52,18 @@ class MiniMaxH3TimestepEmbedding(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.linear_2(ttnn.silu(self.linear_1(x)))
+
+
+@dataclass
+class MiniMaxH3TwoTime:
+    """Interval `(t, r)` conditioning: `temb = emb_t + gate * (emb_r - emb_t)`.
+
+    Not a child module on purpose: a registered child would join the cached weight set and invalidate
+    every existing cache.
+    """
+
+    embedder: MiniMaxH3TimestepEmbedding
+    gate: float
 
 
 class MiniMaxH3AdaLayerNormOut(Module):
@@ -143,7 +154,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
             return ttnn.unsqueeze(
-                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length),
+                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length),
                 0,
             )
 
@@ -230,7 +241,6 @@ class MiniMaxH3Transformer3DModel(Module):
         if dynamic_length and kv_gather_capacity is not None:
             norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
-        self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
@@ -284,6 +294,7 @@ class MiniMaxH3Transformer3DModel(Module):
             out_dim=time_embed_dim,
             mesh_device=mesh_device,
         )
+        self.two_time: MiniMaxH3TwoTime | None = None
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
         # is replicated on SP and attention is local.
@@ -440,6 +451,7 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_sin: ttnn.Tensor,
         logical_n: ttnn.Tensor,
         pad_to: int,
+        endpoint_timestep: ttnn.Tensor | None = None,
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
@@ -453,6 +465,7 @@ class MiniMaxH3Transformer3DModel(Module):
         video_out_indices / audio_out_indices: [1, 1, 1, V_cap] / [1, 1, 1, A_cap] integers, the
             packed row of each target row.
         timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
+        endpoint_timestep: like `timestep`, each slot's step endpoint `r`. Required when `two_time` is set.
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
@@ -514,19 +527,25 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
         # `total_rows`, so rows beyond it (a smaller table layout than an earlier request) are inert.
-        hidden = ttnn.embedding(as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT)
+        hidden = ttnn.embedding(
+            as_indices(assembly_indices), self._source_table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
+        )
         hidden = ttnn.unsqueeze(hidden, 0)
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+        temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        # A trace bakes the buffer, so traced forwards keep one state per padded length; untraced ones rebind.
-        ts_state = self._timestep_idx_state.setdefault(pad_to if traced else 0, StateTensor())
-        ts_state.update(as_indices(timestep_indices), traced=traced)
-        timestep_idx = ts_state.value
+        # Read eagerly by `norm_out` after the traced block loop, so it needs no per-trace state.
+        timestep_idx = as_indices(timestep_indices)
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
@@ -575,9 +594,9 @@ class MiniMaxH3Transformer3DModel(Module):
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            # The native untilize of the TILE table keeps the gather's programs free of the request's length.
+            # runtime_rows keeps the gather's and the TILE table's untilize's programs free of the request's length.
             gathered = ttnn.embedding(
-                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length
+                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length
             )
             return ttnn.unsqueeze(gathered, 0)
 
@@ -598,19 +617,17 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        timed = timed_block_index()
-        for i, block in enumerate(self.transformer_blocks):
-            with DispatchTimer(f"block {i}") if i == timed else nullcontext():
-                hidden = block(
-                    hidden,
-                    logical_n,
-                    temb=temb,
-                    adaln_indices=adaln_indices,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
-                    onehot=onehot,
-                    tilerow=tilerow,
-                )
+        for block in self.transformer_blocks:
+            hidden = block(
+                hidden,
+                logical_n,
+                temb=temb,
+                adaln_indices=adaln_indices,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                onehot=onehot,
+                tilerow=tilerow,
+            )
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])

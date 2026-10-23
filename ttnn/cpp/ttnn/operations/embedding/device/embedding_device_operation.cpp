@@ -16,10 +16,25 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+// The runtime-rows factory serves the fused tilized gather with an interleaved output; only that
+// configuration hashes without the index length and the table row count.
+bool row_free_configuration(
+    const EmbeddingsDeviceOperation::operation_attributes_t& operation_attributes,
+    const EmbeddingsDeviceOperation::tensor_args_t& tensor_args) {
+    return operation_attributes.runtime_rows && operation_attributes.tilized &&
+           tensor_args.input_tensor_arg.layout() == Layout::ROW_MAJOR &&
+           !is_sharded(operation_attributes.output_mem_config.memory_layout());
+}
+}  // namespace
+
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
         return EmbeddingsTilizedIndicesProgramFactory{};
+    }
+    if (row_free_configuration(operation_attributes, tensor_args)) {
+        return EmbeddingsFusedRuntimeRowsProgramFactory{};
     }
     if (operation_attributes.tilized) {
         return EmbeddingsFusedProgramFactory{};
@@ -113,30 +128,20 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-namespace {
-// The fused factory with an interleaved output derives every per-core count from the index length on
-// device; only that configuration hashes without the index length and the table row count.
-bool row_free_configuration(
-    const EmbeddingsDeviceOperation::operation_attributes_t& operation_attributes,
-    const EmbeddingsDeviceOperation::tensor_args_t& tensor_args) {
-    return operation_attributes.tilized && tensor_args.input_tensor_arg.layout() == Layout::ROW_MAJOR &&
-           !is_sharded(operation_attributes.output_mem_config.memory_layout());
-}
-}  // namespace
-
 void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return;
+    }
+    // Only the row-dependent invariants: the index length and the table rows are not in the hash.
     const auto& a = tensor_args.input_tensor_arg;
-    if (operation_attributes.tilized) {
-        TT_FATAL(
-            a.padded_shape()[-1] % TILE_HEIGHT == 0,
-            "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized",
-            a.padded_shape()[-1],
-            TILE_HEIGHT);
-    }
-    if (a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
-    }
+    TT_FATAL(
+        a.padded_shape()[-1] % TILE_HEIGHT == 0,
+        "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized",
+        a.padded_shape()[-1],
+        TILE_HEIGHT);
+    TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     if (tensor_args.optional_output_tensor.has_value()) {
         const auto& output_shape = tensor_args.optional_output_tensor->padded_shape();
         TT_FATAL(
@@ -149,46 +154,29 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t EmbeddingsDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<EmbeddingsDeviceOperation>, operation_attributes, tensor_args);
+    }
     using ttnn::operations::common::hash_spec_without_rows;
     constexpr uint64_t kSalt = 0x656d6265645f6673ULL;  // "embed_fs"
     const auto& index = tensor_args.input_tensor_arg;
-    const auto& weights = tensor_args.weight_arg;
-    const bool row_free = row_free_configuration(operation_attributes, tensor_args);
-    ttsl::hash::hash_t index_hash;
-    ttsl::hash::hash_t weights_hash;
-    ttsl::hash::hash_t output_hash = 0;
-    if (row_free) {
-        // The index length is shape[-1] of a [B, 1, 1, S] row-major tensor: keep everything but S.
-        const auto& layout = index.tensor_spec().tensor_layout();
-        index_hash = ttsl::hash::hash_objects_with_default_seed(
-            kSalt,
-            layout.get_data_type(),
-            layout.get_page_config(),
-            layout.get_memory_config(),
-            index.logical_shape().rank(),
-            index.padded_shape()[0]);
-        weights_hash = hash_spec_without_rows(weights, kSalt);
-        if (tensor_args.optional_output_tensor.has_value()) {
-            output_hash = hash_spec_without_rows(*tensor_args.optional_output_tensor, kSalt);
-        }
-    } else {
-        index_hash = ttsl::hash::hash_objects_with_default_seed(kSalt, index.tensor_spec());
-        weights_hash = ttsl::hash::hash_objects_with_default_seed(kSalt, weights.tensor_spec());
-        if (tensor_args.optional_output_tensor.has_value()) {
-            output_hash =
-                ttsl::hash::hash_objects_with_default_seed(kSalt, tensor_args.optional_output_tensor->tensor_spec());
-        }
-    }
+    // The index length is shape[-1] of a [B, 1, 1, S] row-major tensor: keep everything but S.
+    const auto& layout = index.tensor_spec().tensor_layout();
+    const auto index_hash = ttsl::hash::hash_objects_with_default_seed(
+        kSalt,
+        layout.get_data_type(),
+        layout.get_page_config(),
+        layout.get_memory_config(),
+        index.logical_shape().rank(),
+        index.padded_shape()[0]);
     return tt::tt_metal::operation::hash_operation<EmbeddingsDeviceOperation>(
-        operation_attributes.output_mem_config,
-        operation_attributes.tilized,
-        static_cast<uint8_t>(operation_attributes.embeddings_type),
-        operation_attributes.pad_token,
-        row_free,
+        kSalt,
+        operation_attributes,
         index_hash,
-        weights_hash,
+        hash_spec_without_rows(tensor_args.weight_arg, kSalt),
         tensor_args.optional_output_tensor.has_value(),
-        output_hash);
+        hash_spec_without_rows(tensor_args.optional_output_tensor, kSalt));
 }
 
 tt::tt_metal::TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
@@ -226,7 +214,8 @@ Tensor embedding(
     EmbeddingsType embeddings_type,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<uint32_t>& pad_token,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool runtime_rows) {
     using OperationType = EmbeddingsDeviceOperation;
     auto memory_config = output_mem_config.value_or(input_tensor_arg.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -234,6 +223,7 @@ Tensor embedding(
         .tilized = tilized,
         .embeddings_type = embeddings_type,
         .pad_token = pad_token,
+        .runtime_rows = runtime_rows,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_arg = input_tensor_arg,

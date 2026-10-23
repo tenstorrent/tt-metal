@@ -57,14 +57,14 @@ def _h3_concat_rows():
 
 @pytest.mark.parametrize("batch", [1, 2])
 def test_concatenate_heads_h3_dynamic_rows_flat_cache(device, batch):
-    """H3 concat ([B,14,M,128] -> [B,M,1792]): one program over every served M, bit-exact per length."""
+    """H3 concat ([B,14,M,128] -> [B,M,1792]) with runtime_rows: one program over every served M, bit-exact per length."""
     torch.manual_seed(0)
     golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
 
     def run(rows):
         torch_input_tensor = torch.rand((batch, 14, rows, 128), dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor))
+        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor, runtime_rows=True))
         assert torch.equal(golden_function(torch_input_tensor), output), f"mismatch at rows={rows}"
 
     device.disable_and_clear_program_cache()
@@ -74,7 +74,7 @@ def test_concatenate_heads_h3_dynamic_rows_flat_cache(device, batch):
 
 
 def test_concatenate_heads_width_or_dtype_change_misses(device):
-    """Only the row count is runtime: a new head size, head count or dtype needs its own program."""
+    """With runtime_rows only the row count is runtime: a new head size, head count or dtype needs its own program."""
     torch.manual_seed(0)
     golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
 
@@ -82,7 +82,7 @@ def test_concatenate_heads_width_or_dtype_change_misses(device):
         heads, rows, width, dtype = variant
         torch_input_tensor = torch.rand((1, heads, rows, width), dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor))
+        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor, runtime_rows=True))
         expected = golden_function(ttnn.to_torch(input_tensor))
         assert torch.equal(expected, output), f"mismatch for {variant}"
 
@@ -99,7 +99,7 @@ def test_concatenate_heads_width_or_dtype_change_misses(device):
 
 
 def test_concatenate_heads_crosses_head_parallel_threshold(device):
-    """Fewer tile rows than cores splits by head on device; both sides of the threshold share one program."""
+    """With runtime_rows fewer tile rows than cores splits by head on device; both sides of the threshold share one program."""
     torch.manual_seed(0)
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
@@ -108,13 +108,58 @@ def test_concatenate_heads_crosses_head_parallel_threshold(device):
     def run(rows):
         torch_input_tensor = torch.rand((1, 4, rows, 64), dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor))
+        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor, runtime_rows=True))
         assert torch.equal(golden_function(torch_input_tensor), output), f"mismatch at rows={rows}"
 
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, [32 * num_cores, 32, 32 * (num_cores - 1), 32 * (num_cores + 3)])
     assert device.num_program_cache_entries() == 1
+
+
+def test_concatenate_heads_rows_change_misses_by_default(device):
+    """Without runtime_rows every row count builds its own program (the default path), bit-exact each."""
+    torch.manual_seed(0)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+
+    def run(rows):
+        torch_input_tensor = torch.rand((1, 14, rows, 128), dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        output = ttnn.to_torch(ttnn.transformer.concatenate_heads(input_tensor))
+        assert torch.equal(golden_function(torch_input_tensor), output), f"mismatch at rows={rows}"
+
+    rows = [128, 32, 256, 416]
+    assert_program_cache_flat(device, run, rows, miss_indices=range(1, len(rows)))
+    assert device.num_program_cache_entries() == len(rows)
+
+
+def test_concatenate_heads_runtime_rows_ignored_on_sharded(device):
+    """The sharded program keeps its full-spec hash: with runtime_rows a row change still builds a new program."""
+    torch.manual_seed(0)
+    heads, head_dim = 32, 64
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for rows in (32, 64):
+        torch_input_tensor = torch.rand((1, heads, rows, head_dim), dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, [heads * rows // 4, head_dim], ttnn.ShardOrientation.COL_MAJOR),
+            ),
+        )
+        entries_before = device.num_program_cache_entries()
+        output = ttnn.experimental.nlp_concat_heads(input_tensor, memory_config=output_memory_config, runtime_rows=True)
+        assert device.num_program_cache_entries() == entries_before + 1, f"rows={rows} reused a program"
+        output = ttnn.to_torch(ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG))
+        expected = torch_input_tensor.transpose(1, 2).reshape(1, 1, rows, heads * head_dim)
+        assert torch.equal(expected, output), f"mismatch at rows={rows}"
 
 
 def test_concatenate_heads_sharded_input_interleaved_output(device):

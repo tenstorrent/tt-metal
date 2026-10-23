@@ -42,7 +42,7 @@ NUM_MODULATION_PARAMS = 6
 
 def onehot_identity(rows: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """The dynamic-length path's identity table of the one-hot gathers, padded to a tile width and ROW_MAJOR so
-    ttnn.embedding takes the row-free fused factory and writes TILE output in one launch."""
+    ttnn.embedding (runtime_rows) takes the fused tilized factory and writes TILE output in one launch."""
     width = -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
     return bf16_tensor(F.pad(torch.eye(rows), (0, width - rows)), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -293,7 +293,9 @@ class MiniMaxH3TransformerBlock(Module):
                     else bf16_tensor(torch.eye(rows), device=self.mesh_device)
                 )
             eye = self._eye_tables[rows]
-        out = ttnn.unsqueeze(ttnn.embedding(adaln_indices, eye, layout=ttnn.TILE_LAYOUT), 0)
+        out = ttnn.unsqueeze(
+            ttnn.embedding(adaln_indices, eye, layout=ttnn.TILE_LAYOUT, runtime_rows=self.dynamic_length), 0
+        )
         if self.dynamic_length:
             # The tile-wide table gives a tile-wide one-hot; view it back to `rows` columns (no program) so the
             # gathers see the [rows, hidden] tables' K.
@@ -450,5 +452,8 @@ class MiniMaxH3TransformerBlock(Module):
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
     def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
-        """ff1's blocking kwargs: the per-device length's class pin, else the length-keyed swept table."""
+        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table);
+        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        if not self.use_fused_agmm:
+            return {}
         return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
