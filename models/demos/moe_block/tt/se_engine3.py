@@ -34,6 +34,7 @@ NSEM_OWN = 2 + 2 * NWS
 # round), the leads' acks - 16 B apart; the semaphore ids are all taken by the kernel_lib families)
 RXR, RWR, RXS = 0, 16, 32  # (the router's ew words: RX / RW ready (a round), the x lead's set source)
 RGATE = 64  # (every engine core's partials written: the W streams' gate, SE_RTR_GATE)
+XACK, WACK = 128, 144  # (more than two logits rounds: the receivers' "round consumed" counts on the x / W leads)
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
 RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12, ffree=20)  # (down + reduce-scatter CBs)
@@ -96,8 +97,11 @@ void kernel_main() {
         const auto rxg = TensorAccessor(brx_args, rtr_x, 2048);
         constexpr uint32_t XS = SE_KC * SE_MTR * 2048;  // (SE_MTR: my MT rows of every chunk - row rr of chunk rr / MT)
         volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + RXS_ID);
-        for (uint32_t rd = 0; rd < SE_KTO / SE_KC; ++rd) {
-            const uint32_t xa = rtr_xa + rd * XS;
+        constexpr uint32_t NRD = SE_KTO / SE_KC;
+        volatile tt_l1_ptr uint32_t* xack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + XACK_ID);
+        for (uint32_t rd = 0; rd < NRD; ++rd) {
+            const uint32_t xa = rtr_xa + (rd & 1) * XS;  // (two buffers; past two rounds the row's acks first)
+            if (NRD > 2 && rd >= 2) while (*xack < (rd - 1) * GX) invalidate_l1_cache();
             for (uint32_t r = 0; r < SE_MTR; ++r)
                 for (uint32_t k = 0; k < SE_KC; ++k)
                     noc_async_read(rxg.get_noc_addr(GROW(r / MT, cy * MT + r % MT) * SE_KTO + rd * SE_KC + k), xa + (k * SE_MTR + r) * 2048, 2048);
@@ -107,6 +111,10 @@ void kernel_main() {
             *src = rd + 1;
             noc_semaphore_set_multicast_loopback_src(SE_EW + RXS_ID, get_noc_multicast_addr(lx, ry, rx, ry, SE_EW + RXR_ID), GX);
             noc_async_writes_flushed();
+        }
+        if (NRD > 2) {  // (re-arm: every ack landed - the last were waited for)
+            noc_semaphore_inc(get_noc_addr(SE_EW + XACK_ID), 0u - (NRD - 2) * GX);
+            noc_async_atomic_barrier();
         }
     }
 #endif
@@ -310,12 +318,19 @@ void kernel_main() {
         const bool hw = get_arg_val<uint32_t>(R0 + 9);
         const auto wg2 = TensorAccessor(rw_args, get_arg_val<uint32_t>(R0 + 1), 2048);
         constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
-        static_assert(NRD <= 2, "two buffers, no slot reused");
+        // (two buffers: past two rounds a buffer is reused - every receiver acks a round once its compute popped it
+        // (its next reserve went through): +1 on the row's x lead and the column's W lead, who wait for all of them)
+        const uint32_t xlx = get_arg_val<uint32_t>(R0 + 7), xly = get_arg_val<uint32_t>(R0 + 8);
         for (uint32_t rd = 0; rd < NRD; ++rd) {
             cb_reserve_back(SE_RX, SE_KC * SE_MTR);
             cb_reserve_back(SE_RW, SE_ETC * SE_KC);
+            if (NRD > 2 && rd >= 2) {
+                noc_semaphore_inc(get_noc_addr(xlx, xly, SE_EW + XACK_ID), 1);
+                if (hw) noc_semaphore_inc(get_noc_addr(cxv, ty, SE_EW + WACK_ID), 1);
+            }
             if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
-                const uint32_t wa = rwa + rd * WS;
+                const uint32_t wa = rwa + (rd & 1) * WS;
+                if (NRD > 2 && rd >= 2) while (*ew(WACK_ID) < (rd - 1) * GY) invalidate_l1_cache();
                 for (uint32_t e = 0; e < etc; ++e)
                     for (uint32_t k = 0; k < SE_KC; ++k)
                         noc_async_read(wg2.get_noc_addr((re0 + e) * SE_KTO + rd * SE_KC + k), wa + (e * SE_KC + k) * 2048, 2048);
@@ -333,6 +348,10 @@ void kernel_main() {
         noc_async_writes_flushed();  // (my sets' source words read: re-arm them)
         *ew(RXR_ID) = 0;  // (re-armed: no more sets come this call - the x lead sets from its own word, RXS)
         *ew(RWR_ID) = 0;
+        if (NRD > 2 && lw) {  // (every ack landed: the last were waited for)
+            noc_semaphore_inc(get_noc_addr(SE_EW + WACK_ID), 0u - (NRD - 2) * GY);
+            noc_async_atomic_barrier();
+        }
     }
     {  // my partial logits (the compute's, a few us later) to their router cores' HOLD - before my W stream starts
         DeviceZoneScopedN("SE-RTROUT");
@@ -721,19 +740,23 @@ void kernel_main() {
         {  // (a K chunk's ETC x MT partials in DEST, then fp32 into RO with the packer's L1 accumulation)
             reconfig_data_format(SE_RX, SE_RW);
             pack_reconfig_data_format(SE_RO);
-            rmm_init(SE_RW, SE_RX, SE_MTR, SE_KC);
+            // (row groups of SE_RG rows: ETC x SE_RG tiles in DEST - all rows at once where they fit)
+            rmm_init(SE_RW, SE_RX, SE_RG, SE_KC);
             cb_reserve_back(SE_RO, etc * SE_MTR);
             for (uint32_t rd = 0; rd < SE_KTO / SE_KC; ++rd) {
                 cb_wait_front(SE_RX, SE_KC * SE_MTR);
                 cb_wait_front(SE_RW, etc * SE_KC);
                 PACK((llk_pack_reconfig_l1_acc(rd > 0 ? 1 : 0)));
-                tile_regs_acquire();
-                for (uint32_t e = 0; e < etc; ++e)
-                    for (uint32_t k = 0; k < SE_KC; ++k) rmm(SE_RW, SE_RX, e * SE_KC + k, k * SE_MTR, e * SE_MTR, SE_MTR, SE_KC);
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t t = 0; t < etc * SE_MTR; ++t) pack_tile<true>(t, SE_RO, t);
-                tile_regs_release();
+                for (uint32_t g = 0; g < SE_MTR; g += SE_RG) {
+                    tile_regs_acquire();
+                    for (uint32_t e = 0; e < etc; ++e)
+                        for (uint32_t k = 0; k < SE_KC; ++k) rmm(SE_RW, SE_RX, e * SE_KC + k, k * SE_MTR + g, e * SE_RG, SE_RG, SE_KC);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t e = 0; e < etc; ++e)
+                        for (uint32_t r = 0; r < SE_RG; ++r) pack_tile<true>(e * SE_RG + r, SE_RO, e * SE_MTR + g + r);
+                    tile_regs_release();
+                }
                 cb_pop_front(SE_RX, SE_KC * SE_MTR);
                 cb_pop_front(SE_RW, etc * SE_KC);
             }
@@ -1251,18 +1274,28 @@ class SeEngine3:
             self.rtr = router
             if router is not None:
                 self.ETC = -(-router["ET"] // GX)
-                assert (
-                    self.ETC * MT * self.NCH <= 8
-                ), "the router logits on the engine: ETC x rows of every chunk in DEST"
+                MTR = MT * self.NCH
+                # (DEST: ETC x a row group's tiles <= 8 - every chunk's rows at once, else a chunk's MT at a time)
+                self.RG = MTR if self.ETC * MTR <= 8 else MT
+                assert self.ETC * self.RG <= 8, "the router logits on the engine: ETC x MT rows in DEST"
                 KTO = router["KTO"]
-                self.KC = KTO // 2 if KTO % 2 == 0 else KTO  # (K chunk: x / W_r^T rounds - two, a buffer each)
-                rsz = [
-                    ("rx", 2 * self.KC * MT * self.NCH * 2048),
-                    ("rw", 2 * self.ETC * self.KC * 2048),
-                    ("ro", self.ETC * MT * self.NCH * 4096),
-                ]
-                need = sum(al(v) for _, v in rsz)
+                # (K chunk: x / W_r^T rounds, two buffers - two rounds (KTO / 2) where the region fits past the
+                # words, else more, smaller rounds behind the receivers' acks: the largest that fits)
                 t0 = off[rsr[0][0]] if rsr else o
+                kcs = sorted((d for d in range(1, KTO + 1) if KTO % d == 0 and KTO // d >= 2), reverse=True)
+                for self.KC in kcs:
+                    rsz = [
+                        ("rx", 2 * self.KC * MTR * 2048),
+                        ("rw", 2 * self.ETC * self.KC * 2048),
+                        ("ro", self.ETC * MTR * 4096),
+                    ]
+                    need = sum(al(v) for _, v in rsz)
+                    if (
+                        o - t0 >= need
+                        or self.KC == kcs[-1]
+                        or (self.KC == kcs[0] and KTO // self.KC == 2 and o + need <= ARENA_MAX)
+                    ):
+                        break
                 if o - t0 < need:
                     hall = off["xin"] - off["hall"]
                     t0 = off["hall"] if down and hall >= need else o
@@ -1635,7 +1668,8 @@ class SeEngine3:
             nct_len += len(ttnn.TensorAccessorArgs(prep["xbuf"]).get_compile_time_args()) if prep is not None else 0
             nd += "#define SE_RTR\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RTR_CB.items())
             nd += f"#define SE_KTO {self.rtr['KTO']}\n#define SE_ETC {self.ETC}\n#define SE_ET {self.rtr['ET']}\n"
-            nd += f"#define SE_MTR {MT * self.NCH}\n"  # (the logits: my rows of every chunk, at the start)
+            nd += f"#define SE_MTR {MT * self.NCH}\n#define SE_RG {self.RG}\n"  # (the logits: my rows of every chunk, at the start)
+            nd += f"#define XACK_ID {XACK}\n#define WACK_ID {WACK}\n"
             nd += f"#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
             if rtr.get("gate"):
                 nd += f"#define SE_RTR_GATE\n#define RGATE_ID {RGATE}\n"
