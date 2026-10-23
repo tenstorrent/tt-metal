@@ -9,6 +9,8 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -19,8 +21,9 @@
 // sequences, merges them into one copy and passes the differing value through a register. That is fine for
 // normal code but not for an immediate, and the build fails with "impossible constraint in 'asm'". Keeping each
 // stage a separate function keeps every init's operand a constant.
-constexpr uint32_t tap_count = 4;
-constexpr uint32_t dst_tiles = 4;
+using qkv_conv_bw::tap_count;
+constexpr uint32_t dst_tiles = qkv_conv_bw::dest_tiles;
+static_assert(dst_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
 constexpr auto DEST_TO_SRCB = EltwiseBinaryReuseDestType::DEST_TO_SRCB;
 static_assert(DST_ACCUM_MODE, "the conv accumulates its 4 taps in fp32 DST");
 

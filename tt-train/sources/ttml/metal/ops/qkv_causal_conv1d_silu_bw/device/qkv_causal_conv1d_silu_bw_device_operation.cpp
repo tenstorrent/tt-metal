@@ -78,7 +78,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         "{}: input must be [1,T,Q+K+V]",
         op_name);
     TT_FATAL(
-        in.history.logical_shape() == Shape({1, 3, static_cast<uint32_t>(c)}),
+        in.history.logical_shape() == Shape({1, qkv_conv_bw::halo_rows, static_cast<uint32_t>(c)}),
         "{}: history must be [1,3,Q+K+V]",
         op_name);
     TT_FATAL(

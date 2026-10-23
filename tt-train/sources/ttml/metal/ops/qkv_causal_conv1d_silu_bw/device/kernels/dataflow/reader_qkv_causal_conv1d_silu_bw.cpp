@@ -10,10 +10,11 @@
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 
-constexpr uint32_t tap_count = 4;
-constexpr uint32_t halo_rows = tap_count - 1;
-constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
+using qkv_conv_bw::halo_rows;
+using qkv_conv_bw::tap_count;
+using qkv_conv_bw::tile_height;
 
 // Per work item (channel_block, split): weights, then for every 32-row step a 35-row input window (3 rows of history or
 // previous rows + 32 new rows), 4 shifted copies of it, and the matching grad_q/k/v tiles.

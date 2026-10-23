@@ -10,10 +10,11 @@
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 
-constexpr uint32_t tap_count = 4;
-constexpr uint32_t halo_rows = tap_count - 1;
-constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
+using qkv_conv_bw::halo_rows;
+using qkv_conv_bw::tap_count;
+using qkv_conv_bw::tile_height;
 
 // Keeps the previous grad_preact tile as rows in a 35-row window. When the next grad_preact tile arrives, its first 3
 // rows complete the window, 4 shifted copies are pushed for the grad_input conv of the previous tile, then grad_input

@@ -10,14 +10,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 #include "qkv_causal_conv1d_silu_bw_device_operation_types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
-inline constexpr uint32_t qkv_conv_bw_tap_count = 4;
-inline constexpr uint32_t qkv_conv_bw_window_rows =
-    tt::constants::TILE_HEIGHT + qkv_conv_bw_tap_count - 1;  // 3 rows above + 32
+inline constexpr uint32_t qkv_conv_bw_tap_count = qkv_conv_bw::tap_count;
+inline constexpr uint32_t qkv_conv_bw_window_rows = qkv_conv_bw::window_rows;
 
 struct QkvCausalConv1dSiluBackwardDataflowBuffer {
     std::string_view name;
