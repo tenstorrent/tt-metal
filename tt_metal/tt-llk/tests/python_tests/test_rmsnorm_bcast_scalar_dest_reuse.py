@@ -143,6 +143,9 @@ def _clear_dest_values(mathop):
         return [True]
     return [False, True]
 
+
+def _skip_unsupported(formats, dest_acc):
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -287,7 +290,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse(
     num_tiles tiles from a single unpack -- swept over both ops, all four fidelities that
     reach distinct ELWMUL code, and the DEST-capacity range of num_tiles.
     """
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _skip_unsupported(formats, dest_acc)
 
     device, seen_A, _seed, scalar = _run(
         formats, dest_acc, mathop, math_fidelity, num_tiles, clear_dest=clear_dest
@@ -324,7 +327,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_mul_accumulates_into_dirty_dest(
     higher counts the tiles past the first would be accumulating onto whatever the previous
     kernel left behind.
     """
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _skip_unsupported(formats, dest_acc)
 
     device, seen_A, seed, scalar = _run(
         formats,
@@ -374,7 +377,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_add_overwrites_dirty_dest(
     about the op -- it is the contrast with ELWADD under an identical dirty DEST that makes
     it a property of the MOP branch.
     """
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _skip_unsupported(formats, dest_acc)
 
     dirty, seen_A, _seed, scalar = _run(
         formats,
@@ -428,7 +431,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_partial_faces(
     num_tiles=2 it is pinned -- halving the term on BH p100a leaves tile 0's uncovered
     faces non-zero and fails here.
     """
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _skip_unsupported(formats, dest_acc)
 
     device, seen_A, _seed, scalar = _run(
         formats,
@@ -492,7 +495,7 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
     golden composes them in the obvious order (transpose the input, then apply the phase
     sum), so a fidelity-dependent failure here means they do not actually compose.
     """
-    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    _skip_unsupported(formats, dest_acc)
 
     device, seen_A, _seed, scalar = _run(
         formats,

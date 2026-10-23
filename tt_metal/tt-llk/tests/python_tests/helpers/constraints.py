@@ -433,7 +433,7 @@ def is_valid_quasar_packer_conversion(
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
 
 
-def fp32_no_dest_acc_skip_reason(formats, dest_acc):
+def skip_reason_32bit_input_without_dest_acc(formats, dest_acc):
     """Why :func:`skip_if_32bit_input_without_dest_acc` skips this variant, or ``None``.
     The exact-op guard in hardware_free/accuracy/test_sfpu_accuracy_budget.py asks it
     too, so its exclusions cannot drift from the skip."""
@@ -444,6 +444,6 @@ def fp32_no_dest_acc_skip_reason(formats, dest_acc):
 
 def skip_if_32bit_input_without_dest_acc(formats, dest_acc):
     """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
-    reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
+    reason = skip_reason_32bit_input_without_dest_acc(formats, dest_acc)
     if reason:
         pytest.skip(reason)

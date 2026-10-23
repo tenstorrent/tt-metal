@@ -1203,12 +1203,12 @@ def _exact_driver_skip(driver, op, formats, dest_acc):
     import inspect
 
     import test_eltwise_unary_sfpu as unary
-    from helpers.constraints import fp32_no_dest_acc_skip_reason
+    from helpers.constraints import skip_reason_32bit_input_without_dest_acc
 
     if driver is unary.test_eltwise_unary_sfpu_isinf_isnan:
         return unary.isinf_isnan_skip_reason(formats, op, dest_acc)
     if "skip_if_32bit_input_without_dest_acc(" in inspect.getsource(driver):
-        return fp32_no_dest_acc_skip_reason(formats, dest_acc)
+        return skip_reason_32bit_input_without_dest_acc(formats, dest_acc)
     return None
 
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -307,10 +308,7 @@ def test_sfpu_reduce(
     reduced_extent,
 ):
 
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if (
         mathop == MathOperation.ReduceRow
