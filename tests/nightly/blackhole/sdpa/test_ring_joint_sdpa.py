@@ -821,6 +821,30 @@ def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
     return int(duration_ns), first_program_records
 
 
+# Warm trace replays measured per perf check, each in its own profiler window (replays of one capture share a runtime
+# ID, so one window would merge them); the median is reported.
+RING_JOINT_TRACE_PERF_REPLAYS = 3
+
+
+def profile_ring_joint_traced_duration_ns(mesh_device, run_with_replay):
+    """Device duration of a traced ring joint op: run_with_replay(measure) captures the op and calls measure(replay).
+    One replay is profiled and discarded first (its records arrive asynchronously and could otherwise land in a
+    measured window), then the median of RING_JOINT_TRACE_PERF_REPLAYS replays is returned with its per-chip
+    durations, in ns, by chip id. The op's duration is the slowest chip's, the critical path."""
+    runs = []
+
+    def measure(replay):
+        profile_ring_joint_runtime_duration_ns(mesh_device, replay)
+        for _ in range(RING_JOINT_TRACE_PERF_REPLAYS):
+            runs.append(profile_ring_joint_runtime_duration_ns(mesh_device, replay))
+
+    run_with_replay(measure)
+    assert len(runs) == RING_JOINT_TRACE_PERF_REPLAYS, "the chunked run did not capture and replay the op"
+    duration_ns, records = sorted(runs, key=lambda run: run[0])[len(runs) // 2]
+    per_chip_ns = {record["chip_id"]: int(record["duration_ns"]) for record in records}
+    return duration_ns, per_chip_ns
+
+
 def to_balanced_growing_cache_layout(src_full, sp_size, chunk_size, last_uploaded_chunk):
     """Pack a growing chunked K/V cache into the per-device slab layout expected by ring joint SDPA.
 
@@ -1803,6 +1827,7 @@ def run_ring_joint_sdpa_chunked(
     kv_mean_offset: float = 0.0,
     chunk_indices: Sequence[int] = None,
     v_single_slot: bool = False,
+    trace_replay_measure=None,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1829,8 +1854,15 @@ def run_ring_joint_sdpa_chunked(
 
     chunk_indices runs only those chunks (each is independent of the ones before it, see below);
     RING_JOINT_CHUNKED_CHUNK_ID, when set, takes precedence with its single chunk.
+
+    trace_replay_measure (perf only, do_check=False, one iteration): each chunk's op is compiled by an eager call, then
+    captured in a trace, and trace_replay_measure(replay) is handed a callable that replays that capture, so the
+    measurement sees the steady state of a traced model rather than first-dispatch host overhead.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
+    assert trace_replay_measure is None or (
+        not do_check and num_iterations == 1
+    ), "trace_replay_measure is a single-iteration perf path"
 
     sp_size = mesh_config.sp_size
     if sp_size < 2:
@@ -2622,6 +2654,36 @@ def run_ring_joint_sdpa_chunked(
                         determinism_mismatch_marker = merge_device_mismatch_markers(
                             determinism_mismatch_marker, mismatch_marker
                         )
+                elif trace_replay_measure is not None:
+                    chunk_call_args = (
+                        config_id,
+                        program_config,
+                        0,
+                        i,
+                        s,
+                        e,
+                        tt_Q,
+                        tt_K,
+                        tt_V,
+                        persistent_output_buffer_k,
+                        persistent_output_buffer_v,
+                        kv_cache_batch_idx_arg,
+                    )
+                    ttnn.deallocate(run_chunk_call(*chunk_call_args))
+                    ttnn.synchronize_device(mesh_device)
+                    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    try:
+                        tt_out = run_chunk_call(*chunk_call_args)
+                    finally:
+                        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                    ttnn.synchronize_device(mesh_device)
+                    try:
+                        trace_replay_measure(
+                            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                        )
+                    finally:
+                        ttnn.release_trace(mesh_device, trace_id)
+                        ttnn.deallocate(tt_out)
                 else:
                     tt_out = run_chunk_call(
                         config_id,
@@ -8864,7 +8926,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 UNROLLED_V_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, ring_size, expected_util)
     ("kimi_k3_unrolled_v", 8, 65.95),  # q160 k512, 96 units in one wave: 5.797 ms
-    ("kimi_k2_7_unrolled_v", 8, 60.72),  # q320 k256 split three ways, interleaved ring steps, 96 cores: 4.198 ms
+    ("kimi_k2_7_unrolled_v", 8, 61.19),  # q320 k256 split three ways, interleaved ring steps, 96 cores: 4.165 ms
 ]
 
 
@@ -8893,9 +8955,9 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
     sdpa_cores = runtime.sdpa_compute_grid[0] * runtime.sdpa_compute_grid[1]
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
-            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+            duration_ns, per_chip_ns = profile_ring_joint_traced_duration_ns(
                 runtime.mesh_device,
-                lambda: run_ring_joint_sdpa_chunked(
+                lambda measure: run_ring_joint_sdpa_chunked(
                     MESH_CONFIG,
                     model,
                     chunk_size=chunk_size,
@@ -8907,6 +8969,7 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
                     max_k_splits=k_splits,
                     matmul_math_fidelity=model.matmul_math_fidelity,
                     runtime=runtime,
+                    trace_replay_measure=measure,
                 ),
             )
     finally:
@@ -8920,7 +8983,8 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
     logger.info(
         f"Unrolled-V chunked final-chunk perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% sdpa_cores={sdpa_cores} "
-        f"(expected {expected_util}), profiler_records={len(perf_records)}"
+        f"(expected {expected_util}), traced, per-chip ms "
+        f"{' '.join(f'{chip}:{ns / 1e6:.3f}' for chip, ns in sorted(per_chip_ns.items()))}"
     )
     lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
     upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
@@ -8945,10 +9009,10 @@ if MESH_CONFIG.is_galaxy:
         ("kimi_k2_7_expanded_k", 8, 48.86, 0.05),
     ]
 else:
-    # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets: K3 4.29 ms, K2.7 3.00 ms, repeatable within 0.5%.
+    # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets: K3 4.29 ms, K2.7 2.92 ms, repeatable within 0.5%.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         ("kimi_k3_expanded_k", 8, 54.10, 0.015),
-        ("kimi_k2_7_expanded_k", 8, 51.50, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 52.97, 0.015),
     ]
 
 
@@ -8989,9 +9053,9 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     sdpa_cores = runtime.sdpa_compute_grid[0] * runtime.sdpa_compute_grid[1]
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
-            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+            duration_ns, per_chip_ns = profile_ring_joint_traced_duration_ns(
                 runtime.mesh_device,
-                lambda: run_ring_joint_sdpa_chunked(
+                lambda measure: run_ring_joint_sdpa_chunked(
                     MESH_CONFIG,
                     model,
                     chunk_size=chunk_size,
@@ -9003,6 +9067,7 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
                     max_k_splits=k_splits,
                     matmul_math_fidelity=model.matmul_math_fidelity,
                     runtime=runtime,
+                    trace_replay_measure=measure,
                 ),
             )
     finally:
@@ -9017,7 +9082,8 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     logger.info(
         f"Expanded-K chunked final-chunk perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% sdpa_cores={sdpa_cores} "
-        f"(expected {expected_util}), profiler_records={len(perf_records)}"
+        f"(expected {expected_util}), traced, per-chip ms "
+        f"{' '.join(f'{chip}:{ns / 1e6:.3f}' for chip, ns in sorted(per_chip_ns.items()))}"
     )
     lower = expected_util * (1 - margin)
     upper = expected_util * (1 + margin)

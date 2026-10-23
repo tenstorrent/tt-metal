@@ -510,7 +510,7 @@ void kernel_main() {
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::interleaved_piece(
-                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count), istep.piece, istep.pieces);
+                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id), istep.piece, istep.pieces);
                 if (ksplit_active) {
                     ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
                 }

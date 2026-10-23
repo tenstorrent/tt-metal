@@ -274,7 +274,13 @@ FORCE_INLINE void prefetch_slice_in_parts(
                     from_output ? output_page_base : input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
                 for (uint32_t range = 0; range <= slice_readiness_bands; ++range) {
                     const auto rows = ttnn::ring_attention_all_gather::readiness_rows(
-                        num_chunks, slice_readiness_bands, slice_readiness_chunk_tiles, valid_rows, part, range);
+                        num_chunks,
+                        slice_readiness_bands,
+                        slice_readiness_chunk_tiles,
+                        valid_rows,
+                        part,
+                        range,
+                        slice_tensor_rank);
                     if (rows.end <= rows.begin) {
                         continue;
                     }

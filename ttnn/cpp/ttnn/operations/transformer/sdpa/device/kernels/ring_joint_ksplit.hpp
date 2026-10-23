@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "dataflow/chunked_prefill_utils.hpp"
+#include "../../../../experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
@@ -60,6 +61,14 @@ inline uint32_t ksplit_valid_local_k_chunks(
 // diagonal, so the reducer's rows are never fully masked.
 inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t split_count) {
     return {split_idx * num_valid / split_count, (split_idx + 1) * num_valid / split_count};
+}
+
+// Band split_idx of a slice of tensor rank `ring_id`: the gather's band split (band_begin), so the K split's remainder
+// chunks rotate over the bands across the ring and each band's chunks arrive in the readiness parts it reads them in.
+inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t split_count, uint32_t ring_id) {
+    return {
+        ttnn::ring_attention_all_gather::band_begin(num_valid, split_count, split_idx, ring_id),
+        ttnn::ring_attention_all_gather::band_begin(num_valid, split_count, split_idx + 1, ring_id)};
 }
 
 // Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the

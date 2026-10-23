@@ -179,7 +179,13 @@ FORCE_INLINE void write_slice_in_parts(
                     bh_idx * output_pages_per_batch_head + slice_tensor_rank * input_pages_per_batch_head;
                 for (uint32_t range = 0; range <= slice_readiness_bands; ++range) {
                     const auto rows = ttnn::ring_attention_all_gather::readiness_rows(
-                        num_chunks, slice_readiness_bands, slice_readiness_chunk_tiles, valid_rows, part, range);
+                        num_chunks,
+                        slice_readiness_bands,
+                        slice_readiness_chunk_tiles,
+                        valid_rows,
+                        part,
+                        range,
+                        slice_tensor_rank);
                     if (rows.end <= rows.begin) {
                         continue;
                     }

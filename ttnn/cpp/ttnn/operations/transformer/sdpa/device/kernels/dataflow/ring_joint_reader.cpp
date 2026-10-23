@@ -1007,7 +1007,7 @@ void kernel_main() {
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::interleaved_piece(
-                ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count), istep.piece, istep.pieces);
+                ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id), istep.piece, istep.pieces);
         }
         // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
         // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
@@ -1304,7 +1304,7 @@ void kernel_main() {
                     fused_op_receiver.wait_part(
                         ring_dir,
                         ttnn::ring_attention_all_gather::readiness_part_of(
-                            source_k_chunk, readiness_num_chunks, ksplit_count));
+                            source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
                 }
 
                 if (packed_sources) {
