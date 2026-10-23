@@ -227,6 +227,7 @@ class SwaDecodeQkv:
                 pt_page,
                 cache_tile,
                 self.rows,
+                self.users,
             ]
             writer_ct = [
                 role,
@@ -995,10 +996,10 @@ class TtMiMoAttention:
         k_cache, v_cache = kv_cache
         fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
         if fused_qkv:
-            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). Its query
-            # does not depend on the positions, so serial writes repeat it with one slot's position each.
-            for pos in writes:
-                q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], pos, page_table, k_cache, v_cache)
+            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). The users
+            # whose positions share a cache tile row (a verify's slots) are written by one core, so a verify needs no
+            # serial writes here.
+            q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], cur_pos, page_table, k_cache, v_cache)
             xqkv.deallocate(True)
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
