@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             CLAMP_NEGATIVE,
             DataFormat::Invalid /* TYPECAST_IN */,
             DataFormat::Invalid /* TYPECAST_OUT */,
-            FUSED_SORT>();
+            FUSED_SORT>(formats.math);
         PROFILER_SYNC();
     }
     {

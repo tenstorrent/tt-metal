@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SITU, TorchExpert

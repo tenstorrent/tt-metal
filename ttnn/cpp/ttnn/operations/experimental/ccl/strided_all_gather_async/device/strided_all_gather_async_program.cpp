@@ -21,6 +21,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -571,6 +572,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
             std::optional<tt::tt_fabric::FabricMuxV2Config> mux_v2_config;
             if (use_mux_v2) {
                 mux_v2_config.emplace(
+                    *mesh_device,
                     static_cast<uint8_t>(num_full_size_channels),
                     static_cast<uint8_t>(num_buffers_full_size_channels),
                     buffer_size_bytes_full_size_channel,

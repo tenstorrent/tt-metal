@@ -13,8 +13,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::prim {
 namespace {
@@ -89,8 +91,9 @@ void validate_rm_preconditions(
         static_cast<int>(input.memory_config().memory_layout()),
         static_cast<int>(output.memory_config().memory_layout()));
     TT_FATAL(
-        math_op == tt::tt_metal::ReduceOpMath::SUM,
-        "{} RM path only supports SUM (mean lowered from AVG), got {}",
+        math_op == tt::tt_metal::ReduceOpMath::SUM || math_op == tt::tt_metal::ReduceOpMath::MAX ||
+            math_op == tt::tt_metal::ReduceOpMath::MIN,
+        "{} RM path only supports SUM (mean lowered from AVG), and MAX/MIN as the TILE H-split's stage 2, got {}",
         dim_label,
         math_op);
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);

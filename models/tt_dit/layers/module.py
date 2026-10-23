@@ -19,7 +19,7 @@ from ..utils.progress import Watchdog as _Watchdog
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence, Sequence
     from typing import Any
 
     import torch
@@ -55,6 +55,37 @@ class _LoadProgress:
             logger.info(f"{self._what}: {self._done}/{self._total} tensors ({pct:.0f}%), {elapsed:.0f}s")
 
 
+def release_device_cache(cache: dict) -> None:
+    """Free the device tensors a module's lazy per-shape cache holds and drop those entries.
+
+    `Module.deallocate_weights` frees parameters only; a module that also memoises device
+    constants (pad blocks, masks, filter taps) keyed by input shape would otherwise keep them
+    resident after its eviction, for the life of the process. Entries without a device tensor
+    (compute configs, recorded op choices) are kept: they cost nothing and are expensive to redo.
+    """
+
+    def has_device_tensor(value) -> bool:
+        if isinstance(value, ttnn.Tensor):
+            try:
+                return value.device() is not None
+            except Exception:  # noqa: BLE001 - a dead tensor is not on device
+                return False
+        if isinstance(value, (list, tuple)):
+            return any(has_device_tensor(v) for v in value)
+        return False
+
+    def free(value) -> None:
+        if isinstance(value, ttnn.Tensor):
+            if has_device_tensor(value) and value.is_allocated():
+                ttnn.deallocate(value)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                free(v)
+
+    for key in [k for k, v in cache.items() if has_device_tensor(v)]:
+        free(cache.pop(key))
+
+
 class Module(ABC):
     def __init__(self) -> None:
         self._children = {}
@@ -62,6 +93,7 @@ class Module(ABC):
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
         self._coresident_peers: list[Module] = []
+        self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -250,7 +282,7 @@ class Module(ABC):
                 watchdog.__exit__()
 
     def deallocate_weights(self) -> None:
-        """Deallocate all parameter weights from device memory recursively."""
+        """Deallocate all parameter weights from device memory recursively, then run the eviction hooks."""
         for _, child in self.named_children():
             child.deallocate_weights()
 
@@ -258,6 +290,17 @@ class Module(ABC):
             parameter.deallocate()
 
         self._is_loaded = False
+        for hook in self._eviction_hooks:
+            hook()
+
+    def register_eviction_hook(self, hook: Callable[[], None]) -> None:
+        """Run `hook` whenever this module's weights are deallocated.
+
+        For device state that belongs with the module's residency but lives outside its parameters
+        and children -- an owner's per-geometry caches, for instance -- so that evicting the module
+        frees it too and it is rebuilt lazily on the next use.
+        """
+        self._eviction_hooks.append(hook)
 
     def is_loaded(self) -> bool:
         return self._is_loaded

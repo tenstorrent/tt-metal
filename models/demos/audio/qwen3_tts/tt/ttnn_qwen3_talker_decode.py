@@ -34,7 +34,8 @@ Two hazards inherited rather than rediscovered, both from the XTTS-v2 GPT port:
   * `ttnn.fill_cache` hands each core only its first cache address and walks forward, so a
     write run crossing a head boundary lands in the previous head and leaves positions
     silently zero, identically on every repeat. Safe only when every core gets at most one
-    block or the blocks divide evenly; otherwise the write is chunked.
+    block, so anything longer is chunked: an even split over the cores is not enough, since a
+    core's run still crosses a head whenever its block count does not divide the head's.
 """
 
 import torch
@@ -377,7 +378,7 @@ class TtTalkerCachedDecoder:
         grid = self.device.compute_with_storage_grid_size()
         cores = grid.x * grid.y
         tiles = (length + 31) // 32
-        single_shot = self.kv_heads * tiles <= cores or (self.kv_heads * tiles) % cores == 0
+        single_shot = self.kv_heads * tiles <= cores
         step = fill_step_tiles(self.kv_heads, cores)
 
         for index, layer in enumerate(self.p["layers"]):

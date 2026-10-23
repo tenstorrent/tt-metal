@@ -91,9 +91,3 @@ template <typename T>
 inline constexpr std::string_view long_type_name = detail::long_name<T>();
 
 }  // namespace ttsl
-
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt

@@ -4,7 +4,7 @@
 # the matrix, and a failed shutdown must still fall through to the scoped kill.
 
 # Pipeline constants the runner's binding, the producer and the shutdown helper must agree on.
-MATRIX_CHUNK=${CHUNK:-5120}          # PREFILL_CHUNK_SIZE (knob CHUNK; >= 2048 so the first MSA chunk has 16 blocks)
+MATRIX_CHUNK=${CHUNK:-5120}          # PREFILL_CHUNK_SIZE (knob CHUNK; >= 1024: a cold chunk below 2048 reads the KV cache)
 MATRIX_MAX_NEW=51200        # KV capacity per slot = cached + MATRIX_MAX_NEW (largest default new-token value)
 MATRIX_LAYER_COUNTS=${LAYER_COUNTS:-}   # knob LAYER_COUNTS: PREFILL_PP_LAYER_COUNTS, layers per stage (empty = even split)
 MATRIX_NUM_LAYERS=60

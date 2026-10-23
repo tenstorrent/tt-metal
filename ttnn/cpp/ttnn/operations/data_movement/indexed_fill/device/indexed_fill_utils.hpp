@@ -34,7 +34,7 @@ bool is_native_indexed_fill_sharding(
 //   1. explicit output shard grid (memory_config has a shard_spec) -> that grid
 //   2. any sharded input (input_a > input_b > batch_id)            -> that input's shard grid
 //   3. all worker cores of the device's first sub-device (default fallback)
-CoreRangeSet get_indexed_fill_worker_grid(
+tt::tt_metal::CoreRangeSet get_indexed_fill_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& batch_id,

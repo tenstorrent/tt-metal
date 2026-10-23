@@ -18,6 +18,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -179,21 +180,29 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     bool blocking,
     std::optional<BufferRegion> region) {
     auto lock = lock_api_function_();
+    // The graph-capture hook is per-thread (see GraphTracker's threading contract), and the shard
+    // writes below run on dispatch_thread_pool_ workers, which never see it. So decide here, on the
+    // calling thread: under a NO_DISPATCH capture the buffer's allocation was intercepted and given
+    // the placeholder address 0, and letting a worker write it would put the data at address 0 of
+    // every bank -- for an L1 buffer, over the firmware and mailboxes, which wedges the device.
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            this->write_shard_to_device(buffer, coord, host_data, region, {}, nullptr);
-        };
+        std::vector<MeshCoordinate> coords;
+        std::vector<uint32_t> device_ids;
         for (const auto& coord : device_range) {
             if (mesh_device_->impl().is_local(coord)) {
-                dispatch_thread_pool_->enqueue(
-                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); },
-                    mesh_device_->impl().get_device(coord)->id());
+                coords.push_back(coord);
+                device_ids.push_back(mesh_device_->impl().get_device(coord)->id());
             }
         }
-        dispatch_thread_pool_->wait();
+        dispatch_thread_pool_->parallel_for(device_ids, [this, &buffer, host_data, &region, &coords](size_t i) {
+            this->write_shard_to_device(buffer, coords[i], host_data, region, {}, nullptr);
+        });
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
@@ -235,6 +244,12 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
 
+    // Same as enqueue_write_shard_to_sub_grid: the graph-capture hook is per-thread, and the shard
+    // writes below run on dispatch_thread_pool_ workers, so check it on the calling thread.
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;
 
@@ -254,15 +269,17 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
             }
         };
 
+    std::vector<uint32_t> local_shards;
+    std::vector<uint32_t> device_ids;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->impl().is_local(shard_coord)) {
-            dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-                mesh_device_->impl().get_device(shard_coord)->id());
+            local_shards.push_back(static_cast<uint32_t>(shard_idx));
+            device_ids.push_back(mesh_device_->impl().get_device(shard_coord)->id());
         }
     }
-    dispatch_thread_pool_->wait();
+    dispatch_thread_pool_->parallel_for(
+        device_ids, [&dispatch_lambda, &local_shards](size_t i) { dispatch_lambda(local_shards[i]); });
 
     if (any_pinned_used.load(std::memory_order_relaxed)) {
         this->invalidate_prefetcher_cache_after_pinned_write();

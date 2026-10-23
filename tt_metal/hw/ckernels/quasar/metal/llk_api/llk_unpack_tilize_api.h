@@ -41,13 +41,14 @@ inline void llk_unpack_tilize_init(
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
-        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
-        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), full_ct_dim, block_ct_dim, tensor_shape);
+        const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(bfd_id, full_ct_dim, block_ct_dim, tensor_shape);
     } else {
-        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operand_id);
+        const std::uint8_t bfd_id =
+            llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
+                operand_id);
         _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, full_ct_dim, block_ct_dim);
+            bfd_id, tensor_shape, full_ct_dim, block_ct_dim);
     }
 }
 
@@ -77,8 +78,8 @@ inline void llk_unpack_tilize_block(
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
-    const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
-    const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
+    const LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].cursor_entry_idx;
 
     // Compute how many l1_index units fit in one DFB entry.
     const std::uint32_t entry_size_16B = local_dfb.entry_size;  // DFB entry size in 16B
@@ -158,15 +159,12 @@ inline void llk_unpack_tilizeA_B_init(
 
     // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires a Strided buffer descriptor
     // (y_dim=1, z_dim=1) for operandA; operandB (scalar srcB) uses a Continuous descriptor.
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    [[maybe_unused]] const std::uint8_t bfd_a =
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
+    [[maybe_unused]] const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
 #if defined(REDUCE_OP)
-    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        ct_dim,
-        tensor_shape_A);
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(bfd_a, bfd_b, ct_dim, tensor_shape_A);
 #endif
 }
 
@@ -224,7 +222,7 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
-    const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
+    const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx;
     // Compute how many l1_index units fit in one DFB entry.
     // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
     // l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
@@ -236,7 +234,7 @@ inline void llk_unpack_tilizeA_B(
     const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
     const std::uint32_t l1_index_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     WAYPOINT("UPTW");
 

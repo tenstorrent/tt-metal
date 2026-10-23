@@ -23,7 +23,6 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
-    effective_matmul_ring_size,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -368,10 +367,6 @@ def _run_model_test(
         num_layers = model_cfg.num_layers
         num_iterations = model_cfg.num_iterations
 
-    # Matmul ring size the op (and the weight-prep helpers) auto-detect from the live
-    # DRAM-bank count (12 on WH, 7/8 on BH); used here for the ring-aware width-parallel derivation.
-    ring_n = effective_matmul_ring_size(mesh_device)
-
     _run_moe_compute_impl(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -384,10 +379,7 @@ def _run_model_test(
         N=model_cfg.N,
         hidden_size=model_cfg.hidden_size,
         output_height_shard_dim=model_cfg.output_height_shard_dim,
-        output_width_shard_dim=auto_output_width_shard_dim(
-            model_cfg.hidden_size,
-            matmul_ring_size=ring_n,
-        ),
+        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
         activation_type=activation_type,
@@ -778,7 +770,7 @@ def _get_base_pcc_threshold(activation_type, has_bias):
     act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
         act_threshold = SWIGLU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.SILU:
+    elif activation_type in (MoEActivationFunction.SILU, MoEActivationFunction.CLAMPED_SILU):
         act_threshold = SILU_PCC_THRESHOLD
     elif activation_type == MoEActivationFunction.GELU:
         act_threshold = GELU_PCC_THRESHOLD
@@ -924,6 +916,13 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
     else:
         torch_combine_out = ttnn.to_torch(tt_combine_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
+    return validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold)
+
+
+def validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold):
+    """Compare an already-composed combine output [K, tokens, hidden] against the golden rows
+    flagged in output_data_map. Slots with no flagged row (a device that owns none of the
+    experts a token selected at that k) are skipped."""
     output_ref, output_data_map = combine_goldens
 
     assert torch_combine_out.shape == output_ref[0].shape
@@ -936,6 +935,8 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
                 vals.append(torch_combine_out[k, t, :])
                 refs.append(output_ref[layer_id, k, t, :])
 
+        if not vals:
+            continue
         vals = torch.stack(vals)
         refs = torch.stack(refs)
         _, pcc_val = comp_pcc(refs, vals)
@@ -1381,7 +1382,10 @@ def compute_matmul_golden(
     torch_b1=None,
     torch_b2=None,
     activation_type=MoEActivationFunction.SILU,
+    activation_limit=None,
 ):
+    if (activation_type == MoEActivationFunction.CLAMPED_SILU) != (activation_limit is not None):
+        raise ValueError("activation_limit is required for CLAMPED_SILU and must be omitted for other activations")
     tokens = tokens_per_device * devices
 
     # (L, D, E/D, T, H) -> (L, E, T, H)
@@ -1429,6 +1433,10 @@ def compute_matmul_golden(
         torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
         # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.CLAMPED_SILU:
+        torch_intermediate_ref = torch.nn.functional.silu(
+            torch_w0_output_ref.clamp(max=activation_limit)
+        ) * torch_w1_output_ref.clamp(min=-activation_limit, max=activation_limit)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.GELU:
@@ -2524,11 +2532,6 @@ def test_auto_output_width_shard_dim():
     assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
     assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
     assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
-    # Ring-aware: GPT-OSS width=3 at N=12, falls back to 2 at N=8, and to 1 at N=7 (harvested BH).
-    assert auto_output_width_shard_dim(2880, matmul_ring_size=12) == 3
-    assert auto_output_width_shard_dim(2880, matmul_ring_size=8) == 2
-    assert auto_output_width_shard_dim(2880, matmul_ring_size=7) == 1
-    assert auto_output_width_shard_dim(2880, matmul_ring_size=16) == 2
 
 
 def test_shard_tiles_total_always_correct():

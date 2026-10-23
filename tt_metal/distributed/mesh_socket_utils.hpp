@@ -24,8 +24,13 @@ namespace tt::tt_metal::distributed {
 // Collective over a shared mesh: reject service endpoints before ranks enter different allocators.
 void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoord& endpoint);
 
+// Host I/O is only valid on the rank that owns the endpoint. Sockets resolve this once at
+// construction and check the stored answer on every I/O call: the real-time profiler receiver
+// polls D2H sockets from its own thread, and MeshDevice::is_local reads the mesh view that
+// reshape() replaces without a lock the receiver could take.
 // Descriptor connectors have no MeshDevice and retain host I/O access.
-void validate_host_socket_access(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint);
+bool rank_owns_host_socket_endpoint(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint);
+void validate_host_socket_access(bool rank_owns_endpoint, const MeshCoreCoord& endpoint);
 
 struct SocketSenderSize {
     const uint32_t l1_alignment;

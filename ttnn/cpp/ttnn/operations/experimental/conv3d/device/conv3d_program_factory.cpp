@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
-#include "kernels/conv3d_weight_share.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
@@ -14,11 +15,14 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <array>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <hostdevcommon/common_values.hpp>
 
 namespace ttnn::experimental::prim {
+
+namespace mcast = ttnn::kernel_lib::host;
 
 // Largest divisor of n that is <= cap. Always returns at least 1.
 static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
@@ -28,6 +32,224 @@ static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
         }
     }
     return 1;
+}
+
+Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& config = operation_attributes.config;
+    Conv3dCbGeometry g;
+
+    const uint32_t C_in = input_tensor.logical_shape()[4];
+    const uint32_t padded_C_out = tt::round_up(operation_attributes.output_channels, tt::constants::TILE_WIDTH);
+    const uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
+    const uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
+    const uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
+                                operation_attributes.kernel_size[2] * C_in_block;
+    const uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
+    g.C_in_num_blocks = tt::div_up(C_in, C_in_block);
+    g.matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
+    g.matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
+    g.matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+
+    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t dtype_bytes = input_tensor.element_size();
+    g.tile_size = tt::tile_size(data_format);
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
+    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail (bias add, untilize,
+    // and -- with multiple C_in blocks -- the partial reduction) reads its fp32 tiles back through
+    // UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
+    g.use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
+    // fp32 partials whenever there are multiple C_in blocks and fp32 dest is enabled: no bf16 truncation
+    // between C_in block partial sums.
+    g.use_fp32_partials = fp32_dest_acc_en && g.C_in_num_blocks > 1;
+    g.partial_tile_size = tt::tile_size(g.use_fp32_partials ? tt::DataFormat::Float32 : data_format);
+    g.use_bias = tensor_args.bias_tensor.has_value();
+    g.operand_split = config.enable_fp32_operand_split;
+
+    g.padded_patch_size_bytes = tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;
+    g.C_in_block_bytes = C_in_block * dtype_bytes;
+    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before the next is pushed;
+    // double-buffered when num_patches is not tile-aligned, so reader pushes and compute tilize pops cannot
+    // deadlock on the partial last row.
+    g.vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
+                             ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
+                             : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+
+    // Matmul subblock sizing. out_subblock_w fills the dst register row; out_subblock_h batches multiple
+    // tile-rows per matmul call for weight reuse. On Wormhole B0 the matmul unit benefits from sub_h > 1
+    // (preferred 2x4 subblock). On Blackhole the row-by-row fused tilize+matmul is faster with the current
+    // row-major subblock layout, so keep sub_h = 1 with optimized blockings.
+    const uint32_t dst_size = ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
+    const uint32_t out_subblock_w = std::min(g.matmul_N_t, dst_size);
+    const bool scale_subblock_h =
+        input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && out_subblock_w == g.matmul_N_t;
+    g.out_subblock_h = scale_subblock_h ? largest_divisor_up_to(g.matmul_M_t, dst_size / out_subblock_w) : 1;
+
+    g.in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
+    g.num_dram_banks = static_cast<uint32_t>(input_tensor.device()->num_dram_channels());
+    TT_FATAL(g.num_dram_banks > 0, "Device must report at least one DRAM channel");
+    g.input_is_dram_interleaved =
+        input_tensor.buffer()->is_dram() &&
+        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        !input_tensor.buffer()->buffer_distribution_spec().has_value();
+    g.dram_read_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const bool input_pages_are_dram_read_aligned = g.in_row_size_bytes % g.dram_read_alignment == 0;
+    const bool c_in_slice_is_dram_read_aligned = g.C_in_block_bytes % g.dram_read_alignment == 0;
+    g.enable_dram_read_staging =
+        g.input_is_dram_interleaved && input_pages_are_dram_read_aligned && !c_in_slice_is_dram_read_aligned;
+    // The staged reader rounds the DRAM source down by at most alignment - 1 bytes and reads a full aligned
+    // window. The scratch CB itself may only be L1-aligned, so reserve one extra alignment chunk to let the
+    // kernel round its scratch base up safely.
+    const uint32_t max_staged_dram_window_bytes =
+        tt::round_up(g.C_in_block_bytes + g.dram_read_alignment - 1, g.dram_read_alignment);
+    g.dram_read_scratch_page_bytes =
+        g.enable_dram_read_staging ? max_staged_dram_window_bytes + g.dram_read_alignment : 0;
+    // Logical-pad masking: opt-in. The per-device [h_start, w_start] offset page lands in a tiny CB.
+    g.mask_mode = tensor_args.pad_offset_tensor.has_value() &&
+                  (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
+    g.pad_offset_page_bytes =
+        g.mask_mode ? tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), g.dram_read_alignment) : 0;
+
+    // The prefetch shard covers the full receptive field span for one spatial block, including padding
+    // positions: not capped at T_in/H_in/W_in, since padding positions outside the input are stored in the
+    // shard (zero-filled or clamped) so that the gather can index without boundary checks.
+    const auto& kernel = operation_attributes.kernel_size;
+    const auto& stride = operation_attributes.stride;
+    const auto& dilation = operation_attributes.dilation;
+    const bool has_spatial_reuse = kernel[0] > 1 || kernel[1] > 1 || kernel[2] > 1;
+    const bool has_no_dilation = dilation[0] == 1 && dilation[1] == 1 && dilation[2] == 1;
+    const uint32_t W_shard_full = (config.W_out_block - 1) * stride[2] + kernel[2];
+    if (has_spatial_reuse && has_no_dilation) {
+        g.T_shard = (config.T_out_block - 1) * stride[0] + kernel[0];
+        g.H_shard = (config.H_out_block - 1) * stride[1] + kernel[1];
+        g.W_shard = W_shard_full;
+        g.shard_positions = g.T_shard * g.H_shard * g.W_shard;
+        g.shard_rows = g.T_shard * g.H_shard;
+    }
+    // Coalescing pays for a scratch L1 reorder pass; require enough columns to give each DRAM bank multiple
+    // pages so the larger bank-local bursts amortize the extra L1 traffic.
+    g.coalesced_candidate = g.input_is_dram_interleaved && g.C_in_num_blocks == 1 &&
+                            g.C_in_block_bytes == g.in_row_size_bytes && W_shard_full >= 2 * g.num_dram_banks;
+    return g;
+}
+
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+    // The static circular buffers at a given out_subblock_h: every CB but the prefetch shard.
+    auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
+        uint32_t bytes = g.vol2col_rm_pages * g.padded_patch_size_bytes +     // vol2col_rm
+                         sub_h * g.matmul_K_t * g.tile_size +                 // vol2col_tiled
+                         g.matmul_K_t * g.matmul_N_t * g.tile_size +          // weight_tiled
+                         g.matmul_M_t * g.matmul_N_t * g.partial_tile_size +  // matmul_interm (may be fp32)
+                         g.matmul_M_t * g.matmul_N_t * g.tile_size +          // matmul_result_rm
+                         g.dram_read_scratch_page_bytes + g.pad_offset_page_bytes;
+        if (g.C_in_num_blocks > 1) {
+            bytes += g.matmul_M_t * g.matmul_N_t * g.partial_tile_size + g.tile_size;  // reduction + worker_ack
+            if (g.use_fp32_partials && g.use_fp32_exact) {
+                bytes += g.matmul_M_t * g.matmul_N_t * g.partial_tile_size;  // reduction_acc
+            }
+        }
+        if (g.use_bias) {
+            bytes += g.matmul_N_t * g.tile_size;
+        }
+        if (g.operand_split) {
+            bytes += 2 * sub_h * g.matmul_K_t * g.tile_size +
+                     g.matmul_K_t * g.matmul_N_t * g.tile_size;  // x_hi, x_lo, weight_lo
+        }
+        return bytes;
+    };
+
+    Conv3dL1Plan plan;
+    // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo CBs by
+    // out_subblock_h; blockings swept on Blackhole's larger L1 can overrun Wormhole's. Shrink sub_h toward 1
+    // until the static CBs fit the planning budget; the prefetch shard below is budgeted from whatever is left.
+    plan.out_subblock_h = g.out_subblock_h;
+    while (plan.out_subblock_h > 1 && static_cb_bytes_for(plan.out_subblock_h) > budget.planning) {
+        const uint32_t shrunk = largest_divisor_up_to(g.matmul_M_t, plan.out_subblock_h - 1);
+        log_debug(
+            tt::LogOp,
+            "conv3d: static CBs at out_subblock_h={} ({} B) do not fit the {} B budget; trying {}",
+            plan.out_subblock_h,
+            static_cb_bytes_for(plan.out_subblock_h),
+            budget.planning,
+            shrunk);
+        plan.out_subblock_h = shrunk;
+    }
+
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
+    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
+    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
+    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
+    // reported by the enqueue-time region check.
+    plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
+    TT_FATAL(
+        plan.static_cb_bytes <= budget.span,
+        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
+        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
+        "T/H/W_out_block)",
+        plan.static_cb_bytes,
+        plan.out_subblock_h,
+        g.matmul_M_t,
+        g.matmul_K_t,
+        g.matmul_N_t,
+        g.C_in_num_blocks,
+        budget.span);
+
+    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
+    // once per spatial block, then vol2col reads from L1. Budget: what the static CBs leave of the planning
+    // budget, capped; none when the static CBs already exceed it.
+    constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
+    plan.l1_prefetch_max_bytes = plan.static_cb_bytes < budget.planning
+                                     ? std::min(budget.planning - plan.static_cb_bytes, L1_PREFETCH_HARD_CAP)
+                                     : 0;
+    if (g.shard_positions == 0) {
+        return plan;
+    }
+    const uint32_t shard_bytes = g.shard_positions * g.C_in_block_bytes;
+    const uint32_t coalesced_scratch_row_bytes = g.W_shard * g.C_in_block_bytes;
+    const uint32_t coalesced_scratch_rows_fit =
+        (coalesced_scratch_row_bytes > 0 && shard_bytes < plan.l1_prefetch_max_bytes)
+            ? (plan.l1_prefetch_max_bytes - shard_bytes) / coalesced_scratch_row_bytes
+            : 0;
+    const uint32_t coalesced_scratch_rows_candidate =
+        g.coalesced_candidate ? std::min(g.shard_rows, coalesced_scratch_rows_fit) : 0;
+    // Keep at least one row per DRAM bank in scratch when possible; smaller batches underfill the coalesced
+    // gather and tend to lose to the direct reader after the L1 reorder cost.
+    const uint32_t coalesced_scratch_rows_min = g.coalesced_candidate ? std::min(g.shard_rows, g.num_dram_banks) : 0;
+    const uint32_t shard_bytes_with_coalesced_scratch =
+        (g.shard_positions + coalesced_scratch_rows_candidate * g.W_shard) * g.C_in_block_bytes;
+    if (shard_bytes <= plan.l1_prefetch_max_bytes) {
+        plan.prefetch_shard = true;
+        const bool coalesced = g.coalesced_candidate &&
+                               coalesced_scratch_rows_candidate >= coalesced_scratch_rows_min &&
+                               shard_bytes_with_coalesced_scratch <= plan.l1_prefetch_max_bytes;
+        plan.coalesced_scratch_rows = coalesced ? coalesced_scratch_rows_candidate : 0;
+    }
+    return plan;
+}
+
+Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
+    // Circular buffers are placed upward from the allocator's L1 base and L1 buffers are allocated downward
+    // from the top of L1. The plan keeps a fixed headroom below the top for the L1 buffers that are live when
+    // the program runs (sharded operands of neighbouring ops, CCL and semaphore buffers). The budget is a
+    // function of the device configuration only: the program cache keys on the attributes and the tensor
+    // specs, and a traced program replays under whatever L1 state exists then, so a plan drawn from the live
+    // allocator frontier at create time would describe neither.
+    Conv3dL1Budget budget;
+    budget.span = static_cast<uint32_t>(
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    TT_FATAL(
+        budget.span > L1_TENSOR_HEADROOM,
+        "conv3d: {} B of L1 above the allocator base cannot hold the {} B headroom for L1 buffers",
+        budget.span,
+        L1_TENSOR_HEADROOM);
+    budget.planning = budget.span - L1_TENSOR_HEADROOM;
+    return budget;
+}
+
+Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    return plan_l1(
+        derive_cb_geometry(operation_attributes, tensor_args), conv3d_l1_cb_budget(tensor_args.input_tensor.device()));
 }
 
 tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
@@ -51,6 +273,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const auto& config = operation_attributes.config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     ProgramDescriptor desc;
+
+    // The CB sizes and the L1 plan. Both follow from the attributes, the tensor specs and the device
+    // configuration, like the program cache key, so a cached program is the one this call would build.
+    const Conv3dCbGeometry geometry = derive_cb_geometry(operation_attributes, tensor_args);
+    const Conv3dL1Plan plan = plan_l1(geometry, conv3d_l1_cb_budget(input_tensor.device()));
 
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -80,7 +307,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     // Extract compute kernel config early (needed for CB format decisions)
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_config);
 
     /* Shapes/sizes needed in the kernel
         Reader does volume2column to convert some `T_block x H_block x W_block` of activation
@@ -119,20 +346,14 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         C_out_num_blocks,
         C_out_block);
 
-    uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
-    uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
-    uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+    const uint32_t matmul_M_t = geometry.matmul_M_t;
+    const uint32_t matmul_K_t = geometry.matmul_K_t;
+    const uint32_t matmul_N_t = geometry.matmul_N_t;
 
-    // Matmul subblock sizing. out_subblock_w fills the dst register row; out_subblock_h
-    // batches multiple tile-rows per matmul call for weight reuse.
-    // On Wormhole B0 the matmul unit benefits from sub_h > 1 (preferred 2x4 subblock).
-    // On Blackhole the row-by-row fused tilize+matmul is faster with the current
-    // row-major subblock layout, so keep sub_h = 1 with optimized blockings.
+    // Matmul subblock sizing is derive_cb_geometry's; out_subblock_h is the plan's, after the L1 shrink.
     const uint32_t dst_size = ttnn::get_dest_reg_count(compute_kernel_config);
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
-    const auto arch = tt::tt_metal::hal::get_arch();
-    const bool scale_subblock_h = arch == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
-    const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
+    const uint32_t out_subblock_h = plan.out_subblock_h;
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
     const bool small_output_write_transactions =
         output_write_bytes_per_transaction <= tt::constants::TILE_WIDTH * dtype_bytes;
@@ -163,16 +384,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
-    // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h
-    // tile-rows before each matmul call, so vol2col_tiled needs out_subblock_h*K_t
-    // tiles instead of the full M_t*K_t.
-    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before
-    // the next is pushed.
-    // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
-    // between reader pushes and compute tilize pops on the partial last row.
-    uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
-                                    ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
-                                    : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+    // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h tile-rows before each matmul
+    // call, so vol2col_tiled needs out_subblock_h*K_t tiles instead of the full M_t*K_t. The page counts, the
+    // fp32 flags and the sub_h shrink that keeps the static CBs inside L1 are derive_cb_geometry's / plan_l1's.
+    const uint32_t vol2col_rm_pages = geometry.vol2col_rm_pages;
+    const bool use_fp32_exact = geometry.use_fp32_exact;
+    const bool use_fp32_partials = geometry.use_fp32_partials;
+    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
+    const uint32_t partial_tile_size = geometry.partial_tile_size;
+
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = vol2col_rm_pages * padded_patch_size_bytes,
@@ -205,16 +425,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .page_size = tile_size,
         }}},
     });
-
-    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
-    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
-    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
-    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
-    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
-    // This eliminates bf16 truncation between C_in block partial sums.
-    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
-    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
-    auto partial_tile_size = tt::tile_size(partial_data_format);
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
@@ -349,31 +559,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
     // validate() fatals on a halo buffer with any other padding mode, so presence is the whole test.
     const bool halo_mode = tensor_args.halo_buffer.has_value();
-    // Logical-pad masking: opt-in.
-    const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
-                           (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
+    // Logical-pad masking (opt-in) and the reader's DRAM read staging are derive_cb_geometry's.
+    const bool mask_mode = geometry.mask_mode;
 
-    uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
+    const uint32_t in_row_size_bytes = geometry.in_row_size_bytes;
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
-    const uint32_t device_num_dram_banks = static_cast<uint32_t>(input_tensor.device()->num_dram_channels());
-    TT_FATAL(device_num_dram_banks > 0, "Device must report at least one DRAM channel");
-    const bool input_is_dram_interleaved =
-        input_tensor.buffer()->is_dram() &&
-        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        !input_tensor.buffer()->buffer_distribution_spec().has_value();
-    const uint32_t dram_read_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const bool input_pages_are_dram_read_aligned = in_row_size_bytes % dram_read_alignment == 0;
-    const bool c_in_slice_is_dram_read_aligned = C_in_block_bytes % dram_read_alignment == 0;
-    const bool enable_dram_read_staging =
-        input_is_dram_interleaved && input_pages_are_dram_read_aligned && !c_in_slice_is_dram_read_aligned;
-    // The staged reader rounds the DRAM source down by at most alignment - 1 bytes and reads
-    // a full aligned window.  The scratch CB itself may only be L1-aligned, so reserve one
-    // extra alignment chunk to let the kernel round its scratch base up safely.
-    const uint32_t max_staged_dram_window_bytes =
-        tt::round_up(C_in_block_bytes + dram_read_alignment - 1, dram_read_alignment);
-    const uint32_t dram_read_scratch_page_bytes =
-        enable_dram_read_staging ? max_staged_dram_window_bytes + dram_read_alignment : 0;
+    const uint32_t device_num_dram_banks = geometry.num_dram_banks;
+    const uint32_t dram_read_alignment = geometry.dram_read_alignment;
+    const bool enable_dram_read_staging = geometry.enable_dram_read_staging;
+    const uint32_t dram_read_scratch_page_bytes = geometry.dram_read_scratch_page_bytes;
     uint32_t cb_dram_read_scratch_id = 32;  // Invalid; set below if DRAM read staging is needed
     if (enable_dram_read_staging) {
         cb_dram_read_scratch_id = next_cb_index++;
@@ -391,8 +586,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Tiny landing CB for the per-device [h_start, w_start] offset page (mask mode only).
     uint32_t cb_pad_offset_id = 32;  // Invalid; set below if masking is enabled
     if (mask_mode) {
-        const uint32_t pad_offset_page_bytes =
-            tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), dram_read_alignment);
+        const uint32_t pad_offset_page_bytes = geometry.pad_offset_page_bytes;
         cb_pad_offset_id = next_cb_index++;
         desc.cbs.push_back(CBDescriptor{
             .total_size = pad_offset_page_bytes,
@@ -405,52 +599,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
-    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
-    // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
-    // hal::get_max_worker_l1_unreserved_size() gives total L1 for CBs + kernel code;
-    // subtract a conservative 200 KB reserve for kernel code/stack.
-    constexpr uint32_t L1_KERNEL_CODE_RESERVE = 200 * 1024;
-    constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
-    const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
-
-    uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
-                               (tile_size * out_subblock_h * matmul_K_t) +      // vol2col_tiled
-                               (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
-                               (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
-                               (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
-    if (enable_dram_read_staging) {
-        other_cbs_bytes += dram_read_scratch_page_bytes;
-    }
-    if (C_in_num_blocks > 1) {
-        other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
-        other_cbs_bytes += tile_size;                                    // worker_ack
-        if (use_fp32_partials && use_fp32_exact) {
-            other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction_acc
-        }
-    }
-    if (use_bias) {
-        other_cbs_bytes += tile_size * matmul_N_t;  // bias
-    }
-    if (operand_split) {
-        other_cbs_bytes += 2 * tile_size * out_subblock_h * matmul_K_t;
-        other_cbs_bytes += tile_size * matmul_K_t * matmul_N_t;
-    }
-    uint32_t l1_prefetch_max_bytes =
-        (other_cbs_bytes < l1_usable_for_cbs) ? std::min(l1_usable_for_cbs - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
-
-    const uint32_t kT = operation_attributes.kernel_size[0];
-    const uint32_t kH = operation_attributes.kernel_size[1];
-    const uint32_t kW = operation_attributes.kernel_size[2];
+    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
+    // once per spatial block, then vol2col reads from L1. Whether it exists, and how many rows of
+    // coalesced-read scratch it carries, is the plan's decision (plan_l1).
     const uint32_t W_shard_full_for_coalesce =
         (config.W_out_block - 1) * operation_attributes.stride[2] + operation_attributes.kernel_size[2];
     const uint32_t coalesced_read_row_bytes = C_in_block_bytes;
-    // Coalescing pays for a scratch L1 reorder pass; require enough columns to give each
-    // DRAM bank multiple pages so the larger bank-local bursts amortize the extra L1 traffic.
-    const uint32_t coalesced_min_w_shard = 2 * device_num_dram_banks;
-    const bool coalesced_shard_reads_candidate = input_is_dram_interleaved && C_in_num_blocks == 1 &&
-                                                 C_in_block_bytes == in_row_size_bytes &&
-                                                 W_shard_full_for_coalesce >= coalesced_min_w_shard;
 
     uint32_t cb_input_shard_id = 32;  // Invalid; set below if using L1 prefetch
     uint32_t T_shard_max = 0;
@@ -459,47 +613,19 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     bool enable_coalesced_shard_reads = false;
     uint32_t coalesced_scratch_rows = 0;
 
-    const bool has_spatial_reuse = (kT > 1 || kH > 1 || kW > 1);
-    const bool has_no_dilation =
-        (operation_attributes.dilation[0] == 1 && operation_attributes.dilation[1] == 1 &&
-         operation_attributes.dilation[2] == 1);
-
-    if (has_spatial_reuse && has_no_dilation) {
-        // Shard covers the full receptive field span for one spatial block, including padding positions.
-        // Do NOT cap at T_in/H_in/W_in — padding positions outside input bounds are stored in the shard
-        // (zero-filled or clamped) so that Phase 2 can index without boundary checks.
-        T_shard_max = (config.T_out_block - 1) * operation_attributes.stride[0] + kT;
-        H_shard_max = (config.H_out_block - 1) * operation_attributes.stride[1] + kH;
-        W_shard_max = (config.W_out_block - 1) * operation_attributes.stride[2] + kW;
-        uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
-        uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
-        uint32_t shard_rows_max = T_shard_max * H_shard_max;
-        uint32_t coalesced_scratch_pages_per_row = W_shard_max;
-        uint32_t coalesced_scratch_row_bytes = coalesced_scratch_pages_per_row * C_in_block_bytes;
-        uint32_t coalesced_scratch_rows_fit = (coalesced_scratch_row_bytes > 0 && shard_bytes < l1_prefetch_max_bytes)
-                                                  ? (l1_prefetch_max_bytes - shard_bytes) / coalesced_scratch_row_bytes
-                                                  : 0;
-        uint32_t coalesced_scratch_rows_candidate =
-            coalesced_shard_reads_candidate ? std::min(shard_rows_max, coalesced_scratch_rows_fit) : 0;
-        // Keep at least one row per DRAM bank in scratch when possible; smaller batches underfill the
-        // coalesced gather and tend to lose to the direct reader after the L1 reorder cost.
-        uint32_t coalesced_scratch_rows_min =
-            coalesced_shard_reads_candidate ? std::min(shard_rows_max, device_num_dram_banks) : 0;
-        uint32_t coalesced_scratch_positions = coalesced_scratch_rows_candidate * coalesced_scratch_pages_per_row;
-        uint32_t shard_positions_with_coalesced_scratch = shard_positions_max + coalesced_scratch_positions;
-        uint32_t shard_bytes_with_coalesced_scratch = shard_positions_with_coalesced_scratch * C_in_block_bytes;
-
-        if (shard_bytes <= l1_prefetch_max_bytes) {
-            enable_coalesced_shard_reads = coalesced_shard_reads_candidate &&
-                                           coalesced_scratch_rows_candidate >= coalesced_scratch_rows_min &&
-                                           shard_bytes_with_coalesced_scratch <= l1_prefetch_max_bytes;
-            coalesced_scratch_rows = enable_coalesced_shard_reads ? coalesced_scratch_rows_candidate : 0;
-            const uint32_t shard_positions_alloc =
-                shard_positions_max + coalesced_scratch_rows * coalesced_scratch_pages_per_row;
+    if (geometry.shard_positions > 0) {
+        T_shard_max = geometry.T_shard;
+        H_shard_max = geometry.H_shard;
+        W_shard_max = geometry.W_shard;
+        const uint32_t shard_bytes = geometry.shard_positions * C_in_block_bytes;
+        if (plan.prefetch_shard) {
+            coalesced_scratch_rows = plan.coalesced_scratch_rows;
+            enable_coalesced_shard_reads = coalesced_scratch_rows > 0;
+            const uint32_t shard_positions_alloc = geometry.shard_positions + coalesced_scratch_rows * W_shard_max;
             const uint32_t shard_bytes_alloc = shard_positions_alloc * C_in_block_bytes;
             cb_input_shard_id = next_cb_index++;
             desc.cbs.push_back(CBDescriptor{
-                .total_size = shard_positions_alloc * C_in_block_bytes,
+                .total_size = shard_bytes_alloc,
                 .core_ranges = CoreRangeSet(core_grid),
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(cb_input_shard_id),
@@ -515,8 +641,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 T_shard_max,
                 H_shard_max,
                 W_shard_max,
-                shard_positions_max,
-                coalesced_scratch_rows * coalesced_scratch_pages_per_row,
+                geometry.shard_positions,
+                coalesced_scratch_rows * W_shard_max,
                 shard_bytes_alloc,
                 cb_input_shard_id);
         } else {
@@ -524,7 +650,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 tt::LogOp,
                 "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",
                 shard_bytes,
-                l1_prefetch_max_bytes);
+                plan.l1_prefetch_max_bytes);
             T_shard_max = 0;
             H_shard_max = 0;
             W_shard_max = 0;
@@ -659,41 +785,22 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
     const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
 
-    // Weight sharing: all cores with the same (c_in_idx, c_out_idx) read identical weights.
-    // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp):
-    //   Disabled — single-core group: each active core reads its own weight slice.
-    //   Chain    — per-group forwarding chain (SDPA-style hop chain).
-    //   Mcast    — each group multicasts over its own row-strip rectangle.
-    //
-    // Layout for mcast: each group occupies a strip of contiguous full-width rows; the strips
-    // stack along Y. Within a strip, active cores fill row-major and the trailing slots of the
-    // last row become passive participants. This makes every group a clean rectangle, lets each
-    // one fire its own hardware multicast, and keeps reduction-pair members vertically aligned
-    // (same x, y differing by a multiple of strip height) so reduction reads stay short.
-    //
-    // Ceiling-sized chunks can leave the trailing slots of a dimension without work (e.g. 5 blocks
-    // over 4 slots = 2+2+1+0), so a group's active member count can be below its nominal slot
-    // count. Strips are sized from the active count, and so is the fit check. Every group has
-    // the same active count: C_in has no empty partitions (c_in_per_core == 1), and an empty C_out
-    // partition forces group_size == 1. Falls back to chain if the strips don't fit.
+    // Weight groups have the same (C_in, C_out) slice. Prefer one full-width row strip per
+    // group when all strips fit; otherwise pack active assignments consecutively in row-major
+    // order. The family chooses the transport from the resulting logical receiver sets.
+    // Ceiling-sized chunks can leave empty spatial partitions, so placement uses active counts.
     auto active_slots = [](uint32_t blocks, uint32_t factor) { return tt::div_up(blocks, tt::div_up(blocks, factor)); };
     const uint32_t group_size = active_slots(T_out_blocks, t_out_parallel_factor) *
                                 active_slots(H_out_blocks, h_out_parallel_factor) *
                                 active_slots(W_out_blocks, w_out_parallel_factor);
     const uint32_t num_groups = c_in_parallel_factor * c_out_parallel_factor;
-    WeightShareMode weight_share_mode = WeightShareMode::Disabled;
-    if (group_size > 1) {
-        const uint32_t rows_per_group = tt::div_up(group_size, (uint32_t)grid_size.x);
-        const bool mcast_fits = (uint64_t)num_groups * rows_per_group <= grid_size.y;
-        weight_share_mode = mcast_fits ? WeightShareMode::Mcast : WeightShareMode::Chain;
-    }
-    if (operand_split) {
-        weight_share_mode = WeightShareMode::Disabled;
-    }
+    const bool share_weights = group_size > 1 && !operand_split;
+    const uint32_t rows_per_group = tt::div_up(group_size, (uint32_t)grid_size.x);
+    const bool place_in_rectangles = share_weights && (uint64_t)num_groups * rows_per_group <= grid_size.y;
     log_debug(
         tt::LogOp,
-        "Weight share: mode={}, active group_size={}, num_groups={}",
-        static_cast<uint32_t>(weight_share_mode),
+        "Weight placement: row_strips={}, active group_size={}, num_groups={}",
+        place_in_rectangles,
         group_size,
         num_groups);
 
@@ -705,21 +812,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         .id = semaphore_id,
         .core_ranges = CoreRangeSet(core_grid),
         .initial_value = 0,
-    });
-
-    // Weight-mcast semaphores. Always created so writer kernel can take their ids as compile-time
-    // constants. They are only used when enable_weight_mcast is true at runtime.
-    uint32_t weights_mcast_sender_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = weights_mcast_sender_sem_id,
-        .core_ranges = CoreRangeSet(core_grid),
-        .initial_value = INVALID,
-    });
-    uint32_t weights_mcast_receiver_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = weights_mcast_receiver_sem_id,
-        .core_ranges = CoreRangeSet(core_grid),
-        .initial_value = INVALID,
     });
 
     // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune (see
@@ -958,9 +1050,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id,
-        static_cast<uint32_t>(weight_share_mode),
-        weights_mcast_sender_sem_id,
-        weights_mcast_receiver_sem_id,
         static_cast<uint32_t>(enable_streaming_output),
         operation_attributes.output_pad_h,
         operation_attributes.output_pad_w,
@@ -982,14 +1071,13 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
-    tt::tt_metal::Buffer* pad_offset_buffer_ptr =
-        mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* pad_offset_buffer_ptr = mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
 
-    // Per-core work and weight-sharing metadata. See conv3d_weight_share.hpp for the role values.
+    // Per-core work assignments. Unassigned cores retain empty work ranges.
     struct CoreWork {
         bool has_work = false;
         bool is_reducer = false;
@@ -1005,23 +1093,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         uint32_t t_out_start = 0, t_out_end = 0;
         uint32_t h_out_start = 0, h_out_end = 0;
         uint32_t w_out_start = 0, w_out_end = 0;
-        WeightShareRole weight_share_role = WeightShareRole::Local;
-        // Where this core receives weights from: chain predecessor (chain roles) or mcast sender
-        // (mcast receiver/passive). McastSender carries its own coord for uniform runtime args.
-        uint32_t weight_src_noc_x = 0, weight_src_noc_y = 0;
-        // Chain forwarding target (chain injector/middle). Unused for other roles.
-        uint32_t chain_succ_noc_x = 0, chain_succ_noc_y = 0;
-        // Mcast bbox in physical NoC coords (already swapped for NOC_1). Sender role only.
-        uint32_t mcast_bbox_start_x = 0, mcast_bbox_start_y = 0;
-        uint32_t mcast_bbox_end_x = 0, mcast_bbox_end_y = 0;
-        uint32_t mcast_num_dests = 0;
-        // Iterations for passive participation: matches active receivers' loop count.
-        uint32_t mcast_num_iters = 0;
     };
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
     auto* device = input_tensor.device();
     std::vector<CoreWork> core_work;
+    mcast::McastSenderConfig weight_senders = mcast::McastFixedSenderConfig{};
 
     auto compute_block_ranges = [&](CoreWork& cw) {
         cw.c_in_block_start = cw.c_in_idx * c_in_per_core;
@@ -1050,8 +1127,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cw.mcast_group_id = cw.c_in_idx * c_out_parallel_factor + cw.c_out_idx;
     };
 
-    // Collect active assignments in C_in -> C_out -> T -> H -> W order. Disabled/Chain retain this
-    // order; Mcast arranges each weight-sharing group into a full-row strip.
+    // Collect active assignments in C_in -> C_out -> T -> H -> W order. Compact placement retains
+    // this order; rectangular placement arranges each weight-sharing group into a full-row strip.
     const uint32_t hw_par = h_out_parallel_factor * w_out_parallel_factor;
     const uint32_t num_slots = c_in_parallel_factor * total_output_parallel;
     std::vector<CoreWork> active_work;
@@ -1077,58 +1154,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         active_work.size(),
         num_slots,
         num_cores);
-
-    // Per-mode setup: chain links each group's active cores (in core_id order) into a forwarding
-    // chain; mcast lays each group out as a row-strip rectangle and assigns roles to all cores
-    // within it (active and passive participants). Runtime args are emitted for every physical
-    // core, so each mode pads or initializes core_work to num_cores.
-    if (weight_share_mode == WeightShareMode::Chain) {
-        core_work = std::move(active_work);
+    // Compact row-major groups use their first member as sender by default.
+    if (place_in_rectangles) {
+        // Runtime args are emitted for every core. Rectangular placement fills only the
+        // active slots in each row strip; the remaining entries stay idle.
         core_work.resize(num_cores);
-
-        // Build per-group chain: order cores by core_id, link each one's predecessor and successor.
-        // Chain ordering by core_id keeps the chain "physically nearby" since core_id maps row-major
-        // onto the grid, which keeps each hop short on the NoC.
-        std::vector<std::vector<uint32_t>> mcast_groups(num_groups);
-        for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-            const CoreWork& cw = core_work[core_id];
-            if (!cw.has_work) {
-                continue;
-            }
-            mcast_groups[cw.mcast_group_id].push_back(core_id);
-        }
-        for (uint32_t gid = 0; gid < num_groups; ++gid) {
-            const auto& members = mcast_groups[gid];
-            if (members.size() < 2) {
-                continue;  // single-core group: leave role=0 (local DRAM read).
-            }
-            for (size_t i = 0; i < members.size(); ++i) {
-                const uint32_t cid = members[i];
-                CoreWork& cw = core_work[cid];
-                const bool is_injector = (i == 0);
-                const bool is_tail = (i + 1 == members.size());
-                cw.weight_share_role = is_injector
-                                           ? WeightShareRole::ChainInjector
-                                           : (is_tail ? WeightShareRole::ChainTail : WeightShareRole::ChainMiddle);
-                if (!is_injector) {
-                    const auto pred_phys = device->worker_core_from_logical_core(cores.at(members[i - 1]));
-                    cw.weight_src_noc_x = (uint32_t)pred_phys.x;
-                    cw.weight_src_noc_y = (uint32_t)pred_phys.y;
-                }
-                if (!is_tail) {
-                    const auto succ_phys = device->worker_core_from_logical_core(cores.at(members[i + 1]));
-                    cw.chain_succ_noc_x = (uint32_t)succ_phys.x;
-                    cw.chain_succ_noc_y = (uint32_t)succ_phys.y;
-                }
-            }
-        }
-    } else if (weight_share_mode == WeightShareMode::Mcast) {
-        core_work.resize(num_cores);
-
         // Row-strip placement: each (c_in_idx, c_out_idx) group occupies
         // ceil(members / grid.x) contiguous full-width rows; strips stack along Y in group order.
-        // Members fill their strip row-major and the slots left over in its last row become
-        // passive participants that only serve the multicast handshake. Every group has the same
+        // Members fill their strip row-major; unused tail slots receive writes but do not acknowledge.
+        // Every group has the same
         // member count by the partitioning invariants above, so reduction partners (same slot,
         // different c_in strip) stay vertically aligned. Cores beyond the last strip get no work
         // and no role.
@@ -1137,8 +1171,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // the bbox whose physical column is furthest from the columns already chosen by
         // previous groups' senders. This spreads DRAM weight reads (and ack convergence)
         // across columns / DRAM channels instead of stacking every sender on column 0. The
-        // chosen slot still runs compute as a normal mcast member (role 4 = sender + work).
-        const auto writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+        // chosen slot still runs compute as a normal group member.
 
         std::vector<std::vector<uint32_t>> group_members(num_groups);  // indices into active_work
         for (uint32_t i = 0; i < active_work.size(); ++i) {
@@ -1148,6 +1181,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Track physical-x columns already used as senders so we can max-min the next pick.
         std::vector<uint32_t> used_sender_phys_xs;
         used_sender_phys_xs.reserve(num_groups);
+        mcast::McastExplicitFixedSenderConfig strip_senders;
+        strip_senders.senders_per_group.reserve(num_groups);
 
         auto pick_sender_within_idx = [&](uint32_t bbox_y_start_log, uint32_t num_members) {
             // Return a within-bbox active slot.  The first group keeps the historical top-left
@@ -1179,20 +1214,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         for (uint32_t gid = 0; gid < num_groups; ++gid) {
             const auto& members = group_members[gid];
             const uint32_t num_members = (uint32_t)members.size();
+            TT_FATAL(num_members == group_size, "Conv3D weight-sharing groups must have equal active membership");
             const uint32_t rows_this_group = tt::div_up(num_members, (uint32_t)grid_size.x);
             const uint32_t c_in_idx = gid / c_out_parallel_factor;
             const uint32_t c_out_idx = gid % c_out_parallel_factor;
-
-            // Per-group iteration count must match active receivers' writer loop:
-            // N * this_c_in_blocks * this_c_out_blocks.  The c_in_per_core == 1 TT_FATAL
-            // currently pins that factor, but keeping the c_in factor here makes the
-            // passive handshake formula match the active loop if that invariant is
-            // relaxed later.  When C_out_num_blocks is ragged, this_c_out_blocks keeps
-            // trailing passive cores from running extra handshakes and deadlocking
-            // the sender's per-iteration ack wait.
-            const uint32_t this_c_in_blocks = std::min(c_in_per_core, C_in_num_blocks - c_in_idx * c_in_per_core);
-            const uint32_t this_c_out_blocks = std::min(c_out_per_core, C_out_num_blocks - c_out_idx * c_out_per_core);
-            const uint32_t mcast_iters = N * this_c_in_blocks * this_c_out_blocks;
 
             const uint32_t bbox_y_start_log = next_row;
             const uint32_t bbox_y_end_log = bbox_y_start_log + rows_this_group - 1;
@@ -1200,52 +1225,27 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const uint32_t bbox_num_cores = grid_size.x * rows_this_group;
             next_row += rows_this_group;
 
-            auto bbox_start_phys = device->worker_core_from_logical_core(CoreCoord{0, bbox_y_start_log});
-            auto bbox_end_phys = device->worker_core_from_logical_core(CoreCoord{bbox_x_end_log, bbox_y_end_log});
-            // Conv2d-style swap so the multicast hardware sees the rect in NOC_1's orientation.
-            if (writer_noc == tt::tt_metal::NOC::NOC_1) {
-                std::swap(bbox_start_phys, bbox_end_phys);
-            }
-
             const uint32_t sender_within_idx = pick_sender_within_idx(bbox_y_start_log, num_members);
             const uint32_t sender_x_log = sender_within_idx % grid_size.x;
             const uint32_t sender_y_log = bbox_y_start_log + sender_within_idx / grid_size.x;
             const auto sender_phys = device->worker_core_from_logical_core(CoreCoord{sender_x_log, sender_y_log});
             used_sender_phys_xs.push_back((uint32_t)sender_phys.x);
 
-            // Sender is inside the bbox; EXCLUDE_SRC mcast → num_dests = bbox_cores - 1.
-            const uint32_t num_receivers = bbox_num_cores - 1;
+            strip_senders.senders_per_group.push_back(CoreCoord{sender_x_log, sender_y_log});
 
-            for (uint32_t within_idx = 0; within_idx < bbox_num_cores; ++within_idx) {
+            // Weight CB storage is allocated across core_grid, including the unused row tails.
+            // Leave those cores idle: hardware can land payloads there without a receiving kernel.
+            for (uint32_t within_idx = 0; within_idx < num_members; ++within_idx) {
                 const uint32_t x = within_idx % grid_size.x;
                 const uint32_t y = bbox_y_start_log + within_idx / grid_size.x;
                 const uint32_t target_core_id = y * grid_size.x + x;
-                CoreWork& cw = core_work[target_core_id];
-
-                if (within_idx < num_members) {
-                    cw = active_work[members[within_idx]];
-                    cw.weight_share_role =
-                        within_idx == sender_within_idx ? WeightShareRole::McastSender : WeightShareRole::McastReceiver;
-                } else {
-                    cw.weight_share_role = WeightShareRole::McastPassive;
-                }
-                // Receivers/passives source weights from the sender. Sender carries its own
-                // coord for uniform runtime args; writer.cpp ignores it for McastSender.
-                cw.weight_src_noc_x = (uint32_t)sender_phys.x;
-                cw.weight_src_noc_y = (uint32_t)sender_phys.y;
-                cw.mcast_bbox_start_x = (uint32_t)bbox_start_phys.x;
-                cw.mcast_bbox_start_y = (uint32_t)bbox_start_phys.y;
-                cw.mcast_bbox_end_x = (uint32_t)bbox_end_phys.x;
-                cw.mcast_bbox_end_y = (uint32_t)bbox_end_phys.y;
-                cw.mcast_num_dests = num_receivers;
-                cw.mcast_num_iters = mcast_iters;
+                core_work[target_core_id] = active_work[members[within_idx]];
             }
 
             log_debug(
                 tt::LogOp,
-                "Mcast group {} (c_in={}, c_out={}): {} members + {} passive; bbox logical(0,{})..({},{}); "
-                "phys swapped({},{})..({},{}); sender logical({},{}) phys_x={} within_idx={}; "
-                "num_receivers={}, mcast_iters={}",
+                "Weight group {} (c_in={}, c_out={}): {} members + {} passive; bbox logical(0,{})..({},{}); "
+                "sender logical({},{}) phys_x={} within_idx={}",
                 gid,
                 c_in_idx,
                 c_out_idx,
@@ -1254,20 +1254,39 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 bbox_y_start_log,
                 bbox_x_end_log,
                 bbox_y_end_log,
-                bbox_start_phys.x,
-                bbox_start_phys.y,
-                bbox_end_phys.x,
-                bbox_end_phys.y,
                 sender_x_log,
                 sender_y_log,
                 sender_phys.x,
-                sender_within_idx,
-                num_receivers,
-                mcast_iters);
+                sender_within_idx);
         }
+        weight_senders = std::move(strip_senders);
     } else {
+        // Compact placement preserves active row-major assignments, then appends idle entries.
         core_work = std::move(active_work);
         core_work.resize(num_cores);
+    }
+
+    std::optional<mcast::Mcast> weights_mcast;
+    if (share_weights) {
+        std::vector<CoreRange> active_ranges;
+        for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+            if (core_work[core_id].has_work) {
+                active_ranges.emplace_back(cores[core_id], cores[core_id]);
+            }
+        }
+        const CoreRangeSet active_cores(std::move(active_ranges));
+        const CoreRangeSet receivers =
+            place_in_rectangles ? CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, num_groups * rows_per_group - 1}))
+                                : active_cores;
+        weights_mcast.emplace(
+            *device,
+            mcast::McastConfig{
+                .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()),
+                .handshake_cores = place_in_rectangles ? std::make_optional(active_cores) : std::nullopt,
+                .irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast},
+            receivers,
+            /*receiver_group_size=*/place_in_rectangles ? rows_per_group * grid_size.x : group_size,
+            weight_senders);
     }
 
     // Build reduction groups from logical reduction keys (c_out_idx, t_out_idx, h_out_idx, w_out_idx).
@@ -1400,19 +1419,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.w_out_start);
         writer_args.push_back(cw.w_out_end);
         writer_args.push_back((uint32_t)cw.is_reducer);
-        writer_args.push_back(static_cast<uint32_t>(cw.weight_share_role));
-        writer_args.push_back(cw.weight_src_noc_x);
-        writer_args.push_back(cw.weight_src_noc_y);
-        writer_args.push_back(cw.chain_succ_noc_x);
-        writer_args.push_back(cw.chain_succ_noc_y);
-        writer_args.push_back(cw.mcast_bbox_start_x);
-        writer_args.push_back(cw.mcast_bbox_start_y);
-        writer_args.push_back(cw.mcast_bbox_end_x);
-        writer_args.push_back(cw.mcast_bbox_end_y);
-        writer_args.push_back(cw.mcast_num_dests);
-        writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
-
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);
             writer_args.push_back(reducer_core_physical_ys[group_id]);
@@ -1426,13 +1433,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
         log_debug(
             tt::LogOp,
-            "Core ({},{}): HasWork={}, IsReducer={}, ChainRole={}, "
+            "Core ({},{}): HasWork={}, IsReducer={}, "
             "ReductionGroup={}, C_in_idx={}, C_out_idx={}, NumWorkers={}",
             core.x,
             core.y,
             cw.has_work,
             cw.is_reducer,
-            static_cast<uint32_t>(cw.weight_share_role),
             group_id,
             cw.c_in_idx,
             cw.c_out_idx,
@@ -1443,6 +1449,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(compute_desc));
+    if (weights_mcast) {
+        weights_mcast->attach(
+            desc, "weights_mcast", std::array{std::ref(writer_desc)}, static_cast<uint32_t>(desc.semaphores.size()));
+    } else {
+        mcast::attach_absent_mcast(writer_desc, "weights_mcast");
+    }
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;

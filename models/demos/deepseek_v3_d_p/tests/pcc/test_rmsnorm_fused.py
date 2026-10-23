@@ -41,6 +41,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
     [
         pytest.param(5120, 7168, ttnn.DRAM_MEMORY_CONFIG, id="kimi"),
         pytest.param(1024, 6144, ttnn.L1_MEMORY_CONFIG, id="glm-width-short-sequence-l1"),
+        # GLM-5.3 chunked prefill: 5k chunks (640 rows per device); the attention norm writes L1, the FFN norm DRAM.
+        pytest.param(5120, 6144, ttnn.L1_MEMORY_CONFIG, id="glm-chunk-attn-norm-l1"),
+        pytest.param(5120, 6144, ttnn.DRAM_MEMORY_CONFIG, id="glm-chunk-ffn-norm"),
     ],
 )
 def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_dim, output_memcfg, expect_error):

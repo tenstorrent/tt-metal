@@ -124,4 +124,7 @@ void kernel_main() {
 
         dfb_output.push_back(onetile);
     }  // nc
+    // The scaler tile is waited once and reused for the whole reduction; pop it at the
+    // end so the buffer is left balanced.
+    dfb_scaler.pop_front(1);
 }

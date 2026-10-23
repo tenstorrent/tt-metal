@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_route_finish_device_operation.hpp"
+#include "topk_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -103,7 +104,7 @@ ttsl::hash::hash_t TopkRouteFinishDeviceOperation::compute_program_hash(
     const uint32_t width_tiles = padded[-1] / tt::constants::TILE_WIDTH;
     const uint32_t total_tile_rows = (input.physical_volume() / padded[-1]) / tt::constants::TILE_HEIGHT;
     const uint32_t k_rounded = indices.logical_shape()[-1];
-    const bool index_is_u32 = padded[-1] > std::numeric_limits<uint16_t>::max();
+    const bool index_is_u32 = ttnn::prim::padded_width_needs_uint32_indices(padded[-1]);
 
     return tt::tt_metal::operation::hash_operation<TopkRouteFinishDeviceOperation>(
         input.dtype(),
@@ -136,7 +137,7 @@ spec_return_value_t TopkRouteFinishDeviceOperation::compute_output_specs(
     // Stock device-op index dtype contract (topk_device_operation.cpp compute_output_specs):
     // UINT16 iff the TILE-PADDED source width fits 16 bits, else UINT32.
     const DataType index_dtype =
-        input.padded_shape()[-1] <= std::numeric_limits<uint16_t>::max() ? DataType::UINT16 : DataType::UINT32;
+        ttnn::prim::padded_width_needs_uint32_indices(input.padded_shape()[-1]) ? DataType::UINT32 : DataType::UINT16;
 
     return {
         tt::tt_metal::TensorSpec(
