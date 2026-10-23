@@ -369,9 +369,14 @@ def ulp_elementwise_valid(
     where ``ulp(golden)`` collapses and any absolute error explodes into a step count
     that says nothing about the kernel.
 
-    Returns ``(is_valid, distance, rescued)``. A reporting caller has to exclude
-    *rescued*: those lanes hold the largest step counts by construction, so ranking every
-    lane names one that passed and never mentions the one that failed.
+    Returns ``(is_valid, distance, covered)``. *covered* is every lane the floor
+    judges -- in the band and within *near_zero_atol* -- whether or not it was also
+    within the step budget. A reporting caller has to exclude it: those lanes hold the
+    largest step counts by construction, so ranking every lane names one that passed and
+    never mentions the one that failed; and the emitter's residual (the number a floored
+    row's budget is derived from) is the maximum over the lanes *outside* the floor, so
+    a reader that ranked a covered lane within budget would read one step more than the
+    row records and show no headroom where there is some.
     """
     distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
     both_nan = torch.isnan(golden) & torch.isnan(result)
@@ -418,7 +423,7 @@ def ulp_elementwise_valid(
             )
             near_zero = near_zero & (magnitude <= absolute_cut)
         absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
-        rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
+        rescued = near_zero & (absolute_error <= near_zero_atol)
         valid = valid | rescued
 
     ok = valid & ~nonfinite_mismatches(golden, result)
@@ -612,13 +617,16 @@ def ulp_failure_message(
     *stats* lets a caller that already has them skip a second pass, and supplying it
     *asserts they came from the same* ``mask``. *flush_subnormals* carries the same
     obligation against *distance*, which fixed the count printed beside the step size.
-    *rescued* is the lane mask the near-zero floor accepted, which a ranking caller has
+    *rescued* is the lane mask the near-zero floor covers, which a ranking caller has
     already excluded from *mask*; reporting it is what lets a DEBUG export tell a
-    budget-carried pass from a floor-carried one.
+    budget-carried pass from a floor-carried one. Only its lanes past *max_ulp* are
+    counted: a covered lane within the budget needed no rescue.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
+    if rescued is not None and max_ulp is not None:
+        rescued = rescued & ((distance < 0) | (distance > max_ulp))
     floor = "" if rescued is None else f", {int(rescued.sum())} held by the floor"
     if stats["worst_index"] is None:
         if stats["unmeasurable"] == 0:
