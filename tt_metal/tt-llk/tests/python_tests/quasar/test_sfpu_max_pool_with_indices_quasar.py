@@ -15,7 +15,6 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MaxPoolWithIndicesGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
-    ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -31,7 +30,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MAX_POOL_CHUNK,
     MAX_POOL_WITH_INDICES,
@@ -235,7 +233,6 @@ def test_sfpu_max_pool_with_indices_quasar(formats_dest_acc, variant):
                     build.num_rows, build.row_major, build.accumulate
                 ),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
                 DEST_SYNC(),
             ],

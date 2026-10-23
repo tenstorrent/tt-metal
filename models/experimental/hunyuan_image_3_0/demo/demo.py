@@ -61,6 +61,7 @@ if HUNYUAN not in sys.path:
     sys.path.insert(0, HUNYUAN)
 
 import ttnn
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
@@ -1118,6 +1119,11 @@ def main():
         _record_vae_metrics("vae_decode", time.time() - vae_t0)
         t = _mark("6_vae_decode", t)
         img = img[0]  # [3, 1024, 1024]
+
+        # Report-only perf for the CI dashboard (#58596): images/s over the denoise loop.
+        # Emitted while the mesh is still open (SKU lookup); no-op outside CI.
+        _denoise_seconds = sum(total for _, _, _, total in _DENOISE_METRICS)
+        report_generation_rate("hunyuan-image-3.0", _denoise_seconds, 1)
     finally:
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

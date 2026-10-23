@@ -38,38 +38,6 @@ struct SwigluPackedFwKernels {
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SwigluPackedFwKernels& kernels,
-    const tt::tt_metal::Buffer* packed_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_blocks_per_core_group_1,
-    uint32_t num_blocks_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        SetRuntimeArgs(
-            program, kernels.reader, core, {packed_buffer->address(), num_blocks_per_core, num_blocks_written});
-        SetRuntimeArgs(
-            program, kernels.writer, core, {output_buffer->address(), num_blocks_per_core, num_blocks_written});
-
-        num_blocks_written += num_blocks_per_core;
-    }
-}
-
 SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& packed = tensor_args.packed;
@@ -118,17 +86,12 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
             create_compute_kernel(program, core_group_2, compute_g2_args, {}, kComputeKernelPath, true);
     }
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        packed_buf,
-        output_buf,
-        num_cores,
-        num_cores_y,
-        num_blocks_g1,
-        num_blocks_g2,
-        core_group_1,
-        core_group_2);
+    for_each_core_with_work(
+        num_cores, num_cores_y, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2, [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+            SetRuntimeArgs(program, kernels.reader, core, {packed_buf->address(), num_blocks, start_block});
+            SetRuntimeArgs(program, kernels.writer, core, {output_buf->address(), num_blocks, start_block});
+        });
 
     return cached_program_t{
         std::move(program),
@@ -153,11 +116,10 @@ void SwigluPackedFwProgramFactory::override_runtime_arguments(
     auto& reader_rt = GetRuntimeArgs(program, sv.reader_kernel_id);
     auto& writer_rt = GetRuntimeArgs(program, sv.writer_kernel_id);
 
-    for (uint32_t i = 0; i < sv.num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
+    for_each_core(sv.num_cores, sv.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         reader_rt[core.x][core.y][kPackedBufferIdx] = tensor_args.packed.buffer()->address();
         writer_rt[core.x][core.y][kOutputBufferIdx] = output.buffer()->address();
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::swiglu_packed_fw::device

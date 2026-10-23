@@ -76,48 +76,6 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
         kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
-void add_program_sub_device_meta_data(
-    nlohmann::json& meta_data, ContextId context_id, tt::ChipId device_id, uint32_t runtime_id) {
-    using CacheKey = std::pair<tt::ChipId, uint32_t>;
-    struct CacheKeyHash {
-        std::size_t operator()(const CacheKey& k) const noexcept {
-            const std::size_t h1 = std::hash<tt::ChipId>{}(k.first);
-            const std::size_t h2 = std::hash<std::uint32_t>{}(k.second);
-            return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));  // boost::hash_combine
-        }
-    };
-    static std::mutex cache_mutex;
-    static std::unordered_map<CacheKey, std::optional<tt::ProgramSubDeviceInfo>, CacheKeyHash> sub_device_info_cache;
-
-    const CacheKey cache_key{device_id, runtime_id};
-    std::optional<tt::ProgramSubDeviceInfo> sub_device_info;
-    {
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        auto cache_it = sub_device_info_cache.find(cache_key);
-        if (cache_it == sub_device_info_cache.end()) {
-            cache_it =
-                sub_device_info_cache
-                    .emplace(
-                        cache_key, tt::GetProgramSubDevice(context_id, device_id, static_cast<uint16_t>(runtime_id)))
-                    .first;
-        }
-        sub_device_info = cache_it->second;
-    }
-    if (!sub_device_info.has_value()) {
-        return;
-    }
-    meta_data["sub_device_id"] = sub_device_info->sub_device_id;
-    meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
-}
-
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, ContextId context_id, uint32_t encoded_run_host_id) {
-    if (encoded_run_host_id == 0) {
-        return;
-    }
-    const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
-    add_program_sub_device_meta_data(meta_data, context_id, decoded.device_id, decoded.base_program_id);
-}
-
 #if defined(TRACY_ENABLE)
 NOCDebugEvent make_noc_debug_event(
     const CoreCoord& src_core,
@@ -1367,7 +1325,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(
     ZoneScoped;
     TT_ASSERT(ctx_.device_manager()->is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const CoreCoord dram_grid_size = device->dram_grid_size();
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
@@ -1394,7 +1352,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device, ui
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
     const uint32_t bank_size_bytes = getProfileBufferBankSizeBytes();
     const uint32_t bank_size_words = bank_size_bytes / sizeof(uint32_t);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const int num_dram_channels = device->num_dram_channels();
     const auto& cluster = env_.get_cluster();
@@ -1617,8 +1575,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
 
     const uint32_t coreFlatID = env_.get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
-    const uint32_t startIndex =
-        coreFlatID * env_.get_hal().get_max_processors_per_core() * profiler_dram_bank_vector_size_per_risc;
+    const std::size_t startIndex = static_cast<std::size_t>(coreFlatID) * env_.get_hal().get_max_processors_per_core() *
+                                   profiler_dram_bank_vector_size_per_risc;
 
     // translate worker core virtual coord to phys coordinates
     const metal_SocDescriptor& soc_desc = env_.get_cluster().get_soc_desc(device_id);
@@ -1683,7 +1641,8 @@ void DeviceProfiler::readRiscProfilerResults(
         }
 
         if (bufferEndIndex > 0) {
-            uint32_t bufferRiscShift = (riscEndIndex * profiler_dram_bank_vector_size_per_risc) + startIndex;
+            std::size_t bufferRiscShift =
+                (static_cast<std::size_t>(riscEndIndex) * profiler_dram_bank_vector_size_per_risc) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -1727,7 +1686,7 @@ void DeviceProfiler::readRiscProfilerResults(
             };
             std::vector<PreSentinelMarker> pre_sentinel_markers;
 
-            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+            for (std::size_t index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
@@ -1743,7 +1702,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
                             uint32_t time_L = data_buffer.at(index + 1);
-                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            std::size_t data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             // Skip truncated TS_DATA at the end of this risc's region.
                             if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
                                 uint64_t data_H = data_buffer.at(data_index);
@@ -1993,6 +1952,25 @@ std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
     return {trace_id, trace_id_count};
 }
 
+std::optional<DeviceProfiler::ProgramSubDeviceMetaData> DeviceProfiler::getProgramSubDeviceMetaData(
+    uint32_t run_host_id) {
+    if (run_host_id == 0) {
+        return std::nullopt;
+    }
+    auto [it, inserted] = program_sub_device_meta_data_cache.try_emplace(run_host_id);
+    if (inserted) {
+        const auto decoded = detail::DecodePerDeviceProgramID(run_host_id);
+        const std::optional<tt::ProgramSubDeviceInfo> sub_device_info = tt::GetProgramSubDevice(
+            ctx_.get_context_id(), decoded.device_id, static_cast<uint16_t>(decoded.base_program_id));
+        if (sub_device_info.has_value()) {
+            it->second = ProgramSubDeviceMetaData{
+                .sub_device_id = sub_device_info->sub_device_id,
+                .sub_device_manager_id = sub_device_info->sub_device_manager_id};
+        }
+    }
+    return it->second;
+}
+
 void DeviceProfiler::readDeviceMarkerData(
     std::set<tracy::TTDeviceMarker>& device_markers,
     uint32_t run_host_id,
@@ -2007,7 +1985,10 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
-    add_program_sub_device_meta_data(meta_data, ctx_.get_context_id(), run_host_id);
+    if (const auto sub_device_meta_data = getProgramSubDeviceMetaData(run_host_id)) {
+        meta_data["sub_device_id"] = sub_device_meta_data->sub_device_id;
+        meta_data["sub_device_manager_id"] = sub_device_meta_data->sub_device_manager_id;
+    }
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
@@ -2405,7 +2386,7 @@ uint32_t DeviceProfiler::getProfileBufferBankSizeBytes() const { return this->pr
 
 void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks) {
     this->profile_buffer_bank_size_bytes = size;
-    this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
+    this->profile_buffer.resize(static_cast<std::size_t>(size) * num_dram_banks / sizeof(uint32_t));
 }
 
 void DeviceProfiler::clearStateForDeviceReinit() {
@@ -2661,7 +2642,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         return;
     }
 
-    std::scoped_lock lock(ctx_.profiler_state_manager()->log_file_write_mutex);
+    std::scoped_lock lock(ProfilerRegistry::instance().log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(

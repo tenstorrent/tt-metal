@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
     l2_norm,
     recurrent_gated_delta_rule,
@@ -36,6 +36,12 @@ CHUNK = 32  # the phased op's supported chunk size (Ct=1); 64 splits the WY matr
 # so the long cases run on hardware only.
 _SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
 _hw_only = pytest.mark.skipif(_SIM, reason="hardware test only: too slow on the simulator for the coverage it adds")
+# The chunk-64 phased prep program (Ct=2) exceeds the kernel-config buffer when the watcher is compiled in: its three
+# compute binaries alone are 62 KB of the 69 KB there. The production chunk size is 32.
+_no_watcher = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_WATCHER")),
+    reason="chunk-64 prep binaries exceed the kernel-config buffer under the watcher",
+)
 REPEATS = 0 if _SIM else 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
 
 # Measured:
@@ -454,7 +460,9 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
             2, 16, 48, 128, 128, 256, 32, False, marks=_hw_only
         ),  # batched prefill: BH=96 -> NV=1, plain reader
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
-        (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
+        pytest.param(
+            1, 4, 12, 128, 128, 256, 64, True, marks=_no_watcher
+        ),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake
         (1, 4, 12, 128, 64, 256, 32, True),  # small V: Ct*Vt < 3, the prep mask-slot capacity regime
     ],
@@ -616,6 +624,19 @@ def test_compute_kernel_config_contract(device, expect_error, make_program_confi
         with expect_error(RuntimeError, "HiFi4 with fp32 destination accumulation"):
             _run_with_compute_config(device, tensors, const_tiles, pc, ttnn.WormholeComputeKernelConfig(**kwargs))
             pytest.fail(f"{name} was accepted; the op must reject arithmetic other than the one it was validated at")
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("chunk_size", [48, 96, 128])
+def test_chunk_size_contract(device, expect_error, chunk_size):
+    """The kernels are validated at one and two tile rows per chunk; any other chunk_size, a multiple of
+    32 or not, is rejected."""
+    (q, k, v, g, beta), (eye, tril, ones, masks) = _small_inputs(device)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        ttnn.transformer.chunk_gated_delta_rule(
+            q, k, v, g, beta, chunk_size=chunk_size, eye=eye, tril=tril, ones=ones, masks=masks
+        )
+        pytest.fail(f"chunk_size {chunk_size} was accepted; the op supports 32 and 64 only")
 
 
 # --------------------------------------------------------------------------------------------

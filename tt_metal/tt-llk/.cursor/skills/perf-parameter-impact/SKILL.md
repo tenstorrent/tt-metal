@@ -49,9 +49,6 @@ accounting facts:
   `dest_acc=No`. That mixes a datapath change with twice the section-done
   traffic.
 
-Do not treat `implied_math_format` as a cross-arch factor. It is Quasar-only
-and the sweep comparer ignores it.
-
 ### 2. Filter and audit
 
 Filter exactly on `marker == <requested marker>`. When useful, save the result

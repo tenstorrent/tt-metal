@@ -271,6 +271,27 @@ def merged_num_layers(stage_layout):
     return total
 
 
+def declared_seq_shard_factor(t) -> int:
+    """Product of mesh extents over the axes whose placement shards tensor dim 2 (mirrors the op's
+    tensor_dim_shard_factor). 0 when the topology does not describe the tensor's mesh."""
+    topology = t.tensor_topology()
+    dist_dims = tuple(topology.distribution_shape())
+    placements = topology.placements()
+    if len(placements) != len(dist_dims):
+        return 0
+    factor = 1
+    for axis, placement in enumerate(placements):
+        if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
+            factor *= dist_dims[axis]
+    return factor
+
+
+def is_tp_deduped_kv_cache(t, mesh_shape) -> bool:
+    """True when dim 2 is declared sharded over all sp*tp chips; read from the cache so readers match its allocation."""
+    sp, tp = mesh_shape
+    return tp > 1 and declared_seq_shard_factor(t) == sp * tp
+
+
 def create_kv_chunk_address_table_block_cyclic(
     config,
     mesh_device,
@@ -284,6 +305,7 @@ def create_kv_chunk_address_table_block_cyclic(
     num_my_layers=None,
     stage_layout=None,
     layer_rows=None,
+    tp_axis=None,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
@@ -311,6 +333,7 @@ def create_kv_chunk_address_table_block_cyclic(
             maps slot -> model layer, keeping published rows on the model's layer axis so a consumer
             indexing by layer needs no change. None (every layer owns a slab) means row == layer, which
             is what DeepSeek / Kimi-K2 / GLM want.
+        tp_axis: None for a TP-replicated cache, the TP axis for a deduped one (see is_tp_deduped_kv_cache).
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -357,6 +380,7 @@ def create_kv_chunk_address_table_block_cyclic(
         config_id=0,
         stage_layout=stage_layout,
         layer_rows=layer_rows,
+        tp_axis=tp_axis,
     )
 
 
@@ -374,6 +398,7 @@ def populate_kv_chunk_address_table_block_cyclic(
     stage_layout=None,
     layer_rows=None,
     tp_axis=None,
+    alias_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -394,6 +419,8 @@ def populate_kv_chunk_address_table_block_cyclic(
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
             linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
+        alias_rows: {alias table row: source table row}; each alias gets every location its source does.
+            Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
         (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
@@ -409,6 +436,10 @@ def populate_kv_chunk_address_table_block_cyclic(
             f"the map must cover every layer the cache physically stores"
         )
         return layer_rows[dense_layer]
+
+    aliases_of = {}
+    for alias, source in (alias_rows or {}).items():
+        aliases_of.setdefault(source, []).append(alias)
 
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
@@ -463,6 +494,8 @@ def populate_kv_chunk_address_table_block_cyclic(
                     for slot in range(num_users):
                         for local_layer in range(count):
                             global_layer = first + local_layer
+                            table_row = _table_row(global_layer)
+                            aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
                                     seq_chunk * PREFILL_CHUNK_TOKENS
@@ -477,7 +510,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                                     location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                     location.size_bytes = chunk_size_bytes
                                     location.device_group_index = group_idx
-                                    lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
+                                    lookup_table.set(table_row, position, slot, location, config_id)
+                                    for alias in aliases:
+                                        lookup_table.set(alias, position, slot, location, config_id)
 
                                     curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                     if curr_bank_id == 0:
@@ -500,9 +535,10 @@ def populate_kv_chunk_address_table_block_cyclic(
     # DENSE rows the cache physically holds. With layer_rows the caller has WIDENED the published layer
     # axis to the global count (config.num_layers) while the cache still holds only its compacted rows,
     # so both the loop bound and the batch check below must use the dense count -- otherwise a compacted
-    # cache is rejected for not having num_users * global_layers slots. The stage_layout branch above is
-    # immune because it loops over each stage's own `count`.
-    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers
+    # cache is rejected for not having num_users * global_layers slots. Alias rows widen it the same way
+    # with no cache rows behind them. The stage_layout branch above is immune because it loops over each
+    # stage's own `count`.
+    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers - len(alias_rows or ())
 
     assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
     num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
@@ -564,6 +600,8 @@ def populate_kv_chunk_address_table_block_cyclic(
             curr_bank_offset = 0
             for slot in range(num_users):
                 for layer in range(num_layers):
+                    table_row = _table_row(layer)
+                    aliases = aliases_of.get(table_row, ())
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = (
                             seq_chunk * PREFILL_CHUNK_TOKENS
@@ -576,7 +614,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                             location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                             location.size_bytes = chunk_size_bytes
                             location.device_group_index = group_idx
-                            lookup_table.set(_table_row(layer), position, slot, location, config_id)
+                            lookup_table.set(table_row, position, slot, location, config_id)
+                            for alias in aliases:
+                                lookup_table.set(alias, position, slot, location, config_id)
 
                             curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                             if curr_bank_id == 0:
@@ -1159,7 +1199,7 @@ def init_mla_kv_cache(
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False
+    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False, tp_axis=None
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -1167,6 +1207,8 @@ def allocate_mla_kvpe_cache(
     shared cache holds ``num_users * num_layers`` user-major slots of
     ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
     and the MLA model adapter, so the MLA KV layout has one definition.
+
+    tp_axis: KV dedup, forwarded to init_kvpe_cache; must match the reader's tp_shard_kv.
     """
     return init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BFP8_TILE,
@@ -1178,6 +1220,7 @@ def allocate_mla_kvpe_cache(
         num_kvpe_cache_layers=num_layers,
         num_users=num_users,
         full_mesh=full_mesh,
+        tp_axis=tp_axis,
     )
 
 

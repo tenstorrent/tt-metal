@@ -34,6 +34,7 @@ PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
 PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
+PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
@@ -78,6 +79,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
+    # sc1 is sc4's stage 0, so it opens sc4's slots.
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -140,16 +143,21 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
+# tt-run does not forward PREFILL_*: pass a cache-format override to every rank.
+if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
+fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
-# yields the same chunk twice.
-PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
-  "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+# Start, ~50k, ~100k, ~255k, and the midpoint + tail of each config's window. Deduped: a model with
+# one config yields the same chunk twice, and the summary drops chunks past a short window.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
+  "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -354,9 +362,18 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py" \
+  PERF_POWER=""
+  if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
+    PERF_POWER=$("${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS%%,*}:1" --bind-to none --allow-run-as-root \
+      bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-power" | tail -n 1) || true
+    case "${PERF_POWER}" in
+      8kw|14kw) ;;
+      *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
+    esac
+  fi
+  python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
 fi

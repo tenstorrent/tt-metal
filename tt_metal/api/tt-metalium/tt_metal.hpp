@@ -15,7 +15,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Buffer;
@@ -24,6 +24,9 @@ class Program;
 
 namespace detail {
 
+[[deprecated(
+    "DispatchStateCheck is an internal API: the runtime validates the dispatch mode itself. It "
+    "will be removed after 2026-11-14.")]]
 bool DispatchStateCheck(bool isFastDispatch);
 
 /**
@@ -50,6 +53,9 @@ void ReleaseOwnership();
  * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
+[[deprecated(
+    "Use the owning distributed::MeshDevice and address chips by MeshCoordinate instead. GetActiveDevice will be "
+    "removed after 2026-11-14.")]]
 IDevice* GetActiveDevice(ChipId device_id);
 
 /**
@@ -314,6 +320,7 @@ bool WriteToDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
 
+[[deprecated("WriteRegToDevice is unused and will be removed after 2026-11-14.")]]
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
 
 // clang-format off
@@ -361,6 +368,7 @@ bool ReadFromDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
 
+[[deprecated("ReadRegFromDevice is unused and will be removed after 2026-11-14.")]]
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
 /**

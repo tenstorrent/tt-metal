@@ -39,6 +39,17 @@ template <DataFormat data_format>
 ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
+#elif defined(ARCH_BLACKHOLE)
+    MATH((SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_where_,
+        (APPROX, data_format, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        idst2,
+        odst,
+        VectorMode::None)));
 #else
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
