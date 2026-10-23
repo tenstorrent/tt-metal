@@ -2,8 +2,8 @@
 # tile 0's chain runs with tile 1 already in place. The kernel runs once per tile and carries the
 # product in a register across faces; a per-face kernel with a carry-over store would scale the
 # first rows of tile 1 before tile 1's own chain, and tile 1 would no longer match the golden.
-# Stimuli as in the single-tile case: values near 1 in magnitude so 32-long products stay finite;
-# 0 zeroes a lane's products from there on.
+# Values near 1 in magnitude so 32-long products stay finite; no 0 or denormal point, so every lane's
+# chain runs all 32 steps and the cross-face carry is checked in every lane.
 
 dest_acc: true
 
@@ -18,8 +18,6 @@ operands:
         - [0.8, 0.999]
         - [1.001, 1.25]
         - -1.0
-        - 0.0
-        - 1.0e-40
         - 0.5
         - 1.0
         - 2.0
