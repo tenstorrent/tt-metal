@@ -20,7 +20,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | `tt_llk_wormhole_b0/` | Wormhole B0 — llk_lib, instructions, common headers |
 | `tt_llk_blackhole/` | Blackhole — same structure as WH |
 | `tt_llk_quasar/` | Quasar — different file naming (semantic, not letter-based) |
-| `tests/python_tests/` | Python test suite |
+| `tests/python_tests/` | Python test suite (card jobs collect this tree) |
+| `tests/hardware_free/` | Host-only tests; run with `tests/run_hardware_free.sh` |
 | `tests/sources/` | C++ test source files |
 | `tests/hw_specific/` | Architecture-specific test files |
 | `docs/` | Documentation |

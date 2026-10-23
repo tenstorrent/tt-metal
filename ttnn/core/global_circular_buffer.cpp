@@ -235,17 +235,28 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
         nd_opt.has_value(),
         "weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))) "
         "for the receiver-contiguous Tensor prefetcher path");
+    // A rank-3 shard (G, K, n_per_recv) is a grouped weight (an expert stack): every receiver slab holds
+    // all G groups, each a (K, n_per_recv) block the prefetcher streams like a weight of its own.
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
-        shard_shape.rank() == 2,
-        "receiver-contiguous NdShardSpec shard shape must be 2D (K, n_per_recv); got rank {}",
-        shard_shape.rank());
+        shard_shape.rank() == 2 || shard_shape.rank() == 3,
+        "receiver-contiguous NdShardSpec shard shape must be (K, n_per_recv) or, for a grouped weight, "
+        "(num_groups, K, n_per_recv); got {}",
+        shard_shape);
+    if (shard_shape.rank() == 3) {
+        TT_FATAL(
+            weight.padded_shape().rank() >= 3 && shard_shape[0] == weight.padded_shape()[-3],
+            "grouped receiver-contiguous weight: the shard's group dim ({}) must hold the weight's whole dim -3 "
+            "(weight shape {})",
+            shard_shape[0],
+            weight.padded_shape());
+    }
 
     const auto& tile = weight.tensor_spec().tile();
     const uint32_t tile_h = tile.get_height();
     const uint32_t tile_w = tile.get_width();
-    const uint32_t shard_K = shard_shape[0];
-    const uint32_t shard_N = shard_shape[1];
+    const uint32_t shard_K = shard_shape[-2];
+    const uint32_t shard_N = shard_shape[-1];
     TT_FATAL(
         shard_K % tile_h == 0 && shard_N % tile_w == 0,
         "receiver-contiguous shard shape ({}, {}) must be tile-aligned (tile {}x{})",
