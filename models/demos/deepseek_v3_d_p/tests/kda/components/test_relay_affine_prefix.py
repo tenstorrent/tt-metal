@@ -37,6 +37,21 @@ _MESH = pytest.mark.parametrize(
     indirect=True,
 )
 
+# The prefill runner's fabric: a 7168-byte payload carries one FP32 tile per packet, so a tile column needs four packet
+# headers and the sender buffers fewer columns.
+_MESH_ONE_TILE_PACKETS = pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=7168),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-one-tile-packets",
+        )
+    ],
+    indirect=True,
+)
+
 
 class _Transforms:
     """One transform per rank, its packed device copy, and the FP64 reference of the relay around the ring."""
@@ -146,6 +161,15 @@ def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
     actual_start = make_actual_start(mesh_device, start)
     entry, final, gate = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     assert gate is None
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+
+
+@_MESH_ONE_TILE_PACKETS
+def test_relay_affine_prefix_one_tile_packets(mesh_device):
+    start = 672
+    transforms = _Transforms(mesh_device, seed=start)
+    actual_start = make_actual_start(mesh_device, start)
+    entry, final, _ = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
 
