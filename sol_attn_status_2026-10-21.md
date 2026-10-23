@@ -1013,7 +1013,16 @@ hash (`ComputeKernel::config_hash`) did not include the optimization level, so t
 Fixed in `tt_metal/impl/kernels/kernel.cpp` (the level is appended to the hash when it differs from the compute
 default O3, so existing hashes are unchanged). A host rebuild is needed for both the factory and this fix.
 
-**Expected:** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
+**M10 measured (2026-10-23, 02:11-02:13, O2 build, compute kernel recompiled):** parity 0.9996 / 0.9999 / 1.0 /
+1.0, resident 10.73-10.80 ms at 47 % density (10.88 before); traced dense 7.23-7.45 (unchanged), resident tau 1 /
+2 / 3 = **4.90-4.94 / 4.02-4.07 / 3.40-3.41 ms** against 4.97 / 4.00 / 3.39: -1 % at tau 1, noise at tau 2 and 3.
+The interleave bought nothing measurable, like M5-M9 before it: the step is not limited by which thread the exp
+runs on. What the numbers leave: the matmul work at HiFi2 (~1.15 ms op-level), the row-max/lazy-test stats
+(~0.4), and above all the chain's slowest-member pacing (iteration 470 us for 265 us of per-core steps, M9
+profile), which the gather (437 us per iteration) sits just under. Not promoted to production; the tt_metal hash
+fix is a real bug fix and stands on its own.
+
+**Expected (written before the measurement):** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
 −0.25 to −0.35 ms traced at tau 1, i.e. ~4.65 ms (1.58x) from 4.97. The pooled steps use the same code and gain
 in proportion. This does not reach 1.8x (4.09 ms); the remaining compute levers (section 15: the pooled phase and
 the stats) are each worth ~0.1-0.2, and the rest is the chain's slowest-member pacing (section 13), which only a
