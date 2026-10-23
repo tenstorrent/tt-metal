@@ -1,7 +1,13 @@
 #!/bin/bash
-# sbatch wrapper for run_sol_validation.sh on a Blackhole Galaxy node.
+#SBATCH --partition=bh_wan_machines
+#SBATCH --nodes=1
+#SBATCH --time=01:00:00
+#SBATCH --job-name=optimization_run
+#SBATCH --propagate=NONE
+# sbatch wrapper for run_sol_validation.sh on a Blackhole Galaxy node. The #SBATCH lines above carry the
+# submission options, so the command line is just
 #
-#   sbatch -p bh_wan_machines -N 1 -t 01:00:00 -J optimization_run --propagate=NONE run.sh [step ...]
+#   sbatch sbatch_runner.sh [step ...]       (options on the command line, e.g. --time=02:00:00, override them)
 #
 # Runs ./run_sol_validation.sh once per step (default: m11) from the repo checkout, with the environment the
 # tests need: the Python venv, TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, ARCH_NAME, the 180 W TDP limit.
@@ -12,13 +18,14 @@
 # Knobs (environment variables, pass with sbatch --export=ALL,NAME=value or export them before sbatch):
 #   REPO=/path        repo checkout (default /data/sosborne/sol-attn/tt-metal)
 #   VENV=/path        Python venv (default $REPO/python_env, the create_venv.sh default)
-#   BUILD=1           run ./build_metal.sh --release first (profiler stays on, the default; ~20-40 min, so raise -t)
+#   BUILD=1           run ./build_metal.sh --release first (profiler stays on, the default; ~20-40 min, so raise --time)
 #   RESET=1           tt-smi -r before the steps (after a hang the wedged cores block the next device open)
 #   TDP_WATTS=180     firmware TDP limit handed to the chips when the cluster opens (0 = board default)
 #   SOL_STEPS="a b"   steps, if none are given as arguments
 # TT_SOL_* / SOL_* variables are passed through untouched (e.g. TT_SOL_CHAIN_CREDITS=0 for the M11 A/B); the
 # ones that are set are printed at the start so the log says what was measured.
 set -u
+ME=$(basename "$0")
 
 REPO=${REPO:-/data/sosborne/sol-attn/tt-metal}
 VENV=${VENV:-$REPO/python_env}
@@ -27,9 +34,9 @@ STEPS=("$@")
 JOB=${SLURM_JOB_ID:-nojob}
 T0=$(date +%s)
 
-cd "$REPO" || { echo "run.sh: repo not found: $REPO"; exit 2; }
+cd "$REPO" || { echo "$ME:repo not found: $REPO"; exit 2; }
 
-echo "=== run.sh  $(date)  host=$(hostname)  job=$JOB  steps: ${STEPS[*]}"
+echo "=== $ME  $(date)  host=$(hostname)  job=$JOB  steps: ${STEPS[*]}"
 echo "    repo:   $REPO"
 echo "    branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null)  head: $(git log -1 --format='%h %s' 2>/dev/null)"
 dirty=$(git status --porcelain --untracked-files=no 2>/dev/null)
@@ -51,7 +58,7 @@ if [ -f "$VENV/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
 else
-    echo "run.sh: venv not found at $VENV (create it with ./create_venv.sh, or set VENV=...)"; exit 2
+    echo "$ME:venv not found at $VENV (create it with ./create_venv.sh, or set VENV=...)"; exit 2
 fi
 
 echo "    python: $(command -v python)  ($(python --version 2>&1))"
@@ -73,10 +80,10 @@ fi
 
 # --- sanity: the build and the venv agree ----------------------------------------------------------------------
 LIB=build/lib/libtt_metal.so
-[ -f "$LIB" ] || { echo "run.sh: $LIB missing: build first (./build_metal.sh --release, or BUILD=1)"; exit 3; }
+[ -f "$LIB" ] || { echo "$ME:$LIB missing: build first (./build_metal.sh --release, or BUILD=1)"; exit 3; }
 stale=$(find tt_metal ttnn/cpp -name '*.cpp' -newer "$LIB" -print -quit 2>/dev/null)
 [ -n "$stale" ] && echo "    WARNING: C++ sources newer than $LIB (e.g. $stale): rebuild, or the run measures the old binary"
-python - <<'EOF' || { echo "run.sh: 'import ttnn' failed: venv and build do not match (pip install -e . in the venv after the build)"; exit 3; }
+python - <<'EOF' || { echo "$ME:'import ttnn' failed: venv and build do not match (pip install -e . in the venv after the build)"; exit 3; }
 import ttnn
 print("    ttnn import ok:", ttnn.__file__)
 EOF
