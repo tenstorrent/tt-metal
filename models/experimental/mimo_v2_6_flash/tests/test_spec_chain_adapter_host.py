@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
+from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror, cache_ring
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     CHAIN_HSLOTS,
@@ -30,7 +30,14 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import MTP_ROWS, pack_mtp, pack_mtp_layers, pack_verify
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
+    MTP_ROWS,
+    PAIR_ANCHORS,
+    pack_mtp,
+    pack_mtp_layers,
+    pack_mtp_pair,
+    pack_verify,
+)
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 
@@ -43,10 +50,16 @@ SEQ = [(7 * q * q + 3 * q + 11) % VOCAB for q in range(MAX_SEQ_LEN + 8)]  # the 
 SPEC_ROW = PER_LANE  # lane 1, slot 0
 
 
-def draft_of(bonus, k):
-    """The fake drafter's draft k after the bonus position: the oracle's token, wrong at every third bonus."""
+def draft_of(bonus, k, ring=0):
+    """The fake drafter's draft k after the bonus position, drafting in MTP ring ``ring``: the oracle's token, wrong at
+    every third bonus (draft 2), and in rings other than 0 its first draft wrong at every fifth bonus shifted by the
+    ring (so a draft in another request's ring shows)."""
     t = SEQ[bonus + 1 + k]
-    return (t + 1) % VOCAB if bonus % 3 == 0 and k == 1 else t
+    if bonus % 3 == 0 and k == 1:
+        return (t + 1) % VOCAB
+    if k == 0 and ring and (bonus + ring) % 5 == 0:
+        return (t + ring) % VOCAB
+    return t
 
 
 class FakeChain:
@@ -70,8 +83,8 @@ class FakeChain:
 class FakeMTP:
     def __init__(self, lane):
         self.lane, self.last_inputs_s = lane, 0.0
-        self.chained = self.planned = 0
-        self.layers, self.multi = [0], False
+        self.chained = self.planned = self.pair_runs = 0
+        self.layers, self.multi, self.pairs = [0], False, True
         self.history, self.backfills = None, []
 
     def _run(self):
@@ -83,23 +96,55 @@ class FakeMTP:
                 bonus = mtp[5 * B + s]
                 assert mtp[s] == SEQ[bonus], "the anchor slot holds the bonus token"
                 for k in range(MAX_DRAFTS):
-                    heads[k][s] = draft_of(bonus, k)
+                    heads[k][s] = draft_of(bonus, k, cache_ring(mtp[2 * B + s]))
         lane.chain.words[64:] = drafts_step(mtp, heads)
 
-    def enqueue_chained(self):
+    def _run_pair(self):
+        """The pair draft program on the upload: each anchor's draft in the ring its fill writes; every filled slot
+        holds the committed token at its position + 1."""
+        lane, mtp = self.lane, self.lane.mtp_words
+        self.pair_runs += 1
+        head = [0] * B
+        for s in range(SPEC_SLOTS):
+            if mtp[B + s] >= 0:
+                assert mtp[s] == SEQ[mtp[4 * B + s] + 1], "a filled slot holds the token after its row"
+        rings = []
+        for k in range(2):
+            a = mtp[PAIR_ANCHORS * B + k]
+            if a >= 0:
+                bonus, ring = mtp[4 * B + a] + 1, cache_ring(mtp[B + a])
+                rings.append(ring)
+                head[a] = draft_of(bonus, 0, ring)
+        assert len(set(rings)) == len(rings), "a pair's requests in one ring"
+        lane.chain.words[64:] = drafts_step(mtp, [head], pair=True)
+
+    def enqueue_chained(self, pair=False):
         assert self.lane.rope_tables is not None
         self.chained += 1
-        self._run()
+        self._run_pair() if pair else self._run()
 
     def enqueue(self, tokens, plan):
         self.planned += 1
         self.lane.mtp_words = pack_mtp(B, tokens, plan).tolist()
         self._run()
 
+    def enqueue_pair(self, tokens, plan):
+        self.planned += 1
+        self.lane.mtp_words = pack_mtp_pair(B, tokens, plan).tolist()
+        self._run_pair()
+
     def read_drafts(self, anchor):
         result = self.lane.chain.read()
         assert result.draft_anchor == anchor
         return result.drafts
+
+    def read_pair_drafts(self, anchors):
+        result = self.lane.chain.read()
+        out = []
+        for k, anchor in enumerate(anchors):
+            assert result.sources[k].draft_anchor == anchor
+            out.append(result.sources[k].drafts[:1])
+        return out
 
 
 class FakeLane:
@@ -196,7 +241,7 @@ def propose(model, committed, positions, counts, num_drafts=MAX_DRAFTS):
 
 def start(model, p):
     """As after a plain decode step of the request alone on lane 1 (slot 0), which committed SEQ[p] at p."""
-    model.spec_sources[1] = DraftSource(row=SPEC_ROW, slots=[0])
+    model.spec_sources[1] = (DraftSource(row=SPEC_ROW, slots=[0]),)
     rows = DP * PER_LANE
     committed = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
     positions = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
@@ -213,7 +258,7 @@ def test_speculative_greedy_follows_the_oracle_on_chained_drafts(adapter, mode):
     seq, steps = SEQ[: p + 1], 0
     while len(seq) < 400:
         before = (lane.mtp.chained, lane.mtp.planned, lane.reads)
-        # Lane 0 holds two requests without drafts: one pass of two greedy groups, no draft source.
+        # Lane 0 holds two requests without drafts: one pass of two greedy groups, the pair draft behind it.
         committed, positions, counts, out = verify(
             adapter, seq[-1], len(seq) - 1, drafts, mode, others=[(0, SEQ[50], 50), (1, SEQ[90], 90)]
         )
@@ -231,8 +276,10 @@ def test_speculative_greedy_follows_the_oracle_on_chained_drafts(adapter, mode):
         assert drafts == [draft_of(len(seq) - 1, k) for k in range(MAX_DRAFTS)]
         steps += 1
     assert seq == SEQ[: len(seq)]
-    assert adapter.chain_stats["chained"] == steps and adapter.chain_stats["host"] == 1
-    assert adapter.models[0].mtp.chained == adapter.models[0].mtp.planned == 0
+    # Lane 0's pair drafts chained too (its rows commit the device's tokens at the same positions every step).
+    assert adapter.chain_stats["chained"] == 3 * steps and adapter.chain_stats["host"] == 1
+    assert adapter.models[0].mtp.chained == adapter.models[0].mtp.pair_runs == steps
+    assert adapter.models[0].mtp.planned == 0
 
 
 def test_the_chained_drafts_equal_the_host_plans(adapter, monkeypatch):
@@ -333,20 +380,29 @@ class LayersMTP:
     def __init__(self, lane, mtps, embedding, lm_head):
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
-        self.layers, self.multi = list(mtps), True
+        self.layers, self.multi, self.pairs = list(mtps), True, True
         self.history = None
         self.program = MtpProgramMirror(mtps, embedding, lm_head, table_rows=B)
 
-    def _run(self):
-        self.lane.chain.words[64:] = self.program.run(self.lane.mtp_words, self.lane.step_hidden)
+    def _run(self, pair=False):
+        run = self.program.run_pair if pair else self.program.run
+        self.lane.chain.words[64:] = run(self.lane.mtp_words, self.lane.step_hidden)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, pair=False):
         self.chained += 1
-        self._run()
+        self._run(pair)
 
-    def enqueue_layers(self, source, tokens, positions, m):
+    def enqueue_pair(self, tokens, plan):
         self.planned += 1
-        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self.lane.mtp_words = pack_mtp_pair(B, tokens, plan).tolist()
+        self._run(pair=True)
+
+    def read_pair_drafts(self, anchors):
+        return FakeMTP.read_pair_drafts(self, anchors)
+
+    def enqueue_layers(self, source, tokens, positions, m, ring=0):
+        self.planned += 1
+        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m, ring).tolist()
         self._run()
 
     def read_drafts(self, anchor):
@@ -449,7 +505,8 @@ def test_layers_chained_drafts_are_the_reference_drafters(layers_adapter, mode):
         assert drafts == reference_drafts(model, source, new, positions[SPEC_ROW].tolist(), m, slot_hidden)
         seq += new
     assert counts == set(range(1, MAX_DRAFTS + 2))
-    assert model.chain_stats["chained"] == 60 and model.chain_stats["host"] == 1
+    # Lane 0's two requests draft as a pair behind every verify too (both chained).
+    assert model.chain_stats["chained"] == 3 * 60 and model.chain_stats["host"] == 1
 
 
 def test_layers_chain_check_redrafts_the_same(layers_adapter):
@@ -505,7 +562,7 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
     lane = adapter.models[1]
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append((slot, a))
+    lane.mtp.enqueue_backfill = lambda slot, a, relay_slot=None: lane.mtp.backfills.append((slot, a))
     adapter.chain_check = True
     rows_seen = []
     enqueue = lane.verify_enqueue

@@ -10,14 +10,16 @@ capture) written by one-core steps of kernels/mtp_history.cpp:
 
 * ``stage`` + ``decode``: in the decode traces (TtMiMoModel.capture_decode_trace), a copy of the step's input tokens
   at its start, then the slots' final norm rows (untilized) at its end;
-* ``verify``: in the verify trace, the pass's slots into their requests' rings (the chain row's history slots);
+* ``verify``: in the verify trace, the pass's slots into their requests' histories (the chain row's history slots);
 * ``prefill``: after each prefill chunk (eager) or in a traced prefill batch, the final norm of the chunk's rows and
   the host's write list (its last HISTORY_ROWS rows, the invalidations).
 
 The backfill program (TtMiMoMTP's backfill trace, ``plan`` then ``fill``): the plan step writes the fill's inputs from
-the backfill upload and the history page; one gather of the history rows, one RoPE gather, then per MTP layer the
-layer's input over the BACKFILL_ROWS rows (enorm / hnorm, eh_proj, the block's input norm) and its K / V written into
-the whole ring by one paged_fill_cache each (TtMiMoAttention.fill_kv_rows): no attention, MLP or LM head.
+the backfill upload and the history page (a relayed upload's A from the verify upload, which a chained verify's relay
+step wrote: its first row is known on device only); one gather of the history rows, one RoPE gather, then per MTP
+layer the layer's input over the BACKFILL_ROWS rows (enorm / hnorm, eh_proj, the block's input norm) and its K / V
+written into the request's whole ring by one paged_fill_cache each (TtMiMoAttention.fill_kv_rows): no attention, MLP
+or LM head.
 
 Cost: per decode step one 8-row copy and an untilize of the final norm's tile ([32, 4096] bf16) and one kernel
 (~10-20 us against a ~13 ms step); per verify pass one kernel; per prefill chunk a final norm and untilize of its
@@ -41,7 +43,7 @@ from ..reference.mtp_backfill import (
     prefill_writes,
 )
 from ..reference.spec_chain import CHAIN_HSLOTS, CHAIN_ROW
-from ..reference.spec_decode import SPEC_SLOTS
+from ..reference.spec_decode import MTP_RINGS, SPEC_SLOTS
 from .device_sampler import CB_SCRATCH, _cb, _kernel, _ranges
 
 DECODE, VERIFY, LIST, PLAN = 0, 1, 2, 3  # the kernel's modes
@@ -53,11 +55,13 @@ def _align64(nbytes):
 
 
 class MtpHistory:
-    def __init__(self, plan, max_batch, hidden_size, layers, rope_tails=None):
+    def __init__(self, plan, max_batch, hidden_size, layers, rope_tails=None, verify_upload=None):
         """``layers``: the drafter's MTP layers (their tokens rows; with more than one the plan also writes the stash).
         ``rope_tails``: the model's compact RoPE table tails (None with whole rows), whose 256-row versions the
-        backfill's cos / sin append. Allocates every buffer (persistent)."""
+        backfill's cos / sin append. ``verify_upload``: the verify upload (SpecInputs.verify_packed), which a relayed
+        backfill reads its first row from. Allocates every buffer (persistent)."""
         self.plan, self.max_batch, self.hidden, self.layers = plan, max_batch, hidden_size, layers
+        self.verify_upload = verify_upload
         self.row_bytes = hidden_size * 2
         rep = plan.replicate()
         mesh = plan.mesh_device
@@ -115,6 +119,7 @@ class MtpHistory:
             CHAIN_HSLOTS,
             TABLE_WORDS,
             CB_SCRATCH,
+            MTP_RINGS,
         ]
         scratch = _align64(HIST_WORDS * 4) + _align64(self.row_bytes) + extra
         kernel = _kernel("mtp_history.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
@@ -181,16 +186,19 @@ class MtpHistory:
         return prefill_writes(slot, start, [int(t) for t in tokens], src_first, continues)
 
     def backfill_plan(self, layer_inputs=None):
-        """The backfill's plan step: its inputs from the upload and the page; with every layer (``layer_inputs``, the
-        draft's LayerInputs) also the stash page and hidden rows."""
+        """The backfill's plan step: its inputs from the upload, the page and (a relayed upload) the verify upload;
+        with every layer (``layer_inputs``, the draft's LayerInputs) also the stash page and hidden rows."""
+        assert self.verify_upload is not None, "the plan reads the verify upload (a relayed backfill's first row)"
         li = layer_inputs
         stash = [li.stash, li.stash_hidden] if li is not None else [self.upload, self.upload]
         args = [self.upload.buffer_address(), self.page.buffer_address(), self.rows.buffer_address()]
         args += [self.hidx.buffer_address(), self.rope.buffer_address(), self.table.buffer_address()]
         args += [t.buffer_address() for t in stash] + [t.buffer_address() for t in self.tokens]
+        args += [self.verify_upload.buffer_address()]
         row = _align64(self.max_batch * 4)
-        extra = 2 * row + (2 + self.layers) * _align64(BACKFILL_ROWS * 4) + _align64(TABLE_WORDS * 4)
-        io = [self.upload, self.page, self.rows, *(stash if li is not None else []), self.hidx, self.rope, self.table]
+        extra = 3 * row + (2 + self.layers) * _align64(BACKFILL_ROWS * 4) + _align64(TABLE_WORDS * 4)
+        io = [self.upload, self.page, self.rows, self.verify_upload, *(stash if li is not None else [])]
+        io += [self.hidx, self.rope, self.table]
         self._run(PLAN, args, io + self.tokens, extra)
 
     def gather(self, model):
@@ -250,10 +258,11 @@ class MtpHistory:
             t.deallocate(True)
 
     # ------------------------------------------------------------------ host
-    def upload_backfill(self, slot=None, a=None):
-        """Copy the backfill upload (the request in lane slot ``slot``, the draft's first row ``a``; None: idle)."""
+    def upload_backfill(self, slot=None, a=None, relay_slot=None):
+        """Copy the backfill upload (the request in lane slot ``slot``, the draft's first row ``a``, or with
+        ``relay_slot`` the verify upload's position at that verify slot; None: idle)."""
         host = ttnn.from_torch(
-            torch.tensor(backfill_row(self.max_batch, slot, a), dtype=torch.int32),
+            torch.tensor(backfill_row(self.max_batch, slot, a, relay_slot), dtype=torch.int32),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self.plan.replicate(),

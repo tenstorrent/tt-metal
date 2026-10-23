@@ -25,6 +25,7 @@ from ..reference.spec_inputs import (
     owned_slot_caps,
     owned_slot_columns,
     pack_mtp,
+    pack_mtp_pair,
     pack_verify,
     slot_caps,
 )
@@ -55,6 +56,10 @@ class SpecInputs:
     def mtp_host(self, tokens=None, plan=None):
         """The host tensor a draft copies into ``mtp_packed`` (reference.spec_inputs.pack_mtp; None: idle)."""
         return kv_lib.replicated(self.plan, pack_mtp(self.max_batch, tokens, plan), ttnn.int32, device=False)
+
+    def pair_host(self, tokens=None, plan=None):
+        """The host tensor a pair draft copies into ``mtp_packed`` (reference.spec_inputs.pack_mtp_pair)."""
+        return kv_lib.replicated(self.plan, pack_mtp_pair(self.max_batch, tokens, plan), ttnn.int32, device=False)
 
     def reset(self):
         """Idle uploads (every position -1): a trace's warm-up run and capture then write no K / V, whatever the
@@ -124,3 +129,14 @@ class SpecInputs:
         self._row(packed, 3, out=step3)
         for k, out in enumerate(rope_idx or []):
             self._to_uint32(self._row(packed, 4 + k), out)
+
+    def derive_pair(self, tokens, fill, serial, rope_idx):
+        """Write the pair draft trace's inputs (TtMiMoMTP ``PairInputs``) from ``mtp_packed`` (pack_mtp_pair's
+        layout): its tokens, fill cache positions, their SPEC_SLOTS serial positions and the fill's RoPE indices."""
+        packed = self.mtp_packed
+        assert MTP_ROWS * self.max_batch == packed.shape[-1] and len(serial) == len(self.slot_caps)
+        self._to_uint32(self._row(packed, 0), tokens)
+        self._row(packed, 1, out=fill)
+        for cap, out in zip(self.slot_caps, serial):
+            self._into(ttnn.minimum(fill, cap), out)
+        self._to_uint32(self._row(packed, 4), rope_idx)

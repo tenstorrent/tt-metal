@@ -1139,9 +1139,10 @@ class TtMiMoModel:
             self._release(warm)
         if self.spec_chain is not None:
             # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
-            # step, compile here too, on the persistent buffers their captures use; so do the history's kernel steps
-            # (tt/mtp_backfill.py).
-            self.spec_chain.warm(self.verify_sampler.ctrl)
+            # step, compile here too, on the persistent buffers their captures use; so do the pair draft program
+            # (TtMiMoMTP.warm_pair) and the history's kernel steps (tt/mtp_backfill.py).
+            self.spec_chain.warm(self.verify_sampler.ctrl, pair=self.mtp.pairs)
+            self.mtp.warm_pair()
         if self._history() is not None:
             self._history().warm(self.mtp.inputs)
         ttnn.synchronize_device(self.mesh_device)

@@ -15,6 +15,10 @@ ReferenceMTPDrafter drafts MAX_DRAFTS tokens per step in one of two ways (refere
 * every layer (vLLM 0.31's MultiModuleMTPSpeculator with the num_nextn_predict_layers patch): draft i + 1 from layer i,
   each taking the target's hidden at t and the token at t + i + 1, predicting the token at t + i + 2, every layer's
   query at the position before the last committed token.
+
+and, for the two requests of a lane that drafts for both (reference/spec_decode.py ``plan_mtp_pair``), one token
+each: layer 0 over each request's committed rows, the draft from its last one. Every request keeps its own caches
+(its MTP ring); the lane's stash serves the request that drafts alone.
 """
 
 import torch
@@ -22,14 +26,22 @@ import torch
 from .model import ReferenceDecoderLayer, load_layer_weights, rms_norm
 from .spec_decode import (
     MAX_DRAFTS,
+    MTP_RING_TOKENS,
     SPEC_SLOTS,
     MtpLayersInputs,
+    MtpPairInputs,
     MtpStash,
     mtp_layer_tokens,
     mtp_stash,
     plan_mtp,
     plan_mtp_layers,
+    plan_mtp_pair,
 )
+
+
+def cache_ring(cache_position, ring=MTP_RING_TOKENS):
+    """The MTP ring a cache position (spec_decode.mtp_cache_position) addresses."""
+    return int(cache_position) // (2 * ring)
 
 
 def load_mtp_weights(ckpt, cfg, i):
@@ -77,13 +89,15 @@ class PositionalHistory:
 
 
 class ReferenceMTPDrafter:
-    """The adapter's propose step for one lane's request, on the host. ``mtps``: the ReferenceMTP layers, one
-    (one-layer drafting: layer 0 drafts every token) or MAX_DRAFTS (draft i + 1 from layer i); ``embedding`` [vocab,
-    hidden] and ``lm_head`` [vocab, hidden] the target's. Each layer keeps its K / V in its own PositionalHistory; with
-    every layer the drafter also keeps the MtpStash rows (target hidden, layer-0 token) for the next re-prefill.
+    """The adapter's propose step for one lane, on the host. ``mtps``: the ReferenceMTP layers, one (one-layer
+    drafting: layer 0 drafts every token) or MAX_DRAFTS (draft i + 1 from layer i); ``embedding`` [vocab, hidden] and
+    ``lm_head`` [vocab, hidden] the target's. Each layer keeps its K / V in a PositionalHistory per MTP ring (one per
+    request, ``ring_histories``); with every layer the drafter also keeps the lane's MtpStash rows (target hidden,
+    layer-0 token) for the next re-prefill.
 
-    plan() plans a draft from where the last step left the request (reference.spec_decode.plan_mtp or
-    plan_mtp_layers), draft() runs it from the slots' tokens and target hidden rows, as the device program would."""
+    plan() plans a request's draft from where the last step left it (reference.spec_decode.plan_mtp or
+    plan_mtp_layers), plan_pair() the pair draft of two (plan_mtp_pair); draft() runs either from the slots' tokens and
+    target hidden rows, as the device program would."""
 
     def __init__(self, mtps, embedding, lm_head):
         assert len(mtps) in (1, MAX_DRAFTS), f"{len(mtps)} MTP layers: one, or one per draft"
@@ -96,15 +110,27 @@ class ReferenceMTPDrafter:
 
     def reset(self):
         """A new request's prompt: no K / V, nothing stashed."""
-        self.histories = [PositionalHistory() for _ in self.mtps]
+        self.rings = {}
         self.stash = MtpStash.empty() if self.multi_layer else None
         self.stash_rows = [None] * SPEC_SLOTS  # (hidden, layer-0 token) of each stash slot
         self.outputs = None  # each draft's final normed output at its row (the anchor), of the last draft
 
-    def plan(self, source, committed_positions, accepted):
+    def ring_histories(self, ring):
+        """The caches (one PositionalHistory per layer) of MTP ring ``ring``."""
+        return self.rings.setdefault(int(ring), [PositionalHistory() for _ in self.mtps])
+
+    @property
+    def histories(self):
+        """Ring 0's caches (a lane serving one request in slot 0)."""
+        return self.ring_histories(0)
+
+    def plan(self, source, committed_positions, accepted, ring=0):
         if self.multi_layer:
-            return plan_mtp_layers(source, committed_positions, accepted, self.stash, len(self.mtps))
-        return plan_mtp(source, committed_positions, accepted)
+            return plan_mtp_layers(source, committed_positions, accepted, self.stash, len(self.mtps), ring=ring)
+        return plan_mtp(source, committed_positions, accepted, ring=ring)
+
+    def plan_pair(self, sources, committed_positions, accepted, rings):
+        return plan_mtp_pair(sources, committed_positions, accepted, rings)
 
     def _greedy(self, h):
         return int(torch.argmax(h @ self.lm_head.T))
@@ -114,7 +140,9 @@ class ReferenceMTPDrafter:
         final normed hidden that chose it. Returns the MAX_DRAFTS drafts."""
         if isinstance(plan, MtpLayersInputs):
             return self._draft_layers(plan, slot_tokens, slot_hidden)
-        mtp, history = self.mtps[0], self.histories[0]
+        if isinstance(plan, MtpPairInputs):
+            return self._draft_pair(plan, slot_tokens, slot_hidden)
+        mtp, history = self.mtps[0], self.ring_histories(plan.ring)[0]
         fill = [s for s in range(SPEC_SLOTS) if plan.fill[s] >= 0]
         out = mtp(
             torch.stack([slot_hidden[s] for s in fill]),
@@ -148,7 +176,7 @@ class ReferenceMTPDrafter:
         hidden = torch.stack(hidden)
         positions = torch.tensor([plan.positions[s] for s in rows])
         drafts, self.outputs = [], []
-        for i, (mtp, history) in enumerate(zip(self.mtps, self.histories)):
+        for i, (mtp, history) in enumerate(zip(self.mtps, self.ring_histories(plan.ring))):
             tokens = mtp_layer_tokens(tokens0, drafts, i)
             h = mtp(hidden, self.embedding[torch.tensor(tokens)], positions, history)[-1]
             drafts.append(self._greedy(h))
@@ -159,21 +187,45 @@ class ReferenceMTPDrafter:
         ]
         return drafts
 
+    def _draft_pair(self, plan, slot_tokens, slot_hidden):
+        """Layer 0 over each source's rows, in its own ring; returns each source's one draft (None: it drafts nothing).
+        The stash is the lone request's: a pair draft leaves it."""
+        drafts, self.outputs = [], []
+        for anchor in plan.anchors:
+            if anchor is None:
+                drafts.append(None)
+                self.outputs.append(None)
+                continue
+            ring = plan.rings[anchor]
+            rows = [s for s in plan.rows if plan.rings[s] == ring]
+            out = self.mtps[0](
+                torch.stack([slot_hidden[s] for s in rows]),
+                self.embedding[torch.tensor([slot_tokens[s] for s in rows])],
+                torch.tensor([plan.fill[s] for s in rows]),
+                self.ring_histories(ring)[0],
+            )
+            h = out[rows.index(anchor)]
+            drafts.append(self._greedy(h))
+            self.outputs.append(h)
+        return drafts
+
 
 class MtpProgramMirror:
     """The every-layer draft program of one replica (tt/mtp.py ``_body_layers``) on the host, step for step on the
     kernels' integer mirrors (reference/spec_chain.py): the plan step on the packed upload and the stash page, the
     hidden gather from the table [the step's final norm rows, the stash rows] (which becomes the stash), and pass i on
-    MTP layer i over the plan's slots with the tokens step's tokens, each writing its own cache (PositionalHistory, the
-    device ring's semantics), its greedy token per used slot into head i; then the drafts step. ``mtps``: MAX_DRAFTS
-    ReferenceMTP layers; ``embedding`` / ``lm_head`` the target's; ``table_rows`` T, the final norm buffer's rows."""
+    MTP layer i over the plan's slots with the tokens step's tokens, each writing its own cache in the ring its cache
+    positions address (PositionalHistory per ring, the device ring's semantics), its greedy token per used slot into
+    head i; then the drafts step. ``run_pair``: the pair draft program (tt/mtp.py ``_body_pair``). ``mtps``:
+    MAX_DRAFTS ReferenceMTP layers; ``embedding`` / ``lm_head`` the target's; ``table_rows`` T, the final norm buffer's
+    rows."""
 
     def __init__(self, mtps, embedding, lm_head, table_rows=32):
         from .spec_chain import stash_page
 
         assert len(mtps) == MAX_DRAFTS
         self.mtps, self.embedding, self.lm_head, self.table_rows = list(mtps), embedding, lm_head, table_rows
-        self.histories = [PositionalHistory() for _ in self.mtps]
+        self.rings = {}
         self.stash = stash_page(table_rows)
         self.stash_hidden = torch.zeros(table_rows, embedding.shape[-1])
         self.heads = [[0] * table_rows for _ in self.mtps]
@@ -183,8 +235,41 @@ class MtpProgramMirror:
         """TtMiMoMTP.reset: zero rings (no K / V), an empty stash page."""
         from .spec_chain import stash_page
 
-        self.histories = [PositionalHistory() for _ in self.mtps]
+        self.rings = {}
         self.stash = stash_page(self.table_rows)
+
+    def ring_histories(self, ring):
+        return self.rings.setdefault(int(ring), [PositionalHistory() for _ in self.mtps])
+
+    @property
+    def histories(self):
+        return self.ring_histories(0)
+
+    def run_pair(self, mtp, step_hidden):
+        """One replay of the pair draft program: ``mtp`` the packed upload (pack_mtp_pair's layout), ``step_hidden``
+        the final norm buffer [T, hidden]. MTP layer 0 over the fill's slots, each ring's rows on that ring's cache,
+        the hidden rows the slots' own; returns the result's drafts section (drafts_step, pair)."""
+        from .spec_chain import drafts_step
+        from .spec_inputs import MTP_ROWS
+
+        b = len(mtp) // MTP_ROWS
+        fill, tokens, rope = mtp[b : 2 * b], mtp[:b], mtp[4 * b : 5 * b]
+        head = [0] * self.table_rows
+        self.outputs = []
+        used = [s for s in range(SPEC_SLOTS) if fill[s] >= 0]
+        for ring in sorted({cache_ring(fill[s]) for s in used}):
+            rows = [s for s in used if cache_ring(fill[s]) == ring]
+            out = self.mtps[0](
+                step_hidden.float()[torch.tensor(rows)],
+                self.embedding[torch.tensor([tokens[s] for s in rows])],
+                torch.tensor([rope[s] for s in rows]),
+                self.ring_histories(ring)[0],
+            )
+            for k, s in enumerate(rows):
+                head[s] = int(torch.argmax(out[k] @ self.lm_head.T))
+            self.outputs.append(out[-1])
+        self.heads[0] = head
+        return drafts_step(mtp, [head], pair=True)
 
     def run(self, mtp, step_hidden):
         """One replay: ``mtp`` the packed upload (int32 values [MTP_ROWS * B], B = table_rows), ``step_hidden`` the
@@ -196,8 +281,11 @@ class MtpProgramMirror:
         self.stash_hidden = rows.clone()
         used = [j for j in range(SPEC_SLOTS) if inputs["pos"][j] >= 0]
         positions = torch.tensor([inputs["rope"][j] for j in used])
+        rings = {cache_ring(inputs["pos"][j]) for j in used}
+        assert len(rings) <= 1, f"one request's rows in rings {rings}"
+        histories = self.ring_histories(rings.pop() if rings else 0)
         self.outputs = []
-        for i, (mtp_layer, history) in enumerate(zip(self.mtps, self.histories)):
+        for i, (mtp_layer, history) in enumerate(zip(self.mtps, histories)):
             tokens = inputs["tokens0"] if i == 0 else tokens_step(inputs["tokens0"], self.heads, i)
             head = [0] * self.table_rows
             if used:
@@ -210,18 +298,19 @@ class MtpProgramMirror:
         return drafts_step(mtp, self.heads, layers=MAX_DRAFTS)
 
 
-def backfill_rings(mtps, histories, embedding, history, upload, stash=None, stash_hidden=None):
+def backfill_rings(mtps, histories, embedding, history, upload, stash=None, stash_hidden=None, verify=None):
     """The backfill trace (tt/mtp_backfill.py) on the host: its plan (reference.mtp_backfill.backfill_plan) on the
-    lane's ``history`` (reference.mtp_backfill.History) and the upload, then every MTP layer over the plan's rows,
-    row r writing its K / V at position S0 + r of that layer's cache (``histories``, PositionalHistory; the outputs
-    are not used). With every layer it also rewrites the stash page and the stash's hidden rows (``stash``,
-    ``stash_hidden`` [T, hidden], changed in place). Returns the new stash page."""
+    lane's ``history`` (reference.mtp_backfill.History), the upload and (a relayed upload) the verify upload, then
+    every MTP layer over the plan's rows, row r writing its K / V at position S0 + r of that layer's cache in the
+    request's ring (``histories``, its PositionalHistory per layer; the outputs are not used). With every layer it also
+    rewrites the stash page and the stash's hidden rows (``stash``, ``stash_hidden`` [T, hidden], changed in place).
+    Returns the new stash page."""
     from .mtp_backfill import BACKFILL_ROWS, backfill_plan, backfill_start
 
-    plan, stash = backfill_plan(upload, history.page, len(mtps), stash, history.rows)
-    if not upload[0]:
+    plan, stash = backfill_plan(upload, history.page, len(mtps), stash, history.rows, verify=verify)
+    if plan["a"] is None:
         return stash
-    a = upload[2]
+    a = plan["a"]
     positions = backfill_start(a, history.rows) + torch.arange(BACKFILL_ROWS)
     rows = history.hidden[torch.tensor(plan["hidden"])]
     for mtp, cache, tokens in zip(mtps, histories, plan["tokens"]):

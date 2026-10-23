@@ -39,14 +39,25 @@ With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables, at every cont
 of the tables at the derived positions, as in decode; without them (MIMO_DEVICE_ROPE=0) a one-layer draft also copies
 its six cos / sin, and every-layer drafting is not available (its positions are known on device only).
 
-With the backfill (tt/mtp_backfill.py, MIMO_MTP_BACKFILL) a second traced program fills every layer's ring from the
-history of the target's hidden before a draft that does not continue the rings (``enqueue_backfill``): after a
-prompt, after the lane served several requests.
+A lane that ran two requests in one pass, each with at most one draft, drafts one token for each with a third traced
+program, the pair draft (``_body_pair``, reference/spec_decode.py ``plan_mtp_pair``; with the decode RoPE tables):
+its inputs written from the packed upload (pack_mtp_pair's layout, SpecInputs.derive_pair), one pass of MTP layer 0
+over both requests' committed slots (each slot's hidden is the step's own final norm row, as in the one-layer fill;
+the slots' cache positions address their requests' rings), then the pair drafts step (each source's anchor and
+draft into the result page). Behind a verify the accept trace's chain step writes its upload (``enqueue_chained``),
+else the host (``enqueue_pair``).
+
+With the backfill (tt/mtp_backfill.py, MIMO_MTP_BACKFILL) a fourth traced program fills every layer's ring of one
+request from the history of the target's hidden before a draft that does not continue that request's rings
+(``enqueue_backfill``): after its prompt, after the lane served several requests, or (every layer) after it drafted
+in a pair, which advances layer 0 only.
 
 An MTP layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its own
-final norm feeds the target's LM head. Each layer's KV cache is a small ring addressed at mtp_cache_position(t) with
-RoPE at the true position t (reference/spec_decode.py).
+final norm feeds the target's LM head. Each layer's KV cache holds a small ring per request slot (MTP_RINGS), ring r
+addressed at mtp_cache_position(t, r) with RoPE at the true position t (reference/spec_decode.py): one page table row
+serves every slot and every ring, so the passes write and read their requests' rings with nothing but their cache
+positions.
 """
 
 import os
@@ -59,7 +70,7 @@ import ttnn
 
 from ..reference.mtp import load_mtp_weights
 from ..reference.spec_chain import stash_page
-from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_table_row
+from ..reference.spec_decode import MAX_DRAFTS, PAIR_DRAFTS, PAIR_SOURCES, SPEC_SLOTS, mtp_table_row
 from ..reference.spec_inputs import pack_mtp_layers
 from .common import TILE, as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -69,7 +80,7 @@ from .spec_chain import SpecChain
 
 
 class TtMtpLayer:
-    """One MTP layer's weights and ring KV cache."""
+    """One MTP layer's weights and ring KV cache (a ring per request slot)."""
 
     def __init__(self, model, ckpt, cache_dir, layer, weight_dtype):
         cfg, plan = model.cfg, model.plan
@@ -150,6 +161,40 @@ def make_layer_inputs(plan, max_batch, hidden_size):
     )
 
 
+@dataclass
+class PairInputs:
+    """The pair draft program's persistent inputs, written by SpecInputs.derive_pair on every replay: ``tokens``
+    uint32 [1, B], ``fill`` cache positions int32 [B], ``serial`` SPEC_SLOTS int32 [B] (slot j's alone), ``rope``
+    RoPE indices uint32 [1, B]."""
+
+    tokens: object
+    fill: object
+    serial: list
+    rope: object
+
+
+def make_pair_inputs(plan, max_batch):
+    """The pair draft program's PairInputs on the replica ``plan``: idle positions."""
+
+    def rows(value, dtype, shape):
+        return ttnn.from_torch(
+            torch.full(shape, value, dtype=torch.int32),
+            device=plan.mesh_device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    b = max_batch
+    return PairInputs(
+        tokens=rows(0, ttnn.uint32, (1, b)),
+        fill=rows(-1, ttnn.int32, (b,)),
+        serial=[rows(-1, ttnn.int32, (b,)) for _ in range(SPEC_SLOTS)],
+        rope=rows(0, ttnn.uint32, (1, b)),
+    )
+
+
 class TtMiMoMTP:
     def __init__(self, model, ckpt=None, cache_dir=None, layers=(0,), weight_dtype=ttnn.bfloat8_b, backfill=False):
         """``model``: the replica's TtMiMoModel (embedding, LM head, RoPE setups, greedy head, final hidden buffer).
@@ -165,22 +210,30 @@ class TtMiMoMTP:
         self.page_table = None
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts
         self.inputs = None  # every layer: LayerInputs
+        self.pair_inputs = None  # PairInputs (setup_cache, with the decode RoPE tables): the pair draft's
         self.backfill = backfill
         self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
         self.trace = None
+        self.pair_trace = None
         self.backfill_trace = None
 
+    @property
+    def pairs(self):
+        """The replica drafts for the two requests of a lane (the pair draft program, with the decode RoPE tables)."""
+        return self.pair_inputs is not None
+
     def setup_cache(self):
-        """The ring KV caches, their page table, the greedy heads, with every layer the program's LayerInputs, and the
-        replica's SpecChain (its result page): persistent, made before any trace capture, after
-        TtMiMoModel.setup_vllm_kv_cache (the verify's GreedyHead and VerifySampler, which the chain reads)."""
+        """The ring KV caches, their page table, the greedy heads, with every layer the program's LayerInputs, with the
+        decode RoPE tables the pair draft's PairInputs, and the replica's SpecChain (its result page): persistent, made
+        before any trace capture, after TtMiMoModel.setup_vllm_kv_cache (the verify's GreedyHead and VerifySampler,
+        which the chain reads) and setup_decode_rope_tables."""
         m = self.model
         assert self.page_table is None and m.decode_users is not None and m.decode_users >= SPEC_SLOTS
         row, blocks = mtp_table_row(m.block_size)
         for layer in self.layers:
             layer.kv_cache = layer.block.attn.allocate_kv_cache(blocks, m.block_size, m.kv_dtype)
-        table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
-        table[:SPEC_SLOTS] = torch.tensor(row, dtype=torch.int32)
+        # Every slot's row is the same: a slot's ring is in its cache positions (reference.spec_decode.mtp_table_row).
+        table = torch.tensor(row, dtype=torch.int32).reshape(1, -1).repeat(m.max_batch, 1)
         self.page_table = ttnn.from_torch(
             table,
             device=m.mesh_device,
@@ -193,9 +246,16 @@ class TtMiMoMTP:
             # The hidden table's first part is the final norm buffer (TtMiMoModel.norm_buffers, one tile of rows).
             assert m.norm_buffers is not None and m.norm_buffers[0].shape[-2] == TILE == m.max_batch
             self.inputs = make_layer_inputs(self.plan, m.max_batch, self.cfg.hidden_size)
+        if m.rope_tables is not None:
+            self.pair_inputs = make_pair_inputs(self.plan, m.max_batch)
         if self.backfill and m.rope_tables is not None:
             self.history = MtpHistory(
-                self.plan, m.max_batch, self.cfg.hidden_size, len(self.layers), m.rope_table_tails
+                self.plan,
+                m.max_batch,
+                self.cfg.hidden_size,
+                len(self.layers),
+                m.rope_table_tails,
+                verify_upload=m.spec_inputs.verify_packed,
             )
         assert m.verify_sampler is not None and m.greedy_head is not None, "the chain reads the verify's buffers"
         heads = [h.next_tokens for h in self.heads]
@@ -291,6 +351,27 @@ class TtMiMoMTP:
         for t in made:
             t.deallocate(True)
         self.model.spec_chain.drafts()
+
+    def _body_pair(self):
+        """The pair draft program: its inputs from the packed upload (SpecInputs.derive_pair), one pass of MTP layer 0
+        over the slots on the step's own final norm rows (every slot's cache positions in its request's ring), then
+        the pair drafts step (each source's anchor and draft into the result page)."""
+        m, pi = self.model, self.pair_inputs
+        m.spec_inputs.derive_pair(pi.tokens, pi.fill, pi.serial, pi.rope)
+        cos, sin = m.rope_table_rows(pi.rope, m.rope_tables[:2])
+        h = self._pass(pi.tokens, m.norm_buffers[0], pi.fill, pi.serial, cos, sin, self.heads[0], self.layers[0])
+        h.deallocate(True)
+        cos.deallocate(True)
+        sin.deallocate(True)
+        m.spec_chain.pair_drafts()
+
+    def warm_pair(self):
+        """Compile the pair draft program before any trace capture (TtMiMoModel.capture_decode_trace): one eager run on
+        an idle upload (no fill: no K / V written; its drafts step writes the result page's drafts section, which no
+        step reads before rewriting it). Its programs are the every-layer program's pass 0 and the derive programs."""
+        if self.pairs:
+            self.model.spec_inputs.reset()
+            self._body_pair()
 
     def _gather_hidden(self):
         """The passes' hidden rows [1, 1, B, hidden] (tile): row j of the table [final norm rows, stash rows] at the
@@ -417,6 +498,16 @@ class TtMiMoMTP:
         ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(m.mesh_device)
         self.trace = {"id": trace_id, "inputs": inputs}
+        if self.pairs:
+            # The pair draft program (compiled by warm_pair before the decode capture), on an idle upload.
+            m.spec_inputs.reset()
+            self._body_pair()
+            ttnn.synchronize_device(m.mesh_device)
+            pair_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
+            self._body_pair()
+            ttnn.end_trace_capture(m.mesh_device, pair_id, cq_id=0)
+            ttnn.synchronize_device(m.mesh_device)
+            self.pair_trace = pair_id
         if self.history is not None:
             # The backfill program: compiled by an idle run (an idle upload fills the rings' scratch blocks and leaves
             # the stash), then captured.
@@ -433,16 +524,20 @@ class TtMiMoMTP:
         if self.trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.trace["id"])
             self.trace = None
+        if self.pair_trace is not None:
+            ttnn.release_trace(self.model.mesh_device, self.pair_trace)
+            self.pair_trace = None
         if self.backfill_trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
             self.backfill_trace = None
 
-    def enqueue_backfill(self, slot, a):
-        """Fill every layer's ring from the history of the request in lane ``slot`` before a draft whose first row is
-        at ``a`` (non-blocking; enqueue the draft right after it): the window a - HISTORY_ROWS + 1 .. a - 1, and with
-        every layer the stash rows a - 2, a - 1 the draft then re-runs."""
+    def enqueue_backfill(self, slot, a, relay_slot=None):
+        """Fill every layer's ring of the request in lane ``slot`` (its ring) from its history before a draft whose
+        first row is at ``a`` (non-blocking; enqueue the draft right after it): the window a - HISTORY_ROWS + 1 ..
+        a - 1, and with every layer the stash rows a - 2, a - 1 the draft then re-runs. ``relay_slot``: a is the
+        position the verify upload holds at that verify slot (a chained verify's, known on device only)."""
         assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS
-        self.history.upload_backfill(slot, a)
+        self.history.upload_backfill(slot, a, relay_slot)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):
@@ -464,15 +559,16 @@ class TtMiMoMTP:
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
-    def enqueue_layers(self, source, committed_tokens, committed_positions, accepted):
+    def enqueue_layers(self, source, committed_tokens, committed_positions, accepted, ring=0):
         """Every layer: draft after the replica's last decode or verify step (non-blocking) from the commit of
-        ``accepted`` tokens ``committed_tokens`` at ``committed_positions`` of the lane's DraftSource ``source``: copies
-        its description (reference.spec_inputs.pack_mtp_layers); the plan step plans the passes on device."""
+        ``accepted`` tokens ``committed_tokens`` at ``committed_positions`` of the lane's DraftSource ``source``, in MTP
+        ring ``ring``: copies its description (reference.spec_inputs.pack_mtp_layers); the plan step plans the passes on
+        device."""
         assert self.multi, "one layer: enqueue"
         m = self.model
         assert int(committed_positions[int(accepted) - 1]) < m.max_seq_len
         t = time.perf_counter()
-        packed = pack_mtp_layers(m.max_batch, source, committed_tokens, committed_positions, accepted)
+        packed = pack_mtp_layers(m.max_batch, source, committed_tokens, committed_positions, accepted, ring)
         host = ttnn.from_torch(
             packed, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
         )
@@ -480,12 +576,26 @@ class TtMiMoMTP:
         ttnn.copy_host_to_device_tensor(host, m.spec_inputs.mtp_packed)
         ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
-    def enqueue_chained(self):
+    def enqueue_pair(self, tokens, plan):
+        """The pair draft after the replica's last decode or verify step (non-blocking): ``tokens`` per slot (the
+        tokens committed there), ``plan`` the reference.spec_decode.MtpPairInputs. Copies the packed upload."""
+        assert self.pair_trace is not None, "the pair draft needs the decode RoPE tables (its trace)"
+        m = self.model
+        assert max(plan.fill) < m.max_seq_len, f"draft position {max(plan.fill)} >= {m.max_seq_len}"
+        t = time.perf_counter()
+        packed = m.spec_inputs.pair_host(tokens, plan)
+        self.last_inputs_s = time.perf_counter() - t
+        ttnn.copy_host_to_device_tensor(packed, m.spec_inputs.mtp_packed)
+        ttnn.execute_trace(m.mesh_device, self.pair_trace, cq_id=0, blocking=False)
+
+    def enqueue_chained(self, pair=False):
         """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
-        the packed upload's buffer from the pass's accepted count and committed tokens, so nothing is copied. Needs the
-        decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
+        the packed upload's buffer from the pass's accepted counts and committed tokens, so nothing is copied; ``pair``
+        the pair draft (the chain row named two sources). Needs the decode RoPE tables (without them the host copies
+        the draft's cos / sin: ``enqueue``)."""
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
-        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        trace = self.pair_trace if pair else self.trace["id"]
+        ttnn.execute_trace(self.model.mesh_device, trace, cq_id=0, blocking=False)
 
     def read_drafts(self, anchor):
         """The drafts of the anchor slot, from the result page the drafts step wrote (blocks until it finished)."""
@@ -493,3 +603,15 @@ class TtMiMoMTP:
         if result.draft_anchor != anchor:
             raise RuntimeError(f"the draft ran at slot {result.draft_anchor}, the host planned slot {anchor}")
         return result.drafts
+
+    def read_pair_drafts(self, anchors):
+        """Each source's PAIR_DRAFTS drafts (None for an anchor of None), from the result page the pair drafts step
+        wrote (blocks until it finished)."""
+        result = self.model.spec_chain.read()
+        out = []
+        for k, anchor in enumerate(anchors[:PAIR_SOURCES]):
+            got = result.sources[k].draft_anchor
+            if got != anchor:
+                raise RuntimeError(f"pair source {k}: the draft ran at slot {got}, the host planned slot {anchor}")
+            out.append(None if anchor is None else result.sources[k].drafts[:PAIR_DRAFTS])
+        return out

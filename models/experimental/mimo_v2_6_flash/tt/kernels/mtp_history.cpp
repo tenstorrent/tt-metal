@@ -13,13 +13,15 @@
 // request's slot (the chain row's word chain_hslots + j, slot + 1; 0 none).
 // Mode 2, a write list (prefill): per entry (source row, entry, position, token); source -1 invalidates the entry,
 // -2 skips it.
-// Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A) and the page, the fill of the whole
-// ring from S0 = floor(max(0, A - H + 1) / block) * block: row r at position q = S0 + r takes history entry
-// slot * H + q % H when the history holds q in [A - H + 1, A - 1] (else entry 0), RoPE index min(q, A), and for layer
-// i the token at q + i + 1 when the history holds it and q + i + 1 <= A (else 0); the fill's page table row (ring
-// blocks from S0's, then the scratch blocks); with every layer the stash rows A - 2, A - 1 (positions, layer-0 tokens,
-// hidden rows copied into the stash's hidden buffer) when the history holds them and their tokens. Idle: the scratch
-// blocks, the stash left alone.
+// Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A, relay, relay slot) and the page, the
+// fill of the request's whole ring (ring `slot`) from S0 = floor(max(0, A - H + 1) / block) * block: row r at
+// position q = S0 + r takes history entry slot * H + q % H when the history holds q in [A - H + 1, A - 1] (else entry
+// 0), RoPE index min(q, A), and for layer i the token at q + i + 1 when the history holds it and q + i + 1 <= A (else
+// 0); the fill's page table row (the ring's blocks, slot * N / block .., from S0's, then the scratch blocks after the
+// last ring's); with every layer the stash rows A - 2, A - 1 (positions, layer-0 tokens, hidden rows copied into the
+// stash's hidden buffer) when the history holds them and their tokens. A relayed upload takes A from the verify
+// upload's positions at the relay slot (a chained verify's, which its relay step wrote; -1 idles the backfill).
+// Idle: the scratch blocks, the stash left alone.
 
 #include <cstdint>
 
@@ -49,7 +51,9 @@ void kernel_main() {
     constexpr uint32_t chain_hslots = get_compile_time_arg_val(9);
     constexpr uint32_t table_words = get_compile_time_arg_val(10);  // the fill table row's width
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(11);
+    constexpr uint32_t rings = get_compile_time_arg_val(12);  // MTP rings per layer (the scratch blocks follow them)
     static_assert(S <= B && chain_hslots + S <= B && N % block == 0 && 2 * (N / block) <= table_words);
+    static_assert(S <= rings && 5 <= B);
     constexpr uint32_t page_bytes = 2 * S * H * 4;
     constexpr uint32_t ring_blocks = N / block;
 
@@ -123,23 +127,28 @@ void kernel_main() {
         noc_async_write_barrier();
     } else {
         // Runtime args: upload, page, history rows, hidden rows out, RoPE out, table out, stash page, stash hidden,
-        // then the layers' tokens out.
+        // then the layers' tokens out, then the verify upload.
         const uint32_t upload_addr = get_arg_val<uint32_t>(0);
         const uint32_t page_addr = get_arg_val<uint32_t>(1);
         const uint32_t hist_addr = get_arg_val<uint32_t>(2);
         const uint32_t stash_addr = get_arg_val<uint32_t>(6);
         const uint32_t stash_hidden_addr = get_arg_val<uint32_t>(7);
+        const uint32_t verify_addr = get_arg_val<uint32_t>(8 + layers);
         constexpr uint32_t out_bytes = N * 4;
+        constexpr uint32_t verify_bytes = (chain_row + 1) * B * 4;
         const uint32_t upload_l1 = in_l1;
         const uint32_t stash_l1 = upload_l1 + align64(B * 4);
-        const uint32_t out_l1 = stash_l1 + align64(B * 4);  // hidden rows, RoPE, layers x tokens, table
+        const uint32_t vpos_l1 = stash_l1 + align64(B * 4);  // the verify upload's positions row
+        const uint32_t out_l1 = vpos_l1 + align64(B * 4);    // hidden rows, RoPE, layers x tokens, table
         noc_async_read(dram_addr(page_addr, page_bytes), page_l1, page_bytes);
         noc_async_read(dram_addr(upload_addr, B * 4), upload_l1, B * 4);
+        noc_async_read(dram_addr(verify_addr, verify_bytes, 0, B * 4), vpos_l1, B * 4);
         if constexpr (layers > 1) {
             noc_async_read(dram_addr(stash_addr, B * 4), stash_l1, B * 4);
         }
         noc_async_read_barrier();
         const int32_t* upload = reinterpret_cast<const int32_t*>(upload_l1);
+        const int32_t* vpos = reinterpret_cast<const int32_t*>(vpos_l1);
         volatile tt_l1_ptr int32_t* stash = reinterpret_cast<volatile tt_l1_ptr int32_t*>(stash_l1);
         volatile tt_l1_ptr int32_t* hidden = reinterpret_cast<volatile tt_l1_ptr int32_t*>(out_l1);
         volatile tt_l1_ptr int32_t* rope = reinterpret_cast<volatile tt_l1_ptr int32_t*>(out_l1 + out_bytes);
@@ -156,12 +165,17 @@ void kernel_main() {
             }
         }
         for (uint32_t k = 0; k < table_words; ++k) {
-            table[k] = static_cast<int32_t>(ring_blocks + k % ring_blocks);  // the scratch blocks
+            table[k] = static_cast<int32_t>(rings * ring_blocks + k % ring_blocks);  // the scratch blocks
         }
-        const bool drafting = upload[0] != 0;
+        int32_t a = upload[2];
+        if (upload[0] != 0 && upload[3] != 0) {
+            // Relayed: the chained verify's own position of the source's column 0.
+            const uint32_t j = static_cast<uint32_t>(upload[4]);
+            a = j < B ? vpos[j] : -1;
+        }
+        const bool drafting = upload[0] != 0 && a >= 0 && static_cast<uint32_t>(upload[1]) < S;
         if (drafting) {
             const uint32_t slot = static_cast<uint32_t>(upload[1]);
-            const int32_t a = upload[2];
             const int32_t lo = a - static_cast<int32_t>(H) + 1 > 0 ? a - static_cast<int32_t>(H) + 1 : 0;
             const int32_t s0 = lo / static_cast<int32_t>(block) * static_cast<int32_t>(block);
             auto held = [&](int32_t q, int32_t last) {
@@ -169,7 +183,7 @@ void kernel_main() {
             };
             auto token = [&](int32_t q) { return page[S * H + slot * H + static_cast<uint32_t>(q) % H]; };
             for (uint32_t k = 0; k < ring_blocks; ++k) {
-                table[k] = static_cast<int32_t>((static_cast<uint32_t>(s0) % N / block + k) % ring_blocks);
+                table[k] = static_cast<int32_t>(slot * ring_blocks + (static_cast<uint32_t>(s0) % N / block + k) % ring_blocks);
             }
             for (uint32_t r = 0; r < N; ++r) {
                 const int32_t q = s0 + static_cast<int32_t>(r);

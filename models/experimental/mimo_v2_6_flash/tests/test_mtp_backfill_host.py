@@ -290,7 +290,8 @@ def test_backfill_plan(a):
         plan, new = backfill_plan(backfill_row(B, X, a), hist.page, layers, stash, ROWS)
         s0 = backfill_start(a, ROWS)
         assert s0 % 64 == 0 and s0 <= max(0, a - ROWS + 1) < s0 + 64
-        assert plan["table"][:RING_BLOCKS] == [(s0 // 64 + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
+        # X's ring (its slot's): blocks X * RING_BLOCKS .., from the one holding S0.
+        assert plan["table"][:RING_BLOCKS] == [X * RING_BLOCKS + (s0 // 64 + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
         assert plan["table"][RING_BLOCKS:] == [SCRATCH_BLOCK + k for k in range(RING_BLOCKS)]
         for r in range(BACKFILL_ROWS):
             q = s0 + r
@@ -308,6 +309,14 @@ def test_backfill_plan(a):
             assert plan["stash_rows"] == [
                 (2 + k, entry(X, q, ROWS)) for k, q in enumerate((a - 2, a - 1)) if positions[2 + k] >= 0
             ]
+        # A relayed upload: A is the verify upload's position at the relay slot (a chained verify's, on device).
+        verify = pack_verify(torch.zeros(B, dtype=torch.int32), torch.full((B,), -1, dtype=torch.int32)).tolist()
+        verify[B + 2] = a
+        relayed, again = backfill_plan(backfill_row(B, X, relay_slot=2), hist.page, layers, stash, ROWS, verify=verify)
+        assert relayed == plan and again == new and plan["a"] == a
+        verify[B + 2] = -1
+        idle, same = backfill_plan(backfill_row(B, X, relay_slot=2), hist.page, layers, stash, ROWS, verify=verify)
+        assert idle["a"] is None and same == stash and idle["table"][0] == SCRATCH_BLOCK
     idle, same = backfill_plan(backfill_row(B), hist.page, MAX_DRAFTS, [9] * B, ROWS)
     assert idle["table"] == [SCRATCH_BLOCK + k % RING_BLOCKS for k in range(2 * RING_BLOCKS)] and same == [9] * B
     assert pack_writes([(1, 2, 3, 4)], 2) == [1, 2, 3, 4, -2, 0, -1, 0]

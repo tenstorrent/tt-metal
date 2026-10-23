@@ -10,7 +10,8 @@ Three one-core steps on persistent buffers only (and two more with every MTP lay
   draft's packed upload (SpecInputs.mtp_packed) from the accept page and the verify upload's chain row, and the result
   page's header (the accept page, the verify's argmax ids and positions, the chain's status);
 * ``drafts``, at the end of the MTP draft trace (TtMiMoMTP._body): writes the anchor slot's drafts into the result
-  page, whichever wrote ``mtp_packed`` (the chain step, or the host for a host-planned draft);
+  page, whichever wrote ``mtp_packed`` (the chain step, or the host for a host-planned draft); ``pair_drafts`` the
+  same at the end of the pair draft trace (TtMiMoMTP._body_pair): each source's anchor and its one draft;
 * ``relay``, first in the verify trace (TtMiMoModel.capture_verify_trace), before SpecInputs.derive_verify: for a
   chained verify (the host has not read the lane's last pass) writes the source's tokens and positions into
   ``verify_packed`` and its drafts into VerifySampler's control page from the result page that pass left; a no-op
@@ -45,22 +46,38 @@ from ..reference.spec_chain import (
     ACCEPT_WORDS,
     ARGMAX_AT,
     CHAIN_COLUMNS,
+    CHAIN_GROUP,
     CHAIN_LIMIT,
+    CHAIN_NEXT,
+    CHAIN_PAIR,
     CHAIN_RELAY,
+    CHAIN_RING,
     CHAIN_ROW,
     CHAIN_SLOTS,
     CHAIN_SOURCE,
     CTRL_DRAFTS,
+    DRAFT_WORDS,
     DRAFTS_AT,
     POSITIONS_AT,
     RESULT_WORDS,
     STASH_POSITIONS,
     STASH_TOKENS,
     STATUS_AT,
+    STATUS_WORDS,
     unpack_result,
 )
-from ..reference.spec_decode import MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
-from ..reference.spec_inputs import DESC_A, DESC_COUNT, DESC_DRAFTING, DESC_SLOTS, DESC_TOKENS, MTP_ROWS, VERIFY_ROWS
+from ..reference.spec_decode import MAX_DRAFTS, MTP_RING_TOKENS, PAIR_DRAFTS, PAIR_SOURCES, SPEC_SLOTS
+from ..reference.spec_inputs import (
+    DESC_A,
+    DESC_COUNT,
+    DESC_DRAFTING,
+    DESC_RING,
+    DESC_SLOTS,
+    DESC_TOKENS,
+    MTP_ROWS,
+    PAIR_ANCHORS,
+    VERIFY_ROWS,
+)
 from .device_sampler import CB_SCRATCH, _cb, _is_dram, _kernel, _ranges
 
 # kernels/spec_chain.cpp addresses the chain row's words at these offsets, and the accept page at the result's start.
@@ -106,7 +123,7 @@ class SpecChain:
         )
         self.core = ttnn.CoreCoord(0, 0)
 
-    def _program(self, mode, args, scratch, layer=0):
+    def _program(self, mode, args, scratch, layer=0, pair=False):
         cores = [self.core]
         compile_args = [
             mode,
@@ -130,6 +147,19 @@ class SpecChain:
             self.layers,
             self.layer_inputs.table_rows if self.layer_inputs is not None else self.max_batch,
             layer,
+            int(pair),
+            PAIR_SOURCES,
+            CHAIN_NEXT,
+            CHAIN_PAIR,
+            CHAIN_RING,
+            CHAIN_GROUP,
+            DESC_RING,
+            STATUS_WORDS,
+            DRAFT_WORDS,
+            OUT_WORDS,
+            GROUP_WORDS,
+            PAIR_DRAFTS,
+            PAIR_ANCHORS,
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])
@@ -149,13 +179,18 @@ class SpecChain:
         prog = self._program(CHAIN, args, scratch)
         ttnn.generic_op([self.verify, self.accept, self.argmax, self.mtp, self.result], prog)
 
-    def drafts(self):
-        """The drafts step (after the MTP passes wrote their heads' tokens)."""
+    def drafts(self, pair=False):
+        """The drafts step (after the MTP passes wrote their heads' tokens); ``pair``: the pair draft's (its one pass
+        wrote head 0), each source's anchor and draft."""
         b = self.max_batch
         args = [self.mtp.buffer_address(), self.result.buffer_address()] + [h.buffer_address() for h in self.heads]
         scratch = _align64(MTP_ROWS * b * 4) + MAX_DRAFTS * _align64(b * 4) + _align64((RESULT_WORDS - DRAFTS_AT) * 4)
-        prog = self._program(DRAFTS, args, scratch)
+        prog = self._program(DRAFTS, args, scratch, pair=pair)
         ttnn.generic_op([self.mtp, *self.heads, self.result], prog)
+
+    def pair_drafts(self):
+        """The pair draft's drafts step (the end of TtMiMoMTP's pair trace)."""
+        self.drafts(pair=True)
 
     def relay(self, ctrl):
         """The relay step (first in the verify trace): a relayed source's tokens and positions into ``verify_packed``
@@ -187,16 +222,19 @@ class SpecChain:
         prog = self._program(TOKENS, args, (2 + layer) * _align64(self.max_batch * 4), layer=layer)
         ttnn.generic_op([*ins, li.tokens[layer]], prog)
 
-    def warm(self, ctrl=None):
-        """Compile every step before any trace capture (the relay with ``ctrl``, VerifySampler's control page). The
-        chain and drafts steps write ``mtp_packed`` and the result page only, which no step reads before rewriting
-        them (a capture idles ``mtp_packed`` first: SpecInputs.reset); the relay writes nothing on an idle upload
-        (SpecInputs.reset: its chain row is zeros); the plan and tokens steps write the draft trace's inputs, which it
-        rewrites the same way, and on that idle description they leave the stash page as it was."""
+    def warm(self, ctrl=None, pair=False):
+        """Compile every step before any trace capture (the relay with ``ctrl``, VerifySampler's control page; the
+        pair draft's drafts step with ``pair``). The chain and drafts steps write ``mtp_packed`` and the result page
+        only, which no step reads before rewriting them (a capture idles ``mtp_packed`` first: SpecInputs.reset); the
+        relay writes nothing on an idle upload (SpecInputs.reset: its chain row is zeros); the plan and tokens steps
+        write the draft trace's inputs, which it rewrites the same way, and on that idle description they leave the
+        stash page as it was."""
         if ctrl is not None:
             self.relay(ctrl)
         self.chain()
         self.drafts()
+        if pair:
+            self.pair_drafts()
         if self.layer_inputs is not None:
             self.plan_layers()
             for layer in range(1, MAX_DRAFTS):

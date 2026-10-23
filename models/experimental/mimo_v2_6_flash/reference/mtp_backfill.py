@@ -19,9 +19,10 @@ the prompt's too. The history closes the gap:
 * every prefill chunk writes the final normed hidden of its last HISTORY_ROWS rows and invalidates the slot's
   entries no chunk of this request wrote (``prefill_writes``, eager prefill and the traced batch passes).
 
-Before the first draft that does not continue the rings (the lane's rings last ran another request, or rows they
-never drafted: after a prompt, after the lane served several requests), the adapter runs the backfill trace: every
-MTP layer over the history of the window before the draft's first row. Layer i's entry at q takes h_q and x[q + i + 1]
+Before the first draft that does not continue its request's rings (reference/spec_decode.py: one ring per request
+slot; they last ran another request, or rows they never drafted: after a prompt, after the lane served several
+requests, or the layers 1 and 2 a request skipped while it drafted in a pair), the adapter runs the backfill trace for
+that request: every MTP layer over the history of the window before the draft's first row, into the request's ring. Layer i's entry at q takes h_q and x[q + i + 1]
 (the committed tokens the history holds, x[a] the step's own input at a). The plan (``backfill_plan``) writes the
 whole ring, BACKFILL_ROWS = MTP_RING_TOKENS positions from a block boundary S0, so that one fill per layer covers it
 (paged_fill_cache, no read-modify-write): row r at position S0 + r is real when the history holds q (and its token,
@@ -37,24 +38,29 @@ Layouts (int32, one page each):
   [SPEC_SLOTS * HISTORY_ROWS, hidden], row e.
 - write list [4 * n] (prefill): per entry the source row (-1: invalidate the entry, -2: skip), the entry, position,
   token.
-- backfill upload [B]: drafting (0 / 1), the request's slot, A (the draft's first row, a plain step's position).
+- backfill upload [B]: drafting (0 / 1), the request's slot (its ring), A (the draft's first row, a plain step's
+  position), relay (1: A is the position the verify upload holds at verify slot ``relay slot``, the next word: a
+  chained verify's, which the relay step wrote on device; position -1 idles the backfill).
 - chain row (reference/spec_chain.py): words [CHAIN_HSLOTS, +SPEC_SLOTS), each verify slot's request slot + 1 (0:
   none), so that a zero row writes nothing.
 """
 
 import torch
 
-from .spec_decode import MTP_RING_TOKENS, SPEC_SLOTS
+from .spec_decode import MTP_RING_TOKENS, MTP_RINGS, SPEC_SLOTS
 
 HISTORY_ROWS = 128  # the MTP layers' SWA window
 BLOCK = 64  # the ring cache's block size (the vLLM block size)
 BACKFILL_ROWS = MTP_RING_TOKENS
 RING_BLOCKS = MTP_RING_TOKENS // BLOCK
-SCRATCH_BLOCK = RING_BLOCKS  # the ring cache's blocks RING_BLOCKS .. 2 RING_BLOCKS - 1 are never addressed
-TABLE_WORDS = 2 * RING_BLOCKS  # the fill's page table row: as wide as the cache (paged_update_cache's limit)
+# The rings' physical blocks: ring r's at r RING_BLOCKS ..; the blocks after the last ring's are never addressed by a
+# pass (spec_decode.mtp_table_row), the first RING_BLOCKS of them an idle backfill's scratch.
+SCRATCH_BLOCK = MTP_RINGS * RING_BLOCKS
+TABLE_WORDS = 2 * RING_BLOCKS  # the fill's page table row (its rows fill the first RING_BLOCKS entries)
 HIST_POSITIONS, HIST_TOKENS = 0, SPEC_SLOTS * HISTORY_ROWS
 HIST_WORDS = 2 * SPEC_SLOTS * HISTORY_ROWS
-BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A = 0, 1, 2
+BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A, BACKFILL_RELAY, BACKFILL_RELAY_SLOT = 0, 1, 2, 3, 4
+assert SPEC_SLOTS <= MTP_RINGS  # a history slot's ring is its own
 
 
 def entry(slot, q, rows=HISTORY_ROWS):
@@ -131,12 +137,16 @@ def pack_writes(writes, entries):
 
 
 # ---------------------------------------------------------------------- the backfill
-def backfill_row(max_batch, slot=None, a=None):
+def backfill_row(max_batch, slot=None, a=None, relay_slot=None):
     """The backfill upload's int32 values [max_batch]: the request in lane slot ``slot``, the draft's first row at
-    ``a``; None: idle."""
+    ``a``, or (``relay_slot``) at the position the verify upload holds at that verify slot; None: idle."""
     row = [0] * max_batch
     if slot is not None:
-        row[BACKFILL_DRAFTING], row[BACKFILL_SLOT], row[BACKFILL_A] = 1, int(slot), int(a)
+        row[BACKFILL_DRAFTING], row[BACKFILL_SLOT] = 1, int(slot)
+        if relay_slot is None:
+            row[BACKFILL_A] = int(a)
+        else:
+            row[BACKFILL_RELAY], row[BACKFILL_RELAY_SLOT] = 1, int(relay_slot)
     return row
 
 
@@ -145,13 +155,14 @@ def backfill_start(a, rows=HISTORY_ROWS):
     return max(0, a - rows + 1) // BLOCK * BLOCK
 
 
-def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
+def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, verify=None):
     """The backfill's plan step (kernels/mtp_history.cpp mode 3): ``upload`` the backfill upload, ``history_page``
-    the history page, ``layers`` the MTP layers, ``stash`` the draft's stash page (every layer; None with one).
-    Returns ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices [BACKFILL_ROWS], "tokens": per layer
-    [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the ring's blocks, then scratch blocks),
-    "stash_rows": (stash slot, history entry) to copy}, the new stash page). Row r writes position S0 + r. An idle
-    upload fills the scratch blocks and leaves the stash."""
+    the history page, ``layers`` the MTP layers, ``stash`` the draft's stash page (every layer; None with one),
+    ``verify`` the verify upload's int32 values (a relayed upload's A is its position at the relay slot). Returns
+    ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices [BACKFILL_ROWS], "tokens": per layer
+    [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the request's ring's blocks, then scratch
+    blocks), "stash_rows": (stash slot, history entry) to copy, "a": A}, the new stash page). Row r writes position
+    S0 + r. An idle upload (or a relayed A of -1) fills the scratch blocks and leaves the stash."""
     n = SPEC_SLOTS * rows
     out = {
         "hidden": [0] * BACKFILL_ROWS,
@@ -159,10 +170,18 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
         "tokens": [[0] * BACKFILL_ROWS for _ in range(layers)],
         "table": [SCRATCH_BLOCK + k % RING_BLOCKS for k in range(TABLE_WORDS)],
         "stash_rows": [],
+        "a": None,
     }
     if upload[BACKFILL_DRAFTING] == 0:
         return out, stash
     slot, a = upload[BACKFILL_SLOT], upload[BACKFILL_A]
+    if upload[BACKFILL_RELAY] != 0:
+        b = len(verify) // 3
+        j = upload[BACKFILL_RELAY_SLOT]
+        a = verify[b + j] if 0 <= j < b else -1
+    if a < 0 or not 0 <= slot < SPEC_SLOTS:
+        return out, stash
+    out["a"] = a
     lo, s0 = max(0, a - rows + 1), backfill_start(a, rows)
 
     def held(q, last):  # the history holds position q, and q is committed (<= last)
@@ -171,7 +190,8 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
     def token(q):
         return history_page[n + entry(slot, q, rows)]
 
-    out["table"][:RING_BLOCKS] = [(s0 % MTP_RING_TOKENS // BLOCK + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
+    first = slot * RING_BLOCKS  # the request's ring (spec_decode.mtp_ring_of: its slot)
+    out["table"][:RING_BLOCKS] = [first + (s0 % MTP_RING_TOKENS // BLOCK + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
     for r in range(BACKFILL_ROWS):
         q = s0 + r
         out["rope"][r] = min(q, a)  # the garbage rows past a stay inside the RoPE tables

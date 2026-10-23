@@ -41,21 +41,28 @@ instead of the passes (``pack_mtp_layers``, row 0 of the same buffer, the other 
 committed count m, the position A of the row taking committed token 0, the source's slots and the committed tokens.
 The draft trace's plan step (reference/spec_chain.py ``plan_step``, kernels/spec_chain.cpp) derives the passes'
 inputs from it and the device stash. pack_mtp's idle upload has a zero row 0: it is an idle description too.
+
+MTP pair draft (two requests of a lane, one draft each: reference/spec_decode.py ``plan_mtp_pair``): pack_mtp's rows
+without the steps, the cache positions in each request's own ring (``pack_mtp_pair``): tokens, fill cache positions,
+then row 2 holds each source's anchor slot (word k for source k, -1 none) and row 4 the fill's RoPE indices; rows 3,
+5, 6 stay idle. pack_mtp's idle upload is an idle pair upload too (no fill, no anchor).
 """
 
 import torch
 
-from .spec_decode import SPEC_SLOTS, mtp_cache_position
+from .spec_decode import PAIR_SOURCES, SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
 VERIFY_ROWS = 3  # tokens, positions, the chain row (reference/spec_chain.py)
 MTP_ROWS = 7  # tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices
 # pack_mtp_layers' row 0: drafting (0 / 1), m, A, the source's slots [SPEC_SLOTS] (-1 past m), committed tokens
-# [SPEC_SLOTS] (0 past m).
+# [SPEC_SLOTS] (0 past m), the request's MTP ring.
 DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS = 0, 1, 2, 3
 DESC_TOKENS = DESC_SLOTS + SPEC_SLOTS
-DESC_WORDS = DESC_TOKENS + SPEC_SLOTS
+DESC_RING = DESC_TOKENS + SPEC_SLOTS
+DESC_WORDS = DESC_RING + 1
+PAIR_ANCHORS = 2  # pack_mtp_pair's row of the sources' anchor slots
 
 
 # ---------------------------------------------------------------------- constants (persistent device tensors)
@@ -100,14 +107,29 @@ def pack_mtp(max_batch, tokens=None, plan=None):
         out[0, : len(tokens)] = torch.tensor(tokens, dtype=torch.int32)
     if plan is not None:
         for row, values in enumerate((plan.fill, plan.step2, plan.step3)):
-            out[1 + row, : len(values)] = torch.tensor([mtp_cache_position(p) for p in values], dtype=torch.int32)
+            cache = [mtp_cache_position(p, plan.ring) for p in values]
+            out[1 + row, : len(values)] = torch.tensor(cache, dtype=torch.int32)
             out[4 + row, : len(values)] = torch.tensor([max(p, 0) for p in values], dtype=torch.int32)
     return out.reshape(-1)
 
 
-def mtp_layers_row(max_batch, source=None, committed_tokens=None, committed_positions=None, accepted=None):
+def pack_mtp_pair(max_batch, tokens=None, plan=None):
+    """int32 [MTP_ROWS * B] of a pair draft: ``tokens`` per slot (the tokens committed there), ``plan`` the
+    reference.spec_decode.MtpPairInputs; None: idle (pack_mtp's idle upload)."""
+    out = pack_mtp(max_batch, tokens).reshape(MTP_ROWS, max_batch)
+    if plan is not None:
+        for s, (p, ring) in enumerate(zip(plan.fill, plan.rings)):
+            out[1, s], out[4, s] = mtp_cache_position(p, ring), max(p, 0)
+        assert len(plan.anchors) <= PAIR_SOURCES
+        for k, anchor in enumerate(plan.anchors):
+            out[PAIR_ANCHORS, k] = -1 if anchor is None else int(anchor)
+    return out.reshape(-1)
+
+
+def mtp_layers_row(max_batch, source=None, committed_tokens=None, committed_positions=None, accepted=None, ring=0):
     """pack_mtp_layers' row 0, int32 values [max_batch]: the draft after the commit of ``accepted`` tokens
-    ``committed_tokens`` at ``committed_positions`` (consecutive) of the lane's DraftSource ``source``; None: idle."""
+    ``committed_tokens`` at ``committed_positions`` (consecutive) of the lane's DraftSource ``source``, in MTP ring
+    ``ring``; None: idle."""
     assert max_batch >= DESC_WORDS
     row = [0] * max_batch
     if source is None:
@@ -118,13 +140,14 @@ def mtp_layers_row(max_batch, source=None, committed_tokens=None, committed_posi
     for c in range(SPEC_SLOTS):
         row[DESC_SLOTS + c] = source.slots[c] if c < m else -1
         row[DESC_TOKENS + c] = int(committed_tokens[c]) if c < m else 0
+    row[DESC_RING] = int(ring)
     return row
 
 
-def pack_mtp_layers(max_batch, source=None, committed_tokens=None, committed_positions=None, accepted=None):
+def pack_mtp_layers(max_batch, source=None, committed_tokens=None, committed_positions=None, accepted=None, ring=0):
     """int32 [MTP_ROWS * B] of a multi-layer draft: row 0 ``mtp_layers_row``, the other rows zero."""
     out = torch.zeros(MTP_ROWS, max_batch, dtype=torch.int32)
-    out[0] = torch.tensor(mtp_layers_row(max_batch, source, committed_tokens, committed_positions, accepted))
+    out[0] = torch.tensor(mtp_layers_row(max_batch, source, committed_tokens, committed_positions, accepted, ring))
     return out.reshape(-1)
 
 
@@ -176,3 +199,16 @@ def derive_mtp(packed, caps, rope):
     if rope:
         out["rope_idx"] = [as_uint32(rows[4 + k]).reshape(1, b) for k in range(3)]
     return out
+
+
+def derive_pair(packed, caps):
+    """The pair draft trace's inputs from the upload ``packed`` int32 [MTP_ROWS * B]: tokens, fill cache positions,
+    their serial positions and the fill's RoPE indices (the device RoPE tables')."""
+    b = packed.numel() // MTP_ROWS
+    rows = packed.reshape(MTP_ROWS, b)
+    return {
+        "tokens": as_uint32(rows[0]).reshape(1, b),
+        "fill": rows[1],
+        "serial": [torch.minimum(rows[1], cap) for cap in caps],
+        "rope_idx": as_uint32(rows[4]).reshape(1, b),
+    }
