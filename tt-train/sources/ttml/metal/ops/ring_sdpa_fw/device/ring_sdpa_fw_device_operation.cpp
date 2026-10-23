@@ -77,8 +77,7 @@ ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
         attrs.step,
         attrs.mask_type,
         static_cast<int>(attrs.ring_direction),
-        attrs.program_config.q_chunk_size,
-        attrs.program_config.k_chunk_size,
+        attrs.program_config,
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.logical_shape());
