@@ -111,17 +111,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     TT_FATAL(
         in1_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR, "Only ROW_MAJOR sharding is supported");
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
-    uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-
-    CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
-    CoreCoord bottom_right_core = {
-        (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
-        (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
+    const uint32_t compute_grid_num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
@@ -130,16 +121,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     // Quasar (Gen2) uplift: every Quasar-specific choice below is keyed on this one flag so WH/BH
     // keep their path unchanged.
     const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
-
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    // WH/BH reverse the multicast rectangle for a NOC_1 (high->low) multicast. Quasar is
-    // single-NOC / non-torus and needs an ascending [min..max] rectangle regardless of the
-    // preferred NOC (preferred_noc_for_dram_write() returns NOC_1 there too), so the swap is
-    // Gen1-only; a reversed rectangle would stall the sender in the multicast write.
-    if (in0_noc == tt::tt_metal::NOC::NOC_1 && !is_quasar) {
-        std::swap(start_core_noc, end_core_noc);
-    }
 
     validate_num_workers_per_dram_bank(workers_per_bank);
     TT_FATAL(
@@ -158,10 +139,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         // already pinned to 1 off Blackhole above).
         const uint32_t num_banks = device.num_dram_channels();
         TT_FATAL(
-            num_banks <= num_mcast_cores,
+            num_banks <= compute_grid_num_cores,
             "DRAM-sharded matmul on Quasar needs one worker core per DRAM bank ({} banks, {} cores)",
             num_banks,
-            num_mcast_cores);
+            compute_grid_num_cores);
         reader_assignments.reserve(num_banks);
         for (uint32_t bank = 0; bank < num_banks; ++bank) {
             reader_assignments.push_back(
@@ -378,6 +359,21 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     bounding_box_set.insert(bounding_box);
     CoreRangeSet all_cores_in_rect_grid(bounding_box_set);
     std::vector<CoreCoord> all_cores_in_rect_grid_vec = corerange_to_cores(all_cores_in_rect_grid);
+
+    // Multicast only to the rectangle whose DFBs and semaphores this program owns.
+    const uint32_t num_mcast_cores = bounding_box.size();
+    auto top_left_core_physical = device.worker_core_from_logical_core(bounding_box.start_coord);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bounding_box.end_coord);
+    CoreCoord start_core_noc = top_left_core_physical;
+    CoreCoord end_core_noc = bottom_right_core_physical;
+    // WH/BH reverse the multicast rectangle for a NOC_1 (high->low) multicast. Quasar is
+    // single-NOC / non-torus and needs an ascending [min..max] rectangle regardless of the
+    // preferred NOC (preferred_noc_for_dram_write() returns NOC_1 there too), so the swap is
+    // Gen1-only; a reversed rectangle would stall the sender in the multicast write.
+    if (in0_noc == tt::tt_metal::NOC::NOC_1 && !is_quasar) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
