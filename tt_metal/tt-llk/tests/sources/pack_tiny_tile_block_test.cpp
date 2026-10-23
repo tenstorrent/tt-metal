@@ -28,6 +28,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
+// UNPACK_BLOCK (driver template): one _llk_unpack_A_block_ call per DEST block, as llk_unpack_A_block for tiles under 32x32
+#ifndef UNPACK_BLOCK
+#define UNPACK_BLOCK 0
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -43,19 +48,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces,
         params.num_faces);
 
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */,
         0 /* within_face_16x16_transpose */,
         ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
         formats.unpack_A_src,
         formats.unpack_A_dst);
 
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+    const std::uint32_t tile_stride_16B = L1_ADDRESS(params.buffer_A[1]) - L1_ADDRESS(params.buffer_A[0]);
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
+    {
+        const std::uint32_t address = L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]);
+        if (!IS_BFP_FORMAT(formats.unpack_A_src))
+        {
+            _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en, true, true>(
+                address, params.NUM_TILES_IN_BLOCK, tile_stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces, params.TEST_FACE_R_DIM);
+        }
+        else
+        {
+            _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en>(
+                address, params.NUM_TILES_IN_BLOCK, tile_stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces, params.TEST_FACE_R_DIM);
+        }
+    }
+#else
     const int total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
     for (int i = 0; i < total_tiles; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
+#endif
 }
 
 #endif // LLK_TRISC_UNPACK
@@ -88,15 +111,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-        for (int tile = 0; tile < num_tiles_in_block; tile++)
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+        if constexpr (unpack_to_dest && is_fp32_dest_acc_en)
         {
-            // Standard datacopy: each tile at Tile32x32 DEST slot (sparse).
-            _llk_math_eltwise_unary_datacopy_wrapper_<
-                DataCopyType::A2D,
-                DstSync::SyncHalf,
-                is_fp32_dest_acc_en,
-                BroadcastType::NONE,
-                false /* unpack_to_dest */>(tile, formats.math, formats.math, params.num_faces);
+            // The unpack takes one DEST slot handshake per block of two or more tiles: the math thread's block call matches it.
+            _llk_math_eltwise_unary_datacopy_block_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest, true>(
+                0, num_tiles_in_block, formats.math, formats.math, params.num_faces);
+        }
+        else
+#endif
+        {
+            for (int tile = 0; tile < num_tiles_in_block; tile++)
+            {
+                // Standard datacopy: each tile at Tile32x32 DEST slot (sparse).
+                _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    tile, formats.math, formats.math, params.num_faces);
+            }
         }
 
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

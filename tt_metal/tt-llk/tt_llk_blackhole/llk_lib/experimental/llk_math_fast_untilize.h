@@ -13,6 +13,9 @@
 //   Dst rows 128..191: t0.F2 | t0.F3 | t1.F2 | t1.F3
 //   Dst rows 192..255: t2.F2 | t2.F3 | t3.F2 | t3.F3
 //
+// With a 16-bit DEST, chunks of 5 to 8 tiles use the same layout with 256-row
+// strips (fast_untilize_strip_rows).
+//
 // Each Dst row is one 16-datum face row. The packer then uses
 // ALL_INTF_ACTIVE + DST_ACCESS_STRIDED_MODE to read rows R, R+16, R+32, R+48
 // and emit a contiguous 64-datum chunk.
@@ -96,16 +99,31 @@ inline void _llk_math_fast_untilize_copy_face_fp32_(const std::uint32_t dst_row)
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
 }
 
-template <bool is_fp32_dest_acc_en>
+// A tile in one SrcA bank arrives as F2, F3, F0, F1 at rows 0, 16, 32, 48.
+inline void _llk_math_fast_untilize_copy_bank_face_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    TTI_MOVA2D(0, src_row, ADDR_MOD_4, p_mova2d::MOV_8_ROWS, dst_row);
+    TTI_MOVA2D(0, src_row + 8, ADDR_MOD_4, p_mova2d::MOV_8_ROWS, dst_row + 8);
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM, bool bank_per_tile = false>
 inline void _llk_math_fast_untilize_copy_tile_(const std::uint32_t tile_index)
 {
     const std::uint32_t top_row    = FAST_UNTILIZE_TOP_STRIP_ROW_OFFSET + tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS;
-    const std::uint32_t bottom_row = FAST_UNTILIZE_BOTTOM_STRIP_ROW_OFFSET + tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS;
+    const std::uint32_t bottom_row = fast_untilize_strip_rows(max_unit_dim) + tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS;
 
     // The unpacker presents each tile as F2, F3, F0, F1. Copy bottom faces
     // first, then top faces, so SrcA is consumed in arrival order while DEST is
     // arranged into the shared fast-untilize two-strip layout.
-    if constexpr (is_fp32_dest_acc_en)
+    if constexpr (bank_per_tile)
+    {
+        _llk_math_fast_untilize_copy_bank_face_(0, bottom_row);
+        _llk_math_fast_untilize_copy_bank_face_(16, bottom_row + FAST_UNTILIZE_PHASE_ROWS);
+        _llk_math_fast_untilize_copy_bank_face_(32, top_row);
+        _llk_math_fast_untilize_copy_bank_face_(48, top_row + FAST_UNTILIZE_PHASE_ROWS);
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
+    }
+    else if constexpr (is_fp32_dest_acc_en)
     {
         _llk_math_fast_untilize_copy_face_fp32_(bottom_row);
         _llk_math_fast_untilize_copy_face_fp32_(bottom_row + FAST_UNTILIZE_PHASE_ROWS);
@@ -121,24 +139,83 @@ inline void _llk_math_fast_untilize_copy_tile_(const std::uint32_t tile_index)
     }
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM, bool bank_per_tile = false>
 inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const std::uint32_t block_ct_dim)
 {
-    LLK_ASSERT(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast-untilize supports block_ct_dim 2, 3, or 4");
+    static_assert(max_unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM || !is_fp32_dest_acc_en, "BH fast-untilize chunks over 4 tiles need a 16-bit DEST");
+    LLK_ASSERT(block_ct_dim >= 2 && block_ct_dim <= max_unit_dim, "BH fast-untilize supports block_ct_dim 2 to max_unit_dim");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 
-    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en>(0);
-    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en>(1);
+    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(0);
+    _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(1);
     if (block_ct_dim >= 3)
     {
-        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en>(2);
+        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(2);
     }
     if (block_ct_dim >= 4)
     {
-        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en>(3);
+        _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(3);
     }
+    if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
+    {
+        if (block_ct_dim >= 5)
+        {
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(4);
+        }
+        if (block_ct_dim >= 6)
+        {
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(5);
+        }
+        if (block_ct_dim >= 7)
+        {
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(6);
+        }
+        if (block_ct_dim >= 8)
+        {
+            _llk_math_fast_untilize_copy_tile_<is_fp32_dest_acc_en, max_unit_dim, bank_per_tile>(7);
+        }
+    }
+
+    math::clear_dst_reg_addr();
+}
+
+// Face-pair passes: SrcA brings two faces per tile, placed at rows t * 32 and t * 32 + 16, so a pass of up to sixteen
+// tiles fills one 16-bit DEST half with the layout of a chunk's first strip.
+template <std::uint32_t tile_index, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_fast_untilize_copy_face_pair_(const std::uint32_t unit_dim)
+{
+    if constexpr (tile_index < FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
+    {
+        if (tile_index < unit_dim)
+        {
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                _llk_math_fast_untilize_copy_face_fp32_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
+                _llk_math_fast_untilize_copy_face_fp32_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
+            }
+            else
+            {
+                _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
+                _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
+            }
+            _llk_math_fast_untilize_copy_face_pair_<tile_index + 1, is_fp32_dest_acc_en>(unit_dim);
+        }
+    }
+}
+
+template <bool is_fp32_dest_acc_en = false>
+inline void _llk_math_fast_untilize_pass_block_(const std::uint32_t dst_index, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(
+        unit_dim >= 2 && unit_dim <= (is_fp32_dest_acc_en ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST : FAST_UNTILIZE_MAX_PASS_UNIT_DIM),
+        "BH fast-untilize face passes support unit_dim 2 to 16 (2 to 8 at 32 bit)");
+
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+
+    _llk_math_fast_untilize_copy_face_pair_<0, is_fp32_dest_acc_en>(unit_dim);
 
     math::clear_dst_reg_addr();
 }

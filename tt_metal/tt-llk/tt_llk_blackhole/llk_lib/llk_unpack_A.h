@@ -534,6 +534,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 }
 
 // A block of four-face 32-bit tiles on unpack to dest takes one DEST slot handshake, which the math thread's block call must match.
+// small_tile_block: tiles of fewer than four faces take the same block form on unpack to dest, with the math block call keyed the same way.
 // tiles_back_to_back: the caller's tiles are uncompressed and tile_stride_16B is their size, so the unpacker's Z counter walks
 // from one tile into the next with no address write per tile.
 // The init is _llk_unpack_A_init_ with the same template args and transpose_of_faces 0.
@@ -543,7 +544,8 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false,
     bool is_fp32_dest_acc_en                     = false,
-    bool tiles_back_to_back                      = false>
+    bool tiles_back_to_back                      = false,
+    bool small_tile_block                        = false>
 inline void _llk_unpack_A_block_(
     const std::uint32_t address,
     const std::uint32_t num_tiles,
@@ -563,8 +565,9 @@ inline void _llk_unpack_A_block_(
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
-        // Four-face tiles lie back to back in L1 and DEST: one slot handshake per block, the MOP once per tile with its Z counters walking on.
-        if (!is_fp32_dest_acc_en || num_faces != 4)
+        // Tiles lie back to back in L1 (small_tile_block for fewer than four faces) and take four DEST faces each: one slot handshake per block, the MOP once
+        // per tile with its Z counters walking on.
+        if (!is_fp32_dest_acc_en || (num_faces != 4 && !(small_tile_block && num_tiles >= 2)))
         {
             for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
             {
@@ -572,7 +575,7 @@ inline void _llk_unpack_A_block_(
             }
             return;
         }
-        LLK_ASSERT(tile_stride_16B == face_r_dim * 16, "The unpack to dest block needs four-face 32-bit tiles back to back in L1");
+        LLK_ASSERT(tile_stride_16B == num_faces * face_r_dim * 4, "The unpack to dest block needs 32-bit tiles back to back in L1");
 
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
         volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
@@ -586,6 +589,14 @@ inline void _llk_unpack_A_block_(
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
             ckernel::ckernel_template::run();
+            if (num_faces == 2)
+            {
+                TTI_INCADCZW(p_setadc::UNP_A, 0, 2, 0, 0); // the next tile's faces start at its fifth DEST face slot
+            }
+            else if (num_faces == 1)
+            {
+                TTI_INCADCZW(p_setadc::UNP_A, 0, 3, 0, 0);
+            }
         }
         t6_semaphore_get(semaphore::UNPACK_SYNC);
         unpack_to_dest_tile_done(unp_cfg_context);

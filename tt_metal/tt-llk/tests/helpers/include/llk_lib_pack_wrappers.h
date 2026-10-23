@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "build.h"
 #include "llk_pack.h"
 #include "llk_pack_untilize.h"
 
@@ -112,11 +113,14 @@ inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R
 
 template <
     std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim    = block_ct_dim,
-    bool diagonal                = false,
-    bool narrow_row              = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense /*maybe_unused*/  = false>
+    std::uint32_t full_ct_dim                     = block_ct_dim,
+    bool diagonal                                 = false,
+    bool narrow_row                               = false,
+    std::uint32_t row_num_datums                  = TILE_C_DIM,
+    bool dense /*maybe_unused*/                   = false,
+    bool pace_32bit_rows /*maybe_unused*/      = true,
+    std::uint32_t src_datum_size /*maybe_unused*/ = 0,
+    std::uint32_t dst_datum_size /*maybe_unused*/ = 0>
 inline void _llk_pack_untilize_init_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -128,12 +132,14 @@ inline void _llk_pack_untilize_init_wrapper_(
 
 template <
     std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim        = block_ct_dim,
-    bool diagonal                    = false,
-    bool narrow_row                  = false,
-    std::uint32_t row_num_datums     = TILE_C_DIM,
-    std::uint32_t tile_dst_ct_offset = 0,
-    bool dense /*maybe_unused*/      = false>
+    std::uint32_t full_ct_dim                     = block_ct_dim,
+    bool diagonal                                 = false,
+    bool narrow_row                               = false,
+    std::uint32_t row_num_datums                  = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset              = 0,
+    bool dense /*maybe_unused*/                   = false,
+    std::uint32_t src_datum_size /*maybe_unused*/ = 0,
+    std::uint32_t dst_datum_size /*maybe_unused*/ = 0>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
@@ -241,7 +247,10 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense                   = false>
+    bool dense                   = false,
+    bool pace_32bit_rows      = true,
+    std::uint32_t src_datum_size = 0,
+    std::uint32_t dst_datum_size = 0>
 inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t pack_src_format,
     [[maybe_unused]] const std::uint32_t pack_dst_format,
@@ -249,7 +258,8 @@ inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t num_faces  = 4)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows, src_datum_size, dst_datum_size>(
+        pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
 
 template <
@@ -259,7 +269,10 @@ template <
     bool narrow_row                               = false,
     std::uint32_t row_num_datums /*maybe_unused*/ = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset              = 0,
-    bool dense                                    = false>
+    bool dense                                    = false,
+    std::uint32_t src_datum_size                  = 0,
+    std::uint32_t dst_datum_size                  = 0,
+    bool next_block_follows                       = false>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t pack_dst_format,
@@ -268,7 +281,17 @@ inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t tile_dst_rt_offset          = 0)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, num_faces, tile_dst_rt_offset);
+    if constexpr (next_block_follows)
+    {
+        if (IS_8BIT_FORMAT(pack_dst_format))
+        {
+            _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, src_datum_size, dst_datum_size, is_fp32_dest_acc_en, true>(
+                address, num_faces, tile_dst_rt_offset);
+            return;
+        }
+    }
+    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, src_datum_size, dst_datum_size, is_fp32_dest_acc_en>(
+        address, num_faces, tile_dst_rt_offset);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_format, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)

@@ -71,6 +71,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
+#ifdef ARCH_BLACKHOLE
+            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit (this test unpacks those to DEST)
+            if constexpr (BLOCK_CT_DIM > 2 && !unpack_to_dest)
+            {
+                // Production's CB pages lie back to back: a dense block walks them with the Z counter
+                const bool dense = !IS_BFP_FORMAT(formats.unpack_A_src);
+                const std::uint32_t stride_16B =
+                    dense ? 4 * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src) : PERF_ADDRESS(PERF_INPUT_A, 1) - PERF_ADDRESS(PERF_INPUT_A, 0);
+                for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
+                {
+                    if (dense)
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                    else
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                }
+                continue;
+            }
+#endif
             for (std::uint32_t i = 0; i < TILE_CNT; ++i)
             {
                 _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
@@ -153,6 +177,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t block = 0; block < TILE_CNT / BLOCK_CT_DIM; block++)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+#ifdef ARCH_BLACKHOLE
+                // As the untilize kernels: the math thread clears each section when no 32-bit source writes DEST
+                if constexpr (!unpack_to_dest)
+                {
+                    _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
+#endif
                 for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                 {
                     LLK_ASSERT(
@@ -171,6 +202,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_PACK
+
+#ifndef PACK_UNTILIZE_SRC_DATUM_SIZE
+#define PACK_UNTILIZE_SRC_DATUM_SIZE 0
+#define PACK_UNTILIZE_DST_DATUM_SIZE 0
+#endif
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
@@ -193,7 +229,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
+        _llk_pack_untilize_init_wrapper_<
+            BLOCK_CT_DIM,
+            FULL_CT_DIM,
+            false /* diagonal */,
+            false /* narrow_row */,
+            TILE_C_DIM,
+            false /* dense */,
+            unpack_to_dest,
+            PACK_UNTILIZE_SRC_DATUM_SIZE,
+            PACK_UNTILIZE_DST_DATUM_SIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
         PROFILER_SYNC();
     }
 
@@ -206,7 +251,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                    _llk_pack_untilize_wrapper_<
+                        BLOCK_CT_DIM,
+                        FULL_CT_DIM,
+                        false,
+                        false,
+                        TILE_C_DIM,
+                        0,
+                        false,
+                        PACK_UNTILIZE_SRC_DATUM_SIZE,
+                        PACK_UNTILIZE_DST_DATUM_SIZE>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
                 }
             }
@@ -218,9 +272,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                    _llk_pack_untilize_wrapper_<
+                        BLOCK_CT_DIM,
+                        FULL_CT_DIM,
+                        false,
+                        false,
+                        TILE_C_DIM,
+                        0,
+                        false,
+                        PACK_UNTILIZE_SRC_DATUM_SIZE,
+                        PACK_UNTILIZE_DST_DATUM_SIZE>(
                         PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+#ifdef ARCH_BLACKHOLE
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, unpack_to_dest, true>();
+#else
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#endif
                 }
             }
         }

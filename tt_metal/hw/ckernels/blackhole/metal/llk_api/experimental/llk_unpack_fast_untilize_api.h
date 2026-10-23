@@ -29,13 +29,13 @@ inline bool llk_unpack_fast_untilize_is_bfp_b_input(const std::uint32_t operand)
     return llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool bank_per_tile = false>
 inline void llk_unpack_fast_untilize_init(const std::uint32_t operand, const std::uint32_t dense_init_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t init_unit_dim =
         llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) ? 1 : dense_init_unit_dim;
-    ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en>(
+    ckernel::_llk_unpack_fast_untilize_init_<is_fp32_dest_acc_en, bank_per_tile>(
         unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
 }
 
@@ -106,7 +106,70 @@ inline void llk_unpack_fast_untilize_restore_unit_dim(
     }
 }
 
+// Face-pair passes: dense input unpacks a whole pass with one MOP, block-float input tile by tile.
+template <bool block_float_input, bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_fast_untilize_pass_init(const std::uint32_t operand, const std::uint32_t init_unit_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    LLK_ASSERT(
+        llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]) == block_float_input,
+        "fast_untilize block_float_input must match the input format");
+    ckernel::_llk_unpack_fast_untilize_pass_init_<is_fp32_dest_acc_en>(
+        unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
+}
+
+template <bool block_float_input, bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_fast_untilize_pass_block(
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t pass,
+    std::uint32_t& prev_unit_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    if constexpr (block_float_input) {
+        ckernel::_llk_unpack_fast_untilize_bfp_pass_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index),
+            get_local_cb_interface(operand_id).fifo_page_size,
+            unit_dim,
+            pass);
+    } else {
+        if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim) {
+            ckernel::_llk_unpack_fast_untilize_pass_mop_config_<is_fp32_dest_acc_en>(unit_dim);
+            prev_unit_dim = unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
+        }
+        ckernel::_llk_unpack_fast_untilize_pass_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index), unit_dim, pass);
+    }
+}
+
+template <bool block_float_input>
+inline void llk_unpack_fast_untilize_rest_block(
+    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    if constexpr (block_float_input) {
+        ckernel::_llk_unpack_fast_untilize_bfp_rest_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index),
+            get_local_cb_interface(operand_id).fifo_page_size,
+            unit_dim);
+    } else {
+        ckernel::_llk_unpack_fast_untilize_rest_block_(
+            llk_unpack_fast_untilize_tile_address(operand_id, tile_index), unit_dim);
+    }
+}
+
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_fast_untilize_pass_restore_unit_dim(
+    const std::uint32_t init_unit_dim, const std::uint32_t prev_unit_dim) {
+    SAN_HOOK(unsupported());
+    if (prev_unit_dim != (init_unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY)) {
+        ckernel::_llk_unpack_fast_untilize_pass_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
+    }
+}
+
+template <bool bank_per_tile = false>
 inline void llk_unpack_fast_untilize_uninit() {
     SAN_HOOK(unsupported());
-    ckernel::_llk_unpack_fast_untilize_uninit_();
+    ckernel::_llk_unpack_fast_untilize_uninit_<bank_per_tile>();
 }

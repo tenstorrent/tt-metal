@@ -19,18 +19,32 @@
 // callers pass base_addr = cb_write_address(...) and a compile-time page_stride derived from the output
 // descriptor (fifo_page_size == a single tile size assumption -- see experimental/2_0/llk_pack_untilize.h).
 
+// Never defined: a call that survives constant folding fails the kernel build.
+[[gnu::error(
+    "pack untilize: an Fp8_e4m3 output in one-tile blocks of a wider row writes 32 bytes of zeros after every row "
+    "(tt-metal#59140); split the row into blocks of two or more tiles")]] void
+llk_pack_untilize_fp8_one_tile_block_unsupported();
+
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool pace_32bit_rows = true>
 inline void llk_pack_untilize_init_impl(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim,
     const std::uint32_t num_faces) {
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
+    if constexpr (block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row) {
+        // A kernel with a compile-time output format is refused at build time; the LLK asserts otherwise.
+        if (__builtin_constant_p(pack_dst_format) &&
+            pack_dst_format == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) {
+            llk_pack_untilize_fp8_one_tile_block_unsupported();
+        }
+    }
 
     if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
         // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
@@ -49,7 +63,7 @@ inline void llk_pack_untilize_init_impl(
         StateDiscard<bool>(false /* diagonal: WH-only */),
         StateDiscard<bool>(dense)));
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows>(
         pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
 
@@ -59,7 +73,8 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense = false>
+    bool dense = false,
+    bool next_block_follows_in_row = false>
 inline void llk_pack_untilize_impl(
     const std::uint32_t block_rt_dim,
     const std::uint32_t base_addr,
@@ -98,8 +113,30 @@ inline void llk_pack_untilize_impl(
         StateDiscard<std::uint32_t>(block_c_index),
         StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
 
+    // An odd block of an 8-bit output packs as one stream when a later block of the row overwrites its padding.
+    if constexpr (
+        next_block_follows_in_row &&
+        _llk_pack_untilize_odd_block_form_<block_ct_dim, full_ct_dim, narrow_row, dense>()) {
+        if (IS_8BIT_FORMAT(pack_dst_format)) {
+            for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
+                _llk_pack_untilize_<
+                    block_ct_dim,
+                    full_ct_dim,
+                    narrow_row,
+                    tile_dst_ct_offset,
+                    dense,
+                    0,
+                    0,
+                    DST_ACCUM_MODE,
+                    true>(pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
+
+                pack_tile_addr += page_stride;
+            }
+            return;
+        }
+    }
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, 0, 0, DST_ACCUM_MODE>(
             pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += page_stride;
@@ -133,14 +170,15 @@ template <
     bool diagonal = false /* unused */,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense = false>
+    bool dense = false,
+    bool pace_32bit_rows = true>
 inline void llk_pack_untilize_init(std::uint32_t output) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
-    llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+    llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, pace_32bit_rows>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
@@ -169,6 +207,8 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
  * @tparam row_num_datums     Number of datums per row (unused on Blackhole).
  * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
  * @tparam dense              Pack two 2-face tiles into a single 4-face region.
+ * @tparam blocks_ascend      The caller packs the blocks of a row from the first column to the last, which lets an odd
+ *                            block of an 8-bit output take one stream.
  * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
  * @param  output             Output circular buffer / operand index.
  * @param  block_c_index      Block column index (used when full_ct_dim > block_ct_dim).
@@ -181,17 +221,42 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense = false>
+    bool dense = false,
+    bool blocks_ascend = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
+    // The block index addresses even blocks; a block at any other tile column takes llk_pack_untilize_at_col.
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
+    if constexpr (blocks_ascend && _llk_pack_untilize_odd_block_form_<block_ct_dim, full_ct_dim, narrow_row, dense>()) {
+        if (IS_8BIT_FORMAT(pack_dst_format[output_id]) && (block_c_index + 1) * block_ct_dim < full_ct_dim) {
+            llk_pack_untilize_impl<
+                block_ct_dim,
+                full_ct_dim,
+                narrow_row,
+                row_num_datums,
+                tile_dst_ct_offset,
+                dense,
+                true>(
+                block_rt_dim,
+                get_local_cb_interface(output_id).fifo_wr_ptr - 1,
+                pack_src_format[output_id],
+                pack_dst_format[output_id],
+                full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+                face_r_dim,
+                num_faces,
+                block_c_index,
+                tile_dst_rt_offset);
+            return;
+        }
+    }
     llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim,
         get_local_cb_interface(output_id).fifo_wr_ptr - 1,
@@ -202,4 +267,44 @@ inline void llk_pack_untilize(
         num_faces,
         block_c_index,
         tile_dst_rt_offset);
+}
+
+// A block that starts at tile column first_col of the output row, for a row split into blocks of different widths.
+// The pack untilize init must be for the same block_ct_dim and full_ct_dim.
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+inline void llk_pack_untilize_at_col(std::uint32_t output, const std::uint32_t first_col) {
+    const std::uint32_t output_id = get_output_id(output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t col_offset =
+        SCALE_DATUM_SIZE(
+            pack_dst_format[output_id], first_col * ((num_faces > 2) ? num_faces / 2 : num_faces) * FACE_C_DIM) /
+        16;
+
+    const std::uint32_t base_addr = get_local_cb_interface(output_id).fifo_wr_ptr - 1 + col_offset;
+    const std::uint32_t page_stride = full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
+    // The blocks of a split row are packed from its first column to its last.
+    if (first_col + block_ct_dim < full_ct_dim) {
+        llk_pack_untilize_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, 0, false, true>(
+            1 /* block_rt_dim */,
+            base_addr,
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            page_stride,
+            face_r_dim,
+            num_faces,
+            0 /* block_c_index */,
+            0 /* tile_dst_rt_offset */);
+    } else {
+        llk_pack_untilize_impl<block_ct_dim, full_ct_dim>(
+            1 /* block_rt_dim */,
+            base_addr,
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            page_stride,
+            face_r_dim,
+            num_faces,
+            0 /* block_c_index */,
+            0 /* tile_dst_rt_offset */);
+    }
 }

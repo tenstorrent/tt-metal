@@ -25,5 +25,8 @@ void kernel_main() {
         dfb::out,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        compute_kernel_lib::untilize_config::RemapMode::Configure,
+        compute_kernel_lib::untilize_config::FastChunk::Auto,
+        compute_kernel_lib::untilize_config::DestClear::OnMathAcquire>(per_core_block_cnt);
 }

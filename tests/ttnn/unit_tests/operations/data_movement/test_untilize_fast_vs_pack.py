@@ -1,0 +1,284 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The fast untilize and the plain pack untilize give the same bytes on Blackhole for bf16, bfp8_b and bfp4_b rows."""
+
+import pytest
+import torch
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+
+pytestmark = pytest.mark.skipif(not is_blackhole(), reason="The fast untilize is Blackhole only")
+
+TILE = 32
+CB_IN = 0
+CB_OUT = 16
+
+READER = """
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
+    const auto src = TensorAccessor(src_args, src_addr);
+    const uint32_t tile_bytes = get_tile_size(cb_in);
+    for (uint32_t t = 0; t < num_tiles; ++t) {
+        cb_reserve_back(cb_in, 1);
+        noc_async_read(src.get_noc_addr(t), get_write_ptr(cb_in), tile_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_in, 1);
+    }
+}
+"""
+
+WRITER = """
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
+    constexpr uint32_t wait_pages = get_compile_time_arg_val(1);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(2);
+    constexpr uint32_t row_bytes = get_compile_time_arg_val(3);
+    constexpr auto dst_args = TensorAccessorArgs<4>();
+    const auto dst = TensorAccessor(dst_args, dst_addr);
+    cb_wait_front(cb_out, wait_pages);
+    const uint32_t l1_addr = get_read_ptr(cb_out);
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        noc_async_write(l1_addr + r * row_bytes, dst.get_noc_addr(r), row_bytes);
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out, wait_pages);
+}
+"""
+
+FAST_COMPUTE = """
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/experimental/fast_untilize.h"
+
+void kernel_main() {
+    constexpr uint32_t width = get_compile_time_arg_val(0);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
+    constexpr bool allow_face_passes = get_compile_time_arg_val(2) != 0;
+    constexpr bool block_float_input = get_compile_time_arg_val(3) != 0;
+    compute_kernel_hw_startup(0, 16);
+    fast_untilize_init<width, DST_ACCUM_MODE, false, allow_face_passes, block_float_input>(0, 16);
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        cb_wait_front(0, width);
+        cb_reserve_back(16, width);
+        fast_untilize_block<width, DST_ACCUM_MODE, false, allow_face_passes, block_float_input>(0, 16);
+        cb_push_back(16, width);
+        cb_pop_front(0, width);
+    }
+    fast_untilize_uninit<width>(16);
+}
+"""
+
+HELPER_COMPUTE = """
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+
+void kernel_main() {
+    constexpr uint32_t width = get_compile_time_arg_val(0);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
+    compute_kernel_hw_startup(0, 16);
+    compute_kernel_lib::untilize<width, 0, 16>(num_rows);
+}
+"""
+
+# The untilize helper's pack path: one block for rows up to 8 tiles, else blocks of the largest divisor up to 8.
+PACK_COMPUTE = """
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/pack_untilize.h"
+
+void kernel_main() {
+    constexpr uint32_t width = get_compile_time_arg_val(0);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
+    constexpr uint32_t block = get_compile_time_arg_val(2);
+    compute_kernel_hw_startup(0, 16);
+    pack_untilize_init<block, width>(0, 16);
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        cb_reserve_back(16, width);
+        for (uint32_t b = 0; b < width / block; ++b) {
+            cb_wait_front(0, block);
+            pack_untilize_block<block, width>(0, 1, 16, b);
+            cb_pop_front(0, block);
+        }
+        cb_push_back(16, width);
+    }
+    pack_untilize_uninit(16);
+}
+"""
+
+
+def _core():
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+
+
+def _cb(cb_id, dtype, num_pages):
+    page_size = ttnn.tile_size(dtype)
+    return ttnn.CBDescriptor(
+        total_size=page_size * num_pages,
+        core_ranges=_core(),
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=dtype, page_size=page_size)],
+    )
+
+
+def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_args, fp32_dest=False):
+    row_datums = width * TILE
+    num_tiles = (num_rows // TILE) * width
+    tt_out = ttnn.from_torch(
+        torch.zeros(num_rows, row_datums, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    reader_rt = ttnn.RuntimeArgs()
+    reader_rt[0][0] = [tt_in.buffer_address()]
+    writer_rt = ttnn.RuntimeArgs()
+    writer_rt[0][0] = [tt_out.buffer_address()]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=READER,
+            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+            core_ranges=_core(),
+            compile_time_args=[CB_IN, num_tiles, *ttnn.TensorAccessorArgs(tt_in).get_compile_time_args()],
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=compute_source,
+            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+            core_ranges=_core(),
+            compile_time_args=[width, num_rows // TILE, *extra_args],
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=WRITER,
+            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+            core_ranges=_core(),
+            compile_time_args=[
+                CB_OUT,
+                num_tiles,
+                num_rows,
+                row_datums * 2,
+                *ttnn.TensorAccessorArgs(tt_out).get_compile_time_args(),
+            ],
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+    ]
+    program = ttnn.ProgramDescriptor(
+        kernels=kernels, semaphores=[], cbs=[_cb(CB_IN, in_dtype, num_tiles), _cb(CB_OUT, ttnn.bfloat16, num_tiles)]
+    )
+    ttnn.generic_op([tt_in, tt_out], program)
+    return ttnn.to_torch(tt_out).view(torch.int16)
+
+
+def _block(width, fp32_dest=False):
+    # A 32-bit DEST half holds four tiles, so the pack reference blocks stay at four or less there.
+    return max(b for b in range(1, 5 if fp32_dest else 9) if width % b == 0)
+
+
+def _compare(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
+    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [1, int(in_dtype != ttnn.bfloat16)], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width, fp32_dest)], fp32_dest)
+    mismatched = (fast != pack).nonzero()
+    assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
+
+
+def _bf16_patterns(width):
+    tile_rows = -(-65536 // (width * TILE * TILE))
+    bits = torch.arange(tile_rows * TILE * width * TILE, dtype=torch.int32) % 65536
+    return bits.to(torch.int16).view(torch.bfloat16).reshape(tile_rows * TILE, width * TILE)
+
+
+def _bfp8_raw_tiles(width, min_tile_rows=1):
+    # Raw Bfp8_b tiles: 64 exponent bytes, then 1024 sign and mantissa bytes; 64 tiles cover every exponent with every byte.
+    tile_rows = max(-(-64 // width), min_tile_rows)
+    num_tiles = tile_rows * width
+    face_row = torch.arange(num_tiles * 64) % 4096
+    exponents = (face_row // 16).to(torch.uint8).reshape(num_tiles, 64)
+    datums = ((face_row % 16).unsqueeze(1) * 16 + torch.arange(16)).to(torch.uint8).reshape(num_tiles, 1024)
+    return torch.cat([exponents, datums], dim=1), tile_rows * TILE
+
+
+def _bfp4_raw_tiles(width, min_tile_rows=1):
+    # Raw Bfp4_b tiles: 64 shared exponent bytes, then 512 bytes of two 4-bit codes; 4 tiles cover every exponent with every code.
+    tile_rows = max(-(-4 // width), min_tile_rows)
+    num_tiles = tile_rows * width
+    face_row = torch.arange(num_tiles * 64)
+    exponents = (face_row % 256).to(torch.uint8).reshape(num_tiles, 64)
+    codes = torch.arange(8) * 2
+    datums = ((codes + 1) * 16 + codes).to(torch.uint8).repeat(num_tiles * 64).reshape(num_tiles, 512)
+    return torch.cat([exponents, datums], dim=1), tile_rows * TILE
+
+
+# A bank per tile at 4 to 8 tiles; bf16 rows over eight tiles take face-pair passes, over sixteen with a chunk for a rest of 2 to 8 tiles.
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20, 24, 32, 40])
+def test_fast_and_pack_untilize_match_bf16(device, width):
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width)
+
+
+# With a 32-bit DEST, a row of 5 to 8 tiles takes two face-pair passes of the whole row; the others keep chunks of up to four tiles.
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16])
+def test_fast_and_pack_untilize_match_bf16_fp32_dest(device, width):
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width, fp32_dest=True)
+
+
+# Rests of 1 to 8 tiles (17, 18 to 23, 24, 33, 34 to 39, 40) go as a chunk, 9 to 15 as a pass unit; 32 and 256 rows.
+BFP_WIDTHS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, *range(17, 24), 24, 25, 31, 32, 33, *range(34, 40), 40]
+
+
+@pytest.mark.parametrize("tile_rows", [1, 8])
+@pytest.mark.parametrize("width", BFP_WIDTHS)
+def test_fast_and_pack_untilize_match_bfp8(device, width, tile_rows):
+    raw, num_rows = _bfp8_raw_tiles(width, tile_rows)
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat8_b, num_rows, width)
+
+
+@pytest.mark.parametrize("tile_rows", [1, 8])
+@pytest.mark.parametrize("width", BFP_WIDTHS)
+def test_fast_and_pack_untilize_match_bfp4(device, width, tile_rows):
+    raw, num_rows = _bfp4_raw_tiles(width, tile_rows)
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat4_b, num_rows, width)
+
+
+def _compare_helper(device, tt_in, in_dtype, num_rows, width, fp32_dest=False):
+    helper = _untilize(device, tt_in, in_dtype, num_rows, width, HELPER_COMPUTE, [], fp32_dest)
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width, fp32_dest)], fp32_dest)
+    mismatched = (helper != pack).nonzero()
+    assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
+
+
+# The untilize helper picks the fast form per width and format at compile time (a SrcA bank per tile, face-pair passes at a 32-bit DEST).
+@pytest.mark.parametrize("fp32_dest", [False, True])
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9, 12, 16])
+def test_untilize_helper_matches_pack_bf16(device, width, fp32_dest):
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare_helper(device, tt_in, ttnn.bfloat16, values.shape[0], width, fp32_dest)
+
+
+@pytest.mark.parametrize("width", [2, 3, 4, 5, 6, 7, 8, 9])
+def test_untilize_helper_matches_pack_bfp8(device, width):
+    raw, num_rows = _bfp8_raw_tiles(width, 1)
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare_helper(device, tt_in, ttnn.bfloat8_b, num_rows, width)
