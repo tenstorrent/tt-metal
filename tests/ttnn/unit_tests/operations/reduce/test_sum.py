@@ -238,14 +238,15 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
 
 
 @pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
-def test_sum_full_tensor_bf16(device, dim):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_sum_full_tensor_bf16(device, dim, layout):
     torch_input = torch.zeros((1, 2, 32, 64), dtype=torch.bfloat16)
     torch_input[0, 0, :, :32] = 1024.0
     torch_input[0, 0, :, 32:] = -1024.0
     torch_input[0, 1, :, :32] = 1.0
     torch_output = torch.sum(torch_input.double()).to(torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
     output_tensor = ttnn.sum(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())

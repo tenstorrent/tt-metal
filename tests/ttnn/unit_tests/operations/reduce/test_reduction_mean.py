@@ -209,13 +209,31 @@ def test_mean_multi_axis_bf16(device):
 
 
 @pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
-def test_mean_full_tensor_bf16(device, dim):
-    torch_input = torch.full((1, 2, 32, 64), 1024.0, dtype=torch.bfloat16)
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
+        ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
+        # W = 2048 spans eight W chunks of the row-major reduce kernel. The chunk accumulator is
+        # read back wrongly whenever it is fp32 (a same-format fp32 row-major sum over W > 256 is
+        # off by a few percent on main as well), so the fp32-intermediate chain hits it here.
+        pytest.param(
+            (1, 2, 32, 2048),
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(
+                reason="row-major W reduce misreads its fp32 chunk accumulator for W > 256", strict=True
+            ),
+        ),
+    ],
+)
+def test_mean_full_tensor_bf16(device, dim, shape, layout):
+    torch_input = torch.full(shape, 1024.0, dtype=torch.bfloat16)
     torch_input[0, 1] = -1024.0
     torch_input[0, 1, :, 0] = -1020.0
     torch_output = torch.mean(torch_input.double()).to(torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())

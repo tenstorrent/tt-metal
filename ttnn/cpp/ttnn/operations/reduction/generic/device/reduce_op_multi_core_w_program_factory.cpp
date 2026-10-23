@@ -321,6 +321,12 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     }
     // Accurate fp32: route Float32 through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+    // A bf16 input packed into an FP32 partial needs the packer reconfigured, not just the unpacker
+    // (reduce_rm.cpp switches its reduce() to INPUT_AND_OUTPUT reconfiguration on this define, as the
+    // H factory already does; the bf16 fp32-intermediate chain is the one caller with mixed formats).
+    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+        reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
 
     // ---- Reader kernel ----
     Group<DFBBinding> reader_dfb_bindings;
