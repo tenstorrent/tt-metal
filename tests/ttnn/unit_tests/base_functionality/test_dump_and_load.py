@@ -330,6 +330,61 @@ def test_load_inconsistent_replica_group_raises(tmp_path, expect_error):
         ttnn.load_tensor(file_name)
 
 
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_dump_device_shard(tmp_path, mesh_device):
+    """A shard taken out of a distributed tensor with get_device_tensors is the one-device tensor it holds and is
+    labelled as such, so it dumps and loads on its own; the tensor it was taken from keeps its label."""
+    torch_tensor = torch.arange(2 * 32 * 32, dtype=torch.float32).reshape(2, 32, 32)
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )
+    label = tensor.tensor_topology()
+
+    shards = ttnn.get_device_tensors(tensor)
+    assert [shard.tensor_topology() for shard in shards] == [
+        ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementReplicate()], [ttnn.MeshCoordinate(0, i)])
+        for i in range(2)
+    ]
+    assert tensor.tensor_topology() == label
+
+    file_name = tmp_path / "shard.tensorbin"
+    ttnn.dump_tensor(file_name, shards[1])
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 1
+    torch.testing.assert_close(loaded[0], torch_tensor[1:2], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_dump_tensor_allocated_on_host(tmp_path, mesh_device):
+    """allocate_tensor_on_host labels its tensor over every device of the mesh, so it dumps as the tensor it holds
+    once a replicated device tensor has been read into it."""
+    torch_tensor = torch.rand(32, 32, dtype=torch.bfloat16)
+    device_tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    host_tensor = ttnn.allocate_tensor_on_host(device_tensor.spec, mesh_device)
+    assert host_tensor.tensor_topology() == ttnn.TensorTopology(
+        ttnn.MeshShape(1, 2),
+        [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+        [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)],
+    )
+    ttnn.verify_shards_match_topology(host_tensor, compare_replica_contents=False)
+
+    ttnn.copy_device_to_host_tensor(device_tensor, host_tensor)
+    file_name = tmp_path / "allocated_on_host.tensorbin"
+    ttnn.dump_tensor(file_name, host_tensor)
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 2
+    for shard in loaded:
+        torch.testing.assert_close(shard, torch_tensor, rtol=0, atol=0)
+
+
 def test_verify_shards_match_topology(expect_error):
     """The write-side check is callable on its own, on the host copy of a tensor, for callers that gather a tensor by
     its label: it refuses the mislabelled tensor, passes it on sizes alone when asked to, and passes once the label is

@@ -279,7 +279,10 @@ void validate_loaded_topology(
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers) {
+    const Tensor& tensor,
+    flatbuffers::FlatBufferBuilder& builder,
+    std::vector<SerializedTensorBuffer>& buffers,
+    bool verify_shards) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
@@ -291,8 +294,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     // The topology is a label, and the file trusts it: shards it calls replicas of each other are written once and
     // every record in the group points at that one copy. The label is checked against the shards first, so a wrong
-    // Replicate cannot drop a shard silently (see verify_shards_match_topology).
-    verify_shards_match_topology(tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
+    // Replicate cannot drop a shard silently (see verify_shards_match_topology), unless the caller has checked it.
+    if (verify_shards) {
+        verify_shards_match_topology(tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
+    }
 
     // Replica groups (replica_group_key): coordinates that differ only along Replicate dimensions share one group.
     // Each group remembers the index into `buffers` of the copy written for it.

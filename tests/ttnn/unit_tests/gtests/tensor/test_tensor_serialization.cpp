@@ -23,6 +23,7 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/topology_check.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -236,6 +237,91 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
         EXPECT_EQ(loaded_tensor.layout(), original_tensor.layout());
         EXPECT_TRUE(loaded_tensor.storage_type() == ttnn::StorageType::DEVICE);
         EXPECT_TRUE(loaded_tensor.memory_config() == original_tensor.memory_config());
+    }
+}
+
+TEST_F(TensorSerializationFlatbufferTest, DeviceShardIsLabelledAsOneDeviceTensorAndDumps) {
+    const int num_devices = mesh_device_->num_devices();
+    if (num_devices < 2) {
+        GTEST_SKIP() << "A shard taken out of a distributed tensor needs a mesh with more than one device";
+    }
+    TemporaryFile test_file("device_shard_flatbuffer.tensorbin");
+    constexpr int kNumElements = 64;
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        std::generate_n(std::back_inserter(test_data), kNumElements, [i]() { return static_cast<float>(i); });
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{num_devices, kNumElements}, DataType::FLOAT32));
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, /*dim=*/0);
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    ASSERT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::DEVICE);
+    const TensorTopology sharded_label = sharded_tensor.tensor_topology();
+
+    // Each shard is labelled as the one-device tensor it is, on the device and on the host, and the tensor it was
+    // taken from keeps its label.
+    std::vector<Tensor> shards = ttnn::distributed::get_device_tensors(sharded_tensor);
+    ASSERT_THAT(shards, SizeIs(num_devices));
+    const auto coords = sharded_tensor.device_storage().get_coords();
+    for (int i = 0; i < num_devices; i++) {
+        const TensorTopology expected_label(
+            MeshShape(1), {ttnn::distributed::MeshMapperConfig::Replicate{}}, std::vector<MeshCoordinate>{coords[i]});
+        EXPECT_EQ(shards[i].tensor_topology(), expected_label) << "shard " << i;
+        EXPECT_EQ(shards[i].cpu().tensor_topology(), expected_label) << "shard " << i;
+    }
+    EXPECT_EQ(sharded_tensor.tensor_topology(), sharded_label);
+
+    // A shard dumps on its own and loads back as that shard.
+    dump_tensor_flatbuffer(test_file.string(), shards[1]);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_spec().logical_shape(), (ttnn::Shape{1, kNumElements}));
+    std::vector<Tensor> loaded_shards = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_shards, SizeIs(1));
+    EXPECT_THAT(loaded_shards[0].to_vector<float>(), Each(FloatEq(1.0F)));
+
+    // The shards still combine back into the tensor they were taken from.
+    Tensor combined = ttnn::distributed::combine_device_tensors(shards, /*shard_dim=*/0);
+    auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+    EXPECT_THAT(
+        ttnn::distributed::aggregate_tensor(combined, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
+}
+
+TEST_F(TensorSerializationFlatbufferTest, HostTensorAllocatedOverMeshIsLabelledOverEveryDeviceAndDumps) {
+    TemporaryFile test_file("allocated_on_host_flatbuffer.tensorbin");
+    constexpr int kNumElements = 64;
+    const auto spec = get_tensor_spec(ttnn::Shape{1, kNumElements}, DataType::FLOAT32);
+    const MeshShape& mesh_shape = mesh_device_->shape();
+
+    // Before anything is read into it, the tensor is labelled over every device of the mesh, like the device tensor
+    // create_device_tensor allocates, and the label matches the shards it holds.
+    Tensor host_tensor = ttnn::allocate_tensor_on_host(spec, mesh_device_.get());
+    const auto& label = host_tensor.tensor_topology();
+    EXPECT_EQ(label.distribution_shape(), mesh_shape);
+    EXPECT_EQ(
+        label.placements(),
+        ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement>(
+            mesh_shape.dims(), ttnn::distributed::MeshMapperConfig::Replicate{}));
+    std::vector<MeshCoordinate> every_coord;
+    for (const auto& coord : MeshCoordinateRange(mesh_shape)) {
+        every_coord.push_back(coord);
+    }
+    EXPECT_EQ(label.mesh_coords(), every_coord);
+    EXPECT_EQ(label, ttnn::create_device_tensor(spec, mesh_device_.get()).tensor_topology());
+    verify_shards_match_topology(host_tensor, /*compare_replica_contents=*/false);
+
+    // Filled from a replicated device tensor, it dumps and loads as that tensor.
+    std::vector<float> values(kNumElements);
+    std::generate(values.begin(), values.end(), [n = 0.0F]() mutable { return n++; });
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor =
+        ttnn::distributed::distribute_tensor(Tensor::from_vector(values, spec), *mapper, *mesh_device_);
+    ttnn::copy_to_host(replicated_tensor, host_tensor);
+    dump_tensor_flatbuffer(test_file.string(), host_tensor);
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    std::vector<Tensor> loaded_shards = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_shards, SizeIs(mesh_device_->num_devices()));
+    for (const auto& shard : loaded_shards) {
+        EXPECT_THAT(shard.to_vector<float>(), Pointwise(FloatEq(), values));
     }
 }
 

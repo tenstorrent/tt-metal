@@ -25,6 +25,16 @@ using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
 
+namespace {
+
+// The label of a tensor that is one shard, held at one mesh coordinate.
+TensorTopology single_shard_topology(const MeshCoordinate& coord) {
+    return TensorTopology(
+        MeshShape(1), {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}}, std::vector<MeshCoordinate>{coord});
+}
+
+}  // namespace
+
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
     size_t l1_small_size,
@@ -79,7 +89,9 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.get_coords().size());
         for (const auto& coord : device_storage.get_coords()) {
-            tensors.push_back(Tensor(DeviceStorage(device_storage, {coord})));
+            // Each shard is a tensor of its own held at one mesh coordinate and is labelled as such; the label of
+            // the tensor it was taken from describes shards this tensor does not hold.
+            tensors.push_back(Tensor(DeviceStorage(device_storage, {coord}, single_shard_topology(coord))));
         }
         return tensors;
     }
