@@ -781,6 +781,10 @@ def test_requantize_int8_output_saturation(device, in_dtype, q_values, in_scale,
         (ttnn.int8, -3, -128, 127),
         (ttnn.uint8, 128, 0, 255),
         (ttnn.uint8, 127, 0, 255),
+        # A zero point that is 2 mod 4 gives |zp_lo| = 2. There the zp_hi/zp_lo split becomes a tie.
+        (ttnn.int32, 2, -128, 127),
+        (ttnn.int8, 6, -128, 127),
+        (ttnn.uint8, 130, 0, 255),
     ],
 )
 def test_quantize_rounds_ties_to_even(device, input_dtype, out_dtype, zero_point, q_min, q_max):
@@ -801,6 +805,8 @@ def test_quantize_rounds_ties_to_even(device, input_dtype, out_dtype, zero_point
         (8388608, [-8388607.0, -8388544.0], [1, 64]),
         # 4194307.5 is a tie. It rounds to 4194308 before the zero point is added.
         (-4194305, [4194307.5, 4194176.0], [3, -128]),
+        # 8388610 is 2 mod 4. Its zp_hi/zp_lo split is a tie.
+        (8388610, [-8388609.0, -8388546.0], [1, 64]),
     ],
 )
 def test_quantize_large_zero_point(device, zero_point, input_values, expected):
@@ -817,6 +823,8 @@ def test_quantize_large_zero_point(device, zero_point, input_values, expected):
         (8388608, [-8388607, -8388544], 1.0, [1, 64]),
         # 8388615 * 0.5 = 4194307.5 is a tie. It rounds to 4194308 before the zero point is added.
         (-4194305, [8388615, 8388352], 0.5, [3, -128]),
+        # 8388610 is 2 mod 4. Its zp_hi/zp_lo split is a tie.
+        (8388610, [-8388609, -8388546], 1.0, [1, 64]),
     ],
 )
 def test_requantize_large_output_zero_point(device, out_zero_point, q_values, in_scale, expected):

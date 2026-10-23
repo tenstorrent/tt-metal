@@ -122,7 +122,7 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 // FP32_TO_INT8 mode cannot produce -128. So we clamp m to [t + LO, t + HI] before subtracting to saturate
 // where LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8.
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
-// floating point respresentation of zero_point + ZP_SPLIT is a multiple of 4 for |zero_point| <= 2^24
+// floating point representation of zero_point + ZP_SPLIT is a multiple of 4 for |zero_point| <= 2^24
 constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
 // T_LREG holds the zero point on entry. LREG0 and LREG1 are scratch.
@@ -133,6 +133,7 @@ template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
     constexpr int LO = OUTPUT_FORMAT == DataFormat::UInt8 ? 0 : -128;
     constexpr int HI = OUTPUT_FORMAT == DataFormat::UInt8 ? 255 : 127;
+    constexpr int IMM12_MASK = 0xfff;  // SFPIADD takes a 12-bit 2's complement immediate
     _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
     _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
     // LREG0 = zp_hi = fl(zp + ZP_SPLIT) - ZP_SPLIT
@@ -144,13 +145,13 @@ inline void _rne_clamp_init_() {
     TTI_SFPMAD(T_LREG, p_sfpu::LCONST_neg1, p_sfpu::LREG5, T_LREG, 0 /*mod1*/);
     // LREG5 = RNE_MAGIC + zp_hi
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
-    TTI_SFPIADD(LO & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, 12, 0);
-    TTI_SFPIADD(HI & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, 13, 0);
+    TTI_SFPIADD(LO & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
     TTI_SFPIADD(0, p_sfpu::LCONST_0, T_LREG, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
-        TTI_SFPIADD(128, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(-LO, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     }
 }
 
@@ -173,7 +174,7 @@ inline void _int8_input_unbias_() { TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 
 // [-128, 127] in an int32 container, UInt8 [0, 255], and Int8 packs the 2's complement byte.
 //
 // SIGN_MAGNITUDE_FORMAT = true with Int32 or UInt8 output keeps the previous MAD + STOCH_RND body
-// (ties away from zero, int32 saturates at +/-127). quant_tile never instantiates it.
+// (ties away from zero, int32 saturates at +/-127). A static_assert rejects it.
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
@@ -182,6 +183,9 @@ void quant_init(const uint zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
+    static_assert(
+        !SIGN_MAGNITUDE_FORMAT || OUTPUT_FORMAT == DataFormat::Int8,
+        "quant_init SIGN_MAGNITUDE_FORMAT with Int32 or UInt8 output selects the old STOCH_RND body");
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2 and the RNE constants;
     //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
@@ -257,6 +261,9 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
+    static_assert(
+        !SIGN_MAGNITUDE_FORMAT || (OUTPUT_FORMAT == DataFormat::Int8 && !INT8_INPUT),
+        "requant_init SIGN_MAGNITUDE_FORMAT selects the old STOCH_RND body, which ignores out_zero_point");
     // One-time setup for requant_int32; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2 and the RNE
     // constants, programs ADDR_MOD_6 with dest+=2, then records
@@ -266,7 +273,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
     // zp is the host-folded -z_in * (s_in / s_out).
     //
     // SIGN_MAGNITUDE_FORMAT = true with Int32 or UInt8 output keeps the previous CAST + MAD + STOCH_RND
-    // body (int32 input only). requant_tile never instantiates it. It ignores out_zp.
+    // body (int32 input only). It ignores out_zp. A static_assert rejects it, and rejects it with INT8_INPUT.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);

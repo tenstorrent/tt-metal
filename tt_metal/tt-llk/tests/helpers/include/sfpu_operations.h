@@ -1840,8 +1840,8 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::QUANT)
     {
-        // quant_tile_init. On Blackhole, SIGN_MAGNITUDE_FORMAT selects the SMAG32 replay
-        // body. On Wormhole the init takes the flag as unused; it only changes the
+        // quant_tile_init. On Blackhole, SIGN_MAGNITUDE_FORMAT with Int32 or UInt8 output fails a
+        // static_assert. On Wormhole the init takes the flag as unused; it only changes the
         // SFPLOAD/SFPSTORE mode inside calculate_quant_int32.
         SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
     }

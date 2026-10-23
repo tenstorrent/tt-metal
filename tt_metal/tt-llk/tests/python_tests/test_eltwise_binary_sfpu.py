@@ -1240,10 +1240,12 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
 
 # =============================================================================
 # Quant family. One tile pair: operand A in tile 0, the fp32 scale in tile 1.
-# Six rows: quant / requant / dequant, each with and without sign-magnitude.
+# Quant and requant run in 2's complement only. Blackhole rejects
+# SIGN_MAGNITUDE_FORMAT for them at compile time and nothing calls them with it.
+# Dequant runs with and without sign-magnitude.
 # =============================================================================
 
-_QUANT_INT8_MIN = -127
+_QUANT_INT8_MIN = -128
 _QUANT_INT8_MAX = 127
 _QUANT_UINT8_MAX = 255
 _QUANT_INT8_BIAS = 0x80  # the offset-128 pack's bias; also the int8 byte of -128
@@ -1254,7 +1256,9 @@ _QUANT_OPS = [
 ]
 QUANT_SWEEP = dict(
     mathop=_QUANT_OPS,
-    sign_magnitude=[False, True],
+    sign_magnitude=lambda mathop: (
+        [False, True] if mathop == MathOperation.SfpuDequant else [False]
+    ),
 )
 
 
@@ -1374,13 +1378,15 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
 
     # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
-    # exact in fp32. Lane 2 is an exact half (4.5 = 3 * 0.5 + zp); 5.5 would
-    # round to 6 under both tie rules. Lane 3 is in (-0.5, 0), which
-    # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
+    # exact in fp32. Lanes 0 and 1 saturate to 127 and -128.
+    # Lane 2 is an exact half for requant (3 * 0.5 + zp = 4.5).
+    # Lane 4 is an exact half for quant (5 * 0.5 = 2.5).
+    # Lane 3 rounds a negative value to 0.
     a_float[0], scale[0] = 4000.0, 0.25
     a_float[1], scale[1] = -4000.0, 0.25
     a_float[2], scale[2] = 3.0, 0.5
     a_float[3], scale[3] = -13.0, 0.25
+    a_float[4], scale[4] = 5.0, 0.5
 
     if a_is_int:
         a_vals = a_float.to(torch.int32)
@@ -1391,28 +1397,28 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
     if is_dequant:
         golden_active = ((a_float - zero_point) * scale).to(torch.float32)
     else:
-        prod = a_float * scale + zero_point
-        # SFPSTOCHRND rounds ties away from zero. torch.round ties to even, so
-        # 4.5 would become 4 and miss the tie the planted lane is there to hit.
-        rounded = torch.sign(prod) * torch.floor(prod.abs() + 0.5)
-        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # SFPSTOCHRND clears the sign when the magnitude rounds to 0, on both
-        # Wormhole and Blackhole, so a negative product that rounds to 0 stays +0.
-        neg_zero = (clamped == 0) & (prod < 0)
-        if sign_magnitude:
-            golden_active = int32_to_smag32(clamped)
+        assert not sign_magnitude, f"{mathop.name} runs only in 2's complement"
+        # A * B of two fp32 values is exact in float64.
+        exact = a_float.double() * scale.double()
+        if mathop == MathOperation.SfpuQuant:
+            # Quant rounds A * B to nearest even and then adds the zero point.
+            rounded = torch.round(exact) + zero_point
         else:
-            golden_active = clamped.clone()
+            # The zero point goes in requant's first init argument and
+            # out_zero_point stays 0. The kernel rounds A * B + zp to fp32 and
+            # then rounds that to nearest even.
+            rounded = torch.round((exact + zero_point).float().double())
+        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
+        golden_active = clamped.clone()
         assert (clamped == _QUANT_INT8_MIN).any() and (
             clamped == _QUANT_INT8_MAX
         ).any(), f"{mathop.name} stimuli never reach the int8 clamp"
-        assert clamped[2] == 5, f"{mathop.name} exact half must round away from zero"
+        # Exact halves round to even: quant 2.5 -> 2 (+3 = 5), requant 4.5 -> 4.
+        tie_lane, tie_value = (4, 5) if mathop == MathOperation.SfpuQuant else (2, 4)
         assert (
-            neg_zero.any()
-        ), f"{mathop.name} stimuli never round a negative value to 0"
-        assert (
-            golden_active[neg_zero] == 0
-        ).all(), f"{mathop.name} negative-zero lanes must stay +0"
+            clamped[tie_lane] == tie_value
+        ), f"{mathop.name} exact half must round to even"
+        assert clamped[3] == 0, f"{mathop.name} lane 3 must round a negative value to 0"
 
     zp_for_kernel = -zero_point if is_dequant else zero_point
     zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
