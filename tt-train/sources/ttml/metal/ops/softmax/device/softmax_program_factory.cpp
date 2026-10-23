@@ -7,10 +7,12 @@
 #include <bit>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "softmax_device_operation.hpp"
 #include "softmax_device_operation_types.hpp"
 
 namespace {
@@ -25,10 +27,15 @@ constexpr auto kWriterKernelPath =
 
 constexpr auto kComputeKernelPath = "tt-train/sources/ttml/metal/ops/softmax/device/kernels/compute/softmax_kernel.cpp";
 
+// Kernel push order in the ProgramDescriptor: reader, writer, then the group-1 compute kernel and, when group 2 has
+// cores, the group-2 compute kernel.
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+
 // reader runtime args
-constexpr uint32_t kInputBufferIdx = 0;
+constexpr uint32_t kInputAddrIdx = 0U;
 // writer runtime args
-constexpr uint32_t kOutputBufferIdx = 0;
+constexpr uint32_t kOutputAddrIdx = 0U;
 
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_1;
@@ -56,18 +63,20 @@ const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 
 namespace ttml::metal::ops::softmax::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
-struct SoftmaxKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
-};
+namespace {
 
-SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
+// The input's tile rows over the device's compute grid. create_descriptor() pins it against split_work_to_cores, and
+// override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& input) {
+    const auto& shape = input.padded_shape();
+    return compute_work_split(
+        input.device()->compute_with_storage_grid_size(),
+        shape[0] * shape[1] * (shape[-2] / tt::constants::TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor SoftmaxProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -78,7 +87,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor program;
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
@@ -100,7 +109,6 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
     uint32_t num_inner = input.logical_shape()[-1];
@@ -113,6 +121,9 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    const WorkSplit split = make_work_split(input);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -145,58 +156,54 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
 
-    [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_mask = create_circular_buffer(
-        program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles));
 
-    [[maybe_unused]] auto cb_max_mask = create_circular_buffer(
-        program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles));
 
-    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
-        program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    program.cbs.push_back(make_cb_descriptor(
+        all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles));
 
-    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles));
 
-    [[maybe_unused]] auto cb_max_value_before_reduction = create_circular_buffer(
-        program,
+    program.cbs.push_back(make_cb_descriptor(
         all_cores,
         kMaxValueBeforeReductionCbIndex,
         data_format,
         bfloat16_single_tile_size_bytes,
-        kMaxValueBeforeReductionTiles);
+        kMaxValueBeforeReductionTiles));
 
-    [[maybe_unused]] auto cb_max_value_after_reduction = create_circular_buffer(
-        program,
+    program.cbs.push_back(make_cb_descriptor(
         all_cores,
         kMaxValueAfterReductionCbIndex,
         data_format,
         bfloat16_single_tile_size_bytes,
-        kNumMaxValueAfterReductionTiles);
+        kNumMaxValueAfterReductionTiles));
 
-    [[maybe_unused]] auto cb_exp_input = create_circular_buffer(
-        program, all_cores, kExpCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kExpCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_exp_sum_before_reduction = create_circular_buffer(
-        program,
+    program.cbs.push_back(make_cb_descriptor(
         all_cores,
         kExpSumBeforeReductionCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kNumExpSumBeforeReductionTiles);
+        kNumExpSumBeforeReductionTiles));
 
-    [[maybe_unused]] auto cb_exp_sum_after_reduction = create_circular_buffer(
-        program,
+    program.cbs.push_back(make_cb_descriptor(
         all_cores,
         KExpSumAfterReductionCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kNumExpSumAfterReductionTiles);
+        kNumExpSumAfterReductionTiles));
 
-    [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+    program.cbs.push_back(
+        make_cb_descriptor(all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -232,14 +239,16 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    SoftmaxKernels kernels;
+    // Same defines for every kernel: the reader's mask tiles and 1-pass vs 3-pass row reads must match the compute.
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt, mask_w};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    program.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    program.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for softmax
@@ -251,84 +260,56 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         block_size,                 // per_core_block_size
         Wt};                        // num_inner / TILE_W
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    program.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
 
     // Group 2 (if present) compile-time arguments
-    std::vector<uint32_t> compute_group_2_args = {
-        num_rows_per_core_group_2,  // per_core_block_cnt
-        block_size,                 // per_core_block_size
-        Wt};                        // num_inner / TILE_W
+    if (!core_group_2.ranges().empty()) {
+        std::vector<uint32_t> compute_group_2_args = {
+            num_rows_per_core_group_2,  // per_core_block_cnt
+            block_size,                 // per_core_block_size
+            Wt};                        // num_inner / TILE_W
 
-    kernels.compute_group_2 = create_compute_kernel(
-        program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
+    }
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // num_rows/start_row follow from the hashed input shape.
+    auto& reader = program.kernels[kReaderKernelIdx];
+    auto& writer = program.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+        reader.emplace_runtime_args(core, {input_buffer, num_rows, start_row});
+        writer.emplace_runtime_args(core, {output_buffer, num_rows, start_row});
+    });
 
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            SetRuntimeArgs(program, kernels.reader, core, {input_buffer->address(), num_rows, start_row});
-            SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
-        });
-
-    // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
-    // -------------------------------------------------------------------------
-
-    return cached_program_t{
-        std::move(program),
-        {/* softmax_reader_kernel_id  = */ kernels.reader,
-         /* softmax_writer_kernel_id  = */ kernels.writer,
-         /* softmax_kernel_group_1_id = */ kernels.compute_group_1,
-         /* softmax_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    return program;
 }
 
 void SoftmaxProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto& softmax_reader_kernel_id = shared_variables.reader_kernel_id;
-    auto& softmax_writer_kernel_id = shared_variables.writer_kernel_id;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.input);
 
-    uint32_t num_cores = shared_variables.num_cores;
-    uint32_t num_cores_y = shared_variables.num_cores_y;
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
+    const uint32_t output_addr = output.buffer()->address();
 
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
-
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, softmax_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, softmax_writer_kernel_id);
-
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        // Update input buffers for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-        }
-
-        // Update output buffers for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kOutputBufferIdx] = output_buffer->address();
-        }
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
+        reader_runtime_args[core.x][core.y][kInputAddrIdx] = input_addr;
+        writer_runtime_args[core.x][core.y][kOutputAddrIdx] = output_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SoftmaxDeviceOperation, SoftmaxProgramFactory);
 
 }  // namespace ttml::metal::ops::softmax::device
