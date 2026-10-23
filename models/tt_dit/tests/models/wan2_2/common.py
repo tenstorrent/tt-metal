@@ -11,37 +11,96 @@ from PIL import Image
 
 import ttnn
 
-# Upper timing limits in seconds per (mesh shape, height, arch): 30% headroom over measured, 100% on
-# encoder. test_performance_wan.py gates on them (with TIMING_LOWER_FRACTION as the lower bound);
-# test_pipeline_wan.py gates its cold single run on a multiple of the total.
-T2V_TIMING_LIMITS = {
-    ((2, 2), 480, "bh"): {"encoder": 0.12, "denoising": 680.0, "vae": 60.0, "total": 760.0},
-    ((2, 4), 480, "bh"): {"encoder": 0.1, "denoising": 240.0, "vae": 5.0, "total": 255.0},
-    ((2, 4), 480, "wh"): {"encoder": 0.1, "denoising": 800.0, "vae": 9.0, "total": 850.0},
-    # 4x8: ring measurements only; linear needs remeasuring.
-    ((4, 8), 480, "bh"): {"encoder": 0.21, "denoising": 75.0, "vae": 0.42, "total": 76.0},
-    ((4, 8), 480, "wh"): {"encoder": 0.23, "denoising": 142.0, "vae": 1.55, "total": 144.0},
-    ((4, 8), 720, "bh"): {"encoder": 0.22, "denoising": 205.0, "vae": 0.85, "total": 206.0},
-    ((4, 8), 720, "wh"): {"encoder": 0.22, "denoising": 449.0, "vae": 3.4, "total": 452.0},
-    ((4, 32), 720, "bh"): {"encoder": 0.54, "denoising": 75.0, "vae": 5.0, "total": 80.5},
+# (lower, upper) timing limits in seconds per (model, mesh shape, height, arch), from the CI perf
+# logs of the 2026-10-18..22 nightlies plus one branch dispatch: lower is 0.7x the fastest and upper
+# 1.3x the slowest observation across hosts, sc4 quads and ranks (encoder, being tiny and noisy:
+# 0.5x / 2x). The spread is real: bh_sc1 hosts differ by ~40% on denoising, and the two bh_sc4
+# quads by ~25%. test_performance_wan.py gates on both bounds; test_pipeline_wan.py gates its cold
+# single run on a multiple of the total upper limit.
+#
+# PENDING: the BH 4x8 vae bounds predate the bh_sc1 host-contention fix (#61784, ~0.4 s off the
+# readback); they keep the pre-regression upper limit and an estimated lower until a post-fix run.
+TIMING_LIMITS = {
+    ("t2v", (2, 2), 480, "bh"): {
+        "encoder": (0.01, 0.16),
+        "denoising": (270.0, 530.0),
+        "vae": (2.0, 4.0),
+        "total": (270.0, 530.0),
+    },
+    ("t2v", (4, 8), 480, "bh"): {
+        "encoder": (0.035, 0.17),
+        "denoising": (27.0, 74.0),
+        "vae": (0.23, 0.42),  # PENDING
+        "total": (27.0, 75.0),
+    },
+    ("t2v", (4, 8), 480, "wh"): {
+        "encoder": (0.037, 0.17),
+        "denoising": (75.0, 150.0),
+        "vae": (0.77, 1.7),
+        "total": (76.0, 150.0),
+    },
+    ("t2v", (4, 8), 720, "bh"): {
+        "encoder": (0.034, 0.17),
+        "denoising": (86.0, 210.0),
+        "vae": (0.42, 0.85),  # PENDING
+        "total": (87.0, 210.0),
+    },
+    ("t2v", (4, 8), 720, "wh"): {
+        "encoder": (0.038, 0.17),
+        "denoising": (240.0, 450.0),
+        "vae": (1.6, 3.4),
+        "total": (240.0, 460.0),
+    },
+    # 4x32 T2V has only run on the slower sc4 quad; its lower bounds take the faster quad's I2V
+    # times (same DiT and VAE decode).
+    ("t2v", (4, 32), 720, "bh"): {
+        "encoder": (0.058, 0.29),
+        "denoising": (24.0, 59.0),
+        "vae": (0.28, 1.2),
+        "total": (25.0, 60.0),
+    },
+    ("i2v", (4, 32), 720, "bh"): {
+        "encoder": (0.058, 0.29),
+        "denoising": (24.0, 59.0),
+        "vae": (0.28, 1.2),
+        "total": (25.0, 62.0),
+    },
+    # One observation (a slow bh_sc1 host); the band follows T2V's so a fast host passes too.
+    ("i2v", (4, 8), 720, "bh"): {
+        "encoder": (0.041, 0.17),
+        "denoising": (86.0, 210.0),
+        "vae": (0.42, 0.85),  # PENDING
+        "total": (87.0, 210.0),
+    },
+    # Not run in CI, so never measured here: upper limits only, carried over from before.
+    ("t2v", (2, 4), 480, "bh"): {
+        "encoder": (0.0, 0.1),
+        "denoising": (0.0, 240.0),
+        "vae": (0.0, 5.0),
+        "total": (0.0, 255.0),
+    },
+    ("t2v", (2, 4), 480, "wh"): {
+        "encoder": (0.0, 0.1),
+        "denoising": (0.0, 800.0),
+        "vae": (0.0, 9.0),
+        "total": (0.0, 850.0),
+    },
 }
-# I2V configs measured on their own; anything missing falls back to the T2V limits (TODO: measure).
-I2V_TIMING_LIMITS = {}
-# BH 4x8 linear topology is expected to be slower than ring; relax the limits by this factor.
+# BH 4x8 linear topology is expected to be slower than ring; relax the upper limits by this factor.
 BH_4X8_LINEAR_SLACK = 1.10
-# Uncalibrated placeholder (#60481): a run under this fraction of the upper limit is suspicious
-# (skipped work, a stale cache hit) rather than fast.
-TIMING_LOWER_FRACTION = 0.5
 
 
 def timing_limits(model_type, mesh_shape, height, topology):
-    """``{metric: (lower, upper)}`` seconds for this config, or None if it has no limits."""
+    """``{metric: (lower, upper)}`` seconds for this config, or None if it has no limits.
+
+    I2V configs without their own entry use the T2V limits.
+    """
     key = (tuple(mesh_shape), height, "bh" if ttnn.device.is_blackhole() else "wh")
-    upper = (I2V_TIMING_LIMITS.get(key) if model_type == "i2v" else None) or T2V_TIMING_LIMITS.get(key)
-    if upper is None:
+    limits = TIMING_LIMITS.get((model_type, *key)) or TIMING_LIMITS.get(("t2v", *key))
+    if limits is None:
         return None
     slack = BH_4X8_LINEAR_SLACK if tuple(mesh_shape) == (4, 8) and topology == ttnn.Topology.Linear else 1.0
-    return {k: (v * slack * TIMING_LOWER_FRACTION, v * slack) for k, v in upper.items()}
+    return {k: (lower, upper * slack) for k, (lower, upper) in limits.items()}
 
 
 def check_timings(measured, limits, label):
