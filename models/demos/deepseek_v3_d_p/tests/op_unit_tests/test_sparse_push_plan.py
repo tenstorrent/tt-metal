@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """ttnn.experimental.sparse_push_plan: the on-device sparse KV push plan must rewrite the indices to the compact slots
-a host reference computes, bit-for-bit, and its table must hold the bitmap and counts the owners read."""
+a host reference computes, bit-for-bit, and its table must hold the bitmap and counts the owners read. Its cost is
+timed on traced replays (test_sparse_push_plan_perf)."""
 
+import os
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -64,6 +68,36 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
     return idx
 
 
+def _plan_inputs(mesh_device, prefix, rows, topk, chunk_start):
+    """(host indices [n_dev, rows, topk], device indices, device chunk start): clustered picks within `prefix`, or a
+    layer's real top-k ("L<n>")."""
+    n_dev = mesh_device.get_num_devices()
+    if isinstance(prefix, str):
+        from safetensors.numpy import load_file
+
+        f = TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{prefix[1:]}" / "rows_00000000_00005120.safetensors"
+        if not f.exists():
+            pytest.skip(f"golden top-k not staged: {f}")
+        idx = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, rows, topk)
+        idx[idx < 0] = SENTINEL
+    else:
+        idx = _clustered_indices(np.random.default_rng(0), n_dev, rows, topk, prefix)
+    common = dict(
+        dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_idx = ttnn.from_torch(
+        torch.from_numpy(idx.reshape(1, 1, n_dev * rows, topk).astype(np.uint32).view(np.int32)),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        **common,
+    )
+    tt_split = ttnn.from_torch(
+        torch.tensor([[[[chunk_start]]]], dtype=torch.int32),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **common,
+    )
+    return idx, tt_idx, tt_split
+
+
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "max_rows, prefix",
@@ -75,38 +109,10 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
 def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, banks):
     n_dev = mesh_device.get_num_devices()
     rows, topk, sc, p = 160, 2048, 160, 12
-    rng = np.random.default_rng(0)
-    if isinstance(prefix, str):
-        from safetensors.numpy import load_file
-
-        f = TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{prefix[1:]}" / "rows_00000000_00005120.safetensors"
-        if not f.exists():
-            pytest.skip(f"golden top-k not staged: {f}")
-        idx = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, rows, topk)
-        idx[idx < 0] = SENTINEL
-    else:
-        idx = _clustered_indices(rng, n_dev, rows, topk, prefix)
-
-    want_compact = _compact_reference(idx, n_dev, sc, p, banks)
-    tt_idx = ttnn.from_torch(
-        torch.from_numpy(idx.reshape(1, 1, n_dev * rows, topk).astype(np.uint32).view(np.int32)),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
-    )
-
     # Treat the last 5120 rows as the current chunk: the plan also records each owner's rows before it.
     split = max_rows - 5120
-    tt_split = ttnn.from_torch(
-        torch.tensor([[[[split]]]], dtype=torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    idx, tt_idx, tt_split = _plan_inputs(mesh_device, prefix, rows, topk, split)
+    want_compact = _compact_reference(idx, n_dev, sc, p, banks)
 
     table, compact = ttnn.experimental.sparse_push_plan(
         tt_idx,
@@ -149,3 +155,53 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, banks
         }
         bad += [(d, k) for k, ok in checks.items() if not ok]
     assert not bad, f"device plan differs from the host reference: {bad[:8]}"
+
+
+# Cache capacity (max_rows) and populated prefix of the perf cases: GLM-5.3's 1M cache filled to a depth (clustered
+# picks), and the real 1M top-k of a light (L14) and a heavy (L62) layer.
+_PERF_CASES = [
+    (1044480, 10240),
+    (1044480, 102400),
+    (1044480, 512000),
+    (1044480, 1044480),
+    (1044480, "L14"),
+    (1044480, "L62"),
+    (102400, 102400),
+    (10240, 10240),
+]
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="local production-shape perf qualification")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 16 * 1024 * 1024}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "max_rows, prefix",
+    _PERF_CASES,
+    ids=["1M_cap_10k", "1M_cap_100k", "1M_cap_500k", "1M_cap_1M", "1M_real_L14", "1M_real_L62", "100k", "10k"],
+)
+def test_sparse_push_plan_perf(mesh_device, max_rows, prefix):
+    """The plan op alone, as GLM-5.3 runs it (5k chunk over 32 chips, top-k 2048, FP8 704 B pages: 8 per packet, on
+    consecutive slots for the L1 front). Mean time per call over back-to-back replays of a trace of `reps` calls, so
+    the per-replay host cost is amortised as it is inside the model's layer trace."""
+    n_dev = mesh_device.get_num_devices()
+    rows, topk, sc, p, n, reps = 160, 2048, 160, 8, 20, 10
+    # The current chunk is the populated prefix's last 5120 rows; the real top-k is of a 1M prompt.
+    populated = max_rows if isinstance(prefix, str) else prefix
+    _, tt_idx, tt_split = _plan_inputs(mesh_device, prefix, rows, topk, populated - 5120)
+    plan = lambda: ttnn.experimental.sparse_push_plan(
+        tt_idx, num_devices=n_dev, stripe_chunk=sc, max_rows=max_rows, pages_per_packet=p, banks=1, chunk_start=tt_split
+    )
+    plan()
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outputs = [plan() for _ in range(reps)]  # held until the trace is released: replays write these buffers
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    t0 = time.perf_counter()
+    for _ in range(n):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    us = (time.perf_counter() - t0) / (n * reps) * 1e6
+    ttnn.release_trace(mesh_device, tid)
+    del outputs
+    logger.info(f"sparse_push_plan max_rows={max_rows} prefix={prefix}: {us:.1f} us per call (traced)")
