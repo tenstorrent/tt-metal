@@ -41,7 +41,7 @@ constexpr uint32_t KT = get_compile_time_arg_val(0), PNMAX = get_compile_time_ar
 constexpr uint32_t NCK = get_compile_time_arg_val(3), GX = get_compile_time_arg_val(4), HALVES = get_compile_time_arg_val(5);
 constexpr uint32_t WTB = get_compile_time_arg_val(6), NSLOT = get_compile_time_arg_val(7), NH = get_compile_time_arg_val(8);
 constexpr uint32_t NS = GX;  // (a row: its cores hold the same row tile)
-constexpr uint32_t SW = 0, SA0 = 1, SP0 = 1 + NCK, SFREE = 1 + 2 * NCK, SL = 2 + 2 * NCK;
+constexpr uint32_t SA0 = 0, SP0 = NCK, SFREE = 2 * NCK, SL = 1 + 2 * NCK, SW0 = 2 + 2 * NCK;  // (SW0 + r: W' K range r in)
 constexpr uint32_t CB_W = 0, CB_A = 1, CB_PART = 3, CB_PMY = 4, CB_ONES = 5, CB_SE = 7, CB_OUT = 8;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
@@ -52,21 +52,19 @@ _BRISC = (
     '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
     + _CT
     + r"""
-constexpr auto w_args = TensorAccessorArgs<9>();
-constexpr auto z_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+constexpr auto z_args = TensorAccessorArgs<9>();
 constexpr auto s_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
 // NOC0: every DRAM read (W' K range of my slice, my z shares, my se tiles) and the W' multicast down my half column
 void kernel_main() {
     size_t a = 0;
     const uint32_t r = get_arg_val<uint32_t>(a++), pn = get_arg_val<uint32_t>(a++), n0 = get_arg_val<uint32_t>(a++);
-    const uint32_t w_addr = get_arg_val<uint32_t>(a++), wp0 = get_arg_val<uint32_t>(a++);
+    const uint32_t w_addr = get_arg_val<uint32_t>(a++), wbank = get_arg_val<uint32_t>(a++), woff = get_arg_val<uint32_t>(a++);
     const uint32_t wk0 = get_arg_val<uint32_t>(a++), wk1 = get_arg_val<uint32_t>(a++);
     const uint32_t mx = get_arg_val<uint32_t>(a++), yt = get_arg_val<uint32_t>(a++), yb = get_arg_val<uint32_t>(a++);
     const uint32_t z_addr = get_arg_val<uint32_t>(a++), ak0 = get_arg_val<uint32_t>(a++), ak1 = get_arg_val<uint32_t>(a++);
     const uint32_t se_addr = get_arg_val<uint32_t>(a++), helper = get_arg_val<uint32_t>(a++), NTO = get_arg_val<uint32_t>(a++);
     const uint32_t land = get_arg_val<uint32_t>(a++), SHMAX = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a;
-    const auto wg = TensorAccessor(w_args, w_addr, WTB);
     const auto zg = TensorAccessor(z_args, z_addr, 2048);
     const auto sg = TensorAccessor(s_args, se_addr, 2048);
     if (helper) {  // (the all-ones tile of the squares' row sums)
@@ -75,7 +73,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < 512; ++i) o[i] = 0x3F803F80u;
         cb_push_back(CB_ONES, 1);
     }
-    auto share = [&](uint32_t c) {  // my z share of chunk c into my landing region (per chunk: never reused in a call)
+    // (a chunk's z is spread over the row: each core reads its K share - one owner reading the whole row tile made the
+    // start slower, the owners' DRAM reads crowding W''s - into its landing region, per chunk, never reused in a call)
+    auto share = [&](uint32_t c) {
         const uint32_t R = get_arg_val<uint32_t>(ord + c) * RT + r, dst = land + c * SHMAX * 2048;
         for (uint32_t k = ak0; k < ak1; ++k) noc_async_read(zg.get_noc_addr(R * KT + k), dst + (k - ak0) * 2048, 2048);
         noc_async_read_barrier();
@@ -84,17 +84,17 @@ void kernel_main() {
     share(0);  // (the NCRISC multicasts it while W' loads)
     {  // W': my K range of my slice, then down the half column (its other RT - 1 cores)
         DeviceZoneScopedN("TL-WLOAD");
+        // (my K range of my slice: one contiguous region of one DRAM bank - a single burst)
         const uint32_t wl1 = get_write_ptr(CB_W);
-        for (uint32_t k = wk0; k < wk1; ++k)
-            for (uint32_t j = 0; j < pn; ++j) noc_async_read(wg.get_noc_addr(wp0 + k * pn + j), wl1 + (k * pn + j) * WTB, WTB);
-        noc_async_read_barrier();
         const uint32_t src = wl1 + wk0 * pn * WTB, bytes = (wk1 - wk0) * pn * WTB;
+        noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + woff), src, bytes);
+        noc_async_read_barrier();
         if (RT > 1) {
             if (bytes) noc_async_write_multicast(src, get_noc_multicast_addr(mx, yt, mx, yb, src), bytes, RT - 1);
             noc_async_writes_flushed();
-            noc_semaphore_inc_multicast(get_noc_multicast_addr(mx, yt, mx, yb, get_semaphore(SW)), 1, RT - 1);
+            noc_semaphore_inc_multicast(get_noc_multicast_addr(mx, yt, mx, yb, get_semaphore(SW0 + r)), 1, RT - 1);
         }
-        noc_semaphore_inc(get_noc_addr(get_semaphore(SW)), 1);
+        noc_semaphore_inc(get_noc_addr(get_semaphore(SW0 + r)), 1);
     }
     for (uint32_t c = 1; c < NCK; ++c) share(c);
     for (uint32_t c = 0; c < NCK; ++c) {  // my se tiles
@@ -125,7 +125,7 @@ void kernel_main() {
     const uint32_t o_addr = get_arg_val<uint32_t>(a++), NTO = get_arg_val<uint32_t>(a++);
     const uint32_t land = get_arg_val<uint32_t>(a++), SHMAX = get_arg_val<uint32_t>(a++), ring = get_arg_val<uint32_t>(a++);
     const uint32_t part = get_arg_val<uint32_t>(a++), my = get_arg_val<uint32_t>(a++);
-    const uint32_t ord = a, xs = ord + NCK;  // (my row's NoC x, by column)
+    const uint32_t ord = a, xs = ord + NCK, wk = xs + GX;  // (my row's NoC x, by column; the W' K range bounds)
     const auto og = TensorAccessor(o_args, o_addr, 2048);
     // (NOC1 multicast corners: the right one first) my row - row multicasts only: a column hop on the same NoC stalls
     // the row multicasts crossing it
@@ -133,20 +133,21 @@ void kernel_main() {
     // to every core of my row, me as well: data then the increment of a semaphore
     auto to_group = [&](uint32_t src, uint32_t dst, uint32_t bytes, uint32_t s) {
         if (bytes) noc_async_write_multicast_loopback_src(src, row(dst), bytes, GX);
-        noc_async_write_barrier();
+        noc_async_write_barrier();  // (flushed only - no ack wait - made the matmul 8.4 -> 11.2 us a chunk: faster shares
+                                    // pile multicast writes into L1 under the unpacker)
         if (GX > 1) noc_semaphore_inc_multicast(row(get_semaphore(s)), 1, GX - 1);
         noc_semaphore_inc(get_noc_addr(get_semaphore(s)), 1);
     };
     // my shares go out as soon as each is loaded (BRISC) and its ring slot is free on every group core (FREE): from
     // every wait below, so a chunk's distribution never waits for the previous chunk's
-    uint32_t cs = 0;
-    bool wpushed = false;
+    uint32_t cs = 0, wr = 0;
     auto pump = [&]() {
         invalidate_l1_cache();
-        if (!wpushed && *sem(SW) >= RT) {  // (my slice of W' landed: the half column's RT K ranges)
-            cb_reserve_back(CB_W, KT * pn);
-            cb_push_back(CB_W, KT * pn);
-            wpushed = true;
+        while (wr < RT && *sem(SW0 + wr) >= 1) {  // (W' K range wr of my slice landed: to the compute, in K order)
+            const uint32_t n = (get_arg_val<uint32_t>(wk + wr + 1) - get_arg_val<uint32_t>(wk + wr)) * pn;
+            cb_reserve_back(CB_W, n);
+            cb_push_back(CB_W, n);
+            ++wr;
         }
         if (cs >= NCK || *sem(SL) < cs + 1 || (cs >= NSLOT && *sem(SFREE) < NS * (cs - NSLOT + 1))) return;
         // (one row multicast of a chunk at a time, in column order - the chunk's arrival count is the token:
@@ -199,7 +200,7 @@ void kernel_main() {
         if (c > 0) write_out(c - 1);
     }
     write_out(NCK - 1);
-    while (!wpushed || cs < NCK) pump();
+    while (wr < RT || cs < NCK) pump();
     noc_async_atomic_barrier();
 }
 """
@@ -243,44 +244,32 @@ ALWI void mm4(uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t ids
 void kernel_main() {
     const uint32_t pn = get_arg_val<uint32_t>(0), helper = get_arg_val<uint32_t>(1);
     const uint32_t hk0 = get_arg_val<uint32_t>(2), hk1 = get_arg_val<uint32_t>(3);
+    uint32_t wr = 0, wnext = 0;  // (args 5 ..: the W' K range bounds 0, .., KT)
     compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_W, CB_ACC);
-    cb_wait_front(CB_W, KT * pn);
     if (helper) cb_wait_front(CB_ONES, 1);
     for (uint32_t c = 0; c < NCK; ++c) {
         cb_wait_front(CB_A, KT);
-        if (helper) {  // my K range's squares, summed along the row ((z * z) @ ones), fp32 into PMY (L1 accumulation)
+        if (helper) {  // my K share's squares accumulated elementwise in DEST (fp32, SFPU): E = sum_k z_k * z_k, one
+                       // tile to the row (the receivers' one matmul with ones sums the row's E tiles along the row)
             DeviceZoneScopedN("TL-SQ");
             cb_reserve_back(CB_PMY, 1);
-            for (uint32_t k0 = hk0; k0 < hk1; k0 += SQ_T) {
-                const uint32_t n = hk1 - k0 < SQ_T ? hk1 - k0 : SQ_T;
-                reconfig_data_format_srca(CB_A);
-                pack_reconfig_data_format(CB_SQ);
-                PACK((llk_pack_reconfig_l1_acc(0)));  // (the squares overwrite; only PMY accumulates)
+            reconfig_data_format_srca(CB_A);
+            pack_reconfig_data_format(CB_PMY);
+            tile_regs_acquire();
+            for (uint32_t k0 = hk0; k0 < hk1; k0 += 7) {  // (DEST 1 .. 7 a batch; 0 the sum)
+                const uint32_t n = hk1 - k0 < 7 ? hk1 - k0 : 7;
                 copy_init(CB_A);
-                cb_reserve_back(CB_SQ, SQ_T);  // (whole groups: the FIFO's blocks never straddle)
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < n; ++i) copy_tile(CB_A, k0 + i, i);  // (z^2 in fp32 on the SFPU)
+                for (uint32_t i = 0; i < n; ++i) copy_tile(CB_A, k0 + i, 1 + i);
                 mul_binary_tile_init();
-                for (uint32_t i = 0; i < n; ++i) mul_binary_tile(i, i, i);
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < n; ++i) pack_tile(i, CB_SQ);
-                tile_regs_release();
-                cb_push_back(CB_SQ, SQ_T);
-                cb_wait_front(CB_SQ, SQ_T);
-                reconfig_data_format(CB_ONES, CB_SQ);
-                pack_reconfig_data_format(CB_PMY);
-                mm4_init(CB_SQ, CB_ONES);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < n; ++i) mm4(CB_SQ, CB_ONES, i, 0, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                PACK((llk_pack_reconfig_l1_acc(k0 > hk0 ? 1 : 0)));
-                pack_tile<true>(0, CB_PMY, 0);
-                tile_regs_release();
-                cb_pop_front(CB_SQ, SQ_T);
+                for (uint32_t i = 0; i < n; ++i) mul_binary_tile(1 + i, 1 + i, 1 + i);
+                if (k0 == hk0) copy_dest_values<DataFormat::Float32>(1, 0);
+                add_binary_tile_init();
+                for (uint32_t i = k0 == hk0 ? 1 : 0; i < n; ++i) add_binary_tile(0, 1 + i, 0);
             }
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, CB_PMY);
+            tile_regs_release();
             cb_push_back(CB_PMY, 1);
         }
         {  // my output tiles of the chunk: all of K in DEST, fp32 to ACC
@@ -290,7 +279,13 @@ void kernel_main() {
             matmul_block_init(CB_A, CB_W, 0, pn, 1, KT);
             cb_reserve_back(CB_ACC, pn);
             tile_regs_acquire();
-            for (uint32_t k = 0; k < KT; ++k) matmul_block(CB_A, CB_W, k, k * pn, 0, false, pn, 1, KT);
+            for (uint32_t k = 0; k < KT; ++k) {
+                if (c == 0 && k == wnext) {  // (chunk 0: W' K range by range, as each lands)
+                    wnext = get_arg_val<uint32_t>(5 + ++wr);
+                    cb_wait_front(CB_W, wnext * pn);
+                }
+                matmul_block(CB_A, CB_W, k, k * pn, 0, false, pn, 1, KT);
+            }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < pn; ++j) pack_tile(j, CB_ACC);
@@ -302,17 +297,12 @@ void kernel_main() {
             DeviceZoneScopedN("TL-S");
             cb_wait_front(CB_PART, NH);
             cb_reserve_back(CB_S, 1);
-            reconfig_data_format_srca(CB_PART);
+            // (the row's NH E tiles @ ones, accumulated in DEST at HiFi4: every column the row's sum of squares)
+            reconfig_data_format(CB_ONES, CB_PART);
             pack_reconfig_data_format(CB_S);
-            copy_init(CB_PART);
+            mm4_init(CB_PART, CB_ONES);
             tile_regs_acquire();
-            copy_tile(CB_PART, 0, 0);
-            for (uint32_t i = 1; i < NH; ++i) {
-                copy_init(CB_PART);
-                copy_tile(CB_PART, i, 1);
-                add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
-            }
+            for (uint32_t i = 0; i < NH; ++i) mm4(CB_PART, CB_ONES, i, 0, 0);
 #if TL_PROBE != 4
             binop_with_scalar_tile_init();
             mul_unary_tile(0, INV_HR);
@@ -439,7 +429,6 @@ class TailEngine:
             ("w", self.KT * self.PNMAX * self.wtb),
             ("ring", NSLOT * self.KT * 2048),
             ("land", chunks * self.SHMAX * 2048),
-            ("sq", SQ_T * 4096),
             ("part", chunks * self.NH * 4096),
             ("pmy", 4096),
             ("ones", 2048),
@@ -465,25 +454,27 @@ class TailEngine:
     def upload(self, w_up_cols, g):
         """w_up_cols: per device (row-major mesh order) its [Hr, Ho] column slice of W_up^T; g [Hr] the norm weight
         (folded: W' = diag(g) W). One tensor a chip: per slice its [KT][pn] tiles, slice after slice (pages)."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import _bank_sharded
+
+        self.nbank = self.mesh.dram_grid_size().x
+        self.wreg = max(k1 - k0 for k0, k1 in self.wk) * self.PNMAX  # (tiles a region, padded)
         devs = []
         for w in w_up_cols:
             wf = w.float() * g.float().view(-1, 1)
-            pages = []
-            for s in range(self.NS):
+            regions = []
+            for s in range(
+                self.NS
+            ):  # (region s RT + r: slice s, K range r - the tiles (k, j) of the core that reads it)
                 blk = wf[:, self.n0[s] * 32 : (self.n0[s] + self.pn[s]) * 32]
-                pages.append(blk.reshape(self.KT, 32, self.pn[s], 32).permute(0, 2, 1, 3).reshape(-1, 32))
-            devs.append(torch.cat(pages))
-        t = torch.stack(devs)  # [N, KT Ho, 32]
-        R, C = tuple(self.mesh.shape)
-        self.wp0 = [sum(self.KT * p for p in self.pn[:s]) for s in range(self.NS)]
-        return ttnn.from_torch(
-            t.view(R, C, -1, 32),
-            dtype=self.w_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=(R, C), dims=(0, 1)),
-        )
+                tiles = (
+                    blk.reshape(self.KT, 32, self.pn[s], 32).permute(0, 2, 1, 3).reshape(self.KT, self.pn[s], 32, 32)
+                )
+                for k0, k1 in self.wk:
+                    reg = tiles[k0:k1].reshape(-1, 32, 32)
+                    pad = self.wreg - reg.shape[0]
+                    regions.append(torch.cat([reg, torch.zeros(pad, 32, 32)]) if pad else reg)
+            devs.append(regions)
+        return _bank_sharded(devs, self.nbank, self.w_dtype, self.mesh)
 
     # ---- arena ----
     def alloc_arena(self):
@@ -525,7 +516,6 @@ class TailEngine:
         pns = list(self.pn)
         cb(CB_W, "w", self.KT * self.PNMAX * self.wtb, self.w_dtype, self.wtb, [self.KT * self.PNMAX])  # (one push)
         cb(CB_A, "ring", self.NSLOT * self.KT * 2048, ttnn.bfloat16, 2048, [self.KT])
-        cb(CB_SQ, "sq", SQ_T * 4096, ttnn.float32, 4096, [SQ_T])
         cb(CB_PART, "part", self.NCK * self.NH * 4096, ttnn.float32, 4096, [self.NH])
         cb(CB_PMY, "pmy", 4096, ttnn.float32, 4096, [1])
         cb(CB_ONES, "ones", 2048, ttnn.bfloat16, 2048, [1])
@@ -550,7 +540,8 @@ class TailEngine:
                     pn,
                     self.n0[s],
                     int(w.buffer_address()),
-                    self.wp0[s],
+                    (s * RT + r) % self.nbank,
+                    ((s * RT + r) // self.nbank) * self.wreg * self.wtb,
                     wk0,
                     wk1,
                     v.x,
@@ -585,8 +576,10 @@ class TailEngine:
                     ]
                     + list(order)
                     + [virt(c2, cy).x for c2 in range(GX)]
+                    + [k0 for k0, _ in self.wk]
+                    + [self.KT]
                 )
-                c_rt[cx0 + cx][cy] = [pn, 1, ak0, ak1]
+                c_rt[cx0 + cx][cy] = [pn, 1, ak0, ak1, 0] + [k0 for k0, _ in self.wk] + [self.KT]
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
@@ -597,7 +590,7 @@ class TailEngine:
         comp.dst_full_sync_en = True
         comp.math_approx_mode = False
         modes = [ttnn.UnpackToDestMode.Default] * 64
-        for i in (CB_PART, CB_S, CB_ACC):
+        for i in (CB_S, CB_ACC):
             modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
         comp.unpack_to_dest_mode = modes
         kernels = [
@@ -605,7 +598,7 @@ class TailEngine:
                 kernel_source=_BRISC,
                 source_type=st,
                 core_ranges=self.crs,
-                compile_time_args=ct + acc(w) + acc(z) + acc(se),
+                compile_time_args=ct + acc(z) + acc(se),
                 runtime_args=b_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_0),
             ),
@@ -633,7 +626,7 @@ class TailEngine:
                 config=comp,
             ),
         ]
-        nsem = 3 + 2 * self.NCK
+        nsem = 2 + 2 * self.NCK + self.RT
         prog = ttnn.ProgramDescriptor()
         prog.cbs = cbs
         prog.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.crs, initial_value=0) for i in range(nsem)]

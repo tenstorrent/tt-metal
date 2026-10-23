@@ -1128,3 +1128,16 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   every ~17-18 us = squares 3.4 + matmul 8.4 (the 3-wide cores at HiFi2 peak) + s 2.8 + out 2 in series on the compute,
   plus the partials' wait. Next: (a) squares accumulated in DEST, one 11-tile matmul for the combine; (b) W' in large
   per-core runs, chunk 0's matmul per K range as it lands; (c) step B, the gather straight into L1.
+- (a) the squares accumulated elementwise in DEST (one fp32 E tile a core, no per-tile matmul) and the row's E tiles
+  combined by one HiFi4 matmul with ones accumulated over them (no SFPU copy + adds): squares 3.4 -> 0.5 us a chunk, s
+  2.8 -> 0.6. (b) W' bank-sharded: a core's K range of its slice one contiguous region of one bank, one burst (median
+  load 14 -> 6.6 us); W' pushed to the compute range by range in K order, chunk 0's matmul waiting per range.
+  End to end about unchanged (chips end 122-132 us, device time ~146 with the chips' skew): what paces a chunk now is
+  the matmul (11.2 us: unpack-bound - a k step unpacks 1 A + 3 bf8 W tiles for 3 tile matmuls; HiFi2 math alone 8.4)
+  and chunk 0's start (~35-40 us: W' plus chunk 0's z out of DRAM). Soak 300 calls, min PCC 0.99991.
+- Tried, not kept: (i) the share multicasts flushed instead of acked - the matmul 8.4 -> 11.2 a chunk at the time
+  (shares piling into L1 under the unpacker; later the matmul is 11.2 either way); (ii) one owner a row a chunk reading
+  the whole row tile (224 KB) into its ring slot and one multicast: chunk 0's start 35-40 -> 60 us (ten owners' DRAM
+  reads crowd W'), later chunks no wait. Its first version hung: the chunk-3 owner's BRISC waited for chunk 0's slot to
+  be freed before loading its se tiles, which chunk 0's output needs (triage: that BRISC in the FREE wait, the others in
+  CB_SE reserves) - fixed by loading se(c) before own(c + NSLOT); reverted for (ii)'s start.
