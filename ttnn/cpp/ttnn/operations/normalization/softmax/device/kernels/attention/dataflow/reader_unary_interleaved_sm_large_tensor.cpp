@@ -59,17 +59,17 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(tensor::src);
 
+    constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
+    constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
     {
-        constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
-        constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+                dfb_max_scaler_obj);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                dfb_sum_scaler_obj);
     }
 
     const Noc noc;
