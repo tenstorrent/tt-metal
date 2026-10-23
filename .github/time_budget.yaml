@@ -310,6 +310,7 @@ llk:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
     sim_quasar_xl: 30
+    cpu_xlarge: 10
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
