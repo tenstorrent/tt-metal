@@ -94,3 +94,68 @@ def dispatch_min_tokens_default(shape, *, blackhole: bool) -> int:
     if env is not None and env.strip() != "":
         return int(env)
     return 128 if dispatch_prefill_default(shape, blackhole=blackhole) else 256
+
+
+# --- decode fusion defaults of the 4-chip Blackhole MoE build -------------------------------------------------
+#
+# The fused decode step (explicit 1D decode matmul configs, the custom_ops fusions and the call-site switches) is
+# the default for the 26B-A4B on 4 Blackhole chips, on the (1,4) row mesh and the (4,1) column mesh alike:
+# 64-position HF gate b1 52/64 top-1 (decode PCC 0.98481), b32 50/64 (0.98558); traced step at 32 distinct
+# users 35.7 -> 30.2 ms (28.0 -> 33.1 tok/s/user), b1 23.8 -> 23.0 ms (2026-10-23, line 31..28, device
+# sampling). Every flag stays an explicit override: a set env var wins ("0" restores the old path, "2" for
+# GEMMA4_NORM_FUSED selects the fused_norm_decode form). Other meshes (the Galaxy lane engine), Wormhole and the
+# dense models keep today's defaults (off). The model build records its profile once
+# (``set_decode_fusion_profile``) and the read sites go through ``decode_flag``.
+
+DECODE_FUSION_ON = {
+    "GEMMA4_MLP_DECODE_1D": "1",
+    "GEMMA4_ATTN_DECODE_1D": "1",
+    "GEMMA4_ROUTER_DECODE_1D": "1",
+    "GEMMA4_HEAD_NORM_4D": "1",
+    "GEMMA4_MOE_FUSED": "1",
+    "GEMMA4_MLP_GEGLU_FUSED": "1",
+    "GEMMA4_SOFTCAP_FUSED": "1",
+    "GEMMA4_CONCAT_HEADS_FUSED": "1",
+    "GEMMA4_QKV_L1_OUT": "1",
+    "GEMMA4_NORM_FUSED": "2",
+    "GEMMA4_LAYER_NORM_FUSED": "1",
+    "GEMMA4_QKV_NORM_ROPE_FUSED": "1",
+}
+DECODE_FUSION_OFF = {name: "0" for name in DECODE_FUSION_ON}
+FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
+
+_decode_fusion_profile = {}
+
+
+def fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
+    """Whether a build runs the fused decode step by default: a Blackhole MoE model on the 4-chip (1,4) or (4,1)
+    mesh. Wormhole, dense models and every other mesh shape (one chip, the Galaxy lane engine) do not."""
+    return bool(blackhole) and bool(moe) and _shape(shape) in FOUR_CHIP_SHAPES
+
+
+def decode_fusion_defaults(shape, *, blackhole: bool, moe: bool) -> dict:
+    """The per-flag default value (the string an env var would carry) for this build."""
+    return dict(DECODE_FUSION_ON if fused_decode_build(shape, blackhole=blackhole, moe=moe) else DECODE_FUSION_OFF)
+
+
+def set_decode_fusion_profile(shape, *, blackhole: bool, moe: bool) -> dict:
+    """Record the build's defaults process-wide (the model build calls it before its layers are built, since the
+    weight loaders and the norm modules read the flags at construction). Returns the recorded defaults."""
+    global _decode_fusion_profile
+    _decode_fusion_profile = decode_fusion_defaults(shape, blackhole=blackhole, moe=moe)
+    return dict(_decode_fusion_profile)
+
+
+def clear_decode_fusion_profile():
+    global _decode_fusion_profile
+    _decode_fusion_profile = {}
+
+
+def decode_flag(name: str) -> str:
+    """The effective value of a decode fusion flag: the env var when set (non-empty), else the recorded build
+    profile's default, else "0" (no profile: a module used outside a model build keeps the old path unless the
+    env var asks for the new one)."""
+    env = os.environ.get(name)
+    if env is not None and env.strip() != "":
+        return env.strip()
+    return _decode_fusion_profile.get(name, "0")

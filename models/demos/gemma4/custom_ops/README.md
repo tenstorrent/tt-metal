@@ -20,6 +20,18 @@ repeats, pads), against a 1.7 ms DRAM floor. Each op here removes one such chain
 | `concat_heads_decode` | `to_memory_config (-> height sharded), nlp_concat_heads_decode, sharded_to_interleaved (, slice)` (3-4/layer) | one data-movement program from the interleaved SDPA output to the interleaved o_proj input; opt-in `GEMMA4_CONCAT_HEADS_FUSED=1` (`tt/attention/operations.py`); work units per (column, head) on 32-64 cores (`GEMMA4_CONCAT_HEADS_PER_UNIT`), 27.8 us/layer with the one-unit-per-column split |
 | `fused_norm_decode` | the decode-row norms and the adds / scalar around them: 8 norms + 3 adds + 1 mul per layer -> 5 programs (`post_attention + residual`, `[pre_feedforward, pre_feedforward_2, router norm*scale*H**-0.5]` from one exchange, `post_feedforward_1(mlp) + post_feedforward_2(experts)`, `post_feedforward + residual, * layer_scalar`, `input_layernorm`) | 22 cores (`GEMMA4_FUSED_NORM_CORES`), each 4 column tiles: FPU x^2 + row reduce, a 128-byte partial-sum column exchange, FPU column / row broadcasts (gamma as a row-replicated tile, dest reused for gamma and the residual), one bf16 pack; `GEMMA4_NORM_FUSED=2` (`tt/rms_norm.py`, single norms) + `GEMMA4_LAYER_NORM_FUSED=1` (`tt/layer.py`, the five-program layer tail; needs `GEMMA4_MOE_FUSED=1`) |
 
+**Defaults on the 4-chip Blackhole 26B build (2026-10-23).** On a Blackhole MoE build on the (1,4) or (4,1) mesh the
+fused decode step is the default (`tt/mesh_orientation.py::decode_fusion_defaults`, recorded by the model build, read
+through `decode_flag`): `rms_norm_decode`'s successor `fused_norm_decode` (`GEMMA4_NORM_FUSED=2`, `GEMMA4_LAYER_NORM_FUSED=1`),
+`router_topk` + `geglu_decode` + `moe_combine` (`GEMMA4_MOE_FUSED=1`), the shared-MLP `geglu_decode` (`GEMMA4_MLP_GEGLU_FUSED=1`),
+`concat_heads_decode` (`GEMMA4_CONCAT_HEADS_FUSED=1`), `qkv_norm_rope` in its in-place form (`GEMMA4_QKV_NORM_ROPE_FUSED=1`),
+the call-site switches `GEMMA4_QKV_L1_OUT=1`, `GEMMA4_SOFTCAP_FUSED=1`, `GEMMA4_HEAD_NORM_4D=1` and the explicit 1D decode
+matmul configs (`GEMMA4_MLP_DECODE_1D`, `GEMMA4_ATTN_DECODE_1D`, `GEMMA4_ROUTER_DECODE_1D`). Setting any of these env vars
+still overrides the default (`0` restores the old path). Gate: 64-position HF logits b1 52/64 top-1 (decode PCC 0.98481),
+b32 50/64 (0.98558); traced step at 32 distinct users 35.7 -> 30.2 ms (28.0 -> 33.1 tok/s/user), b1 23.8 -> 23.0 ms
+(device sampling, line 31..28). Other meshes (the Galaxy lane engine), Wormhole and the dense 31B / 12B keep the opt-in
+defaults; `rope_decode` (`GEMMA4_ROPE_DECODE_CUSTOM_OP`) and the kernel-row ops stay opt-in everywhere.
+
 Call-site switches without a kernel: `GEMMA4_QKV_L1_OUT=1` (the wqkv projection writes L1, dropping the DRAM -> L1 copy of
 the Blackhole head-split workaround), `GEMMA4_SOFTCAP_FUSED=1` (`ttnn.softcap` for the `mul, tanh, mul` of the lm head),
 `GEMMA4_MOE_DECODE_TILE_TAIL=1` (the kernel-row frame tail gathers in TILE layout: no `untilize` before / `tilize` after the

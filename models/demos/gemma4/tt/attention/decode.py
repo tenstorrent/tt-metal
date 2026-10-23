@@ -13,6 +13,7 @@ import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.custom_ops.rope_decode.op import RopeDecode
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 from .operations import (
     _paged_fill_cache,
@@ -130,7 +131,7 @@ def decode_forward(
     xqkv = apply_qkv_projection(
         hidden_states,
         weights,
-        memory_config=ttnn.L1_MEMORY_CONFIG if os.environ.get("GEMMA4_QKV_L1_OUT", "0") == "1" else None,
+        memory_config=ttnn.L1_MEMORY_CONFIG if decode_flag("GEMMA4_QKV_L1_OUT") == "1" else None,
     )
 
     # 2. Split into Q, K, V heads
@@ -141,7 +142,7 @@ def decode_forward(
     # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
     fused_qkv = (
-        os.environ.get("GEMMA4_QKV_NORM_ROPE_FUSED", "0") == "1"
+        decode_flag("GEMMA4_QKV_NORM_ROPE_FUSED") == "1"
         and not is_kv_shared
         and rope_presliced
         and len(cos_cache.shape) == 4

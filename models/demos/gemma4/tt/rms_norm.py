@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 from torch import nn
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -44,7 +44,7 @@ class RMSNorm(nn.Module):
             # GEMMA4_NORM_FUSED=2: the [1, 1, 32, H] row-replicated gamma of custom_ops/fused_norm_decode (an
             # on-device repeat of the loaded row, so a warm weight cache never persists it as a placeholder)
             self.tt_weight_full = (
-                FusedNormDecode.full_gamma(self.tt_weight_tile) if os.environ.get("GEMMA4_NORM_FUSED") == "2" else None
+                FusedNormDecode.full_gamma(self.tt_weight_tile) if decode_flag("GEMMA4_NORM_FUSED") == "2" else None
             )
         else:
             self.tt_weight = None
@@ -176,7 +176,7 @@ class RMSNorm(nn.Module):
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
                 and not x.is_sharded()
                 and x.shape[-1] % ttnn.TILE_SIZE == 0
-                and os.environ.get("GEMMA4_NORM_FUSED") == "2"
+                and decode_flag("GEMMA4_NORM_FUSED") == "2"
             ):
                 # GEMMA4_NORM_FUSED=2: one program on 22 cores with FPU broadcasts (custom_ops/fused_norm_decode);
                 # the layer-level forms (residual add, two inputs, three outputs) are taken by tt/layer.py.
@@ -189,7 +189,7 @@ class RMSNorm(nn.Module):
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
                 and not x.is_sharded()
                 and x.shape[-1] % ttnn.TILE_SIZE == 0
-                and os.environ.get("GEMMA4_NORM_FUSED", "0") == "1"
+                and decode_flag("GEMMA4_NORM_FUSED") == "1"
             ):
                 # GEMMA4_NORM_FUSED=1: one multi-core program on the interleaved rows (custom_ops/rms_norm_decode)
                 # instead of the interleaved -> width-sharded -> rms_norm -> interleaved triple below.

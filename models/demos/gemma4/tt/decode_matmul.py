@@ -25,12 +25,15 @@ import math
 import os
 
 import ttnn
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 TILE = ttnn.TILE_SIZE
 
 
 def flag(name: str) -> bool:
-    return os.environ.get(name, "0") == "1"
+    """A decode fusion switch: the env var when set, else the build profile's default (on for the 4-chip Blackhole
+    MoE build, off elsewhere; tt/mesh_orientation.py)."""
+    return decode_flag(name) == "1"
 
 
 def is_decode_rows(x) -> bool:

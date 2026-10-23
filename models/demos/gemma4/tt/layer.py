@@ -51,7 +51,6 @@ On the dense variants (31B / 12B, no MoE block) the same flags fuse the layer ta
 * layer_scalar`` (plus the ``input_layernorm`` program at the top of the layer).
 """
 
-import os
 
 import torch
 
@@ -60,6 +59,7 @@ from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.decode_matmul import flag, is_decode_rows
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
@@ -185,9 +185,7 @@ class Gemma4DecoderLayer:
         # GEMMA4_NORM_FUSED=2: the router's scale as the row-replicated gamma of the layer's fused norm program
         self._router_scale_full = (
             FusedNormDecode.full_gamma(self.moe.router.scale)
-            if self.enable_moe_block
-            and os.environ.get("GEMMA4_NORM_FUSED") == "2"
-            and self.moe.router.scale is not None
+            if self.enable_moe_block and decode_flag("GEMMA4_NORM_FUSED") == "2" and self.moe.router.scale is not None
             else None
         )
 
@@ -224,7 +222,7 @@ class Gemma4DecoderLayer:
         """GEMMA4_LAYER_NORM_FUSED=1 on tp-only decode rows: the fused norm op (GEMMA4_NORM_FUSED=2) and the fused
         MoE path (GEMMA4_MOE_FUSED=1, whole experts, no lanes, no decode kernel) are both in use, so the layer can
         hand the router its pre-normed input."""
-        if not (flag("GEMMA4_LAYER_NORM_FUSED") and os.environ.get("GEMMA4_NORM_FUSED") == "2"):
+        if not (flag("GEMMA4_LAYER_NORM_FUSED") and decode_flag("GEMMA4_NORM_FUSED") == "2"):
             return False
         if not self.enable_moe_block:
             return False
@@ -245,7 +243,7 @@ class Gemma4DecoderLayer:
     def _fused_dense_layer_norms_ok(self, rows):
         """GEMMA4_LAYER_NORM_FUSED=1 on the decode rows of a dense layer (no MoE block): the fused norm op
         (GEMMA4_NORM_FUSED=2) carries the residual adds and the layer scalar, so the tail is three programs."""
-        if not (flag("GEMMA4_LAYER_NORM_FUSED") and os.environ.get("GEMMA4_NORM_FUSED") == "2"):
+        if not (flag("GEMMA4_LAYER_NORM_FUSED") and decode_flag("GEMMA4_NORM_FUSED") == "2"):
             return False
         return (
             not self.enable_moe_block

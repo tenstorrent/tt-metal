@@ -23,10 +23,12 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.mesh_orientation import set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -291,6 +293,15 @@ class Gemma4Model:
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
+        # The 4-chip Blackhole MoE build runs the fused decode step by default (tt/mesh_orientation.py, every
+        # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
+        # the norm modules read the switches at construction.
+        _text_cfg = getattr(hf_config, "text_config", hf_config)
+        set_decode_fusion_profile(
+            tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1),
+            blackhole=is_blackhole(),
+            moe=bool(getattr(_text_cfg, "enable_moe_block", False)),
+        )
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(
@@ -1377,7 +1388,7 @@ class Gemma4Model:
 
         if self.final_logit_softcapping and self.final_logit_softcapping > 0:
             cap = self.final_logit_softcapping
-            if os.environ.get("GEMMA4_SOFTCAP_FUSED", "0") == "1":
+            if decode_flag("GEMMA4_SOFTCAP_FUSED") == "1":
                 logits = ttnn.softcap(logits, cap)  # cap * tanh(logits / cap) as one program
             else:
                 logits = ttnn.mul(logits, 1.0 / cap)

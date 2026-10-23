@@ -24,15 +24,19 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.decode_matmul import DecodeLinear
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 from .weights import AttentionWeights
+
 
 # GEMMA4_HEAD_NORM_4D=1: decode per-head RMSNorm straight on the [1, batch, heads, head_dim] head tensor.
 # The flatten to [1, 1, batch*heads, head_dim] and back are two ReshapeView programs per tensor (the heads
 # dim is padded to a tile, so neither is a view): 6 programs per layer, ~1.7 ms of a batch-32 step.
 # rms_norm normalizes the last dim per row either way; measured bit-identical (P150, trace replay:
 # q/k/v norms 22-41 us -> 7-13 us each). Prefill shapes keep the flatten.
-_HEAD_NORM_4D = os.environ.get("GEMMA4_HEAD_NORM_4D", "0") == "1"
+def _head_norm_4d() -> bool:
+    return decode_flag("GEMMA4_HEAD_NORM_4D") == "1"
+
 
 # Non-chunked prefill SDPA silently returns WRONG results once the Q sequence
 # exceeds 32768 (2^15) — generation degrades to garbage. Above this length we
@@ -153,8 +157,8 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
     """
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
-    # Decode head tensor [1, batch, heads, head_dim]: normalize in place of the flatten (see _HEAD_NORM_4D).
-    direct_4d = _HEAD_NORM_4D and len(orig_shape) == 4 and orig_shape[0] == 1 and orig_shape[2] <= ttnn.TILE_SIZE
+    # Decode head tensor [1, batch, heads, head_dim]: normalize in place of the flatten (see _head_norm_4d).
+    direct_4d = _head_norm_4d() and len(orig_shape) == 4 and orig_shape[0] == 1 and orig_shape[2] <= ttnn.TILE_SIZE
     if direct_4d:
         flat = tensor
     elif len(orig_shape) == 4 and orig_shape[0] > 1:
@@ -657,7 +661,7 @@ def concat_heads(
         if num_heads is None or head_dim is None:
             raise ValueError("decode concat_heads requires num_heads and head_dim")
         batch = tensor.shape[1]
-        if os.environ.get("GEMMA4_CONCAT_HEADS_FUSED", "0") == "1" and not tensor.is_sharded():
+        if decode_flag("GEMMA4_CONCAT_HEADS_FUSED") == "1" and not tensor.is_sharded():
             # GEMMA4_CONCAT_HEADS_FUSED=1: one program straight from the interleaved SDPA output to the
             # interleaved o_proj input (custom_ops/concat_heads_decode) instead of reshard, concat, reshard, slice
             from models.demos.gemma4.custom_ops.concat_heads_decode import ConcatHeadsDecode
