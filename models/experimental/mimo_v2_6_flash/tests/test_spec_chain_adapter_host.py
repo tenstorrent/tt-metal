@@ -31,7 +31,6 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
-    MTP_ROWS,
     PAIR_ANCHORS,
     pack_mtp,
     pack_mtp_layers,

@@ -64,10 +64,10 @@ def test_a_joining_request_gets_its_own_pass():
     assert draft_source(passes) is None
 
 
-def test_plan_rejects_a_block_wider_than_a_pass():
-    with pytest.raises(ValueError):
+def test_plan_rejects_a_block_wider_than_a_pass(expect_error):
+    with expect_error(ValueError, "4 drafts need 5 slots, a pass has 4"):
         plan_verify_passes([(0, [1] * 5, [1, 2, 3, 4, 5], 4)])
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "column 1 of 2 has no position"):
         plan_verify_passes([(0, [1, 2], [1, -1], 1)])
 
 
@@ -87,11 +87,11 @@ def test_mtp_after_a_verify():
     assert plan.step2 == [-1, 42, -1, -1] and plan.step3 == [-1, 43, -1, -1]
 
 
-def test_mtp_after_a_plain_step():
+def test_mtp_after_a_plain_step(expect_error):
     plan = plan_mtp(DraftSource(row=6, slots=[2]), [17, -1, -1, -1], 1)
     assert plan.fill == [-1, -1, 16, -1] and plan.anchor == 2
     assert plan.step2 == [-1, -1, 17, -1] and plan.step3 == [-1, -1, 18, -1]
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "2 committed tokens, the step answered 1 columns"):
         plan_mtp(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2)
 
 
@@ -148,15 +148,15 @@ def test_mtp_layers_replanning_the_same_commit_finds_the_same_rows():
                 assert again.sources[s] == ("stash", s)
 
 
-def test_mtp_layers_after_a_plain_step():
+def test_mtp_layers_after_a_plain_step(expect_error):
     # A step without drafts after a draft: its one slot, and both stash rows (the draft's d_1, d_2 are unverified).
     plan = plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, -1, -1, -1], 1, MtpStash([-1, 13, 14, 15]))
     assert plan.positions == [-1, 14, 15, 16] and plan.sources[1:] == [("stash", 2), ("stash", 3), ("step", 2)]
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "2 committed tokens, the step answered 1 columns"):
         plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2, MtpStash([-1, 13, 14, 15]))
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "not consecutive"):
         plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, 19, -1, -1], 2, MtpStash([-1, 13, 14, 15]))
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "a stash of 2 rows for passes of 4 slots"):
         plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, -1, -1, -1], 1, MtpStash([14, 15]))
 
 

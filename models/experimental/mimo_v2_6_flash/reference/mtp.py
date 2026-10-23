@@ -300,18 +300,19 @@ class MtpProgramMirror:
 
 def backfill_rings(mtps, histories, embedding, history, upload, stash=None, stash_hidden=None, verify=None):
     """The backfill trace (tt/mtp_backfill.py) on the host: its plan (reference.mtp_backfill.backfill_plan) on the
-    lane's ``history`` (reference.mtp_backfill.History), the upload and (a relayed upload) the verify upload, then
-    every MTP layer over the plan's rows, row r writing its K / V at position S0 + r of that layer's cache in the
-    request's ring (``histories``, its PositionalHistory per layer; the outputs are not used). With every layer it also
-    rewrites the stash page and the stash's hidden rows (``stash``, ``stash_hidden`` [T, hidden], changed in place).
-    Returns the new stash page."""
+    lane's ``history`` (reference.mtp_backfill.History), the upload and (a relayed upload) the verify upload, over the
+    MTP layers' window, then every MTP layer over the plan's rows, row r writing its K / V at position S0 + r of that
+    layer's cache in the request's ring (``histories``, its PositionalHistory per layer; the outputs are not used).
+    With every layer it also rewrites the stash page and the stash's hidden rows (``stash``, ``stash_hidden`` [T,
+    hidden], changed in place). Returns the new stash page."""
     from .mtp_backfill import BACKFILL_ROWS, backfill_plan, backfill_start
 
-    plan, stash = backfill_plan(upload, history.page, len(mtps), stash, history.rows, verify=verify)
+    window = mtps[0].cfg.sliding_window
+    plan, stash = backfill_plan(upload, history.page, len(mtps), stash, history.rows, window, verify=verify)
     if plan["a"] is None:
         return stash
     a = plan["a"]
-    positions = backfill_start(a, history.rows) + torch.arange(BACKFILL_ROWS)
+    positions = backfill_start(a, window) + torch.arange(BACKFILL_ROWS)
     rows = history.hidden[torch.tensor(plan["hidden"])]
     for mtp, cache, tokens in zip(mtps, histories, plan["tokens"]):
         mtp(rows, embedding[torch.tensor(tokens)], positions, cache)

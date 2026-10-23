@@ -100,7 +100,7 @@ class SpecChain:
         passes' greedy token rows (TtMiMoMTP's heads). ``layer_inputs``: with every MTP layer, TtMiMoMTP's
         LayerInputs (the plan and tokens steps' outputs, the stash page, ``table_rows``); None with one layer. All
         persistent DRAM buffers; allocates the result page."""
-        self.plan, self.max_batch = plan, spec_inputs.max_batch
+        self.plan, self.max_batch, self.spec_inputs = plan, spec_inputs.max_batch, spec_inputs
         self.verify, self.mtp = spec_inputs.verify_packed, spec_inputs.mtp_packed
         self.accept, self.argmax, self.heads = accept, argmax, list(heads)
         self.layer_inputs = layer_inputs
@@ -224,11 +224,13 @@ class SpecChain:
 
     def warm(self, ctrl=None, pair=False):
         """Compile every step before any trace capture (the relay with ``ctrl``, VerifySampler's control page; the
-        pair draft's drafts step with ``pair``). The chain and drafts steps write ``mtp_packed`` and the result page
-        only, which no step reads before rewriting them (a capture idles ``mtp_packed`` first: SpecInputs.reset); the
-        relay writes nothing on an idle upload (SpecInputs.reset: its chain row is zeros); the plan and tokens steps
-        write the draft trace's inputs, which it rewrites the same way, and on that idle description they leave the
-        stash page as it was."""
+        pair draft's drafts step with ``pair``), on idle uploads (SpecInputs.reset: a recapture finds the last served
+        step's there). The relay writes nothing on an idle upload (its chain row is zeros); the chain and drafts steps
+        write ``mtp_packed`` and the result page only, which no step reads before rewriting them; the plan and tokens
+        steps write the draft trace's inputs, which it rewrites the same way, and on the idle description the chain
+        step writes they leave the stash page as it was (on the last served commit the plan step would re-plan it into
+        a stash a prompt just emptied)."""
+        self.spec_inputs.reset()
         if ctrl is not None:
             self.relay(ctrl)
         self.chain()

@@ -5,11 +5,13 @@
 
 Lane 0 decodes a prompt greedily one token per step; lane 1 serves the same prompt the way the plugin drives a
 speculating request: a plain step, then propose (MTP drafts) / verify (the request in every slot of its replica) /
-greedy acceptance. The speculative tokens must equal the plain greedy tokens. Logs the mean accepted length and the
-time per token of both loops. Needs vllm-tt-plugin (its spec_decode value types) and the MiMo checkpoint. Runs with
-the decode RoPE tables (the decode, verify and draft traces read their cos / sin from them): whole rows, and compact
-ones as past 128K context (the 64 rotated dims plus the 1 / 0 tail); and without them (MIMO_DEVICE_ROPE=0: the host
-uploads the cos / sin beside the packed inputs).
+greedy acceptance. The speculative tokens must equal the plain greedy tokens, and the drafts must be accepted at a rate
+only a working drafter reaches (MIN_MEAN_ACCEPTED). Logs the mean accepted length and the time per token of both
+loops. Needs vllm-tt-plugin (its spec_decode value types) and the MiMo checkpoint. The KV cache is laid out as vLLM
+lays out the adapter's specs (``vllm_kv_layout``): one global and five SWA groups, each with its own block table.
+Runs with the decode RoPE tables (the decode, verify and draft traces read their cos / sin from them): whole rows, and
+compact ones as past 128K context (the 64 rotated dims plus the 1 / 0 tail); and without them (MIMO_DEVICE_ROPE=0: the
+host uploads the cos / sin beside the packed inputs).
 
 The first verifies also run as the plugin's other modes on the same block: logits (its argmax must be the ids), and
 fused_sample (acceptance on device, tt/verify_sampler.py): with every row greedy it must commit what the ids walk
@@ -35,7 +37,8 @@ stash; the chain checks then also cover a draft planned again on the stash its c
 
 With the decode RoPE tables the target-hidden history and the ring backfill run (MIMO_MTP_BACKFILL, tt/mtp_backfill.py):
 the first draft after the prompt backfills the rings from the prompt's last rows; the test also runs once without it
-(the mean accepted length of both is logged: the backfill's effect on the first drafts).
+(the mean accepted length of both is logged), and when both ran in one session the drafts after the backfill must be
+accepted at least as often as without it.
 """
 
 import threading
@@ -57,7 +60,9 @@ pytest.importorskip("vllm_tt_plugin")
 
 SPEC_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 1_200_000_000}
 PER_LANE = 4
-MAX_SEQ_LEN = 1024
+# The prefill warmup lays a lane's first-chunk batches (PER_LANE users of up to TtMiMoModel.PREFILL_BATCH_MAX_PADDED,
+# 512 tokens) along one page-table row, so the row must hold PER_LANE * 512 positions.
+MAX_SEQ_LEN = 2048
 STEPS = 96
 # The first verifies also run in logits and fused_sample mode and must agree with argmax_ids and the host walk.
 LOGITS_CHECKS = 4
@@ -65,6 +70,50 @@ PROMPT = (
     "Write a Python function that returns the n-th Fibonacci number using memoization, then explain how the "
     "memoization changes its time complexity."
 )
+# Committed tokens per verify (the bonus token plus the accepted drafts) the drafter must average: drafts that never
+# match commit 1.0, and greedy MTP commits 2.79 per verify on SPEED-Bench coding at c=1. One accepted draft per verify
+# fails a broken drafter and leaves margin for this one short coding prompt.
+MIN_MEAN_ACCEPTED = 2.0
+# The mean accepted length of each (MTP layers, RoPE tables, backfill) case run in this session.
+MEAN_ACCEPTED = {}
+
+
+def vllm_kv_layout(cfg):
+    """(KV cache group, buffer) of each layer as vLLM lays out get_kv_cache_spec's specs: its hybrid manager
+    (vllm.v1.core.kv_cache_utils._get_kv_cache_groups_uniform_page_size) deals each attention kind's layers, layer 0's
+    kind first, round-robin into groups of at most as many layers as the smaller kind has (9 global and 39 SWA layers:
+    group 0 global, groups 1-5 SWA), and the i-th layer of every group shares buffer i. Every layer of a group is of
+    one kind: the model makes one kv.PrefillTables per group for its first layer's kind (TtMiMoModel._prefill_tables),
+    which gives a later chunk's SWA layers their window blocks only in a SWA group."""
+    kinds = {}
+    for i in range(cfg.num_hidden_layers):
+        kinds.setdefault(cfg.is_swa(i), []).append(i)
+    size = min(len(layers) for layers in kinds.values())
+    groups, buffers = [None] * cfg.num_hidden_layers, [None] * cfg.num_hidden_layers
+    first = 0
+    for layers in kinds.values():
+        n = -(-len(layers) // size)
+        for k in range(n):
+            for t, i in enumerate(layers[k::n]):
+                groups[i], buffers[i] = first + k, t
+        first += n
+    return groups, buffers
+
+
+def kv_cache_and_tables(model, cfg, groups, buffers, rows, width):
+    """The KV cache (allocate_kv_cache_per_layer) and each group's block table [rows, width]. Block 0 is vLLM's null
+    block; the groups share buffers, so their blocks are disjoint, and every row has blocks of its own, so a step that
+    reads another slot's or lane's row reads blocks its request never wrote. Returns the cache, group 0's table (the
+    plugin's page_table) and each layer's group table (its page_tables_per_layer)."""
+    num_groups = max(groups) + 1
+    num_blocks = 1 + num_groups * rows * width
+    specs = []
+    for i in range(cfg.num_hidden_layers):
+        dims = cfg.attention_dims(i)
+        specs.append(((num_blocks, 1, BLOCK_SIZE, dims.head_dim), torch.bfloat16, buffers[i]))
+    kv = model.allocate_kv_cache_per_layer(specs)
+    group_tables = 1 + torch.arange(num_blocks - 1, dtype=torch.int32).reshape(num_groups, rows, width)
+    return kv, group_tables[0], [group_tables[g] for g in groups]
 
 
 @pytest.mark.parametrize("backfill", [True, False], ids=["backfill", "no_backfill"])
@@ -87,37 +136,34 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
     monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", device_rope is not None)
     if device_rope == "compact":  # the 1M entry's tables at this test's short context
         monkeypatch.setattr(generator_vllm, "ROPE_TABLE_FULL_WIDTH_MAX_LEN", 0)
-    # One KV cache group (no vLLM to group the specs): every layer reads one page table, a buffer per layer.
-    monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", [0] * cfg.num_hidden_layers)
+    groups, buffers = vllm_kv_layout(cfg)
+    monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", groups)
     monkeypatch.setattr(MiMoV2ForCausalLM, "prefill_token_budget", 2048)
 
     rows = DP * PER_LANE
     width = MAX_SEQ_LEN // BLOCK_SIZE
-    num_blocks = 1 + rows * width
     hf = SimpleNamespace(num_hidden_layers=cfg.num_hidden_layers, _name_or_path=path)
     model = MiMoV2ForCausalLM.initialize_vllm_model(hf, mesh_device, rows, MAX_SEQ_LEN, tt_data_parallel=DP)
-    specs = []
-    for i in range(cfg.num_hidden_layers):
-        dims = cfg.attention_dims(i)
-        specs.append(((num_blocks, 1, BLOCK_SIZE, dims.head_dim), torch.bfloat16, i))
-    kv = model.allocate_kv_cache_per_layer(specs)
+    kv, page_table, layer_tables = kv_cache_and_tables(model, cfg, groups, buffers, rows, width)
     model.warmup_model_prefill(kv)
     # The plugin's two passes: eager, then trace capture.
     model.warmup_model_decode(kv, enable_trace=False)
     model.warmup_model_decode(kv, enable_trace=True)
-    page_table = 1 + torch.arange(rows * width, dtype=torch.int32).reshape(rows, width)
 
     prompt = AutoTokenizer.from_pretrained(path)(PROMPT, return_tensors="pt")["input_ids"][0].to(torch.int32)
     plain_row, spec_row = 0, PER_LANE  # lane 0 slot 0, lane 1 slot 0
 
     def prefill(row):
+        # Row i of a prefill's tables is its i-th request's (prefill_forward): this one-request batch sends the slot's
+        # rows, which its decode steps and verifies then read by slot.
         logits = model.prefill_forward(
             prompt[None],
             torch.zeros(1, dtype=torch.int32),
             torch.tensor([prompt.numel()]),
-            page_table,
+            page_table[row : row + 1],
             kv,
             empty_slots=[row],
+            page_tables_per_layer=[t[row : row + 1] for t in layer_tables],
         )
         return int(logits[0, -1].argmax())
 
@@ -125,7 +171,9 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         tokens = torch.zeros(rows, 1, dtype=torch.int32)
         positions = torch.full((rows,), -1, dtype=torch.int32)
         tokens[row, 0], positions[row] = token, pos
-        logits = model.decode_forward(tokens, positions, page_table, kv, enable_trace=True)
+        logits = model.decode_forward(
+            tokens, positions, page_table, kv, enable_trace=True, page_tables_per_layer=layer_tables
+        )
         return int(logits[row, 0].argmax())
 
     # Plain greedy on lane 0.
@@ -156,6 +204,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
             positions,
             page_table,
             kv,
+            page_tables_per_layer=layer_tables,
             spec_mode="fused_sample",
             num_valid_drafts=valid,
             accepted_counts=torch.ones(rows, dtype=torch.int32),
@@ -217,6 +266,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
                 positions,
                 page_table,
                 kv,
+                page_tables_per_layer=layer_tables,
                 spec_mode="logits",
                 num_valid_drafts=valid,
                 accepted_counts=torch.ones(rows, dtype=torch.int32),
@@ -231,6 +281,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
             positions,
             page_table,
             kv,
+            page_tables_per_layer=layer_tables,
             spec_mode="argmax_ids",
             num_valid_drafts=valid,
             accepted_counts=torch.ones(rows, dtype=torch.int32),
@@ -257,9 +308,10 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         assert stats["chained"] == 0 and stats["host"] == len(counts)
     # The first draft after the prompt backfills; the chained ones continue the rings.
     assert stats["backfills"] == (1 if backfill and device_rope else 0)
+    mean = sum(counts) / len(counts)
     logger.info(
         f"MTP spec decode ({mtp_layers} MTP layers, backfill {backfill}): mean accepted "
-        f"{sum(counts) / len(counts):.2f} over "
+        f"{mean:.2f} over "
         f"{len(counts)} verifies "
         f"(histogram {[counts.count(m) for m in range(1, MAX_DRAFTS + 2)]}); "
         f"{1e3 * plain_s / STEPS:.1f} ms/token plain, {1e3 * spec_s / (len(seq) - prompt.numel() - 1):.1f} ms/token "
@@ -269,6 +321,15 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
     )
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
     assert first_diff is None, f"speculative tokens diverge from greedy at position {first_diff}"
+    assert mean >= MIN_MEAN_ACCEPTED, f"mean accepted {mean:.2f} < {MIN_MEAN_ACCEPTED}: the drafts rarely match"
+    # Without the backfill the rings hold zeros at the prompt's positions, which every draft of this run attends (the
+    # prompt and STEPS tokens fit in the MTP layers' 128-position window): with the backfilled rings the drafts must be
+    # accepted at least as often.
+    MEAN_ACCEPTED[(mtp_layers, device_rope, backfill)] = mean
+    twin = MEAN_ACCEPTED.get((mtp_layers, device_rope, not backfill))
+    if twin is not None:
+        with_backfill, without = (mean, twin) if backfill else (twin, mean)
+        assert with_backfill >= without, f"mean accepted {with_backfill:.2f} with the backfill < {without:.2f} without"
 
 
 @pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
@@ -282,34 +343,33 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     monkeypatch.setattr(generator_vllm, "MTP_BACKFILL", True)
     monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", True)
     monkeypatch.setattr(generator_vllm, "SPEC_DEFER", True)
-    monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", [0] * cfg.num_hidden_layers)
+    groups, buffers = vllm_kv_layout(cfg)
+    monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", groups)
     monkeypatch.setattr(MiMoV2ForCausalLM, "prefill_token_budget", 2048)
 
     rows = DP * PER_LANE
     width = MAX_SEQ_LEN // BLOCK_SIZE
     hf = SimpleNamespace(num_hidden_layers=cfg.num_hidden_layers, _name_or_path=path)
     model = MiMoV2ForCausalLM.initialize_vllm_model(hf, mesh_device, rows, MAX_SEQ_LEN, tt_data_parallel=DP)
-    specs = []
-    for i in range(cfg.num_hidden_layers):
-        dims = cfg.attention_dims(i)
-        specs.append(((1 + rows * width, 1, BLOCK_SIZE, dims.head_dim), torch.bfloat16, i))
-    kv = model.allocate_kv_cache_per_layer(specs)
+    kv, page_table, layer_tables = kv_cache_and_tables(model, cfg, groups, buffers, rows, width)
     model.warmup_model_prefill(kv)
     model.warmup_model_decode(kv, enable_trace=False)
     model.warmup_model_decode(kv, enable_trace=True)
-    page_table = 1 + torch.arange(rows * width, dtype=torch.int32).reshape(rows, width)
     prompt = AutoTokenizer.from_pretrained(path)(PROMPT, return_tensors="pt")["input_ids"][0].to(torch.int32)
     plain_row, spec_row = 0, PER_LANE
     k1 = 1 + MAX_DRAFTS
 
     def prefill(row):
+        # Row i of a prefill's tables is its i-th request's (prefill_forward): this one-request batch sends the slot's
+        # rows, which its decode steps and verifies then read by slot.
         logits = model.prefill_forward(
             prompt[None],
             torch.zeros(1, dtype=torch.int32),
             torch.tensor([prompt.numel()]),
-            page_table,
+            page_table[row : row + 1],
             kv,
             empty_slots=[row],
+            page_tables_per_layer=[t[row : row + 1] for t in layer_tables],
         )
         return int(logits[0, -1].argmax())
 
@@ -317,7 +377,10 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
         tokens = torch.zeros(rows, 1, dtype=torch.int32)
         positions = torch.full((rows,), -1, dtype=torch.int32)
         tokens[row, 0], positions[row] = token, pos
-        return int(model.decode_forward(tokens, positions, page_table, kv, enable_trace=True)[row, 0].argmax())
+        logits = model.decode_forward(
+            tokens, positions, page_table, kv, enable_trace=True, page_tables_per_layer=layer_tables
+        )
+        return int(logits[row, 0].argmax())
 
     plain = prompt.tolist() + [prefill(plain_row)]
     while len(plain) < prompt.numel() + STEPS:
@@ -329,6 +392,7 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
             positions,
             page_table,
             kv,
+            page_tables_per_layer=layer_tables,
             spec_mode="fused_sample",
             num_valid_drafts=valid,
             accepted_counts=counts,
@@ -389,8 +453,9 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
         pending = newer
     spec_s = time.perf_counter() - t0
     n = min(len(seq), len(plain))
+    mean = sum(counts) / len(counts)
     logger.info(
-        f"MTP chained spec decode: mean accepted {sum(counts) / len(counts):.2f} over {len(counts)} verifies, "
+        f"MTP chained spec decode: mean accepted {mean:.2f} over {len(counts)} verifies, "
         f"{1e3 * spec_s / (len(seq) - prompt.numel() - 2):.1f} ms/token; {model.chain_stats}"
     )
     assert model.chain_stats["uncovered"] == 0
@@ -398,3 +463,4 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     assert model.chain_stats["backfills"] == 1
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
     assert first_diff is None, f"chained speculative tokens diverge from greedy at position {first_diff}"
+    assert mean >= MIN_MEAN_ACCEPTED, f"mean accepted {mean:.2f} < {MIN_MEAN_ACCEPTED}: the drafts rarely match"

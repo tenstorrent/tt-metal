@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror, PositionalHistory, cache_ring
-from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, pass_inputs, verify_pass
+from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, pass_inputs
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     CHAIN_GROUP,
     CHAIN_NEXT,
@@ -29,7 +29,6 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     CHAIN_RING,
     CHAIN_SOURCE,
     DRAFT_WORDS,
-    DRAFTS_AT,
     NO_SLOT,
     STATUS_AT,
     STATUS_WORDS,
@@ -115,20 +114,25 @@ def test_draft_sources():
     assert draft_sources([one]) == [DraftSource(row=5, slots=[0, 1, 2, 3])]
 
 
-def test_plan_mtp_pair():
+def test_plan_mtp_pair(expect_error):
     sources = [DraftSource(row=5, slots=[0, 1]), DraftSource(row=7, slots=[2, 3])]
     plan = plan_mtp_pair(sources, [[41, 42, -1, -1], [91, -1, -1, -1]], [2, 1], [X, Y])
     assert plan.fill == [40, 41, 90, -1] and plan.rings == [X, X, Y, -1] and plan.anchors == [1, 2]
     assert plan.rows == [0, 1, 2]
-    with pytest.raises(ValueError, match="one MTP ring"):
+    with expect_error(ValueError, "one MTP ring"):
         plan_mtp_pair(sources, [[41, -1, -1, -1], [91, -1, -1, -1]], [1, 1], [X, X])
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "another source's"):
         plan_mtp_pair([DraftSource(5, [0, 1]), DraftSource(7, [1])], [[41, 42], [91]], [2, 1], [X, Y])
     # Its upload: pack_mtp's rows, each slot's cache position in its ring, the anchors in row PAIR_ANCHORS.
     tokens = [11, 12, 13, 0]
     packed = pack_mtp_pair(B, tokens, plan).reshape(MTP_ROWS, B)
     assert packed[0, :4].tolist() == tokens
-    assert packed[1, :4].tolist() == [mtp_cache_position(40, X), mtp_cache_position(41, X), mtp_cache_position(90, Y), -1]
+    assert packed[1, :4].tolist() == [
+        mtp_cache_position(40, X),
+        mtp_cache_position(41, X),
+        mtp_cache_position(90, Y),
+        -1,
+    ]
     assert packed[PAIR_ANCHORS, :3].tolist() == [1, 2, -1] and packed[4, :4].tolist() == [40, 41, 90, 0]
     assert torch.equal(packed[[3, 5, 6]], pack_mtp(B).reshape(MTP_ROWS, B)[[3, 5, 6]])
     assert torch.equal(pack_mtp_pair(B), pack_mtp(B)), "the idle upload is pack_mtp's"
@@ -237,7 +241,7 @@ def test_the_drafts_step_and_the_page_carry_both_sources():
     assert drafts_step(pack_mtp(B), [[0] * B] * MAX_DRAFTS)[DRAFT_WORDS] == NO_SLOT
     assert drafts_step(pack_mtp_layers(B), [[0] * B] * MAX_DRAFTS, layers=MAX_DRAFTS)[DRAFT_WORDS] == NO_SLOT
     # An idle pair upload: no anchors.
-    assert drafts_step(pack_mtp_pair(B), [[0] * B], pair=True)[:: DRAFT_WORDS][:2] == [NO_SLOT, NO_SLOT]
+    assert drafts_step(pack_mtp_pair(B), [[0] * B], pair=True)[::DRAFT_WORDS][:2] == [NO_SLOT, NO_SLOT]
 
 
 def host_pair_block(lasts, bonuses, drafts):

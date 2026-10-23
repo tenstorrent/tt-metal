@@ -14,14 +14,15 @@
 // Mode 2, a write list (prefill): per entry (source row, entry, position, token); source -1 invalidates the entry,
 // -2 skips it.
 // Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A, relay, relay slot) and the page, the
-// fill of the request's whole ring (ring `slot`) from S0 = floor(max(0, A - H + 1) / block) * block: row r at
-// position q = S0 + r takes history entry slot * H + q % H when the history holds q in [A - H + 1, A - 1] (else entry
-// 0), RoPE index min(q, A), and for layer i the token at q + i + 1 when the history holds it and q + i + 1 <= A (else
-// 0); the fill's page table row (the ring's blocks, slot * N / block .., from S0's, then the scratch blocks after the
-// last ring's); with every layer the stash rows A - 2, A - 1 (positions, layer-0 tokens, hidden rows copied into the
-// stash's hidden buffer) when the history holds them and their tokens. A relayed upload takes A from the verify
-// upload's positions at the relay slot (a chained verify's, which its relay step wrote; -1 idles the backfill).
-// Idle: the scratch blocks, the stash left alone.
+// fill of the request's whole ring (ring `slot`) from S0 = floor(max(0, A - W + 1) / block) * block (W the MTP
+// window, H >= W + S - 1: the window before a verify pass at A and the pass's rows): row r at position q = S0 + r
+// takes history entry slot * H + q % H when the history holds q in [A - W + 1, A - 1] (else entry 0), RoPE index
+// min(q, A), and for layer i the token the history holds at q + i + 1 (else 0; past A a verify pass's, committed in
+// every row the draft does not re-run); the fill's page table row (the ring's blocks, slot * N / block .., from S0's,
+// then the scratch blocks after the last ring's); with every layer the stash rows A - 2, A - 1 (positions, layer-0
+// tokens, hidden rows copied into the stash's hidden buffer) when the history holds them and their tokens. A relayed
+// upload takes A from the verify upload's positions at the relay slot (a chained verify's, which its relay step
+// wrote; -1 idles the backfill). Idle: the scratch blocks, the stash left alone.
 
 #include <cstdint>
 
@@ -51,9 +52,10 @@ void kernel_main() {
     constexpr uint32_t chain_hslots = get_compile_time_arg_val(9);
     constexpr uint32_t table_words = get_compile_time_arg_val(10);  // the fill table row's width
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(11);
-    constexpr uint32_t rings = get_compile_time_arg_val(12);  // MTP rings per layer (the scratch blocks follow them)
+    constexpr uint32_t W = get_compile_time_arg_val(12);      // the MTP layers' SWA window
+    constexpr uint32_t rings = get_compile_time_arg_val(13);  // MTP rings per layer (the scratch blocks follow them)
     static_assert(S <= B && chain_hslots + S <= B && N % block == 0 && 2 * (N / block) <= table_words);
-    static_assert(S <= rings && 5 <= B);
+    static_assert(W + S - 1 <= H && W + block <= N && S <= rings && 5 <= B);
     constexpr uint32_t page_bytes = 2 * S * H * 4;
     constexpr uint32_t ring_blocks = N / block;
 
@@ -176,11 +178,9 @@ void kernel_main() {
         const bool drafting = upload[0] != 0 && a >= 0 && static_cast<uint32_t>(upload[1]) < S;
         if (drafting) {
             const uint32_t slot = static_cast<uint32_t>(upload[1]);
-            const int32_t lo = a - static_cast<int32_t>(H) + 1 > 0 ? a - static_cast<int32_t>(H) + 1 : 0;
+            const int32_t lo = a - static_cast<int32_t>(W) + 1 > 0 ? a - static_cast<int32_t>(W) + 1 : 0;
             const int32_t s0 = lo / static_cast<int32_t>(block) * static_cast<int32_t>(block);
-            auto held = [&](int32_t q, int32_t last) {
-                return q >= 0 && q <= last && page[slot * H + static_cast<uint32_t>(q) % H] == q;
-            };
+            auto held = [&](int32_t q) { return q >= 0 && page[slot * H + static_cast<uint32_t>(q) % H] == q; };
             auto token = [&](int32_t q) { return page[S * H + slot * H + static_cast<uint32_t>(q) % H]; };
             for (uint32_t k = 0; k < ring_blocks; ++k) {
                 table[k] = static_cast<int32_t>(slot * ring_blocks + (static_cast<uint32_t>(s0) % N / block + k) % ring_blocks);
@@ -188,11 +188,11 @@ void kernel_main() {
             for (uint32_t r = 0; r < N; ++r) {
                 const int32_t q = s0 + static_cast<int32_t>(r);
                 rope[r] = q < a ? q : a;
-                if (q >= lo && held(q, a - 1)) {
+                if (q >= lo && q <= a - 1 && held(q)) {
                     hidden[r] = static_cast<int32_t>(slot * H + static_cast<uint32_t>(q) % H);
                     for (uint32_t i = 0; i < layers; ++i) {
                         const int32_t x = q + static_cast<int32_t>(i) + 1;
-                        if (held(x, a)) {
+                        if (held(x)) {
                             tokens(i)[r] = token(x);
                         }
                     }
@@ -207,7 +207,7 @@ void kernel_main() {
                 }
                 for (uint32_t k = S - 2; k < S; ++k) {
                     const int32_t q = a - static_cast<int32_t>(S - k);
-                    if (held(q, a - 1) && held(q + 1, a)) {
+                    if (held(q) && held(q + 1)) {
                         stash[k] = q;
                         stash[S + k] = token(q + 1);
                         const uint32_t e = slot * H + static_cast<uint32_t>(q) % H;
