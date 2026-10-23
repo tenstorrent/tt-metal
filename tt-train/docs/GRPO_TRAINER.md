@@ -152,7 +152,7 @@ In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
   prompts to rank 1, receives completions, tt-transformers' per-token
   log-probs and rank 1's `weight_version`, and computes the rewards itself.
   Every `weight_sync_every` optimizer steps it pushes the policy weights as
-  version `step`.
+  version `step`, except after the last batch.
 - **Rank 1 (rollout)** opens the `remote_rollout_config.mesh_shape` mesh,
   builds a `TTTRolloutSampler` and an `MPIRolloutServer`, and never calls
   `dataset_func`. Its `train()` serves generate and weight-update requests until
