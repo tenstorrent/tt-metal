@@ -7,8 +7,8 @@ Temporal self-attention (TSA) in PyTorch.
 This module implements the encoder's self-attention over the BEV queries, as upstream's
 ``TemporalSelfAttention`` (``projects/mmdet3d_plugin/bevformer/modules/temporal_self_attention.py``
 in fundamentalvision/BEVFormer). It is the reference ``tt/tt_temporal_self_attention.py`` is
-checked against. Parameter names follow upstream, so a checkpoint's
-``pts_bbox_head.transformer.encoder.layers.<i>.attentions.0`` weights load unchanged.
+checked against. Parameter names follow upstream's
+``pts_bbox_head.transformer.encoder.layers.<i>.attentions.0``.
 
 The value holds ``num_bev_queue`` (2) BEV maps per sample: the previous BEV, aligned to the
 current frame, and the current BEV queries; on the first frame the queries twice. The sampling

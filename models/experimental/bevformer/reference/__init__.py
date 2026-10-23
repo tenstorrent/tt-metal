@@ -3,7 +3,7 @@
 
 """BEVFormer-base in PyTorch, the reference the TTNN port is checked against.
 
-- ``bevformer``: the detector, ``build_bevformer_base`` and ``load_bevformer_checkpoint``
+- ``bevformer``: the detector and ``build_bevformer_base``
 - ``resnet``, ``fpn``: the image backbone and neck
 - ``perception_transformer``: the encoder's glue (CAN bus, embeddings, previous BEV)
 - ``encoder``, ``temporal_self_attention``, ``spatial_cross_attention``, ``point_sampling_3d_2d``

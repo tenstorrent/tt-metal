@@ -25,9 +25,7 @@ detector in ``tt/tt_bevformer.py`` is checked against:
 The caller carries the previous BEV between frames and makes the CAN bus relative to the previous
 frame (:func:`relative_can_bus`), as upstream's ``forward_test`` does.
 
-:func:`build_bevformer_base` builds BEVFormer-base from ``model_config.py``, and
-:func:`load_bevformer_checkpoint` loads a BEVFormer checkpoint into it, every key but the loss's
-``code_weights`` accounted for.
+:func:`build_bevformer_base` builds BEVFormer-base from ``model_config.py``.
 """
 
 import torch
@@ -148,7 +146,7 @@ class BEVFormer(nn.Module):
 
 
 def build_bevformer_base(bev_h=BEV_H, bev_w=BEV_W):
-    """BEVFormer-base with PyTorch's default init, ready for :func:`load_bevformer_checkpoint`."""
+    """BEVFormer-base with PyTorch's default init."""
     return BEVFormer(
         ResNet(**RESNET_KWARGS),
         FPN(**FPN_KWARGS),
@@ -157,30 +155,3 @@ def build_bevformer_base(bev_h=BEV_H, bev_w=BEV_W):
         bev_h,
         bev_w,
     )
-
-
-def load_bevformer_checkpoint(model, state_dict):
-    """Load a BEVFormer checkpoint's ``state_dict`` into ``model``, strictly. Upstream's
-    ``pts_bbox_head`` holds the BEV queries, the positional encoding and the whole transformer;
-    here the decoder and its reference-point Linear are the head's and the rest of the BEV side is
-    the detector's."""
-    # The first matching prefix wins, so the more specific ones come first.
-    renames = (
-        ("pts_bbox_head.transformer.decoder.", "head.decoder."),
-        ("pts_bbox_head.transformer.reference_points.", "head.reference_points."),
-        ("pts_bbox_head.transformer.", "transformer."),
-        ("pts_bbox_head.bev_embedding.", "bev_embedding."),
-        ("pts_bbox_head.positional_encoding.", "positional_encoding."),
-        ("pts_bbox_head.", "head."),
-    )
-    mapped = {}
-    for key, value in state_dict.items():
-        if key == "pts_bbox_head.code_weights":
-            continue
-        for old, new in renames:
-            if key.startswith(old):
-                key = new + key[len(old) :]
-                break
-        mapped[key] = value
-    model.load_state_dict(mapped, strict=True)
-    return model

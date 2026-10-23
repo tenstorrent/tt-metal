@@ -5,8 +5,7 @@
 """BEVFormer-base's configuration, shared by the PyTorch reference and the TTNN port.
 
 The architecture follows upstream's ``projects/configs/bevformer/bevformer_base.py``
-(fundamentalvision/BEVFormer): the reference modules take these values as their defaults, so the
-BEVFormer-base checkpoint loads into them unchanged. The TTNN section holds the port's precision
+(fundamentalvision/BEVFormer): the reference modules take these values as their defaults. The TTNN section holds the port's precision
 and memory choices, which the reference does not see.
 
 Sections:
@@ -73,7 +72,6 @@ RESNET_KWARGS = dict(
     plugins=None,
     with_cp=False,
     zero_init_residual=True,
-    pretrained=None,
     init_cfg=None,
 )
 
@@ -239,10 +237,9 @@ CODER_BISECTION_STEPS = 22
 # (layer1); level indices the FPN levels from 0 (C3).
 
 # Layers whose convs accumulate in an fp32 destination register (layer3 and layer4, the DCN
-# layers; a DCN conv2 always does). Measured with the BEVFormer-base checkpoint
-# (bevformer_r101_dcn_24ep.pth, img_backbone): with bfloat16 accumulation, the error grows
-# through these layers' 26 blocks until C5 falls below PCC 0.99. The dummy-weight tests do
-# not show it; their weights lack the trained backbone's outlier channels.
+# layers; a DCN conv2 always does): with bfloat16 accumulation, activations with outlier channels
+# lose precision through these layers' 26 blocks until C5 falls below PCC 0.99. The tests' dummy
+# weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
 # Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in

@@ -9,9 +9,8 @@ This module implements the encoder that builds the bird's-eye-view map: one quer
 six cameras' FPN features. It follows upstream's ``BEVFormerEncoder`` and ``BEVFormerLayer``
 (``projects/mmdet3d_plugin/bevformer/modules/encoder.py`` in fundamentalvision/BEVFormer) and is
 the reference the TTNN encoder in ``tt/tt_encoder.py`` is checked against. Module names follow
-mmcv's ``BaseTransformerLayer`` (``attentions``, ``ffns``, ``norms``), so the
-``pts_bbox_head.transformer.encoder`` weights of a BEVFormer checkpoint load into it with that
-prefix stripped.
+mmcv's ``BaseTransformerLayer`` (``attentions``, ``ffns``, ``norms``), as upstream's
+``pts_bbox_head.transformer.encoder`` names them.
 
 Per frame, the encoder projects each BEV pillar's ``num_points_in_pillar`` points into the
 cameras (``point_sampling``) and builds the cells' 2D reference points; for the previous BEV
@@ -51,7 +50,7 @@ from models.experimental.bevformer.reference.temporal_self_attention import Temp
 
 class FFN(nn.Module):
     """mmcv's two-layer ``FFN`` with its identity shortcut, shared by the encoder and the decoder;
-    dropout is a no-op in inference. ``layers`` keeps mmcv's nesting, so checkpoint keys match."""
+    dropout is a no-op in inference. ``layers`` keeps mmcv's nesting."""
 
     def __init__(self, embed_dims=EMBED_DIMS, feedforward_channels=FEEDFORWARD_CHANNELS):
         super().__init__()

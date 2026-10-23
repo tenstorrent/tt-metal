@@ -8,8 +8,8 @@ This module implements the encoder's cross-attention from the BEV queries into t
 features, as upstream's ``SpatialCrossAttention`` and ``MSDeformableAttention3D``
 (``projects/mmdet3d_plugin/bevformer/modules/spatial_cross_attention.py`` in
 fundamentalvision/BEVFormer). It is the reference ``tt/tt_spatial_cross_attention.py`` is checked
-against. Parameter names follow upstream, so a checkpoint's
-``pts_bbox_head.transformer.encoder.layers.<i>.attentions.1`` weights load unchanged.
+against. Parameter names follow upstream's
+``pts_bbox_head.transformer.encoder.layers.<i>.attentions.1``.
 
 Each BEV query is gathered ("rebatched") into every camera whose image its pillar's points land
 in (``bev_mask``). There it attends to the four FPN levels around those points: its 8 sampling

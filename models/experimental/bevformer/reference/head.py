@@ -25,9 +25,9 @@ branch per layer), no two-stage proposals, no losses or assigners. The BEV encod
 ``PerceptionTransformer`` (BEV queries, positional encoding, can bus, previous BEV) is not
 part of this module.
 
-Parameter names follow the BEVFormer checkpoint's ``pts_bbox_head``: ``query_embedding``,
-``cls_branches`` and ``reg_branches`` load unchanged, and ``transformer.reference_points``
-and ``transformer.decoder`` load into ``reference_points`` and ``decoder``. The rest of
+Parameter names follow upstream's ``pts_bbox_head``: ``query_embedding``, ``cls_branches`` and
+``reg_branches`` as they are, and ``transformer.reference_points`` and ``transformer.decoder`` as
+``reference_points`` and ``decoder``. The rest of
 ``pts_bbox_head`` (``bev_embedding``, ``positional_encoding``, and ``transformer``'s
 ``encoder``, ``level_embeds``, ``cams_embeds`` and ``can_bus_mlp``) is the encoder side's
 and is left out.

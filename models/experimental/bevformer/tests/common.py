@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Helpers shared by the BEVFormer tests: camera rigs and dataset presets, dummy weights scaled to
-the BEVFormer-base checkpoint's statistics, random inputs shaped like the model's, and PCC checks.
+"""Helpers shared by the BEVFormer tests: camera rigs and dataset presets, dummy weights with
+realistic statistics, random inputs shaped like the model's, and PCC checks.
 
 BEVFormer-base's own configuration is ``model_config.py``'s; this module holds what only the tests
 use.
@@ -293,8 +293,7 @@ class DatasetPreset:
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4, tsa_num_points=4)
-# The base presets: BEVFormer-base's encoder attention sizes over the four camera levels, so the
-# checkpoint's encoder weights fit them.
+# The base presets: BEVFormer-base's encoder attention sizes over the four camera levels.
 _BASE = dict(
     embed_dims=EMBED_DIMS,
     num_heads=NUM_HEADS,
@@ -313,8 +312,7 @@ PRESETS = {
 
 # --- Backbone and FPN dummy weights -----------------------------------------------------------
 
-# Tuned so the random backbone matches the trained BEVFormer-base one in output std at C3-C5
-# (order 1), DCN offsets (under a pixel on average, so samples fall between pixels)
+# Tuned so the random backbone has a realistic output std at C3-C5 (order 1), DCN offsets (under a pixel on average, so samples fall between pixels)
 # and DCN masks (near 0.9).
 DCN_OFFSET_STD = 0.04
 DCN_MASK_BIAS = 2.6
@@ -329,7 +327,7 @@ def init_dummy_backbone_weights(torch_model, seed=0, input_std=1.0):
 
     The reference model's own initialization cannot be used. ``ModulatedDeformConv2dPack``
     allocates its weight uninitialized, and the ResNet stores ``init_cfg`` without applying
-    it, so its BatchNorms keep identity statistics that no trained network has.
+    it, so its BatchNorms keep identity statistics no real network has.
     """
     generator = torch.Generator().manual_seed(seed)
 
@@ -371,7 +369,7 @@ def init_dummy_backbone_weights(torch_model, seed=0, input_std=1.0):
         # With the BatchNorm ranges above, the last BatchNorm of each branch at gamma ~1
         # makes the branch outgrow its identity path block after block, and the output
         # grows by orders of magnitude over 33 blocks. This range keeps each branch's std
-        # at about its identity's, as in the trained backbone (ratio 0.6-1.1).
+        # at about its identity's (ratio 0.6-1.1).
         for module in torch_model.modules():
             if hasattr(module, "bn3") and isinstance(module.bn3, nn.modules.batchnorm._BatchNorm):
                 uniform_(module.bn3.weight, *RESIDUAL_BN_GAMMA)
@@ -451,8 +449,8 @@ def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 def random_image_batch():
     """Random camera images in the range BEVFormer's normalized images take: smooth random
     structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
-    as pixels are, minus ``IMAGE_MEAN_BGR``. Backbone error with trained weights depends on the
-    input scale, so the inputs keep the real one."""
+    as pixels are, minus ``IMAGE_MEAN_BGR``. Backbone error depends on the input scale, so the
+    inputs keep the real one."""
     mean = torch.tensor(IMAGE_MEAN_BGR).view(1, 3, 1, 1)
     images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
@@ -468,12 +466,12 @@ def random_image_batch():
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (BEV_H, BEV_W)}
 
-# Spread of the random weights on top of upstream's init, after the offset and attention-logit
-# spread the BEVFormer-base checkpoint's encoder shows. Upstream's init alone has zero offset and
+# Spread of the random weights on top of upstream's init, so the offsets and attention logits vary
+# per query. Upstream's init alone has zero offset and
 # attention weights: every query samples the same fixed pattern with uniform weights.
-# The TSA offsets are drawn narrower than the checkpoint's. Its offsets barely move with the input,
-# so its six layers carry a bfloat16-sized perturbation through unchanged, frame to frame too;
-# random offset weights at its spread follow every perturbation of the BEV maps they then sample,
+# The TSA offsets are drawn narrower than the SCA's. Realistic offsets barely move with the input,
+# so six layers carry a bfloat16-sized perturbation through unchanged, frame to frame too;
+# random offset weights at a wider spread follow every perturbation of the BEV maps they then sample,
 # and the layers amplify it on their own, so the test would measure the dummy model's sensitivity,
 # not the port's error. The offsets' bias (upstream's init ring, up to 4 px) still exposes a
 # misordered channel.
@@ -503,7 +501,7 @@ def _spread(linear, std, generator):
 
 
 def build_reference_encoder(num_layers=ENCODER_NUM_LAYERS, seed=0):
-    """BEVFormer's encoder with upstream's init plus trained-like offset and attention spreads,
+    """BEVFormer's encoder with upstream's init plus random offset and attention spreads,
     drawn from ``seed``. The projections, FFNs and norms keep upstream's and PyTorch's init."""
     torch.manual_seed(seed)
     model = BEVFormerEncoder(num_layers=num_layers)
@@ -591,17 +589,16 @@ def sample_ego_shifts(batch_size):
 # --- Decoder ----------------------------------------------------------------------------------
 
 
-# Spread of the random weights on top of the upstream init, set to what the BEVFormer-base
-# checkpoint's decoder shows on random_bev (per layer: sampling offsets 1.0-1.7 px off
-# the init pattern, cross-attention logits of std 0.45-0.9, self-attention logits of std
-# 2.2-5), so the test sees trained-like sampling and softmaxes.
+# Spread of the random weights on top of the upstream init: sampling offsets about 1.3 px off the
+# init pattern, cross-attention logits of std 0.7 and self-attention logits of std 3, so the test
+# sees varied sampling and peaked softmaxes.
 SAMPLING_OFFSET_STD_PX = 1.3
 ATTENTION_LOGIT_STD = 0.7
 SELF_ATTENTION_LOGIT_STD = 3.0
 
 # Scale of the reg branches' last Linear over PyTorch's default init, whose outputs have std
-# ~0.08. The checkpoint's branches refine the reference points by ~0.01 in logit space per
-# layer, and emit the other box channels with std ~0.6. Larger refinements move every later
+# ~0.08: refinements of the reference points of ~0.01 in logit space per layer, and the other box
+# channels with std ~0.6. Larger refinements move every later
 # layer's sampling points further and amplify the decoder's error through them; near-constant
 # box channels make their PCC measure noise.
 REG_REFINEMENT_SCALE = 0.125
@@ -610,7 +607,7 @@ REG_BOX_SCALE = 7.5
 
 def _init_cross_attention(msda, generator):
     """BEVFormer ``CustomMSDeformableAttention.init_weights`` (mmcv's
-    ``MultiScaleDeformableAttention`` init) plus trained-like random weights."""
+    ``MultiScaleDeformableAttention`` init) plus random weights."""
     heads, levels, points = msda.num_heads, msda.num_levels, msda.num_points
     in_features = msda.sampling_offsets.in_features
 
@@ -672,7 +669,7 @@ def build_reference_decoder(seed=0):
 
 
 def init_reg_branches(branches):
-    """Scale each branch's last Linear to trained-like outputs: REG_REFINEMENT_SCALE on the
+    """Scale each branch's last Linear's outputs: REG_REFINEMENT_SCALE on the
     rows that refine the reference points (cx, cy, cz), REG_BOX_SCALE on the others."""
     scale = torch.full((CODE_SIZE, 1), REG_BOX_SCALE)
     scale[CODE_XY] = scale[CODE_Z] = REG_REFINEMENT_SCALE
@@ -701,7 +698,7 @@ def random_reference_points(batch_size, generator=None):
     """Uniform in [0, 1], with a slice of points on and just inside the grid edges.
 
     Edge points exercise out-of-bounds zero padding in the sampling and the eps clamp of
-    inverse_sigmoid, which trained queries near the BEV border reach.
+    inverse_sigmoid, which queries near the BEV border reach.
     """
     points = torch.rand(batch_size, NUM_QUERY, 3, generator=generator)
     edges = torch.tensor([0.0, 1e-3, 1.0 - 1e-3, 1.0])
@@ -790,9 +787,8 @@ def build_reference_head(bev_shape, seed=0):
 
 
 # Box center error bounds in metres: PCC alone allows metres of error on x and y, which span
-# 102.4 m, where nuScenes matches boxes from 0.5 m. With BEVFormer-base's trained weights the
-# mean stays near 0.01 m and the worst of the 900 queries reaches 0.2 m, a bfloat16 tail no
-# single op's precision moves; the bounds leave headroom over both.
+# 102.4 m, where nuScenes matches boxes from 0.5 m. The worst of the 900 queries carries a
+# bfloat16 tail no single op's precision moves; the bounds leave headroom over it.
 CENTER_MEAN_ATOL = 0.015
 CENTER_MAX_ATOL = 0.35
 
@@ -849,11 +845,10 @@ def assert_boxes_close(expected, actual, pcc=0.99):
 
 # The device's selected scores against the reference's at the same pairs, and the share of the
 # reference's top-k the device selects. The score error is gated at its 99th percentile, with a
-# looser bound on the worst pair: with the BEVFormer-base checkpoint, the second frame's BEV is
-# off most at the grid's edges, where the previous BEV, rotated and shifted by the ego motion,
+# looser bound on the worst pair: the second frame's BEV is off most at the grid's edges, where the previous BEV, rotated and shifted by the ego motion,
 # turns to zeros and the self-attention samples across that step, so the few queries there
-# score off by several times the rest. The bounds leave headroom over the checkpoint's errors,
-# not so much that a regression in the logits passes.
+# score off by several times the rest. The bounds leave headroom, not so much that a regression
+# in the logits passes.
 SCORE_ERROR_QUANTILE = 0.99
 MAX_SCORE_ERROR = 0.04
 MAX_WORST_SCORE_ERROR = 0.2
@@ -942,9 +937,8 @@ def build_reference_bevformer(bev_shape):
 
 
 # The box code channels the detector reads off small differences, the yaw's sine and the
-# velocities, carry the backbone's and the encoder's bfloat16 error the most: with BEVFormer-base's
-# trained weights they reach PCC 0.95 to 0.98 where every other output stays above 0.99, and the
-# velocity stays below 0.99 even on the reference's own FPN features. They gate at this floor.
+# velocities, carry the backbone's and the encoder's bfloat16 error the most; they gate at this
+# floor, every other output at the test's PCC.
 LOW_PRECISION_BOX_CODES = (CODE_SIN.start, *range(CODE_VELOCITY.start, CODE_VELOCITY.stop))
 LOW_PRECISION_BOX_CODE_PCC = 0.94
 
@@ -954,7 +948,7 @@ def check_detector_outputs(expected, actual, pcc):
     outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
     BEV, the last layer's logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at
     ``LOW_PRECISION_BOX_CODE_PCC``), and the detections by ``assert_topk_close``.
-    Logs the box center error, which the trained weights' outputs are not bounded by."""
+    Logs the box center error."""
     cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
     for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
