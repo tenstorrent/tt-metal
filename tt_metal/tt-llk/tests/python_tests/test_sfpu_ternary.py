@@ -207,10 +207,10 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 
 
 # Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
-# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode.
-# MathOperation.SfpuAddcdiv has the same shape; it joins this list with its own init fix
-# (tenstorrent/tt-metal#59860, tenstorrent/tt-llk#1701 item 5).
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
+# (tenstorrent/tt-llk#1701 items 2 and 5).
 _TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
     MathOperation.SfpuSnakeBeta,
 ]
 
@@ -227,7 +227,7 @@ def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
             "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
-            "item 2, verified on Blackhole silicon only; Wormhole's "
+            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
             "sfpu_reciprocal_init programs its constants in both modes"
         )
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:

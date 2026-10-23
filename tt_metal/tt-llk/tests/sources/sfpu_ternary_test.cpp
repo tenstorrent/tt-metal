@@ -114,6 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             // Ternary SFPU: out(tile 0) = f(a=0, b=1, c=2). VectorMode::RC drives 4 faces
             // (8 rows each) so the per-call ITERATIONS is 8, matching the production APIs.
+            // On Blackhole the harness runs where, addcmul, addcdiv and lerp as one 32-row call.
 #ifdef SFPU_CLOBBER_LREGS
             // Test hook: fill the SFPU registers with garbage first, as another op's init would in a fused compute
             // kernel. The ternary op's init must program every register its body reads.

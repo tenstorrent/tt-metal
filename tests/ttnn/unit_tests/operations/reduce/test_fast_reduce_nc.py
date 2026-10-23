@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,

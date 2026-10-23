@@ -43,24 +43,41 @@ void kernel_main() {
 
     uint32_t l1_write_addr_0 = base_l1_write_addr + output_stick_offset;
     const uint32_t l1_read_addr_0 = input_dfb_0.get_read_ptr() + input_start_0;
-    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-        UnicastEndpoint{},
-        group_stick_size_0,
-        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = l1_read_addr_0});
+    // Over the limit, set-state is unusable: it holds the length in the command buffer and the
+    // splitting variant rewrites it per packet, so overlapping reads see each other's length.
+    if constexpr (group_stick_size_0 <= NOC_MAX_BURST_SIZE) {
+        noc.set_async_read_state<NocOptions::DEFAULT, group_stick_size_0>(
+            UnicastEndpoint{},
+            group_stick_size_0,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = l1_read_addr_0});
+    }
 
     uint32_t read_offset_0 = l1_read_addr_0;
     uint32_t l1_write_addr_inc_0 = group_stick_size_0 + group_stride_0;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
             CoreLocalMem<uint32_t> dst(l1_write_addr_0);
-            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                UnicastEndpoint{},
-                dst,
-                group_stick_size_0,
-                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                 .addr = read_offset_0},
-                {.offset_bytes = 0});
+            if constexpr (group_stick_size_0 <= NOC_MAX_BURST_SIZE) {
+                noc.async_read_with_state<NocOptions::DEFAULT, group_stick_size_0>(
+                    UnicastEndpoint{},
+                    dst,
+                    group_stick_size_0,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = read_offset_0},
+                    {.offset_bytes = 0});
+            } else {
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    group_stick_size_0,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = read_offset_0},
+                    {.offset_bytes = 0});
+            }
             l1_write_addr_0 += (l1_write_addr_inc_0);
             read_offset_0 += group_stick_size_0;
         }
@@ -68,24 +85,41 @@ void kernel_main() {
 
     uint32_t l1_write_addr_1 = base_l1_write_addr + output_stick_offset + group_stick_size_0;
     const uint32_t l1_read_addr_1 = input_dfb_1.get_read_ptr() + input_start_1;
-    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-        UnicastEndpoint{},
-        group_stick_size_1,
-        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = l1_read_addr_1});
+    // Over the limit, set-state is unusable: it holds the length in the command buffer and the
+    // splitting variant rewrites it per packet, so overlapping reads see each other's length.
+    if constexpr (group_stick_size_1 <= NOC_MAX_BURST_SIZE) {
+        noc.set_async_read_state<NocOptions::DEFAULT, group_stick_size_1>(
+            UnicastEndpoint{},
+            group_stick_size_1,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = l1_read_addr_1});
+    }
 
     uint32_t read_offset_1 = l1_read_addr_1;
     uint32_t l1_write_addr_inc_1 = group_stick_size_1 + group_stride_1;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
             CoreLocalMem<uint32_t> dst(l1_write_addr_1);
-            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                UnicastEndpoint{},
-                dst,
-                group_stick_size_1,
-                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                 .addr = read_offset_1},
-                {.offset_bytes = 0});
+            if constexpr (group_stick_size_1 <= NOC_MAX_BURST_SIZE) {
+                noc.async_read_with_state<NocOptions::DEFAULT, group_stick_size_1>(
+                    UnicastEndpoint{},
+                    dst,
+                    group_stick_size_1,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = read_offset_1},
+                    {.offset_bytes = 0});
+            } else {
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    group_stick_size_1,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = read_offset_1},
+                    {.offset_bytes = 0});
+            }
             l1_write_addr_1 += (l1_write_addr_inc_1);
             read_offset_1 += group_stick_size_1;
         }
