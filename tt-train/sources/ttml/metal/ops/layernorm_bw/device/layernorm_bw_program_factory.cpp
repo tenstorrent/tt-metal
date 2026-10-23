@@ -6,8 +6,10 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "layernorm_bw_device_operation.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace {
@@ -21,17 +23,21 @@ constexpr auto kReaderKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/layernorm_bw/device/kernels/compute/layernorm_bw_kernel.cpp";
 
-// Reader buffer indices
-constexpr uint32_t kGammaBufferIdx = 0;
-constexpr uint32_t kInputBufferIdx = 1U;
-constexpr uint32_t kMeanBufferIdx = 2U;
-constexpr uint32_t kRstdBufferIdx = 3U;
-constexpr uint32_t kDLdoutBufferIdx = 4U;
+// Kernel handles are the push order into ProgramDescriptor::kernels: reader, writer, then one compute kernel per core
+// group.
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
 
-// Writer buffer indices
-constexpr uint32_t kDxBufferIdx = 0;
-constexpr uint32_t kDgammaComponentsBufferIdx = 1U;
-constexpr uint32_t kDbetaComponentsBufferIdx = 2U;
+// reader runtime args
+constexpr uint32_t kGammaAddrIdx = 0U;
+constexpr uint32_t kInputAddrIdx = 1U;
+constexpr uint32_t kMeanAddrIdx = 2U;
+constexpr uint32_t kRstdAddrIdx = 3U;
+constexpr uint32_t kDLdoutAddrIdx = 4U;
+// writer runtime args
+constexpr uint32_t kDxAddrIdx = 0U;
+constexpr uint32_t kDgammaComponentsAddrIdx = 1U;
+constexpr uint32_t kDbetaComponentsAddrIdx = 2U;
 
 // CBs with input data
 constexpr auto kScalerCbIndex = tt::CBIndex::c_0;     // 1/N scaler
@@ -115,14 +121,20 @@ bool fits_in_l1_check(
 
 namespace ttml::metal::ops::layernorm_bw::device {
 
-struct LayerNormBackwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
-};
+namespace {
 
-LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactory::create(
+// The input's tile rows over the device's compute grid. create_descriptor() pins it against split_work_to_cores, and
+// override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& input) {
+    const auto& shape = input.padded_shape();
+    return compute_work_split(
+        input.device()->compute_with_storage_grid_size(),
+        (shape[-2] * shape[-3] * shape[-4]) / tt::constants::TILE_HEIGHT);
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor LayerNormBackwardProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -152,7 +164,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const auto& dL_dout_shape = dLdout.logical_shape();
     TT_FATAL(dL_dout_shape.rank() == 4, "dL_dout tensor must be 4D [B, N, S, C], got shape {}", dL_dout_shape);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
     tt::tt_metal::IDevice* device = input.device();
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
@@ -180,13 +192,15 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
     constexpr uint32_t block_size = 3U;  // Need 1 extra registers for layernorm backward
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    const WorkSplit split = make_work_split(input);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(static_cast<float>(1.F / num_inner));
 
@@ -212,70 +226,44 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     tt::DataFormat precise_data_format = tt::DataFormat::Float32;
 
     // Input data CBs
-    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
-        program, all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
-        program, all_cores, kXHatCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
-    [[maybe_unused]] auto cb_rstd = create_circular_buffer(
-        program, all_cores, kRstdCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumRstdTiles);
-    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
-        program, all_cores, kDLoutCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    [[maybe_unused]] auto cb_mean = create_circular_buffer(
-        program, all_cores, kMeanCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_mean_tiles);
-    [[maybe_unused]] auto cb_mean_bcast = create_circular_buffer(
-        program,
-        all_cores,
-        kMeanBcastCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumMeanBcastTiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kXHatCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kRstdCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumRstdTiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kDLoutCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kInputCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMeanCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_mean_tiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMeanBcastCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles));
 
     // Output CBs
-    [[maybe_unused]] auto cb_dx = create_circular_buffer(
-        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDgammaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
-    [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDbetaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kDgammaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kDbetaComponentsCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size));
 
     // Intermediate computation CBs
-    [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
-        program,
-        all_cores,
-        kRstdBcastCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumRstdBcastTiles);
-    [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
-        program,
-        all_cores,
-        kScaledDyGammaSumCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumDyGammaSumTiles);
-    [[maybe_unused]] auto cb_scaled_dy_gamma_xnorm_sum = create_circular_buffer(
-        program,
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kRstdBcastCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kScaledDyGammaSumCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles));
+    desc.cbs.push_back(make_cb_descriptor(
         all_cores,
         kScaledDyGammaXnormSumCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
-        kNumDyGammaXnormSumTiles);
+        kNumDyGammaXnormSumTiles));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -297,20 +285,21 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         defines[kEverythingFitsInL1DefineKey] = "1";
     }
 
-    LayerNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
     tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(dx_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dgamma_components_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dbeta_components_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels
@@ -324,8 +313,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    desc.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -336,104 +325,67 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
             Wt                          // num_inner / TILE_W
         };
 
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        desc.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
     }
 
     // -------------------------------------------------------------------------
-    // 5) Assign runtime args for each core
+    // 5) Per-core runtime args
     // -------------------------------------------------------------------------
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            // Reader kernel runtime args
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {gamma_buffer->address(),
-                 input_buffer->address(),
-                 mean_buffer->address(),
-                 rstd_buffer->address(),
-                 dLdout_buffer->address(),
-                 start_row,
-                 num_rows});
-            // Writer kernel runtime args
-            SetRuntimeArgs(
-                program,
-                kernels.writer,
-                core,
-                {dx_buffer->address(),
-                 dgamma_components_buffer->address(),
-                 dbeta_components_buffer->address(),
-                 start_row,
-                 num_rows});
-        });
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // The row split depends only on the hashed input spec.
+    // Taken after the last kernel push: a later push could reallocate desc.kernels.
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+        // Reader kernel runtime args
+        reader.emplace_runtime_args(
+            core, {gamma_buffer, input_buffer, mean_buffer, rstd_buffer, dLdout_buffer, start_row, num_rows});
+        // Writer kernel runtime args
+        writer.emplace_runtime_args(
+            core, {dx_buffer, dgamma_components_buffer, dbeta_components_buffer, start_row, num_rows});
+    });
 
-    // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
-    // -------------------------------------------------------------------------
-    return cached_program_t{
-        std::move(program),
-        {/* layernorm_bw_reader_kernel_id  = */ kernels.reader,
-         /* layernorm_bw_writer_kernel_id  = */ kernels.writer,
-         /* layernorm_bw_kernel_group_1_id = */ kernels.compute_group_1,
-         /* layernorm_bw_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    return desc;
 }
 
 void LayerNormBackwardProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto& layernorm_bw_reader_kernel_id = shared_variables.layernorm_bw_reader_kernel_id;
-    auto& layernorm_bw_writer_kernel_id = shared_variables.layernorm_bw_writer_kernel_id;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.input);
 
-    auto* gamma_buffer = tensor_args.gamma.buffer();
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* mean_buffer = tensor_args.mean.buffer();
-    auto* rstd_buffer = tensor_args.rstd.buffer();
-    auto* dLdout_buffer = tensor_args.dL_dout.buffer();
+    const uint32_t gamma_addr = tensor_args.gamma.buffer()->address();
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
+    const uint32_t mean_addr = tensor_args.mean.buffer()->address();
+    const uint32_t rstd_addr = tensor_args.rstd.buffer()->address();
+    const uint32_t dLdout_addr = tensor_args.dL_dout.buffer()->address();
+    const uint32_t dx_addr = output[0].buffer()->address();
+    const uint32_t dgamma_components_addr = output[1].buffer()->address();
+    const uint32_t dbeta_components_addr = output[2].buffer()->address();
 
-    auto* dx_buffer = output[0].buffer();
-    auto* dgamma_buffer = output[1].buffer();
-    auto* dbeta_buffer = output[2].buffer();
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_bw_writer_kernel_id);
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kGammaAddrIdx] = gamma_addr;
+        reader_args[kInputAddrIdx] = input_addr;
+        reader_args[kMeanAddrIdx] = mean_addr;
+        reader_args[kRstdAddrIdx] = rstd_addr;
+        reader_args[kDLdoutAddrIdx] = dLdout_addr;
 
-    for_each_core(shared_variables.num_cores, shared_variables.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        // Update input buffers for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kMeanBufferIdx] = mean_buffer->address();
-            runtime_args[kRstdBufferIdx] = rstd_buffer->address();
-            runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
-        }
-
-        // Update output buffers for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDxBufferIdx] = dx_buffer->address();
-            runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
-            runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
-        }
+        auto& writer_args = writer_runtime_args[core.x][core.y];
+        writer_args[kDxAddrIdx] = dx_addr;
+        writer_args[kDgammaComponentsAddrIdx] = dgamma_components_addr;
+        writer_args[kDbetaComponentsAddrIdx] = dbeta_components_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(LayerNormBackwardDeviceOperation, LayerNormBackwardProgramFactory);
 
 }  // namespace ttml::metal::ops::layernorm_bw::device
