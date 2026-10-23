@@ -9150,11 +9150,17 @@
     "s": 0.0,
     "status": "PASS",
     "t": "2026-10-22T21:27:08"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-23T01:49:42"
    }
   ],
-  "last_run": "2026-10-22T21:27:08",
+  "last_run": "2026-10-23T01:49:42",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.20.log",
   "metrics": {
+   "device_ms_total": 83.47,
    "err_layer_L00": 0.024829373735482503,
    "err_layer_L00_limit": 0.057040304657989094,
    "err_layer_L01": 0.033803919979285176,
@@ -9167,7 +9173,7 @@
    "err_layer_L14_limit": 0.13803127960006578,
    "err_layer_L20": 0.02994972795565897,
    "err_layer_L20_limit": 0.0507189886421758,
-   "err_layer_L21": 0.05134822182525605,
+   "err_layer_L21": 0.05134823218128988,
    "err_layer_L21_limit": 0.13115337487015624,
    "err_layer_L24": 0.02802596566537622,
    "err_layer_L24_limit": 0.04181175884968598,
@@ -9223,8 +9229,9 @@
   "reason": [],
   "role": "perf",
   "stamp": null,
-  "started": "2026-10-22T21:27:07",
+  "started": "2026-10-23T01:49:41",
   "status": "PASS",
+  "units": null,
   "waiting": null
  },
  "P.21": {
@@ -9594,7 +9601,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
