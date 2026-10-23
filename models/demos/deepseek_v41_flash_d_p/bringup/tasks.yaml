@@ -10489,3 +10489,44 @@ tasks:
       per call site: before/after device ms, the chosen config, the error vs the current config; total device and wall per
       chunk. Verify with `gate P.23 --check` (F170). Final check: `python -m models.demos.common.bringup.orchestrator measure
       --task P.23`.'
+- id: P.24
+  title: 'Batched attention output matmul (wo_a) on a tuned 2D config, fp32 partials kept (nothing else changes): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.23
+  device: true
+  gate:
+    cmd: for t in swa_15 swa_engram_18 enc_source_17 enc_source_engram_20 enc_reuse_15 dec_candidate_17 dec_reindex_16 dec_reuse_15;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_ffn_residual.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: < 69.7
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  ab:
+    env:
+      WO_A_CONFIG: auto
+    change:
+      WO_A_CONFIG: tuned
+  brief:
+    details: 'Owner (2026-10-23): the batched attention output matmul (attn.wo_a, 2x1024x4096 . 2x4096x1024 bfp8, 8 calls
+      per chunk) on a tuned program config; NOTHING else changes (dtypes, fidelity, compute kernel config, memory configs,
+      other call sites). A comparison agent found it (report and files in /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/pr54943/):
+      auto already uses 2D multicast with fuse_batch=False (each core loops the batches, fp32 partials) but picks in0_block_w
+      1; the same family at the widest in0 block (32 tiles of K) is bit-identical to auto and 0.476 -> 0.116 ms per call here
+      (640 rows: 0.258 -> 0.068). P.23''s sweep tried only MatmulMultiCoreReuseProgramConfig for batched calls, whose K-block
+      partials lose fp32 (DS41-113): never use it. Start from the patch /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/pr54943/p24_mm_configs.patch
+      to tt/mm_configs.py (applies to HEAD; review it; /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/pr54943/test_p24_rule.py
+      and p24_rule.log are its device check). Add one setting WO_A_CONFIG {auto, tuned (default)} in tt/settings.py (tuned
+      only when MATMUL_CONFIG is tuned too), so the old path stays selectable; extend tests/perf/test_matmul_sweep.py so its
+      batched candidates include the 2D fuse_batch=False family (in0 block up to 32) and its minimal_matmul loop tries every
+      subblock, not only the first. Report wo_a device ms per call and the chunk''s device total before/after, and the error
+      vs auto and vs fp64. Verify with `gate P.24 --check` (F170). Final check: `python -m models.demos.common.bringup.orchestrator
+      measure --task P.24`.'
