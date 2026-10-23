@@ -291,6 +291,11 @@ DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 # whole tiles wide.
 DRAM_CONV_SLICES = 8
 
+# Layers run one camera at a time with every activation in L1 (layer1): the whole batch does not fit
+# L1, so its blocks would move each tensor through DRAM, several times over; one camera's do fit.
+# A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
+PER_CAMERA_STAGES = (0,)
+
 # Width slices for a layer's non-DCN 3x3 conv2s, by layer (0 is layer1), over DRAM_CONV_SLICES:
 # their 64- and 128-channel inputs fit L1 in 2 and 1 slices, and every slice pays its own slice,
 # halo and write-back ops.
@@ -333,6 +338,7 @@ def tt_resnet_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         conv2_dram_conv_slices=CONV2_DRAM_CONV_SLICES,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
+        per_camera_stages=PER_CAMERA_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
