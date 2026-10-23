@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+EW_PureWrite4352,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[8]",1,4352,1,7062106.000000,9175733.131165,39.932791,39.932791,39.932791,0.000000,1.000000
+EW_PureWrite16,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[8]",1,16,1,7042480.000000,9201304.086061,0.147221,0.147221,0.147221,0.000000,1.000000
+NS_PureWrite16,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,"[8]",1,16,1,7185594.000000,9018043.602241,0.144289,0.144289,0.144289,0.000000,1.000000

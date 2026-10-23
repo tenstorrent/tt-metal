@@ -249,6 +249,12 @@ struct NocUnicastScatterCommandHeader {
         }
     }
 };
+enum NocFlushType : uint8_t {
+    FLUSH_NONE = 0,
+    FLUSH_STRICT = 1,
+    FLUSH_RELAXED = 2,
+};
+
 // Currently limited to 2 chunks followed by a semaphore increment
 #define NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS 2
 struct NocUnicastScatterAtomicIncFusedCommandHeader {
@@ -256,14 +262,14 @@ struct NocUnicastScatterAtomicIncFusedCommandHeader {
     uint64_t semaphore_noc_address;
     uint16_t chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1];  // last chunk size is implicit
     uint16_t val;                                                              // Semaphore increment value
-    bool flush;
+    uint8_t flush;
 
     NocUnicastScatterAtomicIncFusedCommandHeader(
         std::initializer_list<uint64_t> noc_addresses,
         uint64_t semaphore_noc_address,
         std::initializer_list<uint16_t> chunk_sizes,
         uint16_t val,
-        bool flush = true) :
+        uint8_t flush = NocFlushType::FLUSH_STRICT) :
         semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         const size_t num_noc_addresses = noc_addresses.size();
@@ -287,22 +293,25 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, bool flush = true) :
+    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, uint8_t flush = NocFlushType::FLUSH_STRICT) :
         noc_address(noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint32_t val;
-    bool flush;
+    uint8_t flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
+        uint64_t noc_address,
+        uint64_t semaphore_noc_address,
+        uint32_t val,
+        uint8_t flush = NocFlushType::FLUSH_STRICT) :
         noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
     uint32_t val;
-    bool flush;
+    uint8_t flush;
 };
 struct NocMulticastCommandHeader {
     uint32_t address;
@@ -764,8 +773,11 @@ public:
             "CHUNK_ENCODING_SEMINC_NO_FLUSH + 1");
         const NocScatterWriteChunkEncoding seminc_chunk_encoding = static_cast<NocScatterWriteChunkEncoding>(
             NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH +
-            noc_unicast_scatter_atomic_inc_fused_command_header.flush);
+            (noc_unicast_scatter_atomic_inc_fused_command_header.flush != NocFlushType::FLUSH_NONE));
         set_chunk_encoding(chunk_encodings, seminc_chunk_encoding, chunk_count - 1);
+        if (noc_unicast_scatter_atomic_inc_fused_command_header.flush == NocFlushType::FLUSH_RELAXED) {
+            chunk_encodings |= (1u << (chunk_count * 2));
+        }
 
         this->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
 

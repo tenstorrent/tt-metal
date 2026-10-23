@@ -140,6 +140,9 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["atomic_inc_val"]) {
         config.atomic_inc_val = parse_scalar<uint32_t>(pattern_yaml["atomic_inc_val"]);
     }
+    if (pattern_yaml["flush"]) {
+        config.flush = parse_scalar<bool>(pattern_yaml["flush"]);
+    }
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
@@ -191,12 +194,15 @@ std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node
                 segment.size = parse_scalar<uint32_t>(field.second);
             } else if (key == "atomic_inc_val") {
                 segment.atomic_inc_val = parse_scalar<uint32_t>(field.second);
+            } else if (key == "flush") {
+                segment.flush = parse_scalar<bool>(field.second);
             } else if (key == "count") {
                 segment.count = parse_scalar<uint32_t>(field.second);
                 TT_FATAL(segment.count > 0, "A stream segment's 'count' must be at least 1");
             } else {
                 TT_THROW(
-                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val and count; "
+                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val, flush and "
+                    "count; "
                     "ftype, destination, mcast_start_hops and the packet count (repeat) apply to the whole stream",
                     key);
             }
@@ -1371,6 +1377,7 @@ TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTraf
     resolved_pattern.size = parsed_pattern.size;
     resolved_pattern.num_packets = parsed_pattern.num_packets;
     resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
+    resolved_pattern.flush = parsed_pattern.flush;
     resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
     resolved_pattern.sender_credit_info = std::nullopt;
     resolved_pattern.credit_return_batch_size = std::nullopt;
@@ -1818,6 +1825,10 @@ void TestConfigBuilder::validate_pattern(const TrafficPatternConfig& pattern, co
         TT_FATAL(
             !pattern.atomic_inc_val.has_value(),
             "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
+            test.name);
+        TT_FATAL(
+            !pattern.flush.has_value(),
+            "Test '{}': 'flush' should not be specified for 'unicast_write' ntype.",
             test.name);
     }
 
@@ -2934,6 +2945,16 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
                 // An atomic_inc_val set on the pattern is meant for the stream's atomic segments.
                 pattern.atomic_inc_val.reset();
             }
+            if (segment.flush.has_value()) {
+                TT_FATAL(
+                    !is_write_only,
+                    "Test '{}': a stream segment sets flush but its ntype sends no atomic increment",
+                    test.name);
+                pattern.flush = segment.flush;
+            } else if (is_write_only) {
+                // Like atomic_inc_val, a flush set on the pattern is meant for the stream's atomic segments.
+                pattern.flush.reset();
+            }
 
             // atomic_inc carries no payload, so it counts as zero bytes in bandwidth results.
             if (pattern.ntype == NocSendType::NOC_UNICAST_ATOMIC_INC) {
@@ -3117,6 +3138,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TrafficPatternC
     if (config.atomic_inc_val) {
         out << YAML::Key << "atomic_inc_val";
         out << YAML::Value << config.atomic_inc_val.value();
+    }
+    if (config.flush) {
+        out << YAML::Key << "flush";
+        out << YAML::Value << config.flush.value();
     }
     if (config.mcast_start_hops) {
         out << YAML::Key << "mcast_start_hops";

@@ -1,0 +1,317 @@
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+index ce1ed11d653..4884179f847 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+@@ -333,23 +333,47 @@ struct NocUnicastWriteFields {
+ };
+ 
+ struct NocUnicastAtomicIncFields {
++    // The host packs an optional flush override into the increment word's top two bits (see the host-side
++    // NocUnicastAtomicIncFields::get_args): bit 31 = override present, bit 30 = its value.
++    static constexpr uint32_t kFlushSetBit = 1u << 31;
++    static constexpr uint32_t kFlushValueBit = 1u << 30;
++
+     template <bool IS_SOURCE>
+     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
+-        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
++        const uint32_t inc_word = get_local_arg_val<uint32_t>(arg_idx++);
+         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
+         uint32_t dst_noc_encoding = 0;
+         if constexpr (IS_SOURCE) {
+             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
+         }
+-        return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
+-    }
+-
+-    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
+-        atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
++        return NocUnicastAtomicIncFields(
++            inc_word & ~(kFlushSetBit | kFlushValueBit),
++            dst_address,
++            dst_noc_encoding,
++            (inc_word & kFlushSetBit) != 0,
++            (inc_word & kFlushValueBit) != 0);
++    }
++
++    NocUnicastAtomicIncFields(
++        uint32_t atomic_inc_val,
++        uint32_t dst_address,
++        uint32_t dst_noc_encoding,
++        bool flush_set = false,
++        bool flush_value = false) :
++        atomic_inc_val(atomic_inc_val),
++        dst_address(dst_address),
++        dst_noc_encoding(dst_noc_encoding),
++        flush_set(flush_set),
++        flush_value(flush_value) {}
++
++    // Flush flag for the packet header: the override when present, otherwise the given per-type default.
++    bool flush_or(bool default_flush) const { return flush_set ? flush_value : default_flush; }
+ 
+     uint32_t atomic_inc_val;
+     uint32_t dst_address;
+     uint32_t dst_noc_encoding;
++    bool flush_set;
++    bool flush_value;
+ };
+ 
+ struct NocUnicastWriteAtomicIncFields {
+@@ -1235,7 +1259,8 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
+     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+ 
+     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
++    config->packet_header->to_noc_unicast_atomic_inc(
++        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.flush_or(true)});
+ 
+     config->noc_fields_.atomic_inc_fields = fields;
+     config->payload_size_bytes = 0;
+@@ -1252,7 +1277,8 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
+ 
+     // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
+-    // write-before-atomic without flushing the write pipeline.
++    // write-before-atomic without flushing the write pipeline. A pattern or stream segment can still request the
++    // flush ('flush: true') to measure the router's flushed path.
+     ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
+ 
+     uint64_t write_noc_addr =
+@@ -1262,7 +1288,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+ 
+     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
+         NocUnicastAtomicIncFusedCommandHeader{
+-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
++            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.atomic_inc_fields.flush_or(false)},
+         fields.write_fields.payload_size_bytes);
+ 
+     config->noc_fields_.write_atomic_inc_fields = fields;
+@@ -1280,7 +1306,7 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
+ 
+     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
+         NocUnicastAtomicIncFusedCommandHeader{
+-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
++            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, fields.atomic_inc_fields.flush_or(false)},
+         fields.write_fields.payload_size_bytes);
+ }
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+index 7091e8b6c06..d25f329bc16 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+@@ -69,6 +69,9 @@ struct ParsedStreamSegment {
+     std::optional<NocSendType> ntype;
+     std::optional<uint32_t> size;
+     std::optional<uint32_t> atomic_inc_val;
++    // atomic_inc / fused_atomic_inc segments: whether the receiving router flushes earlier writes before the atomic.
++    // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
++    std::optional<bool> flush;
+     uint32_t count = 1;
+ };
+ 
+@@ -82,6 +85,7 @@ struct ParsedTrafficPatternConfig {
+     std::optional<uint32_t> num_packets;
+     std::optional<ParsedDestinationConfig> destination;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;  // see ParsedStreamSegment::flush
+     std::optional<uint32_t> mcast_start_hops;
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
+     // Ordered packet shapes sent in laps; expand_streams turns each segment into its own pattern.
+@@ -129,6 +133,7 @@ struct TrafficPatternConfig {
+     std::optional<uint32_t> num_packets;
+     std::optional<DestinationConfig> destination;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;  // see ParsedStreamSegment::flush
+     std::optional<uint32_t> mcast_start_hops;
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+index c1172a8efbe..537ac7efa64 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+@@ -140,6 +140,9 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const
+     if (pattern_yaml["atomic_inc_val"]) {
+         config.atomic_inc_val = parse_scalar<uint32_t>(pattern_yaml["atomic_inc_val"]);
+     }
++    if (pattern_yaml["flush"]) {
++        config.flush = parse_scalar<bool>(pattern_yaml["flush"]);
++    }
+     if (pattern_yaml["mcast_start_hops"]) {
+         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
+     }
+@@ -191,12 +194,14 @@ std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node
+                 segment.size = parse_scalar<uint32_t>(field.second);
+             } else if (key == "atomic_inc_val") {
+                 segment.atomic_inc_val = parse_scalar<uint32_t>(field.second);
++            } else if (key == "flush") {
++                segment.flush = parse_scalar<bool>(field.second);
+             } else if (key == "count") {
+                 segment.count = parse_scalar<uint32_t>(field.second);
+                 TT_FATAL(segment.count > 0, "A stream segment's 'count' must be at least 1");
+             } else {
+                 TT_THROW(
+-                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val and count; "
++                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val, flush and count; "
+                     "ftype, destination, mcast_start_hops and the packet count (repeat) apply to the whole stream",
+                     key);
+             }
+@@ -1371,6 +1376,7 @@ TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTraf
+     resolved_pattern.size = parsed_pattern.size;
+     resolved_pattern.num_packets = parsed_pattern.num_packets;
+     resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
++    resolved_pattern.flush = parsed_pattern.flush;
+     resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
+     resolved_pattern.sender_credit_info = std::nullopt;
+     resolved_pattern.credit_return_batch_size = std::nullopt;
+@@ -1819,6 +1825,10 @@ void TestConfigBuilder::validate_pattern(const TrafficPatternConfig& pattern, co
+             !pattern.atomic_inc_val.has_value(),
+             "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
+             test.name);
++        TT_FATAL(
++            !pattern.flush.has_value(),
++            "Test '{}': 'flush' should not be specified for 'unicast_write' ntype.",
++            test.name);
+     }
+ 
+     // 3. Validate payload size
+@@ -2934,6 +2944,16 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
+                 // An atomic_inc_val set on the pattern is meant for the stream's atomic segments.
+                 pattern.atomic_inc_val.reset();
+             }
++            if (segment.flush.has_value()) {
++                TT_FATAL(
++                    !is_write_only,
++                    "Test '{}': a stream segment sets flush but its ntype sends no atomic increment",
++                    test.name);
++                pattern.flush = segment.flush;
++            } else if (is_write_only) {
++                // Like atomic_inc_val, a flush set on the pattern is meant for the stream's atomic segments.
++                pattern.flush.reset();
++            }
+ 
+             // atomic_inc carries no payload, so it counts as zero bytes in bandwidth results.
+             if (pattern.ntype == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+@@ -3118,6 +3138,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TrafficPatternC
+         out << YAML::Key << "atomic_inc_val";
+         out << YAML::Value << config.atomic_inc_val.value();
+     }
++    if (config.flush) {
++        out << YAML::Key << "flush";
++        out << YAML::Value << config.flush.value();
++    }
+     if (config.mcast_start_hops) {
+         out << YAML::Key << "mcast_start_hops";
+         out << YAML::Value << config.mcast_start_hops.value();
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+index 8853acbf5e3..0c3914e41b9 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+@@ -249,6 +249,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
+     merged.size = specific.size.has_value() ? specific.size : base.size;
+     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
+     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
++    merged.flush = specific.flush.has_value() ? specific.flush : base.flush;
+     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
+     if constexpr (requires { merged.stream; }) {
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+index 28af07c75a2..65dc6c80eb2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+@@ -656,6 +656,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
+                 .payload_size_bytes = pattern.size.value(),
+                 .num_packets = pattern.num_packets.value(),
+                 .atomic_inc_val = pattern.atomic_inc_val,
++                .flush = pattern.flush,
+                 .mcast_start_hops = pattern.mcast_start_hops,
+                 .enable_flow_control = config.enable_flow_control,
+                 .seed = config.seed,
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
+index d047c1fceb0..3debce14aa2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_traffic.hpp
+@@ -151,6 +151,12 @@ struct NocUnicastAtomicIncFields {
+         dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+ 
+     void set_atomic_inc_val(uint32_t value) { this->atomic_inc_val = value; }
++    void set_flush(bool value) { this->flush = value; }
++
++    // The increment's argument word also carries the optional flush override in its top two bits
++    // (kFlushSetBit: an override is present, kFlushValueBit: its value); the kernel decodes and masks them.
++    static constexpr uint32_t kFlushSetBit = 1u << 31;
++    static constexpr uint32_t kFlushValueBit = 1u << 30;
+ 
+     template <bool IS_SOURCE>
+     std::vector<uint32_t> get_args() const {
+@@ -160,7 +166,15 @@ struct NocUnicastAtomicIncFields {
+                 throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
+             }
+         }
+-        std::vector<uint32_t> args = {atomic_inc_val.value_or(default_atomic_inc_val), dst_address};
++        uint32_t inc_word = atomic_inc_val.value_or(default_atomic_inc_val);
++        if (inc_word & (kFlushSetBit | kFlushValueBit)) {
++            log_fatal(tt::LogTest, "atomic_inc_val {} does not fit in 30 bits", inc_word);
++            throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
++        }
++        if (flush.has_value()) {
++            inc_word |= kFlushSetBit | (flush.value() ? kFlushValueBit : 0u);
++        }
++        std::vector<uint32_t> args = {inc_word, dst_address};
+         if (dst_noc_encoding.has_value()) {
+             args.push_back(dst_noc_encoding.value());
+         }
+@@ -168,6 +182,7 @@ struct NocUnicastAtomicIncFields {
+     }
+ 
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;
+     uint32_t dst_address;
+     std::optional<uint32_t> dst_noc_encoding;
+ };
+@@ -250,6 +265,7 @@ struct TrafficParameters {
+     size_t payload_size_bytes;
+     size_t num_packets;
+     std::optional<uint32_t> atomic_inc_val;
++    std::optional<bool> flush;
+     std::optional<uint32_t> mcast_start_hops;
+     bool enable_flow_control = false;
+ 
+@@ -420,6 +436,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto atomic_inc_args = atomic_inc_fields.get_args<true>();
+             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+         } break;
+@@ -431,6 +450,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+             const auto fused_args = fused_fields.get_args<true>();
+             args.insert(args.end(), fused_args.begin(), fused_args.end());
+@@ -500,6 +522,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
+             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+             break;
+@@ -510,6 +535,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
+             if (this->parameters.atomic_inc_val.has_value()) {
+                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+             }
++            if (this->parameters.flush.has_value()) {
++                atomic_inc_fields.set_flush(this->parameters.flush.value());
++            }
+             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+             const auto fused_args = fused_fields.get_args<false>();
+             args.insert(args.end(), fused_args.begin(), fused_args.end());

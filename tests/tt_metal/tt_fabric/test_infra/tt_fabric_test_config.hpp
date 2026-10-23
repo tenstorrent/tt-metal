@@ -249,6 +249,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
+    merged.flush = specific.flush.has_value() ? specific.flush : base.flush;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
     if constexpr (requires { merged.stream; }) {

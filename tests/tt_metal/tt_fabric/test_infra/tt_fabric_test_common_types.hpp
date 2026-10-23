@@ -69,6 +69,9 @@ struct ParsedStreamSegment {
     std::optional<NocSendType> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> atomic_inc_val;
+    // atomic_inc / fused_atomic_inc segments: whether the receiving router flushes earlier writes before the atomic.
+    // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
+    std::optional<bool> flush;
     uint32_t count = 1;
 };
 
@@ -82,6 +85,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;  // see ParsedStreamSegment::flush
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
     // Ordered packet shapes sent in laps; expand_streams turns each segment into its own pattern.
@@ -129,6 +133,7 @@ struct TrafficPatternConfig {
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
+    std::optional<bool> flush;  // see ParsedStreamSegment::flush
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
 

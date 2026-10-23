@@ -422,6 +422,9 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
             (command_header.flush ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
                                   : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH),
             NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
+        if (command_header.flush == NocFlushType::FLUSH_RELAXED) {
+            chunk_encodings |= (1u << ((NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS + 1) * 2));
+        }
         packet_header->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
     }
 

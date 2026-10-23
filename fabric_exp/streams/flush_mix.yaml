@@ -1,0 +1,260 @@
+# Flushed-signal benchmark (§64): fused write+atomic and standalone atomic signals with the router flush on / off,
+# per packet and once per chunk of 8 or 16 packets. 4352 B payload, 1 link, 2x4 P150x8 mesh, chip ids row-major.
+# 'flush' is the per-segment override added with streams_flush.patch (unset keeps fused=false, atomic_inc=true).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "EW_Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 48000
+      stream:
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk8Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk16Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 3000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 15}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk8Atomic_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: atomic_inc, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 48000
+      stream:
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk8Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk16Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 3000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 15}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk8Atomic_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: atomic_inc, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "NS_Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 48000
+      stream:
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk8Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk16Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 3000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 15}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk8Atomic_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: atomic_inc, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 48000
+      stream:
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk8Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk16Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 3000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 15}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk8Atomic_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 6000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 7}
+        - {ntype: atomic_inc, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}

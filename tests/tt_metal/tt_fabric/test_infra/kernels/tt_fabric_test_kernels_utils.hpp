@@ -333,23 +333,52 @@ struct NocUnicastWriteFields {
 };
 
 struct NocUnicastAtomicIncFields {
+    // The host packs an optional flush override into the increment word's top two bits (see the host-side
+    // NocUnicastAtomicIncFields::get_args): bit 31 = override present, bit 30 = its value.
+    static constexpr uint32_t kFlushSetBit = 1u << 31;
+    static constexpr uint32_t kFlushValueBit = 1u << 30;
+
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        const uint32_t inc_word = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
-        return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
+        return NocUnicastAtomicIncFields(
+            inc_word & ~(kFlushSetBit | kFlushValueBit),
+            dst_address,
+            dst_noc_encoding,
+            (inc_word & kFlushSetBit) != 0,
+            (inc_word & kFlushValueBit) != 0);
     }
 
-    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
-        atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+    NocUnicastAtomicIncFields(
+        uint32_t atomic_inc_val,
+        uint32_t dst_address,
+        uint32_t dst_noc_encoding,
+        bool flush_set = false,
+        bool flush_value = false) :
+        atomic_inc_val(atomic_inc_val),
+        dst_address(dst_address),
+        dst_noc_encoding(dst_noc_encoding),
+        flush_set(flush_set),
+        flush_value(flush_value) {}
+
+    static constexpr uint8_t kActiveFlushMode = tt::tt_fabric::NocFlushType::FLUSH_RELAXED;
+
+    // Flush flag for the packet header: the override when present, otherwise the given per-type default.
+    uint8_t flush_or(bool default_flush) const {
+        const bool should_flush = flush_set ? flush_value : default_flush;
+        return should_flush ? kActiveFlushMode : tt::tt_fabric::NocFlushType::FLUSH_NONE;
+    }
 
     uint32_t atomic_inc_val;
     uint32_t dst_address;
     uint32_t dst_noc_encoding;
+    bool flush_set;
+    bool flush_value;
 };
 
 struct NocUnicastWriteAtomicIncFields {
@@ -1235,7 +1264,8 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+    config->packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.flush_or(true)});
 
     config->noc_fields_.atomic_inc_fields = fields;
     config->payload_size_bytes = 0;
@@ -1252,7 +1282,8 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
     // Test infra allocates the payload and atomic counter on the same core, so NOC ordering preserves
-    // write-before-atomic without flushing the write pipeline.
+    // write-before-atomic without flushing the write pipeline. A pattern or stream segment can still request the
+    // flush ('flush: true') to measure the router's flushed path.
     ASSERT(fields.write_fields.dst_noc_encoding == fields.atomic_inc_fields.dst_noc_encoding);
 
     uint64_t write_noc_addr =
@@ -1262,7 +1293,10 @@ inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.flush_or(false)},
         fields.write_fields.payload_size_bytes);
 
     config->noc_fields_.write_atomic_inc_fields = fields;
@@ -1280,7 +1314,10 @@ inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKerne
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{
-            write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val, false /* flush */},
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.flush_or(false)},
         fields.write_fields.payload_size_bytes);
 }
 

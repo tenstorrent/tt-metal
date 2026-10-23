@@ -1295,6 +1295,65 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     }
 }
 
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
+inline __attribute__((always_inline)) void noc_fast_atomic_increment_set_state(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t addr,
+    uint32_t vc,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
+    posted = false;
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    noc_assert_targ_addr_mid_clear(noc, cmd_buf);
+    if constexpr (noc_mode == DM_DYNAMIC_NOC || program_ret_addr == true) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_CTRL,
+        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_AT_LEN_BE,
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_cmdbuf_chk = false>
+inline __attribute__((always_inline)) void noc_fast_atomic_increment_with_state(
+    uint32_t noc, uint32_t cmd_buf, bool posted = false) {
+    posted = false;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if (!posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, 1);
+        }
+    }
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if (!posted) {
+            noc_nonposted_atomics_acked[noc] += 1;
+        }
+    }
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     uint32_t noc,

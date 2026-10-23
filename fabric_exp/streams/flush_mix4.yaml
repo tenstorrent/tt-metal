@@ -1,0 +1,72 @@
+# Flushed-signal benchmark, chunk of 4 (§71): 3 writes + 1 fused write+atomic, router flush on / off. The shape of
+# reduce_scatter_minimal_async's short ring steps (one signal per 4-packet chunk). Same setup as flush_mix.yaml: 4352 B,
+# 1 link, 2x4 P150x8 mesh, chip ids row-major, 'flush' per-segment override (streams_flush.patch).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "EW_Chunk4Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 12000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 3}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "EW_Chunk4Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 12000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 3}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  - name: "NS_Chunk4Fused_NoFlush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 12000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 3}
+        - {ntype: fused_atomic_inc, size: 4352, flush: false}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  - name: "NS_Chunk4Fused_Flush"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      repeat: 12000
+      stream:
+        - {ntype: unicast_write, size: 4352, count: 3}
+        - {ntype: fused_atomic_inc, size: 4352, flush: true}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}

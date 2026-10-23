@@ -671,6 +671,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .payload_size_bytes = pattern.size.value(),
                 .num_packets = pattern.num_packets.value(),
                 .atomic_inc_val = pattern.atomic_inc_val,
+                .flush = pattern.flush,
                 .mcast_start_hops = pattern.mcast_start_hops,
                 .enable_flow_control = config.enable_flow_control,
                 .seed = config.seed,

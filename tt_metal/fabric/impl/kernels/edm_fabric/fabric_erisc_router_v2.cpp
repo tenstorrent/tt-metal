@@ -16,6 +16,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#define FABRIC_ERISC_ROUTER_V2 1
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
@@ -213,84 +214,6 @@ FORCE_INLINE void record_sender_channel_usage(size_t sender_channel_index, size_
     }
 }
 
-template <
-    uint8_t sender_channel_index,
-    uint8_t to_receiver_pkts_sent_id,
-    bool SKIP_CONNECTION_LIVENESS_CHECK,
-    bool SKIP_TAIL = false,
-    uint32_t REMOTE_RECEIVER_BASE_ADDR = 0,
-    typename SenderChannelT,
-    typename WorkerInterfaceT,
-    typename ReceiverPointersT>
-FORCE_INLINE void send_next_data(
-    SenderChannelT& sender_buffer_channel,
-    WorkerInterfaceT& sender_worker_interface,
-    ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    PerfTelemetryRecorder& perf_telemetry_recorder,
-    uint32_t exp_payload_size_bytes = 0) {
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
-    uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    size_t payload_size_bytes;
-    if constexpr (fabric_exp_tx_send_early_size_read) {
-        payload_size_bytes = exp_payload_size_bytes;
-    } else {
-        payload_size_bytes = pkt_header->get_payload_size_including_header();
-    }
-
-    record_sender_channel_usage(sender_channel_index, payload_size_bytes);
-
-    const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
-
-    if constexpr (!skip_src_ch_id_update) {
-        pkt_header->src_ch_id = sender_channel_index;
-    }
-
-    if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        const uint32_t prespin_start = phase_profiler.open<PHASE_TX_TXQ_PRESPIN>();
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
-        }
-        phase_profiler.close<PHASE_TX_TXQ_PRESPIN>(prespin_start);
-    }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
-
-    if constexpr (!fabric_exp_tx_send_no_write_counter) {
-        sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
-    }
-
-    if constexpr (fabric_exp_tx_lean_vc0_loop && REMOTE_RECEIVER_BASE_ADDR != 0) {
-        outbound_to_receiver_channel_pointers
-            .template advance_remote_receiver_buffer_pointer_ct<REMOTE_RECEIVER_BASE_ADDR, channel_buffer_size>();
-    } else {
-        outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
-    }
-
-    if constexpr (fabric_exp_tx_send_stride_slot) {
-        if constexpr (fabric_exp_tx_lean_vc0_loop) {
-            constexpr size_t sender_entry_idx = SENDER_TO_ENTRY_IDX[sender_channel_index];
-            constexpr size_t sender_base_addr = channel_allocs::template Entry<sender_entry_idx>::base_address;
-            sender_buffer_channel
-                .template advance_to_next_cached_buffer_slot_addr_by_stride_ct<sender_base_addr, channel_buffer_size>();
-        } else {
-            sender_buffer_channel.advance_to_next_cached_buffer_slot_addr_by_stride();
-        }
-    } else {
-        sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
-    }
-    record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
-    if constexpr (SKIP_TAIL) {
-        return;
-    }
-    remote_receiver_num_free_slots--;
-
-    const uint32_t spin_start = phase_profiler.open<PHASE_TX_TXQ_SPIN>();
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
-    }
-    phase_profiler.close<PHASE_TX_TXQ_SPIN>(spin_start);
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
-}
-
 FORCE_INLINE bool exp_local_delivery_is_data_only(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start, tt::tt_fabric::NocSendType noc_send_type) {
     if (noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE) {
@@ -373,26 +296,41 @@ FORCE_INLINE void drisc_offload_push_packet(uint32_t pkt_addr, uint32_t total_by
 }
 #endif
 
+template <bool enable_first_level_ack>
+constexpr bool can_defer_local_atomic_flush() {
+#if defined(ARCH_BLACKHOLE) && defined(FABRIC_2D) && !defined(FABRIC_DRISC_OFFLOAD) && \
+    !defined(FABRIC_2D_VC1_ACTIVE) && !defined(FABRIC_2D_VC2_SERVICED)
+    return !enable_deadlock_avoidance && !enable_first_level_ack && !udm_mode && !any_sender_channel_serviced &&
+           fuse_receiver_flush_and_completion_ptr && fabric_exp_rx_batch_completion &&
+           tt::tt_fabric::local_chip_noc_equals_downstream_noc && tt::tt_fabric::edm_to_local_chip_noc == noc_index &&
+           NUM_RECEIVER_CHANNELS == 1 && RECEIVER_NUM_BUFFERS_ARRAY[0] >= NUM_TRANSACTION_IDS &&
+           NUM_TRANSACTION_IDS == 16;
+#else
+    return false;
+#endif
+}
+
 FORCE_INLINE void generic_rx_local_delivery_impl(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
     uint16_t payload_size_bytes,
     tt::tt_fabric::NocSendType noc_send_type,
     uint8_t transaction_id,
-    uint8_t rx_channel_id) {
+    uint8_t rx_channel_id,
+    uint32_t* pending_atomic_flush = nullptr) {
     const uint32_t local_start = phase_profiler.open<PHASE_RX_LOCAL>();
     execute_chip_unicast_to_local_chip_impl(
-        packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id);
+        packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id, pending_atomic_flush);
     phase_profiler.close<PHASE_RX_LOCAL>(local_start);
 }
 
 FORCE_INLINE void generic_rx_local_delivery(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
-    uint16_t payload_size_bytes,
+    [[maybe_unused]] uint16_t payload_size_bytes,
     uint8_t transaction_id,
     uint8_t rx_channel_id) {
     auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
     generic_rx_local_delivery_impl(
-        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+        packet_start, packed.payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
 }
 
 template <typename DownstreamSenderT>
@@ -565,17 +503,43 @@ FORCE_INLINE void receiver_forward_packet(
 #endif  // !FABRIC_2D
 
 #if defined(FABRIC_2D)
+template <typename D>
+tt::tt_fabric::PacketHeaderBase<D>* packet_header_base_of(tt::tt_fabric::PacketHeaderBase<D>*);
+using PacketHeaderBaseT =
+    std::remove_pointer_t<decltype(packet_header_base_of(static_cast<PACKET_HEADER_TYPE*>(nullptr)))>;
+
+struct PackedHeaderWord40 {
+    uint16_t payload_size_bytes;
+    tt::tt_fabric::NocSendType noc_send_type;
+    uint8_t src_ch_id;
+
+    static FORCE_INLINE PackedHeaderWord40 load(const volatile PACKET_HEADER_TYPE* hdr) {
+        static_assert(offsetof(PacketHeaderBaseT, payload_size_bytes) == 40);
+        static_assert(offsetof(PacketHeaderBaseT, noc_send_type) == 42);
+        static_assert(offsetof(PacketHeaderBaseT, src_ch_id) == 43);
+        const uint32_t raw = *reinterpret_cast<const volatile uint32_t*>(
+            reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBaseT, payload_size_bytes));
+        return {
+            static_cast<uint16_t>(raw & 0xFFFFu),
+            static_cast<tt::tt_fabric::NocSendType>((raw >> 16) & 0xFFu),
+            static_cast<uint8_t>(raw >> 24)};
+    }
+};
+
 template <uint8_t rx_channel_id, typename LocalRelayInterfaceT>
 FORCE_INLINE void forward_to_local_destination(
     LocalRelayInterfaceT& local_relay_interface,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     uint16_t payload_size_bytes,
-    uint8_t transaction_id) {
+    tt::tt_fabric::NocSendType noc_send_type,
+    uint8_t transaction_id,
+    uint32_t* pending_atomic_flush = nullptr) {
     if constexpr (udm_mode) {
         execute_chip_unicast_to_relay(
             local_relay_interface, packet_start, payload_size_bytes, transaction_id, rx_channel_id);
     } else {
-        generic_rx_local_delivery(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        generic_rx_local_delivery_impl(
+            packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id, pending_atomic_flush);
     }
 }
 
@@ -618,8 +582,8 @@ constexpr bool use_2d_single_live_stateful_noc() {
     constexpr bool is_ew = my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST;
     constexpr uint8_t LIVE = live_eth_mask_2d<DOWNSTREAM_EDM_SIZE>();
 #if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED) && !defined(FABRIC_2D_VC1_ACTIVE)
-    return is_ew && LIVE == 0b0001 && NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode &&
-           !is_intermesh_router && !is_intermesh_router_on_edge && !is_intramesh_router_on_edge;
+    return is_ew && LIVE == 0b0001 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode && !is_intermesh_router &&
+           !is_intermesh_router_on_edge && !is_intramesh_router_on_edge;
 #else
     return false;
 #endif
@@ -629,10 +593,63 @@ template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWN
 FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_2d_dispatch(
     uint8_t action,
     bool ld,
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
-    LocalRelayInterfaceT& local_relay_interface) {
+    [[maybe_unused]] std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    [[maybe_unused]] LocalRelayInterfaceT& local_relay_interface) {
     constexpr uint8_t LIVE = live_eth_mask_2d<DOWNSTREAM_EDM_SIZE>();
     constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+#if !defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+    if constexpr (!udm_mode) {
+        if constexpr (LIVE == 0b0001) {
+            if (action & Routing2DCodec::action_bit(dirs[0])) {
+                constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
+                return get_ptr_val<vc0_local_free_slots_stream_id<edm_index>()>() != 0;
+            }
+            return true;
+        } else {
+            if ((action & Routing2DCodec::ACTION_ETH_MASK) == 0) {
+                return true;
+            }
+            [[maybe_unused]] int32_t free_0 = 0;
+            [[maybe_unused]] int32_t free_1 = 0;
+            [[maybe_unused]] int32_t free_2 = 0;
+            [[maybe_unused]] int32_t free_3 = 0;
+            if constexpr ((LIVE >> 0) & 1) {
+                free_0 = get_ptr_val<vc0_local_free_slots_stream_id<get_downstream_edm_interface_index<dirs[0]>()>()>();
+            }
+            if constexpr ((LIVE >> 1) & 1) {
+                free_1 = get_ptr_val<vc0_local_free_slots_stream_id<get_downstream_edm_interface_index<dirs[1]>()>()>();
+            }
+            if constexpr ((LIVE >> 2) & 1) {
+                free_2 = get_ptr_val<vc0_local_free_slots_stream_id<get_downstream_edm_interface_index<dirs[2]>()>()>();
+            }
+            if constexpr ((LIVE >> 3) & 1) {
+                free_3 = get_ptr_val<vc0_local_free_slots_stream_id<get_downstream_edm_interface_index<dirs[3]>()>()>();
+            }
+            bool ok = true;
+            if constexpr ((LIVE >> 0) & 1) {
+                if (action & Routing2DCodec::action_bit(dirs[0])) {
+                    ok = ok && (free_0 != 0);
+                }
+            }
+            if constexpr ((LIVE >> 1) & 1) {
+                if (action & Routing2DCodec::action_bit(dirs[1])) {
+                    ok = ok && (free_1 != 0);
+                }
+            }
+            if constexpr ((LIVE >> 2) & 1) {
+                if (action & Routing2DCodec::action_bit(dirs[2])) {
+                    ok = ok && (free_2 != 0);
+                }
+            }
+            if constexpr ((LIVE >> 3) & 1) {
+                if (action & Routing2DCodec::action_bit(dirs[3])) {
+                    ok = ok && (free_3 != 0);
+                }
+            }
+            return ok;
+        }
+    }
+#endif
     bool ok = true;
     if constexpr (udm_mode) {
         ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -955,66 +972,63 @@ FORCE_INLINE void update_bw_cycles(
 // ============================================================================
 // Sender-channel grouped free-slot polling & idle-channel helpers (pure C++)
 // ============================================================================
-constexpr size_t exp_grouped_packet_check_channels = ACTUAL_VC0_SENDER_CHANNELS < 4 ? ACTUAL_VC0_SENDER_CHANNELS : 4;
+constexpr size_t grouped_packet_check_channels = ACTUAL_VC0_SENDER_CHANNELS < 4 ? ACTUAL_VC0_SENDER_CHANNELS : 4;
 
 template <size_t CH>
-constexpr uint32_t exp_free_slots_reg_addr() {
+constexpr uint32_t free_slots_reg_addr() {
     return STREAM_REG_ADDR(
         sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(CH)],
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 }
 
 template <size_t CH>
-FORCE_INLINE uint32_t exp_read_free_slots_raw() {
-    return *reinterpret_cast<volatile uint32_t*>(exp_free_slots_reg_addr<CH>());
+FORCE_INLINE uint32_t read_free_slots_raw() {
+    return *reinterpret_cast<volatile uint32_t*>(free_slots_reg_addr<CH>());
 }
 
-template <size_t N = exp_grouped_packet_check_channels>
-FORCE_INLINE void exp_read_grouped_free_slots(uint32_t (&raw)[4]) {
+template <size_t N = grouped_packet_check_channels>
+FORCE_INLINE void read_grouped_free_slots(uint32_t (&raw)[4]) {
     if constexpr (N >= 1) {
-        raw[0] = exp_read_free_slots_raw<0>();
+        raw[0] = read_free_slots_raw<0>();
     }
     if constexpr (N >= 2) {
-        raw[1] = exp_read_free_slots_raw<1>();
+        raw[1] = read_free_slots_raw<1>();
     }
     if constexpr (N >= 3) {
-        raw[2] = exp_read_free_slots_raw<2>();
+        raw[2] = read_free_slots_raw<2>();
     }
     if constexpr (N >= 4) {
-        raw[3] = exp_read_free_slots_raw<3>();
+        raw[3] = read_free_slots_raw<3>();
     }
     // Compiler scheduling barrier: keeps all N stream-register loads back-to-back before ch0 masks raw[0].
     std::atomic_signal_fence(std::memory_order_seq_cst);
 }
 
-constexpr bool exp_skip_idle_channel(size_t ch) {
-    return ch >= 1 && ch < exp_grouped_packet_check_channels && is_sender_channel_serviced[ch];
+constexpr bool skip_idle_channel(size_t ch) {
+    return ch >= 1 && ch < grouped_packet_check_channels && is_sender_channel_serviced[ch];
 }
-constexpr bool exp_skip_idle_supported = [] {
+constexpr bool skip_idle_per_channel = [] {
     for (size_t ch = 1; ch <= (is_2d_fabric ? 3 : 1) && ch < MAX_NUM_SENDER_CHANNELS; ch++) {
-        if (is_sender_channel_serviced[ch] && !exp_skip_idle_channel(ch)) {
+        if (is_sender_channel_serviced[ch] && !skip_idle_channel(ch)) {
             return false;
         }
     }
     bool any = false;
-    for (size_t ch = 1; ch < exp_grouped_packet_check_channels; ch++) {
+    for (size_t ch = 1; ch < grouped_packet_check_channels; ch++) {
         if (is_sender_channel_serviced[ch]) {
-            if (!sender_ch_live_check_skip[ch]) {
+            if (!sender_ch_live_check_skip[ch] || !sender_channel_uses_counter_credits(ch)) {
                 return false;
             }
             any = true;
         }
     }
-    return any && fabric_exp_tx_lean_completions && fabric_exp_tx_grouped_packet_check && !ENABLE_FIRST_LEVEL_ACK_VC0 &&
-           !fabric_exp_tx_amortize_worker_credits && !fabric_exp_tx_upstream_on_e1;
+    return any && !ENABLE_FIRST_LEVEL_ACK_VC0;
 }();
-constexpr bool fabric_exp_tx_skip_idle_per_channel =
-    (fabric_exp_flags & EXP_TX_SKIP_IDLE_PER_CHANNEL) != 0 && exp_skip_idle_supported;
 
-constexpr bool exp_skip_idle_bit_test = [] {
+constexpr bool skip_idle_bit_test = [] {
     size_t n = 0;
-    for (size_t ch = 1; ch < exp_grouped_packet_check_channels; ch++) {
-        if (exp_skip_idle_channel(ch)) {
+    for (size_t ch = 1; ch < grouped_packet_check_channels; ch++) {
+        if (skip_idle_channel(ch)) {
             const size_t slots = SENDER_NUM_BUFFERS_ARRAY[ch];
             if ((slots & (slots - 1)) != 0 || slots >= (1u << REMOTE_DEST_WORDS_FREE_WIDTH) || (n != 0 && slots != n)) {
                 return false;
@@ -1026,8 +1040,8 @@ constexpr bool exp_skip_idle_bit_test = [] {
 }();
 
 template <size_t CH>
-FORCE_INLINE bool exp_channel_all_slots_free(uint32_t raw) {
-    if constexpr (exp_skip_idle_bit_test) {
+FORCE_INLINE bool channel_all_slots_free(uint32_t raw) {
+    if constexpr (skip_idle_bit_test) {
         return (raw & SENDER_NUM_BUFFERS_ARRAY[CH]) != 0;
     } else {
         return (raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1)) == SENDER_NUM_BUFFERS_ARRAY[CH];
@@ -1037,46 +1051,41 @@ FORCE_INLINE bool exp_channel_all_slots_free(uint32_t raw) {
 // ============================================================================
 // Sender & Receiver Channel Steps (Pure C++, Zero asm)
 // ============================================================================
+constexpr bool is_blackhole_arch =
+#if defined(ARCH_BLACKHOLE)
+    true;
+#else
+    false;
+#endif
+
+template <uint8_t sender_channel_index>
+constexpr bool sender_channel_overlaps_send_completion() {
+    return is_blackhole_arch && sender_channel_uses_counter_credits(sender_channel_index) &&
+           !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !ENABLE_RISC_CPU_DATA_CACHE;
+}
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
-    bool SKIP_CONNECTION_LIVENESS_CHECK,
     bool enable_first_level_ack,
-    uint8_t VC_RECEIVER_CHANNEL = 0,
     typename SenderChannelT,
-    typename WorkerInterfaceT,
     typename ReceiverPointersT,
-    typename ReceiverChannelT,
     typename LocalTelemetryT,
     typename SenderChannelFromReceiverCreditsT>
-#if !defined(FABRIC_2D_VC1_ACTIVE)
-FORCE_INLINE
-#endif
-    bool
-    run_sender_channel_step_impl(
-        SenderChannelT& local_sender_channel,
-        WorkerInterfaceT& local_sender_channel_worker_interface,
-        ReceiverPointersT& outbound_to_receiver_channel_pointers,
-        ReceiverChannelT& remote_receiver_channel,
-        bool& channel_connection_established,
-        uint32_t sender_channel_free_slots_stream_id,
-        SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
-        PerfTelemetryRecorder& perf_telemetry_recorder,
-        LocalTelemetryT& local_fabric_telemetry,
-        uint32_t exp_grouped_free_slots_raw = 0) {
-    bool progress = false;
+FORCE_INLINE bool sender_channel_try_send(
+    SenderChannelT& local_sender_channel,
+    ReceiverPointersT& outbound_to_receiver_channel_pointers,
+    uint32_t sender_channel_free_slots_stream_id,
+    SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
+    PerfTelemetryRecorder& perf_telemetry_recorder,
+    LocalTelemetryT& local_fabric_telemetry,
+    bool has_unsent_packet,
+    int32_t& completions_since_last_check) {
     constexpr bool use_bubble_flow_control =
         sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
     static_assert(
         !use_bubble_flow_control || enable_first_level_ack,
         "Bubble flow control and first level ack must be set to the same values");
-
-    if constexpr (fabric_exp_tx_skip_idle_per_channel && exp_skip_idle_channel(sender_channel_index)) {
-        if (exp_channel_all_slots_free<sender_channel_index>(exp_grouped_free_slots_raw) &&
-            !sender_channel_from_receiver_credits.has_completions_pending()) {
-            return false;
-        }
-    }
 
     bool receiver_has_space_for_packet;
     if constexpr (use_bubble_flow_control) {
@@ -1085,123 +1094,138 @@ FORCE_INLINE
     } else {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     }
-    uint32_t free_slots;
-    if constexpr (fabric_exp_tx_grouped_packet_check && sender_channel_index < exp_grouped_packet_check_channels) {
-        free_slots = exp_grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
-    } else {
-        free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-    }
-    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
-    bool can_send = receiver_has_space_for_packet && has_unsent_packet;
-
-    uint32_t exp_payload_size_bytes = 0;
-    if constexpr (fabric_exp_tx_send_early_size_read) {
-        if (can_send) {
-            exp_payload_size_bytes = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-                                         local_sender_channel.get_cached_next_buffer_slot_addr())
-                                         ->get_payload_size_including_header();
-            if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {
-                can_send = !internal_::eth_txq_is_busy(sender_txq_id);
-            }
+    if (!receiver_has_space_for_packet || !has_unsent_packet) {
+        if (has_unsent_packet) {
+            phase_profiler.mark_blocked();
+            phase_profiler.count_event(EVENT_TX_BLOCKED_CREDIT);
         }
-    } else if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        return false;
     }
-    constexpr bool exp_overlap_send_completion =
-#if defined(ARCH_BLACKHOLE)
-        fabric_exp_tx_send_overlap_completion && sender_channel_uses_counter_credits(sender_channel_index) &&
-        !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_send_early_txq_read && !ENABLE_RISC_CPU_DATA_CACHE;
-#else
-        false;
-#endif
-    int32_t completions_since_last_check = 0;
-    if (can_send) {
+
+    const uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
+    auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(src_addr);
+    constexpr uint32_t txq_base = ETH_TXQ0_REGS_START + sender_txq_id * ETH_TXQ_REGS_SIZE;
+    volatile uint32_t* const txq_regs = reinterpret_cast<volatile uint32_t*>(txq_base);
+
+    size_t payload_size_bytes;
+    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && is_blackhole_arch) {
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        const uint32_t raw_payload_size = pkt_header->get_payload_size_excluding_header();
+        (void)txq_regs[ETH_TXQ_CMD >> 2];
+        const uint32_t pre_txq_status = txq_regs[ETH_TXQ_STATUS >> 2];
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+
         did_something = true;
-        progress = true;
-        phase_profiler.mark_progress();
-        const uint32_t send_start = phase_profiler.open<PHASE_TX_SEND>();
+        if constexpr (!skip_src_ch_id_update) {
+            pkt_header->src_ch_id = sender_channel_index;
+        }
+        std::atomic_signal_fence(std::memory_order_seq_cst);
 
-        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            local_sender_channel.get_cached_next_buffer_slot_addr());
-        constexpr size_t rem_rx_entry_idx =
-            eth_remote_channel_allocs::receiver_channel_to_entry_index[VC_RECEIVER_CHANNEL];
-        constexpr uint32_t rem_rx_base_addr =
-            static_cast<uint32_t>(eth_remote_channel_allocs::template Entry<rem_rx_entry_idx>::base_address);
-        send_next_data<
-            sender_channel_index,
-            to_receiver_pkts_sent_id,
-            SKIP_CONNECTION_LIVENESS_CHECK,
-            exp_overlap_send_completion,
-            rem_rx_base_addr>(
-            local_sender_channel,
-            local_sender_channel_worker_interface,
-            outbound_to_receiver_channel_pointers,
-            perf_telemetry_recorder,
-            exp_payload_size_bytes);
-        if constexpr (exp_overlap_send_completion) {
-            constexpr uint32_t txq_base = ETH_TXQ0_REGS_START + sender_txq_id * ETH_TXQ_REGS_SIZE;
-            constexpr uint32_t rem_stream_addr =
-                STREAM_REG_ADDR(to_receiver_pkts_sent_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-            volatile uint32_t* const txq_regs = reinterpret_cast<volatile uint32_t*>(txq_base);
-            volatile tt_l1_ptr uint32_t* const cptr =
-                sender_channel_from_receiver_credits.completions_received_counter_ptr;
-
-            // Issue the TX-queue busy reads (BH-55 dummy CMD + STATUS) and the L1 completion-counter read
-            // back to back, fenced so the K=6 address/counter instructions below stay in the load shadow.
-            std::atomic_signal_fence(std::memory_order_seq_cst);
-            (void)txq_regs[ETH_TXQ_CMD >> 2];
-            const uint32_t txq_status_raw = txq_regs[ETH_TXQ_STATUS >> 2];
-            const uint32_t comp_raw = *cptr;
-            std::atomic_signal_fence(std::memory_order_seq_cst);
-
-            outbound_to_receiver_channel_pointers.num_free_slots--;
-            if constexpr (fabric_exp_tx_lean_vc0_loop || fabric_exp_tx_send_ct_free_slot_stream) {
-                increment_local_update_ptr_val<
-                    sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)]>(1);
-            } else {
-                increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
-            }
-            std::atomic_signal_fence(std::memory_order_seq_cst);
-
-            if (static_cast<int32_t>(txq_status_raw << 15) < 0) [[unlikely]] {
-                while (internal_::eth_txq_is_busy(sender_txq_id)) {
-                }
-            }
-            txq_regs[ETH_TXQ_DEST_ADDR >> 2] = rem_stream_addr;
-            txq_regs[ETH_TXQ_REMOTE_REG_DATA >> 2] = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
-            txq_regs[ETH_TXQ_CMD >> 2] = ETH_TXQ_CMD_START_REG;
-            if constexpr (fabric_exp_tx_lean_completions) {
-                sender_channel_from_receiver_credits.note_packet_sent();
-            }
-            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                update_bw_counters(pkt_header, local_fabric_telemetry);
-            }
-            completions_since_last_check = static_cast<int32_t>(
-                comp_raw - sender_channel_from_receiver_credits.completions_received_and_processed);
-        } else {
-            if constexpr (fabric_exp_tx_lean_completions) {
-                sender_channel_from_receiver_credits.note_packet_sent();
-            }
-            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                update_bw_counters(pkt_header, local_fabric_telemetry);
-            }
-            if constexpr (fabric_exp_tx_send_ct_free_slot_stream) {
-                increment_local_update_ptr_val<
-                    sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)]>(1);
-            } else {
-                increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        if (static_cast<int32_t>(pre_txq_status << (31 - ETH_TXQ_STATUS_CMD_ONGOING_BIT)) < 0) [[unlikely]] {
+            phase_profiler.mark_blocked();
+            phase_profiler.count_event(EVENT_TX_BLOCKED_TXQ);
+            return false;
+        }
+        payload_size_bytes = raw_payload_size + sizeof(PACKET_HEADER_TYPE);
+    } else {
+        payload_size_bytes = pkt_header->get_payload_size_including_header();
+        if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            if (internal_::eth_txq_is_busy(sender_txq_id)) {
+                phase_profiler.mark_blocked();
+                phase_profiler.count_event(EVENT_TX_BLOCKED_TXQ);
+                return false;
             }
         }
-        phase_profiler.close<PHASE_TX_SEND>(send_start);
-        phase_profiler.count_pkt();
-        fabric_experiment_spin<fabric_exp_tx_delay>();
-    } else if (has_unsent_packet) {
-        phase_profiler.mark_blocked();
-        phase_profiler.count_event(receiver_has_space_for_packet ? EVENT_TX_BLOCKED_TXQ : EVENT_TX_BLOCKED_CREDIT);
+        did_something = true;
+        if constexpr (!skip_src_ch_id_update) {
+            pkt_header->src_ch_id = sender_channel_index;
+        }
+        if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            const uint32_t prespin_start = phase_profiler.open<PHASE_TX_TXQ_PRESPIN>();
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            }
+            phase_profiler.close<PHASE_TX_TXQ_PRESPIN>(prespin_start);
+        }
     }
 
-    if (!exp_overlap_send_completion || !can_send) {
-        if (!fabric_exp_tx_lean_completions || sender_channel_from_receiver_credits.has_completions_pending()) {
+    phase_profiler.mark_progress();
+    const uint32_t send_start = phase_profiler.open<PHASE_TX_SEND>();
+    record_sender_channel_usage(sender_channel_index, payload_size_bytes);
+
+    const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
+    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+
+    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
+    local_sender_channel.advance_to_next_cached_buffer_slot_addr_by_stride();
+    record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
+
+    if constexpr (sender_channel_overlaps_send_completion<sender_channel_index>()) {
+        constexpr uint32_t rem_stream_addr =
+            STREAM_REG_ADDR(to_receiver_pkts_sent_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+        volatile tt_l1_ptr uint32_t* const cptr = sender_channel_from_receiver_credits.completions_received_counter_ptr;
+
+        // Issue the TX-queue busy reads (BH-55 dummy CMD + STATUS) and the L1 completion-counter read
+        // back to back, fenced so the K=6 address/counter instructions below stay in the load shadow.
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        (void)txq_regs[ETH_TXQ_CMD >> 2];
+        const uint32_t txq_status_raw = txq_regs[ETH_TXQ_STATUS >> 2];
+        const uint32_t comp_raw = *cptr;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+
+        outbound_to_receiver_channel_pointers.num_free_slots--;
+        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+
+        if (static_cast<int32_t>(txq_status_raw << (31 - ETH_TXQ_STATUS_CMD_ONGOING_BIT)) < 0) [[unlikely]] {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            }
+        }
+        txq_regs[ETH_TXQ_DEST_ADDR >> 2] = rem_stream_addr;
+        txq_regs[ETH_TXQ_REMOTE_REG_DATA >> 2] = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        txq_regs[ETH_TXQ_CMD >> 2] = ETH_TXQ_CMD_START_REG;
+        sender_channel_from_receiver_credits.note_packet_sent();
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+            update_bw_counters(pkt_header, local_fabric_telemetry);
+        }
+        completions_since_last_check =
+            static_cast<int32_t>(comp_raw - sender_channel_from_receiver_credits.completions_received_and_processed);
+    } else {
+        outbound_to_receiver_channel_pointers.num_free_slots--;
+        const uint32_t spin_start = phase_profiler.open<PHASE_TX_TXQ_SPIN>();
+        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        }
+        phase_profiler.close<PHASE_TX_TXQ_SPIN>(spin_start);
+        remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+
+        sender_channel_from_receiver_credits.note_packet_sent();
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+            update_bw_counters(pkt_header, local_fabric_telemetry);
+        }
+        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+    }
+
+    phase_profiler.close<PHASE_TX_SEND>(send_start);
+    phase_profiler.count_pkt();
+    fabric_experiment_spin<fabric_exp_tx_delay>();
+    return true;
+}
+
+template <
+    uint8_t sender_channel_index,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    bool enable_first_level_ack,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename SenderChannelFromReceiverCreditsT>
+FORCE_INLINE void sender_channel_process_completions(
+    WorkerInterfaceT& local_sender_channel_worker_interface,
+    ReceiverPointersT& outbound_to_receiver_channel_pointers,
+    SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
+    bool channel_connection_established,
+    bool sent_packet,
+    int32_t completions_since_last_check) {
+    if (!sender_channel_overlaps_send_completion<sender_channel_index>() || !sent_packet) {
+        if (sender_channel_from_receiver_credits.has_completions_pending()) {
             completions_since_last_check =
                 sender_channel_from_receiver_credits
                     .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -1220,7 +1244,7 @@ FORCE_INLINE
 
     if constexpr (enable_first_level_ack) {
         uint32_t acks_since_last_check = 0;
-        if (!fabric_exp_tx_lean_completions || sender_channel_from_receiver_credits.has_acks_pending()) {
+        if (sender_channel_from_receiver_credits.has_acks_pending()) {
             acks_since_last_check = sender_channel_from_receiver_credits
                                         .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         }
@@ -1232,19 +1256,133 @@ FORCE_INLINE
             phase_profiler.close<PHASE_TX_COMPLETION>(ack_start);
         }
     }
+}
 
-    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
-        auto check_connection_status =
-            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
-        if (check_connection_status) {
-            const uint32_t conn_start = phase_profiler.open<PHASE_TX_CONN>();
-            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                local_sender_channel_worker_interface,
-                channel_connection_established,
-                sender_channel_free_slots_stream_id);
-            phase_profiler.close<PHASE_TX_CONN>(conn_start);
-        }
+template <
+    uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool enable_first_level_ack,
+    typename SenderChannelT,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename LocalTelemetryT,
+    typename SenderChannelFromReceiverCreditsT>
+#if !defined(FABRIC_2D_VC1_ACTIVE)
+FORCE_INLINE
+#endif
+    bool
+    run_worker_sender_step(
+        SenderChannelT& local_sender_channel,
+        WorkerInterfaceT& local_sender_channel_worker_interface,
+        ReceiverPointersT& outbound_to_receiver_channel_pointers,
+        bool& channel_connection_established,
+        uint32_t sender_channel_free_slots_stream_id,
+        SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
+        PerfTelemetryRecorder& perf_telemetry_recorder,
+        LocalTelemetryT& local_fabric_telemetry,
+        uint32_t grouped_free_slots_raw = 0) {
+    uint32_t free_slots;
+    if constexpr (sender_channel_index < grouped_packet_check_channels) {
+        free_slots = grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+    } else {
+        free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
     }
+    const bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+
+    int32_t completions_since_last_check = 0;
+    const bool progress =
+        sender_channel_try_send<sender_channel_index, to_receiver_pkts_sent_id, enable_first_level_ack>(
+            local_sender_channel,
+            outbound_to_receiver_channel_pointers,
+            sender_channel_free_slots_stream_id,
+            sender_channel_from_receiver_credits,
+            perf_telemetry_recorder,
+            local_fabric_telemetry,
+            has_unsent_packet,
+            completions_since_last_check);
+
+    sender_channel_process_completions<
+        sender_channel_index,
+        /*SKIP_CONNECTION_LIVENESS_CHECK=*/false,
+        enable_first_level_ack>(
+        local_sender_channel_worker_interface,
+        outbound_to_receiver_channel_pointers,
+        sender_channel_from_receiver_credits,
+        channel_connection_established,
+        progress,
+        completions_since_last_check);
+
+    if (!channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request()) {
+        const uint32_t conn_start = phase_profiler.open<PHASE_TX_CONN>();
+        check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+            local_sender_channel_worker_interface, channel_connection_established, sender_channel_free_slots_stream_id);
+        phase_profiler.close<PHASE_TX_CONN>(conn_start);
+    }
+    return progress;
+}
+
+template <
+    uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool enable_first_level_ack,
+    typename SenderChannelT,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename LocalTelemetryT,
+    typename SenderChannelFromReceiverCreditsT>
+#if !defined(FABRIC_2D_VC1_ACTIVE)
+FORCE_INLINE
+#endif
+    bool
+    run_forwarding_sender_step(
+        SenderChannelT& local_sender_channel,
+        WorkerInterfaceT& local_sender_channel_worker_interface,
+        ReceiverPointersT& outbound_to_receiver_channel_pointers,
+        uint32_t sender_channel_free_slots_stream_id,
+        SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
+        PerfTelemetryRecorder& perf_telemetry_recorder,
+        LocalTelemetryT& local_fabric_telemetry,
+        uint32_t grouped_free_slots_raw = 0) {
+    bool has_unsent_packet;
+    if constexpr (skip_idle_per_channel && skip_idle_channel(sender_channel_index)) {
+        const bool all_slots_free = channel_all_slots_free<sender_channel_index>(grouped_free_slots_raw);
+        if (all_slots_free && !sender_channel_from_receiver_credits.has_completions_pending()) {
+            return false;
+        }
+        has_unsent_packet = !all_slots_free;
+    } else {
+        uint32_t free_slots;
+        if constexpr (sender_channel_index < grouped_packet_check_channels) {
+            free_slots = grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+        } else {
+            free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+        }
+        has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+    }
+
+    int32_t completions_since_last_check = 0;
+    const bool progress =
+        sender_channel_try_send<sender_channel_index, to_receiver_pkts_sent_id, enable_first_level_ack>(
+            local_sender_channel,
+            outbound_to_receiver_channel_pointers,
+            sender_channel_free_slots_stream_id,
+            sender_channel_from_receiver_credits,
+            perf_telemetry_recorder,
+            local_fabric_telemetry,
+            has_unsent_packet,
+            completions_since_last_check);
+
+    sender_channel_process_completions<
+        sender_channel_index,
+        /*SKIP_CONNECTION_LIVENESS_CHECK=*/true,
+        enable_first_level_ack>(
+        local_sender_channel_worker_interface,
+        outbound_to_receiver_channel_pointers,
+        sender_channel_from_receiver_credits,
+        /*channel_connection_established=*/true,
+        progress,
+        completions_since_last_check);
+
     return progress;
 }
 
@@ -1266,33 +1404,46 @@ FORCE_INLINE
         EthSenderChannels& local_sender_channels,
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
         ReceiverPointersT& outbound_to_receiver_channel_pointers,
-        RemoteEthReceiverChannels& remote_receiver_channels,
+        [[maybe_unused]] RemoteEthReceiverChannels& remote_receiver_channels,
         std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry,
-        uint32_t exp_grouped_free_slots_raw = 0) {
+        uint32_t grouped_free_slots_raw = 0) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
         const uint32_t visit_start = phase_profiler.open<PHASE_TX_VISIT>();
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-        const bool progress = run_sender_channel_step_impl<
-            sender_channel_index,
-            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index],
-            enable_first_level_ack,
-            VC_RECEIVER_CHANNEL>(
-            local_sender_channels.template get<sender_channel_index>(),
-            local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
-            outbound_to_receiver_channel_pointers,
-            remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
-            channel_connection_established[sender_channel_index],
-            local_sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)],
-            sender_channel_from_receiver_credits.template get<sender_channel_index>(),
-            perf_telemetry_recorder,
-            local_fabric_telemetry,
-            exp_grouped_free_slots_raw);
+        bool progress;
+        if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
+            progress = run_forwarding_sender_step<
+                sender_channel_index,
+                to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+                enable_first_level_ack>(
+                local_sender_channels.template get<sender_channel_index>(),
+                local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
+                outbound_to_receiver_channel_pointers,
+                local_sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)],
+                sender_channel_from_receiver_credits.template get<sender_channel_index>(),
+                perf_telemetry_recorder,
+                local_fabric_telemetry,
+                grouped_free_slots_raw);
+        } else {
+            progress = run_worker_sender_step<
+                sender_channel_index,
+                to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+                enable_first_level_ack>(
+                local_sender_channels.template get<sender_channel_index>(),
+                local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
+                outbound_to_receiver_channel_pointers,
+                channel_connection_established[sender_channel_index],
+                local_sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)],
+                sender_channel_from_receiver_credits.template get<sender_channel_index>(),
+                perf_telemetry_recorder,
+                local_fabric_telemetry,
+                grouped_free_slots_raw);
+        }
         phase_profiler.close<PHASE_TX_VISIT>(visit_start);
         return progress;
     }
@@ -1323,7 +1474,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     [[maybe_unused]] uint16_t my_mesh_id,
     [[maybe_unused]] uint8_t my_mesh_coord_y,
     [[maybe_unused]] uint8_t my_mesh_coord_x,
-    LocalTelemetryT& local_fabric_telemetry) {
+    LocalTelemetryT& local_fabric_telemetry,
+    [[maybe_unused]] uint32_t& rx_idle_steps,
+    [[maybe_unused]] uint32_t& pending_atomic_flush) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     int32_t pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -1420,10 +1573,15 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             ROUTING_FIELDS_TYPE cached_routing_fields{};
 #ifndef FABRIC_2D
             cached_routing_fields = packet_header->routing_fields;
-#endif
             if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
                 receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
             }
+#else
+            const auto hdr_w40 = PackedHeaderWord40::load(packet_header);
+            if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, hdr_w40.src_ch_id);
+            }
+#endif
             uint8_t action = 0;
             bool local_deliver = false;
             bool intermesh_egress = false;
@@ -1492,6 +1650,63 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     uint8_t trid =
                         receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                             receiver_buffer_index);
+                    if constexpr (can_defer_local_atomic_flush<enable_first_level_ack>()) {
+                        if (pending_atomic_flush) [[unlikely]] {
+                            if (pending_atomic_flush == 1u) {
+                                complete_pending_atomic_flush(receiver_channel);
+                                pending_atomic_flush = 0;
+                            } else {
+#if defined(ARCH_BLACKHOLE) && defined(FABRIC_2D)
+                                constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+                                const uint32_t trid_s = pending_atomic_flush & 0xFu;
+                                const bool can_bypass =
+                                    hdr_w40.noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE &&
+                                    (use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>() ||
+                                     action == Routing2DCodec::ACTION_LOCAL_DELIVER) &&
+                                    ((trid_s - trid) & 0xFu) > 1u;
+                                if (!can_bypass) {
+                                    drain_pending_atomic_flush(receiver_channel, pending_atomic_flush);
+                                } else if (pending_atomic_flush < 0x100u) {
+                                    // First write past the atomic: nothing has been issued since its packet, so every
+                                    // outstanding write is older. Read global outstanding first, then trid_s and
+                                    // trid_p = (trid_s - 1) & 0xF. Since counts only fall, g_out == s_out + p_out
+                                    // proves no write is outstanding on any other trid (regardless of ack order).
+                                    const uint32_t trid_p = (trid_s - 1u) & 0xFu;
+                                    const uint32_t acked_target = noc_nonposted_writes_acked[noc];
+                                    uint32_t g_out;
+                                    uint32_t s_out;
+                                    uint32_t p_out;
+                                    do {
+                                        const uint32_t ack_rec = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+                                        s_out = NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid_s));
+                                        p_out = NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid_p));
+                                        std::atomic_signal_fence(std::memory_order_seq_cst);
+                                        g_out = acked_target - ack_rec;
+                                    } while (g_out != s_out + p_out);
+                                    if ((s_out | p_out) == 0) {
+                                        noc_semaphore_inc_with_state<true, /*skip_cmdbuf_chk=*/true>(noc);
+                                        pending_atomic_flush = 0;
+                                    } else {
+                                        const uint32_t wait_a = s_out != 0 ? trid_s : trid_p;
+                                        const uint32_t wait_b = p_out != 0 ? trid_p : trid_s;
+                                        pending_atomic_flush = 0x100u | (wait_b << 4) | wait_a;
+                                    }
+                                } else {
+                                    const uint32_t trid_b = (pending_atomic_flush >> 4) & 0xFu;
+                                    if (ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid_s)) {
+                                        if (trid_b == trid_s ||
+                                            ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid_b)) {
+                                            noc_semaphore_inc_with_state<true, /*skip_cmdbuf_chk=*/true>(noc);
+                                            pending_atomic_flush = 0;
+                                        } else {
+                                            pending_atomic_flush = 0x100u | (trid_b << 4) | trid_b;
+                                        }
+                                    }
+                                }
+#endif
+                            }
+                        }
+                    }
                     if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
                         if (intermesh_egress) {
@@ -1512,7 +1727,13 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                             }
                             if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
-                                    local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
+                                    local_relay_interface,
+                                    packet_header,
+                                    hdr_w40.payload_size_bytes,
+                                    hdr_w40.noc_send_type,
+                                    trid,
+                                    can_defer_local_atomic_flush<enable_first_level_ack>() ? &pending_atomic_flush
+                                                                                           : nullptr);
                             }
                         }
 #endif
@@ -1535,6 +1756,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
         }
 #endif
+    }
+
+    if constexpr (can_defer_local_atomic_flush<enable_first_level_ack>()) {
+        if (!progress && pending_atomic_flush) [[unlikely]] {
+            drain_pending_atomic_flush(receiver_channel, pending_atomic_flush);
+        }
     }
 
     receiver_forward_timer.close();
@@ -1575,8 +1802,16 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             (!progress &&
              (uncompleted >= batch_target || (uncompleted != 0 && get_ptr_val<drisc_free_slots_stream_id>() ==
                                                                       static_cast<int32_t>(drisc_ring_slots))));
+#elif defined(FABRIC_2D)
+        bool should_check_completion;
+        if (progress) {
+            rx_idle_steps = 0;
+            should_check_completion = uncompleted > batch_target;
+        } else {
+            should_check_completion = uncompleted >= batch_target || (uncompleted != 0 && ++rx_idle_steps >= 4);
+        }
 #else
-        const bool should_check_completion = uncompleted > batch_target || (uncompleted != 0 && !progress);
+        const bool should_check_completion = uncompleted > batch_target || (!progress && uncompleted != 0);
 #endif
         if (should_check_completion) {
             const uint32_t batch = uncompleted > batch_target ? batch_target : uncompleted;
@@ -1595,6 +1830,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
             }
             if (can_send_completion) {
+#if !defined(FABRIC_DRISC_OFFLOAD) && defined(FABRIC_2D)
+                rx_idle_steps = 0;
+#endif
                 const uint32_t completion_start = phase_profiler.open<PHASE_RX_COMPLETION>();
                 if constexpr (skip_src_ch_id_update) {
                     receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
@@ -1667,7 +1905,9 @@ FORCE_INLINE bool run_receiver_channel_step(
     uint16_t my_mesh_id,
     uint8_t my_mesh_coord_y,
     uint8_t my_mesh_coord_x,
-    LocalTelemetryT& local_fabric_telemetry) {
+    LocalTelemetryT& local_fabric_telemetry,
+    uint32_t& rx_idle_steps,
+    uint32_t& pending_atomic_flush) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         const uint32_t visit_start = phase_profiler.open<PHASE_RX_VISIT>();
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -1692,7 +1932,9 @@ FORCE_INLINE bool run_receiver_channel_step(
             my_mesh_id,
             my_mesh_coord_y,
             my_mesh_coord_x,
-            local_fabric_telemetry);
+            local_fabric_telemetry,
+            rx_idle_steps,
+            pending_atomic_flush);
         phase_profiler.close<PHASE_RX_VISIT>(visit_start);
         return progress;
     }
@@ -1830,6 +2072,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
     receiver_channel_pointers_ch0.reset();
+    uint32_t rx_idle_steps_ch0 = 0;
+    uint32_t pending_atomic_flush_ch0 = 0;
 
 #if defined(FABRIC_2D_VC1_SERVICED)
     auto outbound_to_receiver_channel_pointer_ch1 =
@@ -1837,6 +2081,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
+    uint32_t rx_idle_steps_ch1 = 0;
+    uint32_t pending_atomic_flush_ch1 = 0;
 #endif
 
 #if defined(FABRIC_2D_VC2_SERVICED)
@@ -1970,7 +2216,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             my_mesh_id,
                             my_mesh_coord_y,
                             my_mesh_coord_x,
-                            local_fabric_telemetry);
+                            local_fabric_telemetry,
+                            rx_idle_steps_ch0,
+                            pending_atomic_flush_ch0);
 #else
                         const uint32_t rx_visit_start = phase_profiler.open<PHASE_RX_VISIT>();
                         rx_progress |= run_receiver_channel_step_speedy<
@@ -1993,9 +2241,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 } else {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-                    uint32_t exp_free_slots_raw[4] = {0, 0, 0, 0};
-                    if constexpr (fabric_exp_tx_grouped_packet_check && any_sender_channel_serviced) {
-                        exp_read_grouped_free_slots(exp_free_slots_raw);
+                    uint32_t free_slots_raw[4] = {0, 0, 0, 0};
+                    if constexpr (any_sender_channel_serviced) {
+                        read_grouped_free_slots(free_slots_raw);
                     }
                     tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
@@ -2007,7 +2255,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry,
-                        exp_free_slots_raw[0]);
+                        free_slots_raw[0]);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                     rx_progress |= run_receiver_channel_step<
                         0,
@@ -2026,7 +2274,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         my_mesh_id,
                         my_mesh_coord_y,
                         my_mesh_coord_x,
-                        local_fabric_telemetry);
+                        local_fabric_telemetry,
+                        rx_idle_steps_ch0,
+                        pending_atomic_flush_ch0);
 #else
                     rx_progress |= run_receiver_channel_step<
                         0,
@@ -2045,7 +2295,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         my_mesh_id,
                         my_mesh_coord_y,
                         my_mesh_coord_x,
-                        local_fabric_telemetry);
+                        local_fabric_telemetry,
+                        rx_idle_steps_ch0,
+                        pending_atomic_flush_ch0);
 #endif
                     tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
@@ -2057,7 +2309,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry,
-                        exp_free_slots_raw[1]);
+                        free_slots_raw[1]);
                     if constexpr (is_2d_fabric) {
                         tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                             local_sender_channels,
@@ -2069,7 +2321,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             sender_channel_from_receiver_credits,
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
-                            exp_free_slots_raw[2]);
+                            free_slots_raw[2]);
                         tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
                             local_sender_channels,
                             local_sender_channel_worker_interfaces,
@@ -2080,7 +2332,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             sender_channel_from_receiver_credits,
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
-                            exp_free_slots_raw[3]);
+                            free_slots_raw[3]);
                     }
                     if constexpr (is_2d_fabric && ACTUAL_VC0_SENDER_CHANNELS > 4) {
                         tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
@@ -2168,7 +2420,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         my_mesh_id,
                         my_mesh_coord_y,
                         my_mesh_coord_x,
-                        local_fabric_telemetry);
+                        local_fabric_telemetry,
+                        rx_idle_steps_ch1,
+                        pending_atomic_flush_ch1);
 #endif
 
 #if defined(FABRIC_2D_VC2_SERVICED)
@@ -2211,6 +2465,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
                 }
                 phase_profiler.end_iteration();
+            }
+            if constexpr (
+                is_receiver_channel_serviced[0] && can_defer_local_atomic_flush<ENABLE_FIRST_LEVEL_ACK_VC0>()) {
+                if (pending_atomic_flush_ch0) [[unlikely]] {
+                    drain_pending_atomic_flush(0, pending_atomic_flush_ch0);
+                }
             }
             phase_profiler.flush();
 
@@ -2834,17 +3094,8 @@ void kernel_main() {
     auto local_receiver_channels = tt::tt_fabric::
         ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
 
-#if !defined(FABRIC_2D_VC2_SERVICED)
-    constexpr bool exp_use_lean_stride_sender_channels =
-        fabric_exp_tx_lean_vc0_loop && fabric_exp_tx_send_stride_slot && !super_speedy_mode;
-#else
-    constexpr bool exp_use_lean_stride_sender_channels = false;
-#endif
-    using SenderChannelsAllocT = std::conditional_t<
-        exp_use_lean_stride_sender_channels,
-        tt::tt_fabric::LeanSenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>,
-        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>>;
-    auto local_sender_channels = SenderChannelsAllocT::make();
+    auto local_sender_channels =
+        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2943,26 +3194,28 @@ void kernel_main() {
                         receiver_channel_free_slots_stream_id,
                         receiver_channel_forwarding_data_cmd_buf_ids[0],
                         receiver_channel_forwarding_sync_cmd_buf_ids[0]);
-                if constexpr (is_2d_fabric) {
-                    if constexpr (use_vc0_single_live_stateful_noc) {
-                        downstream_edm_noc_interfaces_vc0[compact_index]
-                            .template setup_edm_noc_cmd_buf<
-                                tt::tt_fabric::edm_to_downstream_noc,
-                                tt::tt_fabric::forward_and_local_write_noc_vc>();
-                    }
-                } else {
-                    if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-                        downstream_edm_noc_interfaces_vc0[compact_index]
-                            .template setup_edm_noc_cmd_buf<
-                                tt::tt_fabric::edm_to_downstream_noc,
-                                tt::tt_fabric::forward_and_local_write_noc_vc>();
-                    }
+                if constexpr (
+                    NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !use_vc0_single_live_stateful_noc) {
+                    downstream_edm_noc_interfaces_vc0[compact_index]
+                        .template setup_edm_noc_cmd_buf<
+                            tt::tt_fabric::edm_to_downstream_noc,
+                            tt::tt_fabric::forward_and_local_write_noc_vc>();
                 }
                 dense_index++;
             }
             compact_index++;
             has_downstream_edm >>= 1;
         }
+#if defined(FABRIC_2D)
+        if constexpr (NUM_ACTIVE_ERISCS == 1 && use_vc0_single_live_stateful_noc) {
+            if (has_downstream_edm_vc0_buffer_connection & 0x1) {
+                downstream_edm_noc_interfaces_vc0[0]
+                    .template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            }
+        }
+#endif
     }
 #endif  // !FABRIC_DRISC_OFFLOAD
 
@@ -3249,6 +3502,16 @@ void kernel_main() {
                 edm_index++;
                 has_downstream_edm >>= 1;
             }
+#if defined(FABRIC_2D)
+            if constexpr (use_vc0_single_live_stateful_noc) {
+                if (has_downstream_edm_vc0_buffer_connection & 0x1) {
+                    downstream_edm_noc_interfaces_vc0[0]
+                        .template setup_edm_noc_cmd_buf<
+                            tt::tt_fabric::edm_to_downstream_noc,
+                            tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
+            }
+#endif
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)

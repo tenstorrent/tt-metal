@@ -2622,6 +2622,33 @@ FORCE_INLINE void noc_semaphore_inc(
     WAYPOINT("NSID");
 }
 
+template <bool posted = false>
+FORCE_INLINE void noc_semaphore_inc_set_state(
+    uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
+    SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
+
+    WAYPOINT("NSIW");
+    DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
+    DEBUG_INSERT_DELAY(TransactionAtomic);
+    noc_fast_atomic_increment_set_state<noc_mode>(
+        noc_id,
+        write_at_cmd_buf,
+        addr,
+        vc,
+        incr,
+        31 /*wrap*/,
+        false /*linked*/,
+        posted /*posted*/,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
+}
+
+template <bool posted = false, bool skip_cmdbuf_chk = false>
+FORCE_INLINE void noc_semaphore_inc_with_state(uint8_t noc_id = noc_index) {
+    noc_fast_atomic_increment_with_state<noc_mode, skip_cmdbuf_chk>(noc_id, write_at_cmd_buf, posted);
+    WAYPOINT("NSID");
+}
+
 // clang-format off
 /**
  * The Tensix core executing this function call initiates an atomic increment

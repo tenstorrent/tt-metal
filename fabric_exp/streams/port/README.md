@@ -1,5 +1,10 @@
 # Streams port into the experiment tree
 
+- `streams_flush.patch` (2026-10-22, §64): per-segment / per-pattern `flush` for atomic_inc and fused_atomic_inc
+  (host parse + merge + stream expansion + traffic args; the kernel decodes it from the top two bits of the
+  increment word). Made in the worktree first (uncommitted there), applied here with `git apply`. Undo:
+  `git apply -R streams_flush.patch`.
+
 The experiment tree currently carries `streams_p3f.patch` (applied 2026-10-16 after reversing `streams_p3d.patch`; the faster benchmark loops also run the existing single-pattern and round-robin benchmark sends).
 
 - `streams_p2.patch`: test_infra changes from branch `aagarwal/fabric-test-streams` (worktree

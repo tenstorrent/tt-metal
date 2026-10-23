@@ -149,6 +149,71 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
+FORCE_INLINE void complete_pending_atomic_flush(uint8_t rx_channel_id) {
+    flush_write_to_noc_pipeline(rx_channel_id);
+    noc_semaphore_inc_with_state<true, /*skip_cmdbuf_chk=*/true>(tt::tt_fabric::edm_to_local_chip_noc);
+}
+
+#if defined(ARCH_BLACKHOLE)
+FORCE_INLINE void complete_relaxed_atomic_flush(uint32_t trid_b, uint32_t trid_s) {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid_s));
+    if (trid_b != trid_s) {
+        while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid_b));
+    }
+    noc_semaphore_inc_with_state<true, /*skip_cmdbuf_chk=*/true>(noc);
+}
+#endif
+
+FORCE_INLINE void drain_pending_atomic_flush(uint8_t rx_channel_id, [[maybe_unused]] uint32_t& pending_atomic_flush) {
+#if defined(ARCH_BLACKHOLE)
+    if (pending_atomic_flush < 0x100u) {
+        complete_pending_atomic_flush(rx_channel_id);
+    } else {
+        complete_relaxed_atomic_flush((pending_atomic_flush >> 4) & 0xFu, pending_atomic_flush & 0xFu);
+    }
+    pending_atomic_flush = 0;
+#else
+    complete_pending_atomic_flush(rx_channel_id);
+#endif
+}
+
+FORCE_INLINE void execute_local_semaphore_inc(
+    uint64_t addr,
+    uint32_t incr,
+    uint8_t flush,
+    uint8_t rx_channel_id,
+    [[maybe_unused]] uint32_t* pending_atomic_flush = nullptr,
+    [[maybe_unused]] uint8_t last_write_trid = 0) {
+#if defined(FABRIC_ERISC_ROUTER_V2)
+    if (flush != tt::tt_fabric::NocFlushType::FLUSH_NONE) {
+        noc_semaphore_inc_set_state<true>(
+            addr, incr, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::forward_and_local_write_noc_vc);
+#if defined(ARCH_BLACKHOLE)
+        if (pending_atomic_flush != nullptr) {
+            if (!ncrisc_noc_nonposted_writes_flushed(tt::tt_fabric::edm_to_local_chip_noc)) {
+                *pending_atomic_flush =
+                    (flush == tt::tt_fabric::NocFlushType::FLUSH_RELAXED) ? (0x10u | (last_write_trid & 0xFu)) : 1u;
+                return;
+            }
+            noc_semaphore_inc_with_state<true, /*skip_cmdbuf_chk=*/true>(tt::tt_fabric::edm_to_local_chip_noc);
+            return;
+        }
+#endif
+        complete_pending_atomic_flush(rx_channel_id);
+    } else {
+        noc_semaphore_inc<true>(
+            addr, incr, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::forward_and_local_write_noc_vc);
+    }
+#else
+    if (flush != tt::tt_fabric::NocFlushType::FLUSH_NONE) {
+        flush_write_to_noc_pipeline(rx_channel_id);
+    }
+    noc_semaphore_inc<true>(
+        addr, incr, tt::tt_fabric::edm_to_local_chip_noc, tt::tt_fabric::forward_and_local_write_noc_vc);
+#endif
+}
+
 #if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
 // On DRISC, NoC1 local_chip_data_cmd_buf (write_cmd_buf = 0) is dedicated to local-chip unicast writes on
 // forward_and_local_write_noc_vc, and write_at_cmd_buf (3) is dedicated to local-chip semaphore increments.
@@ -229,7 +294,8 @@ FORCE_INLINE
         uint16_t payload_size_bytes,
         tt::tt_fabric::NocSendType noc_send_type,
         uint32_t transaction_id,
-        uint8_t rx_channel_id) {
+        uint8_t rx_channel_id,
+        uint32_t* pending_atomic_flush = nullptr) {
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
@@ -286,16 +352,18 @@ FORCE_INLINE
             const auto increment = header.command_fields.unicast_seminc.val;
 #if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
             drisc_local_semaphore_inc(
-                dest_address, increment, header.command_fields.unicast_seminc.flush, rx_channel_id);
-#else
-            if (header.command_fields.unicast_seminc.flush) {
-                flush_write_to_noc_pipeline(rx_channel_id);
-            }
-            noc_semaphore_inc<true>(
                 dest_address,
                 increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                header.command_fields.unicast_seminc.flush != tt::tt_fabric::NocFlushType::FLUSH_NONE,
+                rx_channel_id);
+#else
+            execute_local_semaphore_inc(
+                dest_address,
+                increment,
+                header.command_fields.unicast_seminc.flush,
+                rx_channel_id,
+                pending_atomic_flush,
+                static_cast<uint8_t>((transaction_id - 1u) & 0xFu));
 #endif
         } break;
 
@@ -317,11 +385,12 @@ FORCE_INLINE
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
-            const bool flush = header.command_fields.unicast_seminc_fused.flush;
+            const uint8_t flush = header.command_fields.unicast_seminc_fused.flush;
 #if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
             drisc_local_write_one_packet<true, true>(
                 payload_start_address, dest_address, payload_size_bytes, transaction_id);
-            drisc_local_semaphore_inc(semaphore_dest_address, increment, flush, rx_channel_id);
+            drisc_local_semaphore_inc(
+                semaphore_dest_address, increment, flush != tt::tt_fabric::NocFlushType::FLUSH_NONE, rx_channel_id);
 #else
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
@@ -331,14 +400,13 @@ FORCE_INLINE
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
-            if (flush) {
-                flush_write_to_noc_pipeline(rx_channel_id);
-            }
-            noc_semaphore_inc<true>(
+            execute_local_semaphore_inc(
                 semaphore_dest_address,
                 increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                flush,
+                rx_channel_id,
+                pending_atomic_flush,
+                static_cast<uint8_t>(transaction_id));
 #endif
         } break;
 
@@ -477,16 +545,18 @@ FORCE_INLINE
                     tt::tt_fabric::edm_to_local_chip_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
-                if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
-                    flush_write_to_noc_pipeline(rx_channel_id);
-                }
                 // If a semaphore increment is being performed, the increment value is fed in in the chunk size, to
                 // reduce payload size
-                noc_semaphore_inc<true>(
+                execute_local_semaphore_inc(
                     final_destination_noc_address,
                     scatter.chunk_size[last_chunk_index],
-                    tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
+                    chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
+                        ? static_cast<uint8_t>(
+                              tt::tt_fabric::NocFlushType::FLUSH_STRICT + ((packet_encoding >> 2) & 0x1u))
+                        : static_cast<uint8_t>(tt::tt_fabric::NocFlushType::FLUSH_NONE),
+                    rx_channel_id,
+                    pending_atomic_flush,
+                    static_cast<uint8_t>(transaction_id));
             } else {
                 // Every scatter write packet contains a chunk_count, and the unicast_writes above are only called for
                 // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).

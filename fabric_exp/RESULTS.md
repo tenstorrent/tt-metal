@@ -2752,6 +2752,21 @@ firmware's 8000 and BW telemetry off.
 
 ## 45. Neighbor exchange on main
 
+**Repro note (added 2026-10-21):** "main" here means main's router behavior with the harness's BW telemetry off. That
+is not what an unmodified main checkout measures.
+- These runs used the study tree: router v1 at flags 0, which behaves like main (audited for `V3_INVENTORY.md`), with
+  `TT_FABRIC_NO_BW_TELEMETRY=1`.
+- That switch exists only in this tree and on `aagarwal/fabric-test-streams`. Main's `test_tt_fabric.cpp:205`
+  forces BW telemetry on in every benchmark/latency run.
+- With telemetry on, neighbor exchange at 4 KiB is 138 cycles/packet = 40.1 GB/s here (`nbr_tel.csv`), and 39.95 on
+  a clean main checkout run as CI does (§9). With it off, 124.4 cycles = 44.5 GB/s.
+- The same caveat applies to every "main" column in §44.
+- **Goldens:** CI's golden `test_infra/golden/golden_bandwidth_summary_blackhole_p150_x4.csv` comes from
+  `test_fabric_ubench_at_least_2x2_mesh.yaml` (telemetry on, 2x2 p150_x4). Neighbor exchange, 4 KiB, 1 link:
+  golden 38.38 GB/s, clean main here 39.95, this tree with telemetry on 40.08, telemetry off 44.46.
+  - That yaml also has `NeighborExchangeLinear` (topology Linear: generic 1D router, not the speedy path). Golden
+    29.06 GB/s, clean main here 30.41 at 4 KiB. Not comparable with these numbers.
+
 The stock router, as in §44: no flags, BW telemetry off, keepalive at the firmware's 8000, and with the keepalive fix
 (1000). `topology: NeighborExchange` (`FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE`), not 1D Linear/Ring; 1 link,
 plain writes; every router runs the speedy path (§10). Script
@@ -2926,6 +2941,1525 @@ passed.
   at parity within layout noise.
 - **Caveat:** that the signal fence keeps the scheduler from moving register-only instructions across it is GCC
   behavior, not a C++ guarantee. Recheck the disassembly after compiler upgrades.
+
+## 49. Router kernel v2, third version: worker/forwarding split; `[[likely]]` and the early semaphore read cost time
+
+**The user's update** to `fabric_erisc_router_v2.cpp` (v1 unchanged):
+- `run_sender_channel_step` splits into `run_worker_sender_step` (channel 0) and `run_forwarding_sender_step`
+  (channels 1–3, chosen by `sender_ch_live_check_skip`).
+  - The forwarding step computes `all_slots_free` once and returns early, marked `[[likely]]`, when nothing is queued.
+  - It sets `has_unsent_packet = !all_slots_free`, which is exact for power-of-two slot counts.
+- The worker step reads the connection semaphore as a fourth load in the bit 23 fenced group (CMD, STATUS, completion
+  counter, semaphore). The close test becomes `!connected || conn_sem_raw == close_connection_request_value`, which
+  is equivalent to v1's.
+  - v1 also reads the semaphore every iteration, but at the end of the step, after the send. Here it moves ahead of
+    the send decision.
+- The STATUS test is now `txq_status_raw << (31 - ETH_TXQ_STATUS_CMD_ONGOING_BIT)`, the same instruction as before.
+- **Latent:** the forwarding step drops v1's bubble flow-control check. That only matters with deadlock avoidance
+  plus an injection forwarding channel, which none of our configs use.
+
+**Code generation** (E0 of 13129088, west router): STATUS is spilled to the stack right after its load
+(`lw s0,8(t0)` … `sw s0,24(sp)`), and the semaphore pointer is reloaded from the stack. The fourth load runs out of
+registers.
+
+**Full suite** (`TT_FABRIC_KERNEL_VERSION=2 dqf_runs.sh dqo dqob`, `dqv2_compare.py dqo`): all validation and
+benchmark runs passed. Mean change in cycles/packet against v1 (second v2, `dql`, in brackets):
+
+| Suite | ERISC-only | offload |
+| --- | ---: | ---: |
+| 4352 | +1.07 (−0.03) | +1.74 (+0.10) |
+| mix | +4.99 (−0.46) | +3.71 (−0.44) |
+| 4352_trim | +1.16 (+0.42) | +1.11 (+0.27) |
+| mix_trim | +2.41 (+0.99) | +2.53 (+0.93) |
+| small | +2.70 (+1.42) | +2.91 (+1.40) |
+
+- Worst rows: ERISC-only untrimmed E/W 16 B write 137.0 → 152.9, 1-hop E/W 4352 B 132.5 → 138.3.
+- W32 offload is the only suite that improves: 4352 −2.16, mix −1.41.
+- 16 B latency +19 to +63 ns, growing with hops (ERISC-only 3-hop +56, offload 3-hop +63). 4096 B latency +2 to +48.
+
+**A/B of the two suspects** (ERISC-only, `abv2c.py`, each variant patched into the user's file and then restored):
+`nolikely` removes the `[[likely]]`; `nosem` reads the semaphore after the send as v1 does; `both` does both.
+
+| Variant | mix | mix_trim | 1-hop E/W 4352 | E/W 16 B | E/W 16 B replay | 1-hop E/W 16 B lat | 3-hop 16 B lat |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v1 | 0 | 0 | 132.5 | 137.0 | 121.9 | 1356 | 3456 |
+| dql (second v2) | −0.46 | +0.99 | 132.5 | 135.4 | 129.2 | 1356 | 3454 |
+| dqo (third v2) | +4.99 | +2.41 | 138.3 | 152.9 | 122.1 | 1383 | 3513 |
+| nolikely | +1.36 | +0.11 | 132.7 | 142.6 | 122.0 | 1383 | 3502 |
+| nosem | +2.35 | +1.96 | — | 148.0 | 131.3 | — | — |
+| both | −0.58 | +1.27 | 132.7 | 135.0 | 131.3 | 1356 | 3461 |
+
+- **`[[likely]]` is the main cost**, as with bit 25 (§40). Removing it brings 1-hop 4352 B back to v1 (138.3 → 132.7)
+  and the mix mean from +4.99 to +1.36. The 4352 B suites of both variants are at v1 (mean −0.02 / +0.05).
+- **The early semaphore read is a trade-off.**
+  - It brings the trimmed E/W 16 B replay to v1 (131.3 → 122.0).
+  - It costs +7.6 on the untrimmed E/W 16 B write (135.0 → 142.6).
+  - It costs 16 B latency: +27 ns at 1 hop, +41 ns at 3 hops (`nolikely` against `both`). The send now waits
+    behind one more L1 load plus the spill on every router it crosses.
+- `both` is the second v2 (`dql`) plus the split, and it measures the same.
+- Nothing here beats v1 beyond layout noise (§37, §40).
+
+## 50. Router kernel v2, fourth version: at or below v1 everywhere except the W32 offload build
+
+**The user's update** to `fabric_erisc_router_v2.cpp` (v1 unchanged):
+- `sender_channel_try_send` absorbs `send_next_data`. It owns the whole TX-queue send:
+  - the space check, with bubble flow control restored for injection channels (fixes §49's gap);
+  - the TX-queue busy check;
+  - the send, pointer advances and the bit 23 group (CMD, STATUS, completion counter; no semaphore);
+  - the free-slot increment and the remote doorbell.
+- `sender_channel_process_completions` owns the completion and ack handling and the upstream credit return.
+- `run_worker_sender_step` and `run_forwarding_sender_step` call those two functions.
+  - The forwarding step keeps the idle early return without `[[likely]]`.
+  - The worker step checks the connection at the end, after the send, as v1 does.
+- The liveness-skip template argument matches v1: true for forwarding channels, false for the worker channel.
+- Experiment bits 3 and 9 (lazy connection check, upstream on E1) are not handled. Earlier v2s didn't handle them
+  either, and neither build sets them.
+
+**Code generation** (E0 of 13129088, west router): CMD, STATUS and the completion counter load back to back
+(`0x9058`–`0x9060`). STATUS stays in a register until its test 8 instructions later, so §49's spill is gone.
+2,796 instructions (second v2: 2,842; third v2: 2,847).
+
+**Full suite** (`TT_FABRIC_KERNEL_VERSION=2 dqf_runs.sh dqq dqqb`, `dqv2_compare.py dqq`): all validation and
+benchmark runs passed (stream 10/0, mesh 96/0 twice). Mean change in cycles/packet against v1:
+
+| Suite | ERISC-only | offload | offload W32 |
+| --- | ---: | ---: | ---: |
+| 4352 | +0.11 | +0.14 | **+3.36** |
+| mix | −0.12 | +0.10 | **+4.54** |
+| 4352_trim | −0.42 | −0.51 | |
+| mix_trim | −0.62 | −0.53 | |
+| small | −0.66 | −0.57 | |
+
+- **Trimmed first passes improve 2–4 cycles on v1** in both builds, for example E/W 16 B 156.1 → 152.9 and
+  1-hop E/W bidirectional 4352 B 156.4 → 152.4.
+- **Trimmed E/W 16 B replay** is at v1 (122.0 against 121.9) without §49's early semaphore read. The second v2 was at 129.2.
+- **Untrimmed small writes** are 0.6–0.8 below v1.
+- **Latency:** 16 B within noise (−5 to +9 ns, one +9 fused row). 4096 B +2 to +9 ns at 1 hop, +19 to +31 ns at 3 hops.
+- **W32 offload regresses:** E/W rows +11.2 at every size, N/S +5, 3-hop +4.
+  - A rerun reproduces it (`dqq2`: E/W 142.2).
+  - The second v2 rerun in the same session matches its earlier numbers (`dqlr`: 131.9 against 132.0), so the
+    machine has not drifted.
+  - The third v2 was the best W32 build (128.6).
+  - Uniform across sizes means a per-packet loop cost on one core, most likely E0 of the W32 build (32 worker
+    slots, 8-slot senders). That is unconfirmed. Code layout moves this binary by this much (§37, §40), but it has
+    not been checked.
+
+**Cleanup of the fourth version** (`dqr`, reduced suite):
+- **The change:** the TX experiment flags in v2 are hard-wired to the 13129088 setting, and the `exp_` names are dropped.
+  - Always on: bits 7, 8, 10, 12, 14, 19, 23.
+  - Removed: bits 6, 11, 13, 24. This includes the lean sender-channel type.
+  - Only bits 21 and 22 and the delay knobs still change v2.
+- **Fix:** it first failed to compile. The removed `exp_local_delivery_is_data_only` is still called by
+  `fabric_erisc_router_speedy_path.hpp:295`, so I restored it unchanged.
+- **E0 is instruction-identical** to the fourth version (2,796 instructions).
+- **Measured:** every run passed. Means against v1 match the fourth version within 0.02, and no row moved by 1 cycle
+  or more: ERISC-only 4352 +0.11, mix −0.12, mix_trim −0.63, offload mix +0.09, W32 4352 +3.34. Latency is within
+  ±5 ns of the fourth version.
+
+## 51. Grouped pre-send loads: a win, but only if a busy TX queue still returns to the loop
+
+**The user's update** to `sender_channel_try_send` (Blackhole, no spin-wait build):
+- Before the send, the payload-size L1 read and the TX-queue dummy CMD and STATUS reads are issued as one fenced group.
+- The payload size is computed as `excluding_header + sizeof(PACKET_HEADER_TYPE)`. That equals
+  `get_payload_size_including_header()` for every header type, including the UDM header's override.
+- **Behavior change:** when STATUS shows the queue busy, the channel spins until it is free and then sends.
+  - Before, and in v1 with bit 14, the channel returned `false` and the loop moved on.
+  - `EVENT_TX_BLOCKED_TXQ` is no longer counted on Blackhole.
+- **Code generation** (E0 of 13129088): the group is `lhu` size, CMD, STATUS, and STATUS is tested 5 instructions
+  later, the same shape as before. 2,808 instructions (cleanup: 2,796).
+
+**Measured** (`dqt`, reduced suite): all runs passed. Mean change against v1, with the cleanup (`dqr`) in brackets:
+ERISC-only 4352 +1.11 (+0.11), mix +4.23 (−0.12), mix_trim +1.65 (−0.63), offload mix +3.25 (+0.09),
+W32 4352 +2.22 (+3.34).
+- Untrimmed 16 B–1 KiB writes +13–14 (E/W 136.4 → 149.7).
+- Trimmed first passes +7 to +14, offload small writes +7.7, 1-hop 4352 B +3.6.
+- Latency within +9 ns.
+
+**A/B** (`dqtyb`, ERISC-only): the update unchanged except that a busy queue returns `false` as before.
+
+| Row | v1 | cleanup | update (spin) | update + return false |
+| --- | ---: | ---: | ---: | ---: |
+| 4352 mean vs v1 | 0 | +0.11 | +1.11 | +0.02 |
+| mix mean vs v1 | 0 | −0.12 | +4.23 | −0.66 |
+| 1-hop E/W 4352 | 132.5 | 133.0 | 136.6 | 132.8 |
+| E/W 16 B write | 137.0 | 136.4 | 149.7 | 134.3 |
+| N/S 16 B write | 134.1 | 133.4 | 147.5 | 132.2 |
+
+- **The spin is the whole regression.** When the old code found the queue busy, it went back to the loop and did its
+  other work while the queue drained. The spin makes that work wait until after the send.
+- **The grouped loads on their own are a win:** small writes 2.1 below the cleanup and 2.7 below v1 (E/W).
+- In this variant `did_something` is set before the busy check, so a yield still counts as activity. It only affects
+  idle context switching, and a channel with a packet waiting is not idle.
+
+## 52. Router kernel v2 with the yield change: best on small and forwarded writes, W32 worse again
+
+**The user's change:** byte-identical to §51's A/B variant, where a busy TX queue returns `false`.
+
+**Measured** (`dqu`, reduced suite): all runs passed. Mean change against v1, with the cleanup (`dqr`) in brackets:
+
+| Suite | `dqu` | cleanup |
+| --- | ---: | ---: |
+| ERISC-only 4352 | +0.02 | +0.11 |
+| ERISC-only mix | −0.67 | −0.12 |
+| ERISC-only mix_trim | +0.00 | −0.63 |
+| offload mix | −0.57 | +0.09 |
+| offload W32 4352 | **+6.75** | +3.34 |
+
+- **Repeatable:** ERISC-only 4352 and mix match §51's A/B run within 0.01.
+- **Better than the cleanup:**
+  - Untrimmed small writes: E/W 136.4 → 134.3, N/S 133.4 → 132.2.
+  - Offload forwarded small writes: 114.7 → 112.4.
+- **Worse than the cleanup:** trimmed first passes +2.2 to +3.5. They are back at v1's level, so the cleanup's gain is
+  gone. Trimmed E/W small-write replays +1.5 to +1.7 (123.6 against v1 121.9).
+- **W32 offload worsens again** against v1: N/S 147.1 (133.4), 1-hop E/W 144.7 (131.0), bidirectional 149.5
+  (131.6).
+  - The W32 mean against v1 by version: dql −1.16, third v2 −2.16, fourth v2 +3.36, cleanup +3.34, spin +2.22,
+    yield +6.75.
+  - That binary moves several cycles with each edit, in both directions. The cause is still unconfirmed.
+- **Latency** is within ±11 ns of v1.
+
+## 53. E1 experiments in v2: stateful E/W forwarding brings ERISC-only multi-hop to the DRISC offload's level
+
+**The user's three E1 changes** in `fabric_erisc_router_v2.cpp`, as E1 bits 26–28. These are new; the old §35–§37
+bits with the same numbers are gone from the tree.
+- **Bit 26:** load header word 40 (payload size, send type, `src_ch_id`) once, after admission, and pass the values
+  to forwarding and local delivery. `src_ch_id` is no longer written before admission. Only admitted slots read it.
+- **Bit 27:** stateful NoC1 forwarding on two-ERISC E/W routers with one live direction.
+  - Main allowed this only in single-ERISC mode.
+  - E1 re-programs downstream 0's command buffers last at init, after the loop over all downstream connections.
+  - E1 forwards on NoC1 buffers 2 (data) and 1 (sync). Its local writes use buffer 0 and its atomics and inline writes
+    use buffer 3. E0 runs on NoC0 (the builder sets ERISC 0 to NOC_0 and ERISC 1 to NOC_1).
+  - Still unverified from source: whether base firmware touches NoC1 buffers 1/2 during E0's context switch. Main's
+    single-ERISC stateful path makes the same assumption.
+- **Bit 28:** admission with compile-time stream IDs. Same registers as the adapter's `edm_has_space_for_packet`.
+  The stream reads are issued back to back, and local-only packets return early.
+- **Fix needed to compile:** `PackedHeaderWord40` took `offsetof` on the non-standard-layout header
+  (`-Werror=invalid-offsetof`), failing every variant. It now takes the offsets on the header's deduced
+  `PacketHeaderBase`, as `PackedPayloadAndSendType` does.
+
+**Measured** (`fabric_exp/dqx_runs.sh`, ERISC-only, labels `dqx_<flags>_*`):
+- Every variant passed mesh validation (96/0) and every benchmark.
+- The new baseline with all bits off matches §52 within 0.05, so the restructure is neutral.
+
+| Row | v1 | base | +26 | +28 | +27 | 27+28 | all |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4352 mean vs base | −0.07 | 0 | +0.83 | −0.97 | −3.22 | **−3.38** | −2.83 |
+| mix mean vs base | +0.66 | 0 | +0.50 | 0.00 | +0.26 | +0.23 | +0.47 |
+| 3-hop E/W write | 157.2 | 157.0 | 161.5 | 152.2 | 143.7 | **143.4** | 146.0 |
+| multicast write | 154.7 | 154.5 | 152.8 | 152.1 | 142.1 | **141.6** | 141.1 |
+| multicast scatter | 197.6 | 197.7 | 196.6 | 195.3 | 188.1 | **187.6** | 188.2 |
+| 1-hop/forwarded scatter, atomic, fused | — | — | +1.9 | 0 | +1.0 | +1.0 | +1.9 |
+| forwarded small writes | 115.1 | 115.1 | 117.1 | 115.1 | 116.1 | 116.0 | 117.1 |
+| 3-hop latency 16 B (ns) | 3456 | 3466 | 3484 | 3446 | 3396 | **3387** | 3402 |
+| 3-hop latency 4 KiB (ns) | 4326 | 4341 | 4345 | 4319 | 4306 | **4290** | 4316 |
+
+- **Bit 27 carries the gain:** 3-hop −13.3 and multicast −12.4. E/W 1-hop rows don't move, as expected, since E0
+  binds them.
+  - At 4352 B, 3-hop is now 41.0 GB/s and multicast 41.5 GB/s.
+  - ERISC-only best before this was 37.4 and 38.0 (§44). DRISC offload v4 is 40.9 and 41.8.
+- **Bit 27 also costs +1.0 on scatter, atomic, fused and forwarded rows**, uniformly across sizes. That looks like a
+  per-packet cost or layout on one core; not investigated.
+- **Bit 28 alone:** 3-hop −4.8, with no row worse. On top of 27 it adds only −0.3 to −0.5; the two mostly overlap.
+- **Bit 26 makes things worse** alone (3-hop +4.5, forwarded +2, atomics/fused/scatter +1.9) and in combination (all
+  vs 27+28: 3-hop +2.6).
+  - The removed loads probably overlapped other work already. Moving the word-40 load after admission likely puts
+    it on the critical path. Not checked in the disassembly.
+- **Offload build:** baseline and +26 are equal (+0.03 / +0.02). The DRISC sets the rate there.
+- **Recommendation:** keep 27 and 28, drop 26.
+
+## 54. E1 on 1-hop writes: ~125 cycles/packet in total, of which the timed phases are ~80
+
+**Setup:** current best ERISC-only build, v2 at 13129088 + E1 bits 27/28 (415782272), 4352 B suite
+(`fabric_exp/dqe1_runs.sh`). E1 spins `TT_FABRIC_EXP_RX_DELAY` cycles per packet. A fully E1-bound row (multicast)
+gives the spin's real cost: +20 adds 23.1 cycles.
+
+| Row | no delay | RX +20 | +40 | +60 | +80 | E1 slack | E1 per packet |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W write | 132.8 | 147.1 | 172.0 | 190.0 | 208.1 | ~9 | **~124** |
+| 1-hop N/S write | 132.6 | 150.3 | 175.1 | 193.0 | 211.1 | ~5 | **~127** |
+| 1-hop E/W bidirectional | 139.0 | 147.5 | 172.0 | 189.9 | 207.8 | ~15 | ~124 |
+| 3-hop E/W write | 143.4 | 161.1 | 186.0 | 204.0 | 222.0 | ~5 | (E1-bound) |
+| multicast write | 141.6 | 164.7 | 186.7 | 203.9 | 219.8 | 0 | (E1-bound) |
+
+- **E1 has little slack on 1-hop writes:** about 124–127 cycles/packet against a 132.8 interval. Stages near balance
+  lose a few cycles, so the true figure may be a little lower (§26).
+- **The ~80 figure counts only E1's timed phases.** From §39's level-2 profile (v1, same E1 receive path), per
+  packet:
+  - decode/admit 21.0 (E/W) / 36.1 (N/S);
+  - local write 50.1;
+  - completion 18.8 / 17.9, from 0.36 / 0.31 batches per packet at ~52 cycles each.
+    - Corrected 2026-10-21: an earlier version of this bullet said "~7 per packet (18.8 per batch)". The profiler
+      reports ticks per packet.
+
+  Raw that sums to ~90 / ~104. Minus the ~4-cycle timer self-cost per timed occurrence it is ~80 / ~95. The rest,
+  roughly 45 (E/W) / 32 (N/S), is broken down in §55.
+- **E1 in offload mode** (blind push to the DRISC, §26) is ≤ 86 in total, because it skips local delivery.
+- **Level-1 profile** (`dqe1_prof1_*`): the timestamps stretch the loop to ~223, but both ERISCs read ~93% busy on
+  1-hop writes. Both are near saturation, consistent with the slack test.
+
+## 55. Where E1's ~125 cycles go on a 1-hop write
+
+**Method** (`fabric_exp/dqe1s_runs.sh`, `exp_2d_4352_1hop_write.yaml`, the user's v2 with E1 bits 27/28 hard-wired,
+flags 13129088):
+- Each run times one segment at level 2, with no per-iteration timing (`TT_FABRIC_PHASE_NO_ITER=1`).
+- The phase mask is compile-time, so the run carries exactly one timer pair. Net = raw ticks minus the calibrated
+  4.0 per occurrence.
+- Four extra E1 segments come from a temporary instrumented copy of v2, on phase IDs E0 never hits in this traffic.
+  The user's file was restored and byte-checked.
+- Level 2 still increments a counter on every phase `close`, which slows the profiled runs to 210–260 overall. That
+  cost falls outside the segments: no segment contains another phase's close except the completion send inside the
+  completion block, which is subtracted.
+
+| E1 segment, per packet | E/W | N/S | What runs there |
+| --- | ---: | ---: | --- |
+| packet poll | 9.2 | 9.2 | packets-received stream-register read, used at once (§17: 7), plus the test |
+| decode/admit (phase) | 17.1 | 20.1 | header and route decode, admission |
+| post-admit | 13.1 | 13.0 | transaction-ID tracker update; the local-only pass through `forward_2d_dispatch` (loads `payload_size_bytes`); `generic_rx_local_delivery` loading header word 40 again |
+| local write (phase) | 51.1 | 52.2 | the NoC write |
+| post-local | 6.0 | 6.0 | sent-counter increment, packets-received stream decrement |
+| completion decision | ~11 | ~11 | bit 22 bookkeeping every iteration; every 4th packet the write-flushed and TX-queue busy reads |
+| completion send (phase) | ~14 | ~14 | credit frame for a batch of 4, ~57 per batch × 0.25 |
+| loop | ~2 | ~2 | inner-loop branch; outer checks once per 32 iterations (§17) |
+| **total** | **~124** | **~128** | slack test (§54): ~124 / ~127 |
+
+- **The untimed ~41 is not mostly polling.**
+  - The poll is 9.
+  - About 13 is the gap between admission and the local write.
+  - 6 is retiring the packet.
+  - About 11 is bit 22's per-iteration completion bookkeeping.
+  - The loop itself costs ~2.
+- **Post-admit (13) is two L1 header loads that cost their full latency.** `forward_2d_dispatch` loads the payload
+  size even for local-only packets, and the local-delivery wrapper then loads word 40 again.
+  - This is from the source, not checked in the disassembly.
+  - Bit 26 tried to remove the duplicate and got slower (§53). A version that skips the forward-dispatch load only
+    when no Ethernet direction is set might keep the gain without moving a load onto the critical path. Untested.
+- **N/S decode/admit fell from 36 (v1, §39) to 20**, with bit 28's compile-time admission. E/W is unchanged at 17.
+- **The completion decision (~11)** includes, every 4 packets, the write-flushed and TX-queue reads (§17: up to 8 if
+  not grouped).
+- Idle iterations add the poll plus the completion decision, which can send a partial batch. E1 has 5–9 cycles of
+  slack, so unprofiled there are few.
+
+## 56. E1 local-delivery header loads: a faster E1 can slow E0 through bit 22's completion batching
+
+**Premise check (disassembly, E/W and N/S E1 of the user's v2):** §55's guess was wrong.
+- `forward_2d_dispatch`'s payload-size load is already sunk into the forward branches. On N/S, bit 28's early return
+  skips it too, so local-only packets never execute it.
+- The local path loads header word 40 three times:
+  - `lbu 43` (`src_ch_id`), before admission;
+  - `lhu 40`, the payload size the caller passes;
+  - `lw 40` in `generic_rx_local_delivery`, for the send type, used at once by the jump-table dispatch.
+
+**Variants** (`fabric_exp/dqpa_runs.sh`, `dqpa_compare.py`; whole-file swaps, the user's file restored and checked):
+- **A:** `generic_rx_local_delivery` takes the payload size from its own packed word-40 load, so the caller's `lhu`
+  is dead.
+- **B:** A, plus the pre-admission `src_ch_id` byte load widened to one 32-bit word-40 load (base pointer + `offsetof`
+  on the deduced `PacketHeaderBase`). 2D local delivery reuses its payload size and send type, so the dispatch no
+  longer waits on a load.
+  - The first two attempts at B failed `-Werror=strict-aliasing`: a `uint16_t` member's address was cast to
+    `uint32_t*`, directly and then through `uintptr_t`.
+
+**Measured** (ERISC-only, flags 13129088): every variant passed mesh validation (96/0) and every benchmark.
+- **Base (the user's hard-wired file) equals the bit-27/28 flag build:** +0.02 / −0.01.
+
+| Row | v1 | base | A | B |
+| --- | ---: | ---: | ---: | ---: |
+| 4352 mean vs base | +3.33 | 0 | −0.37 | **−2.72** |
+| mix mean vs base | +0.42 | 0 | −0.23 | **−1.42** |
+| 1-hop E/W scatter | 169.5 | 170.5 | 169.4 | 164.4 |
+| E/W atomic | 135.2 | 136.2 | 135.1 | 130.4 |
+| E/W fused | 157.6 | 158.6 | 158.4 | 153.4 |
+| forwarded 16 B write | 115.1 | 116.1 | 116.0 | 111.5 |
+| multicast write / scatter | 154.7 / 197.6 | 141.6 / 187.5 | 142.4 / 187.4 | 139.7 / 183.1 |
+| 1-hop E/W 4352 B write | 132.5 | 132.8 | 132.8 | 132.1 |
+| E/W 16 B / 1 KiB write (stream) | 137.0 / 137.3 | 133.5 / 133.6 | 133.6 / 133.7 | **138.1 / 138.3** |
+| N/S 16 B write (stream) | 134.1 | 132.2 | 132.2 | 132.9 |
+
+- Latency: A and B are within ±12 ns of base.
+- **A** recovers the +1.0 that bit 27 cost on scatter and atomics, back to v1, and changes nothing else. 1-hop
+  writes don't move, as §17 predicted: two back-to-back L1 loads cost about the same as one used at once.
+- **B** gains 5–6 on every E1-bound row, but E/W 16 B–1 KiB writes get +4.6.
+
+**Why B slows E/W small writes** (`dqpa_slack_runs.sh`, `p3_small_ew_ns.yaml`, `dqpat_*`):
+- **E0's binary is instruction-identical** in base and B (all eight E0 builds compared); only E1 changed.
+- **Slack test, E/W 16 B write:**
+
+  | | rate | TX +20 | RX +20 |
+  | --- | ---: | ---: | ---: |
+  | base | 133.5 | 179.3 | 146.7 |
+  | B | 138.1 | 179.7 | 141.7 |
+
+  E1's slack grew (RX +20 costs +3.6 against +13.2), so E1 is faster. E0 binds.
+- **TX-queue counters** (`TT_FABRIC_TXQ_COUNTERS=1`), receiving E1, 48,000 packets. One transfer per completion
+  frame (§57 check: at 4352 B, 12,195 transfers = bit 22's batch of 4):
+  - base: 24,107 frames (~2.0 packets per frame);
+  - B: 38,856 (~1.24 per frame);
+  - at 4352 B the count doesn't change (12,195 / 12,161, ~3.9 per frame).
+  - Corrected 2026-10-21: an earlier version said ~4.0 and ~2.5, assuming 2 transfers per frame. The ratio, and the
+    conclusion, are unchanged.
+- **Mechanism:** with B's faster E1 the stream runs dry more often, and bit 22 flushes a partial batch on any idle
+  iteration (`uncompleted != 0 && !progress`). E0 then processes ~60% more completion frames, and E0 pays per frame
+  (§26). So an E1 speed-up turns into an E0 slow-down on E0-bound rows.
+- **Next step:** pair B with a partial-batch hold that only flushes after N consecutive idle polls and resets on
+  progress, like the §37 design. §37's hold was mixed when E1 had little slack; it should matter more now. Untested.
+
+## 57. E1 word-40 reuse plus a partial-batch hold: best ERISC-only build so far
+
+**The user's update to v2:**
+- **Variant A** (§56) is folded in unconditionally.
+- **E1 bit 26** = variant B: the pre-admission `src_ch_id` load widened to `PackedHeaderWord40::load` (base pointer +
+  `offsetof` on the deduced `PacketHeaderBase`), with payload size and send type reused by local delivery.
+- **E1 bit 28** = a partial-batch hold on top of bit 22.
+  - Iterations with progress keep the stock "> 4" rule.
+  - On idle iterations a full batch still flushes at once, while a 1–3 packet tail waits for 4 consecutive idle
+    polls.
+  - The counter is a per-receiver-channel local, increments only while something is pending, and resets on progress
+    or on a send. So the hold is bounded and cannot deadlock.
+- **Reviewed:** `src_ch_id` is set exactly once on 1D and 2D paths, and forwarding is unchanged. Compiled first try.
+
+**Measured** (`fabric_exp/dqhd_runs.sh`, `dqhd_compare.py`, labels `dqhd_<flags>_*`, ERISC-only): all four values passed
+mesh validation (96/0) and every benchmark. Cycles/packet:
+
+| Row | v1 | A (13129088) | B (+26) | A+hold (+28) | **B+hold (+26+28)** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4352 mean vs A | +3.71 | 0 | −2.38 | +0.24 | **−2.74** |
+| mix mean vs A | +0.66 | 0 | −1.20 | −0.97 | **−3.21** |
+| 1-hop E/W write 4352 | 132.5 | 132.8 | 132.0 | 132.7 | **130.6** |
+| E/W 16 B / 1 KiB write | 137.0 / 137.3 | 133.6 / 133.7 | 138.1 / 138.3 | 128.0 / 128.2 | **128.3 / 128.3** |
+| N/S 16 B write | 134.1 | 132.2 | 132.9 | 128.4 | **128.3** |
+| 1-hop E/W scatter | 169.5 | 169.4 | 164.4 | 170.0 | **164.0** |
+| 1-hop N/S scatter | 176.9 | 175.7 | 174.6 | 173.4 | **172.3** |
+| E/W atomic / fused | 135.2 / 157.6 | 135.1 / 158.4 | 130.4 / 153.4 | 135.6 / 158.0 | **130.1 / 152.0** |
+| forwarded 16 B write | 115.1 | 116.0 | 111.5 | 116.6 | **111.4** |
+| multicast write / scatter | 154.7 / 197.6 | 142.4 / 187.4 | 139.8 / 183.1 | 143.6 / 188.8 | **140.9 / 184.1** |
+| N/S atomic | 138.2 | 137.2 | 136.3 | 139.0 | 138.0 |
+| packets per completion frame, E/W 16 B (TX-queue counters) | | 1.59 | 1.25 | 3.87 | 3.76 |
+
+- **The hold fixes what B broke.** It restores ~3.8–3.9 packets per completion frame on small writes (4352 B rows stay
+  at ~3.94).
+- **The hold also helps on its own.** Variant A already left E1 enough slack to flush partial batches (1.59 per
+  frame). Holding them takes small writes from 133.6 to 128.0 on E/W and from 132.2 to 128.4 on N/S.
+- **B+hold keeps both gains:**
+  - small writes −4 to −5;
+  - scatter, atomics, fused and forwarded rows −4.6 to −6.4;
+  - 1-hop E/W 4352 B write 130.6. That is 45.0 GB/s, equal to DRISC offload v4's 44.9 (§44) and 96% of the wire
+    (125.4).
+- **Costs of the hold:**
+  - N/S atomic +0.8 against A;
+  - multicast write −1.5 against A, but +1.1 against B alone;
+  - 3-hop 16 B latency +23 to +27 ns (3379 → 3402 / 3406).
+  - Other latency rows are within ±13 ns.
+  - With a single packet in flight the hold should only delay completion credits. Why 3-hop small packets see it was
+    not investigated.
+- **Recommendation:** keep both (hard-wire bits 26 and 28).
+
+## 58. Fused write + atomic with flush: 3.4× slower, and production uses it
+
+**Our benchmarks never flush.** Every fused header the test harness builds passes `flush = false`, the same on main:
+- benchmark and stream traffic, `tt_fabric_test_kernels_utils.hpp:1265` and `:1283`;
+- latency sender and responder.
+
+The harness comment explains why: the payload and the counter sit on the same core, so NoC ordering already keeps the
+write before the atomic. So the fused premium in §42–§57 (~+20 over a write) is the atomic's second NoC command and
+three more header fields, not a flush.
+
+**Production does flush.**
+- `NocUnicastAtomicIncFusedCommandHeader`'s constructor defaults to `flush = true` (`fabric_edm_packet_header.hpp:299`).
+- Kernels that rely on that default or pass `true` explicitly:
+  - `ring_reduce_scatter_minimal_async_writer.cpp:220`;
+  - `high_bw_all_gather/.../unicast_common.hpp:258`;
+  - `reduce_to_root` sender and root writers;
+  - `tt_fabric_udm.hpp:672`;
+  - `minimal_ccl_common.hpp` passes a caller's flag.
+
+**What a flush does on E1** (`flush_write_to_noc_pipeline`, Blackhole with bit 22):
+- E1 issues the payload write, then spins until every outstanding non-posted write on its local NoC is acknowledged
+  (`ncrisc_noc_nonposted_writes_flushed`), then issues the atomic.
+- The receiver stops while the write drains and its ack returns.
+
+**Measured** (`fabric_exp/dqfl_runs.sh`, `streams/p3_fused.yaml`, best ERISC-only build 348673408):
+- The harness's flush flag was forced on by a temporary edit, then restored and checked.
+
+| Row | flush off | flush on |
+| --- | ---: | ---: |
+| E/W fused 4352 B | 152.0 (38.65 GB/s) | **522.8 (11.24 GB/s)** |
+| N/S fused 4352 B | 160.3 (36.65 GB/s) | **531.2 (11.06 GB/s)** |
+| forwarded fused 4352 B | 152.0 (38.66 GB/s) | **522.7 (11.24 GB/s)** |
+| E/W / forwarded write 4352 B | 132.6 / 125.7 | 132.6 / 125.7 |
+
+- A flushed fused packet costs **+371 cycles**, the drain-and-ack time of a 4352 B local write. That's 3.4× slower.
+  Writes don't move.
+- The rate cost per packet in production depends on how often fused packets appear. For example, one fused packet
+  per 8 would add ~46 cycles per packet on average. A flush also drains every earlier write still in flight.
+- This is not specific to the study builds: main's flush is the per-transaction-ID loop over the same writes.
+  Not measured on main.
+
+**Options (untested):**
+- **Skip the flush when it's redundant.** When the payload and semaphore addresses name the same core and the atomic
+  uses the same NoC and VC, the write is already ordered before the atomic, which is what the harness relies on. One
+  compare of the coordinate bits would spare every same-core producer. Needs a hardware-ordering confirmation.
+- **Don't spin.** Record the pending atomic with its write's transaction ID, keep servicing packets, and issue the atomic
+  (then the completion) once that ID is flushed. The ID tracking already exists for completions.
+- **Benchmark coverage:** add a flushed fused row to the stream suite so this cost shows up in our numbers.
+
+## 59. Survey: which ops make the router flush
+
+**Method:** `fabric_exp/flush_survey.py` (call sites in `fabric_exp/results/flush_survey.csv`).
+- It parses every construction of the three header types whose `flush` makes the receiving router drain its
+  outstanding local writes before the atomic, across `ttnn/`, `models/` and `tt_metal/` (tests excluded):
+  - `NocUnicastAtomicIncCommandHeader`, the standalone atomic;
+  - `NocUnicastAtomicIncFusedCommandHeader`, write + atomic;
+  - `NocUnicastScatterAtomicIncFusedCommandHeader`, scatter + atomic.
+- **All three default to `flush = true`.**
+- Each call site is classified as explicit true, false, default, or an expression.
+- Expressions were resolved by hand: shared helpers in `minimal_ccl_common.hpp` and `moe_utils.hpp` traced to their
+  callers, local variables and `constexpr` flags read at the call site.
+- Sampled default sites were checked by eye.
+
+**Counts:**
+- **182 call sites:**
+  - 132 use the default (flush);
+  - 13 pass explicit `true`;
+  - 15 pass `false`;
+  - 22 pass an expression. These are the helpers and fabric API pass-throughs (`linear/addrgen_api.h`, `mesh/api.h`,
+    UDM), plus a few locals.
+- **By type:** standalone atomics are 123 default, 4 true, 6 false. Fused is 7 default, 5 true, 9 false. Scatter + atomic
+  is 2 default, 4 true.
+- **39 ops or kernel directories** construct these headers:
+  - 35 have at least one flushing site;
+  - 4 never flush: `all_reduce_async`, `rms_allgather`, and DeepSeek V3 B1 `d2d_exchange` / `host_io`.
+
+**Ops that flush on a data packet** (fused or scatter + atomic, the §58 pattern), 10:
+
+| Op | flushing sites | notes |
+| --- | --- | --- |
+| `experimental/ccl/reduce_scatter_minimal_async` | fused 4, scatter 2 (default) + 21 atomics | the chunk's semaphore increment is fused onto its last data packet: one drain per chunk |
+| `ccl/reduce_to_root` | fused 2 (true) + 3 atomics | |
+| `experimental/ccl/reduce_scatter_minimal_direct` | fused 2 (default) + 3 atomics | |
+| `experimental/ccl/ring_attention_all_gather_async` | fused 1, scatter 1 (true) + 1 atomic | |
+| `experimental/ccl/deepseek_moe_reduce_scatter` | scatter 2 (true) | |
+| `models/demos/deepseek_v3_b1/unified_kernels` | scatter 1 (true) + 8 atomics | `sdpa_reduce_worker`'s fused writes do not flush |
+| `experimental/high_bw_all_gather` | fused 1 (true) + 3 atomics | |
+| `tt_metal/impl/dispatch/kernels` | fused 1 (default) + 1 atomic | dispatch, not a CCL |
+| `experimental/ccl/dit_fused_distributed_rmsnorm` | fused (true) via helper | |
+| `experimental/ccl/dit_fused_norm_common` | fused (true) via helper | payload to `dram_dest`: the DRAM-then-notify case |
+
+**Ops that flush only through standalone atomics**, 25: `all_gather_async` (14), `neighbor_pad_halo` (13),
+`all_to_all_async_generic` (10, its fused write passes `false`), `ccl/all_gather` (8), `neighbor_pad_async` (8),
+`ccl/broadcast` (6), `strided_reduce_scatter_async` (5), `all_gather_minimal_matmul_async` (4),
+`slice_reshard_async`, `strided_all_gather_async`, `point_to_point`, `all_to_all_combine` (via `moe_utils`),
+`all_gather_concat_heads_fused`, `all_to_all_async`, `llama_all_gather_matmul_async`, both `llama_reduce_scatter`
+variants (their fused writes are `constexpr false`), DeepSeek prefill
+`attn_res_gather_softmax` / `combine` / `combine_fabric2d` / `dispatch` / `dispatch_fabric2d` (data handshakes
+`true`, init handshakes `false`), `all_reduce_create_qkv_heads`, `transformer/sdpa`, `ttnn/core/tensor/kernels`.
+
+**Caveats:**
+- These are static call sites, not runtime frequency. Many default sites are init or barrier handshakes, often with
+  value 0 or 1, where nothing is outstanding and the drain costs ~nothing.
+- What costs is a flush that follows data writes still in flight. That is up to the ~371 cycles of §58 for a 4352 B
+  write, paid once per flushed packet: per chunk for `reduce_scatter_minimal_async`, per signal for the
+  standalone-atomic ops.
+- Whether the payload lands in DRAM (where the flush is needed) or same-core L1 (where NoC ordering would suffice)
+  was not classified per op, apart from `dit_fused_norm_common`.
+
+## 60. Survey: which ops could opt in to "order only my own data" flushes
+
+**Context:** the user's direction is a new header field, off by default. With it set, the router would order a packet's
+atomic only after that sender's earlier data, instead of acting as a full barrier, and would keep servicing later
+packets meanwhile. This survey, a read-only code read by a subagent, checked each flushing producer's consumers for
+patterns that rely on the barrier:
+- **H1:** a later unflushed write or flag used as evidence that earlier data landed;
+- **H2:** a buffer reused with no consumer-to-producer release;
+- **H3:** unflushed increments sharing a counted semaphore.
+
+I spot-checked the key citations against the code. Items marked (inf) are the subagent's inference.
+
+**Router conditions every candidate needs:**
+- **C1, multi-packet coverage.** Most producers send many plain packets, then one flushed signal. So the atomic must
+  wait for all earlier writes on the receiver channel (an in-order "landed" pointer over slots ≤ N), not just its
+  own payload.
+- **C2, atomics in order.** Every consumer waits on a count.
+- **C3, multicast.** The rule applies at each hop.
+
+**Verdicts:**
+- **Opt-in candidates.** No H1 or H3 pattern was found anywhere.
+  - **Strongest:**
+    - `deepseek_moe_reduce_scatter`: a flushed scatter+atomic on every packet, L1 on the semaphore core (inf), one
+      counting consumer;
+    - `reduce_scatter_minimal_async`: a flushed increment every `chunks_per_sync` chunks into the intermediate tensor,
+      often DRAM; each (batch, slice) has its own region; a hot CCL;
+    - `high_bw_all_gather`: several mux workers share a link, so today each flush also waits for the other workers'
+      writes;
+    - `cq_relay` (dispatch): flushes per page batch, and credits already guard reuse.
+  - **Safe but little to gain** (once per op or iteration): `reduce_scatter_minimal_direct`, `reduce_to_root`,
+    DeepSeek V3 B1 sampling, the dit ops, all-gather variants, broadcast, neighbor pad, prefill 1D combine/dispatch,
+    `all_to_all_combine`.
+- **Not safe:** DeepSeek prefill `combine_fabric2d` and `dispatch_fabric2d` (H2).
+  - Forwarding pages are reused across launches with no release.
+  - The code says so at `reader_combine_fabric2d.cpp:637-638`: "a chip far enough ahead can still overwrite pages we
+    have not read". Dispatch is the same (inf).
+  - The race exists today. Opt-in would only remove some throttling.
+- **Same class, unverified:** ring-attention AG/halo and the dit ops reuse buffers across launches with no handshake
+  inside the op. Host-side rotation may cover this.
+
+**Possible existing ordering bugs, independent of the opt-in** (leads for the op owners; consumer side not verified):
+- `all_to_all_async_generic`: on the local path the semaphore is incremented before the data writes are issued
+  (`all_to_all_sender_writer.cpp:411-417`, checked). The remote path's last packet is fused with `flush = false`
+  (:440-442) after scatter writes to possibly different cores.
+- `ccl/all_gather` multicast with load-balanced alternate routes on even rings: no flushed increment covers the
+  alternate-path writes (inf, `all_gather_multicast_factory.cpp:463-471/513-516` vs `multicast_writer.cpp:233-240`).
+- `neighbor_pad_halo` corner-first mode sends the last row's middle sticks after the semaphore raise
+  (`np_writer` :408-433, inf).
+
+**Router note:** `sender_combine_fabric2d.cpp:77-78` says a fused write+atomic whose payload goes to DRAM "is
+documented to hang Blackhole", so that op uses a header-only atomic after the writes (checked). An opt-in design has
+to work for the standalone-atomic form (C1), because DRAM producers can't switch to fused packets.
+
+## 61. Staged atomic: flushed fused −26 to −32, unflushed fused +3.5 to +7.6
+
+**The user's update to v2:**
+- **E1 bits 26 (word-40 reuse) and 28 (partial-batch hold) are hard-wired.** The hold's `FABRIC_2D` guard is gone, so
+  1D builds on the batched-completion path now hold partial batches too. That is bounded, but not measured here.
+- **The local-delivery function is copied into v2** as `v2_execute_chip_unicast_to_local_chip_impl`. It matches the
+  header's ERISC path except for comments and the three atomic sites: standalone atomic, fused, and the scatter's
+  semaphore chunk.
+- **The atomic is staged:** `v2_local_semaphore_inc` writes the same registers and counters as the stock
+  `noc_fast_atomic_increment`, but the flush wait sits between staging and the send.
+  - Data-before-atomic is kept, and nothing else on E1 uses `write_at_cmd_buf` meanwhile.
+  - Watcher and debug builds fall back to `noc_semaphore_inc`.
+- **Fused packets launch the payload write before loading the semaphore fields,** in a fenced load group.
+
+**Measured** (`fabric_exp/dqst_runs.sh`, `dqst_compare.py`, flags 13129088, against the same code with bits 26/28 as
+flags, `dqhd_348673408`): stream sanity 10/0, mesh 96/0, and every suite and fused run passed.
+- A second variant, "loads first" (`dqstlf_*`), keeps the staging but restores the original fused order: semaphore
+  fields loaded before the write, no fences.
+
+| Row (cycles/packet) | before | staged (user) | loads first |
+| --- | ---: | ---: | ---: |
+| fused, flush on: E/W / N/S / forwarded | 522.8 / 531.2 / 522.7 | **491.2 / 499.1 / 491.0** | 496.7 / 503.8 / 495.8 |
+| fused, flush off: E/W / N/S / forwarded | 152.0 / 160.3 / 152.0 | 159.6 / 167.2 / 159.6 | 155.5 / 163.2 / 155.5 |
+| standalone atomic: E/W / forwarded | 130.1 / 129.6 | 131.3 / 131.2 | 131.3 / 131.2 |
+| mix mean vs before | 0 | +0.84 | +0.42 |
+| 4352 mean vs before | 0 | −0.42 (3-hop −1.2, multicast −1.7 to −1.9) | — |
+| fused latency 16 B, 1 hop E/W / N/S (ns) | 1413 / 1409 | 1443 / 1436 | 1435 / 1424 |
+
+- **Staging pays where it was meant to.** With nothing left to program after the wait, a flushed fused packet costs
+  32 fewer cycles (−6%).
+- **The unflushed fused regression has two parts:**
+  - **The write-first reorder: about 4.** Restoring the original order brings 159.6 to 155.5 and costs 5 of the
+    flushed gain. Mechanism not checked: perhaps E1's header loads contend with the NoC reading the 4352 B payload
+    from the same L1, or the atomic simply issues later.
+  - **The hand-written atomic path itself: about 3.5,** and the standalone atomic's +1.2 to +1.6 in both variants.
+    It has the same register writes as stock, so this is likely code layout or the fences in the atomic case.
+    Not checked in the disassembly.
+- **Suggested next variant:** stage only when `flush` is set, and take the stock `noc_semaphore_inc` path otherwise,
+  with loads first. Unflushed traffic, the benchmark default and `flush = false` producers, would then run the
+  original code. Untested.
+
+## 62. Staging only when flush is set: keeps the flushed gain, unflushed back to within ~2
+
+**The user's update** (the §61 suggestion, built as reusable API):
+- **New HAL helpers** next to `noc_fast_atomic_increment` in `noc_nonblocking_api.h` (Blackhole, Wormhole, Quasar
+  v1/v2/v3): `noc_fast_atomic_increment_set_state` and `noc_fast_atomic_increment_with_state`.
+- **New dataflow API** in `dataflow_api.h`: `noc_semaphore_inc_set_state` and `noc_semaphore_inc_with_state`.
+- **Blackhole review:** `set_state` is the stock function up to the send: ready wait, mid-address assert, return
+  address in dynamic mode, all six registers with the same values. `with_state` holds the dynamic-mode counter, an
+  optional ready check, the send and the atomics-acked counter. The API wrapper keeps the stock debug and sanitize
+  hooks.
+- **Wormhole and Quasar:** additive only and mirror each architecture's stock function. Not compiled or run here.
+- **`execute_local_semaphore_inc(addr, incr, flush, rx_channel_id)`** in `fabric_edm_packet_transmission.hpp`, used by
+  the standalone atomic, fused and scatter-semaphore cases:
+  - with `FABRIC_ERISC_ROUTER_V2` and flush set: `set_state`, then the flush, then `with_state` (no ready check);
+  - otherwise: the stock `noc_semaphore_inc`.
+  - Without the define, v1 and the speedy path keep the original flush-then-increment. The DRISC branches are
+    untouched.
+- **v2 defines `FABRIC_ERISC_ROUTER_V2`** just before including the header, and drops its §61 copies. No header
+  includes the transmission header indirectly, so the define takes effect.
+- **The fused case loads its header fields before the payload write,** in the original order. The hold is
+  `FABRIC_2D`-only again.
+
+**Measured** (`fabric_exp/dqsf_runs.sh`, `dqsf_compare.py`, flags 13129088): stream 10/0, mesh 96/0, and every suite
+and fused run passed.
+
+| Row (cycles/packet) | before | §61 staged always | §61 loads first | **§62 flush-only** |
+| --- | ---: | ---: | ---: | ---: |
+| fused, flush on: E/W / N/S / forwarded | 522.8 / 531.2 / 522.7 | 491.2 / 499.1 / 491.0 | 496.7 / 503.8 / 495.8 | **494.7 / 502.7 / 494.0** |
+| fused, flush off: E/W / N/S / forwarded | 152.0 / 160.3 / 152.0 | 159.6 / 167.2 / 159.6 | 155.5 / 163.2 / 155.5 | **153.9 / 162.4 / 153.9** |
+| standalone atomic: E/W / N/S / forwarded | 130.1 / 138.0 / 129.6 | 131.3 / 139.0 / 131.2 | 131.3 / 139.0 / 131.2 | 130.2 / 139.1 / 129.8 |
+| fused latency 16 B, 1 hop E/W / N/S (ns) | 1413 / 1409 | 1443 / 1436 | 1435 / 1424 | 1414 / 1414 |
+| 4352 mean vs before | 0 | −0.42 | — | −0.05 |
+| mix mean vs before | 0 | +0.84 | +0.42 | +0.25 |
+
+- **Flushed fused: −28 (−5.4%).** Most of §61's −32 is kept.
+- **Unflushed fused: +1.9 (E/W, forwarded) and +2.1 (N/S).** That is down from +7.6, and these packets run the stock
+  increment. The remainder is probably E1 layout from the larger function. Not checked.
+- **Standalone atomics and latency are back at the before values.** §61's −1 to −2 on 3-hop and multicast is gone
+  too, so that was layout.
+- **Recommendation: keep §62.** The HAL and `dataflow_api.h` additions are public API in shared headers. They need
+  their owners' review, and a Wormhole compile, before they leave this branch.
+
+## 63. Deferring the flushed atomic: −55 on flushed fused, +2 to +3 on every E1-bound row
+
+**The user's update** (step 1 of "do work during the flush wait", barrier semantics kept):
+- **`execute_local_semaphore_inc(..., bool* pending_atomic_flush)`:**
+  - With flush set, it stages the atomic (`noc_semaphore_inc_set_state`) and checks
+    `ncrisc_noc_nonposted_writes_flushed` once.
+  - If the writes have already landed, the atomic fires at once, so a standalone atomic with nothing in flight pays
+    nothing.
+  - Otherwise it sets `*pending_atomic_flush` and returns.
+- **Callers that pass no pointer keep §62's behavior:** v1, the speedy path, the DRISC.
+- **`can_defer_local_atomic_flush()` allows deferral only on:** Blackhole 2D, a single receiver channel, no VC1/VC2, no
+  deadlock avoidance, no first-level ack, no UDM, no DRISC offload, fused flush/completion pointer, bit 22, and local
+  and downstream writes on E1's own NoC. No other channel can touch the staged `write_at_cmd_buf`.
+- **Drain points** (`complete_pending_atomic_flush` = flush wait + send):
+  - next packet admitted: right after its transaction ID, before any forward or local NoC operation;
+  - idle or blocked iteration: before the completion block, so a partial batch cannot include slot N early;
+  - end of the inner loop: before telemetry, context switch, teardown.
+- **Reviewed:**
+  - Between staging and send, E1 issues no NoC transaction for later packets.
+  - The completion block with progress only takes `batch_target` slots when more than that are outstanding, so it never
+    includes the newest slot.
+
+**Measured** (`fabric_exp/dqpd_runs.sh`, `dqpd_compare.py`, flags 13129088): stream 10/0, mesh 96/0, and every suite and
+fused run passed.
+
+| Row (cycles/packet) | before | §62 | **§63** |
+| --- | ---: | ---: | ---: |
+| fused, flush on: E/W / N/S / forwarded | 522.8 / 531.2 / 522.7 | 494.7 / 502.7 / 494.0 | **439.9 / 440.4 / 440.2** |
+| fused, flush off: E/W / N/S | 152.0 / 160.3 | 153.9 / 162.4 | 156.1 / 164.6 |
+| scatter: E/W / N/S | 164.0 / 172.3 | 163.9 / 172.3 | 167.0 / 175.6 |
+| forwarded 16 B–1 KiB writes | 111.4–111.5 | 111.4–111.5 | 113.7 |
+| 1-hop E/W 4352 write | 130.6 | 130.4 | 132.2 |
+| multicast write / scatter | 140.9 / 184.1 | 140.8 / 184.1 | 142.2 / 186.5 |
+| 4352 / mix mean vs before | 0 / 0 | −0.05 / +0.25 | +2.03 / +1.31 |
+
+Latency is within noise (±11 ns).
+
+- **Flushed fused: −55 against §62, −83 (−16%) against before.** N/S gains the most (−62): its admission and decode are
+  longer, so more of the wait is overlapped.
+- **Every E1-bound row pays +2 to +3,** including scatter and forwarded writes that never touch an atomic.
+  - E1's hot path only adds a register test (`bnez t1`, the flag stays in a register).
+  - But E1 grew from 1610 to 1752 instructions: the flush loop and send are inlined at each drain site, and each atomic
+    site gains a "landed yet?" branch.
+  - So the cost is most likely layout and spread. Not proven.
+- **Trade-off:** one flushed packet per N saves ~55 and costs ~2.5 × N on E1-bound traffic. It wins when a flushed
+  signal comes at least every ~20 packets and is a net loss for ops that flush once per op.
+  - §59 and §60: `reduce_scatter_minimal_async` flushes per `chunks_per_sync` chunks, `deepseek_moe_reduce_scatter` per
+    packet, the standalone-atomic ops per chunk or group.
+- **Next steps:**
+  1. Shrink the code: one out-of-line drain body. That needs care with §33's non-leaf `kernel_main` register spills,
+     so a single inlined site is better.
+  2. Measure a realistic mix, 7 writes + 1 flushed fused. That needs the per-segment flush option in the stream yaml.
+
+## 64. Flushed-signal benchmark: the deferral cuts a chunked signal's flush cost by 55–70%
+
+**New test-infra option** (`fabric_exp/streams/port/streams_flush.patch`, made in the streams worktree first and
+applied here; both trees build):
+- An optional `flush` on a pattern or a stream segment, for `atomic_inc` and `fused_atomic_inc`. Unset keeps today's
+  defaults: atomic true, fused false. Existing yamls are unchanged.
+- **Host:** parsed, merged, carried through stream expansion and into the traffic parameters, and packed into the top two
+  bits of the increment argument (bit 31 = set, bit 30 = value). Argument counts don't change. `atomic_inc_val` must
+  fit in 30 bits, which is checked.
+- **Kernel:** `NocUnicastAtomicIncFields::build_from_args` decodes and masks the bits. The fused header builders (setup
+  and per-packet update) use `flush_or(false)`, the atomic builder `flush_or(true)`.
+- Line sync, flow-control credits and the latency kernels are unchanged.
+- **Benchmark:** `fabric_exp/streams/flush_mix.yaml`, 16 tests, 1-hop E/W and N/S, 4352 B, flush on/off:
+  - fused on every packet;
+  - 7 writes + 1 fused (chunk of 8);
+  - 15 writes + 1 fused (chunk of 16);
+  - 7 writes + 1 standalone atomic.
+- The override reaches the device: fused on every packet gives 439.9 with flush against 156.0 without, matching §63's
+  forced-flush runs.
+
+**Measured** (`fabric_exp/dqfm_runs.sh`, `dqfm_compare.py`): three router versions, each a v2 + transmission-header pair
+swapped in and restored (checked). All 16 tests passed on each.
+- **before:** pre-atomic-change, flags 348673408.
+- **§62:** flush-only staging.
+- **§63:** deferral.
+
+| Row (cycles/packet) | before | §62 | §63 |
+| --- | ---: | ---: | ---: |
+| E/W chunk 8 fused, flush / no flush | 162.6 / 134.8 | 159.3 / 134.8 | **147.6** / 135.1 |
+| E/W chunk 16 fused, flush / no flush | 148.2 / 134.3 | 146.7 / 134.4 | **139.1** / 134.8 |
+| E/W chunk 8 atomic, flush / no flush | 140.6 / 132.8 | 141.4 / 132.9 | 141.8 / 133.7 |
+| N/S chunk 8 fused, flush / no flush | 171.9 / 135.7 | 168.5 / 135.8 | 166.7 / 136.4 |
+| N/S chunk 16 fused, flush / no flush | 151.9 / 135.1 | 150.4 / 135.3 | **141.1** / 135.8 |
+| N/S chunk 8 atomic, flush / no flush | 158.9 / 134.6 | 155.7 / 134.6 | 153.3 / 135.3 |
+| fused every packet, E/W, flush / no flush | 522.9 / 151.9 | 494.7 / 153.9 | 439.9 / 156.0 |
+
+**Cost of one flushed signal** (flushed − unflushed, × chunk length, cycles):
+
+| Shape | before | §62 | §63 |
+| --- | ---: | ---: | ---: |
+| E/W chunk 8 fused | 222 | 196 | **100** |
+| E/W chunk 16 fused | 222 | 197 | **70** |
+| N/S chunk 8 fused | 289 | 262 | 242 |
+| N/S chunk 16 fused | 269 | 242 | **85** |
+| E/W chunk 8 atomic | 63 | 68 | 65 |
+| N/S chunk 8 atomic | 194 | 169 | 144 |
+| fused every packet (E/W / N/S) | 371 / 371 | 341 / 340 | 284 / 276 |
+
+- **A signal at the end of a chunk is much cheaper to flush than a flush on every packet.** At the chunk's end most
+  earlier writes have drained.
+  - Before, it cost 220–290 cycles per signal.
+  - With §63 it costs 70–100 (E/W chunks of 8 and 16, N/S chunk 16), a 55–70% cut, because E1 works on the next
+    packets while the last write drains.
+  - The flushed chunk rows improve 6–9% end to end (E/W chunk 8: 162.6 → 147.6).
+- **Unexplained:**
+  - **N/S chunk 8 fused barely moves (289 → 242).** Not investigated. A guess: the packet after the signal is often
+    blocked, so the idle-iteration drain spins at once.
+  - **Standalone atomics after 7 writes:** E/W costs ~65 per signal in every version. N/S drops 194 → 144.
+- **Unflushed rows:** §63 costs +0.3 to +0.9 per packet on these chunk shapes, +4 on fused every packet, and +2 to +3
+  on the E1-bound non-signal rows of §63 (scatter, forwarded).
+- **Net:** in traffic that signals every 8–16 packets, the deferral saves 7–15 cycles/packet on those flows, against
+  ~2–3 on E1-bound flows that never signal.
+
+## 65. A slimmer deferral that ended up slower: E1's packet path became a taken branch
+
+**The user's update to §63:**
+1. **Always defer:** every flushed atomic is staged and marked pending. The inline "already landed" check and its send
+   are gone.
+2. **Non-blocking idle drain:** before the completion block, the atomic is sent if its writes have landed. On an
+   iteration with no progress and the atomic still pending, completions are skipped.
+3. **Drain moved:** the inner-loop-end drain moves to the main-loop exit. Deferral also requires
+   `!any_sender_channel_serviced`.
+- **Reviewed, correct:**
+  - Admission still drains, blocking, before the next packet's NoC operation.
+  - Slot N's credit cannot overtake its atomic.
+  - On Blackhole the context switch is a no-op on ERISC 1, and on ERISC 0 it uses NoC0 only. So a pending atomic
+    across the outer loop only adds latency.
+
+**Measured** (`fabric_exp/dqps_runs.sh`, `dqps_compare.py`, flags 13129088): stream 10/0, mesh 96/0, and every suite
+and the flushed-signal yaml passed.
+
+| Row (cycles/packet) | before | §63 | §65 |
+| --- | ---: | ---: | ---: |
+| 4352 / mix mean vs before | 0 / 0 | +2.03 / +1.31 | **+6.10 / +4.96** |
+| 1-hop E/W scatter | 164.0 | 167.0 | 174.1 |
+| forwarded 16 B write | 111.4 | 113.7 | 120.6 |
+| E/W atomic | 130.1 | 130.5 | 137.9 |
+| E/W chunk 8 fused flush: cost per signal | 222 | 100 | 149 |
+| N/S chunk 16 fused flush: cost per signal | 269 | 85 | 130 |
+| fused every packet, flush (E/W) | 522.9 | 439.9 | 439.0 |
+| 3-hop 16 B latency (ns) | 3406 | 3408 | 3436 |
+
+**Why it is slower:**
+- **Layout.** E1 grew 1752 → 1815 instructions, and GCC flipped the receive loop: after the packet poll, the
+  packet-present path is now a taken branch out of line (`bnez a2, …`), where §63 fell through. Scatter and forwarded
+  rows, which never touch an atomic, lose 7 more cycles.
+- **Change 1** defers even atomics with nothing in flight, so standalone atomics pay the deferral (+7.4).
+- **Change 2** withholds all completions while an atomic is pending on an idle iteration, including the earlier slots
+  that are safe to complete. The upstream sender then waits for credits. That fits chunk 8 getting worse (E/W 147.6 →
+  154.7, N/S 166.7 → 172.5).
+
+**Recommendation:** keep §63.
+- If its code size is still worth chasing, keep the inline "already landed" fast path.
+- On idle iterations, complete every slot except the newest rather than none.
+- Avoid steering block layout with `[[likely]]` or `__builtin_expect`. They have cost before (§32, §49), and the flip
+  here is a layout effect.
+
+## 66. New host; §65 with the fast path and partial idle completions is still ~2 slower than §63
+
+**New host: bh-lb-120-a08u24.** It is shared, so every run goes through the tt-device-mcp broker. The runners
+(`dq66*_runs.sh`) do no resets themselves, stream their output and print a heartbeat.
+- **Calibration** (v1 at 13129088, whose code hasn't changed):
+  - 4352: mean +0.17 cycles/packet against a04u24, largest row change 1.1 (3-hop E/W).
+  - mix: +0.01, largest row change 0.3.
+  - So a04u24 throughput tables compare directly.
+- **Latency does not carry over between hosts:** 1-hop E/W is 5–14 ns lower here, 1-hop N/S 4–11 ns higher, and 3-hop
+  50–72 ns higher. Latency is compared within one host only.
+- **Links:** `read_eth_speed.py` shows every trained link at 400G, but 7 ports are down:
+  - chip 0 eth (10,1), chip 2 eth (10,1), chip 7 eth (10,1);
+  - chip 3 eth (6,1);
+  - chip 5 eth (6,1) and (7,1).
+  The links the 2D tests use are not affected.
+
+**Router sources are now kept in `fabric_exp/variants/`.** A Claude Code restart wiped the session scratchpad and the
+A/B copies with it.
+- **§63 was rebuilt from the session transcript** (`variants/s63r`):
+  - The transmission header is the same as §66's.
+  - In the router, every deferral site lands on §63's line numbers.
+  - It reproduces a04u24's §63: mix mean +1.31 on both hosts, and the flushed-signal rows within 0.1 (the noisy chunk-8
+    atomic rows excepted).
+
+**The user's update to §65** (`variants/s66`):
+1. Immediate-send fast path restored: the atomic fires at once when the writes have already landed.
+2. On an idle step:
+   - the atomic is sent if its writes have landed;
+   - otherwise the newest slot is left out of the completion batch (`uncompleted -= pending`) and the earlier slots still
+     complete.
+3. `[[unlikely]]` removed. The drain stays at the main-loop exit (§65).
+
+**Reviewed:**
+- Correct for two-ERISC Blackhole:
+  - The pending atomic always belongs to the newest admitted slot, since the next admission drains it first.
+  - With progress the batch only takes `batch_target` of more than `batch_target` outstanding slots.
+  - On an idle step the newest slot is excluded, and `uncompleted` is at least 1 whenever the atomic is pending, so the
+    subtraction cannot underflow.
+- **But §65's `!any_sender_channel_serviced` guard is gone.** With one ERISC per link, the ERISC also runs sender
+  channels:
+  - `notify_worker_of_read_counter_update` issues `noc_inline_dw_write`, which goes through `write_at_cmd_buf`. That is
+    the command buffer holding the staged atomic, so the later `noc_semaphore_inc_with_state<…, skip_cmdbuf_chk>` would
+    send whatever the inline write left in it.
+  - The context switch to base firmware has the same exposure.
+  - §63 has the sender-channel hole too, because its atomic stays pending across iterations.
+  - **The guard costs nothing here:** §63 with the guard (`variants/s63g`) gives byte-identical `.text` on all 80 ERISC
+    ELFs (40 configs, E0 and E1). It should go back in.
+
+**Measured** (`dq66_runs.sh`, `dq66b_runs.sh`, `dq66c_runs.sh`, `dq66d_runs.sh`, `dq66e_runs.sh`; `dq66b_compare.py`,
+`dq66c_compare.py`). Every run passed: stream 10/0 and mesh 96/0 for §66 and §63r, and every suite on every variant. §66
+ran three times; the runs agree to ±0.01 on the 4352 and mix means.
+- §66u: §66 with `[[unlikely]]` back on the admission drain (diagnostic).
+- §66d: §66 with the drain back at the end of the inner loop (diagnostic).
+
+| Row (cycles/packet, a08u24) | §63r | §66 | §66u | §66d |
+| --- | ---: | ---: | ---: | ---: |
+| 4352 / mix / flushed-signal mean vs §63r | 0 / 0 / 0 | **+1.95 / +2.19 / +1.53** | +2.27 / +2.33 / +2.09 | +2.29 / +2.31 / +2.35 |
+| forwarded 16 B–1 KiB writes | 113.7 | 117.0 | 117.7 | 117.1 |
+| 1-hop scatter E/W / N/S | 167.0 / 175.6 | 170.3 / 180.0 | 171.1 / 179.9 | 170.5 / 182.8 |
+| atomic (flushed, nothing in flight) E/W / N/S | 130.4 / 138.5 | 135.2 / 144.7 | 136.0 / 145.7 | 135.3 / 144.6 |
+| fused, no flush E/W / N/S | 156.0 / 164.6 | 160.4 / 168.2 | 159.1 / 168.1 | 160.5 / 168.0 |
+| fused every packet, flush E/W / N/S | 439.8 / 440.3 | 437.8 / 436.7 | 438.8 / 440.1 | 442.0 / 441.1 |
+| E1 instructions (most common config) | 1742 | 1800 | 1792 | 1799 |
+
+**Cost of one flushed signal** (flushed − unflushed × chunk length, cycles):
+
+| Shape | §63r | §66 |
+| --- | ---: | ---: |
+| E/W chunk 8 / 16 fused | 99 / 70 | 114 / 64 |
+| N/S chunk 8 / 16 fused | 242 / 85 | 260 / 107 |
+| fused every packet E/W / N/S | 284 / 276 | 277 / 269 |
+
+**Latency** (a08u24, against one §63r run): §66 is 0–20 ns higher. The 3-hop rows move most (+6 to +20).
+
+**Findings:**
+- **§66 is ~2 cycles/packet slower than §63 on average.** It recovers about 40% of §65's loss, but rows that never touch
+  an atomic still pay +3.3 (forwarded writes, scatter).
+- **Neither `[[unlikely]]` nor the drain location explains it:** §66u and §66d measure the same as §66. What remains is
+  the idle-step change: the non-blocking send before the completion block, and leaving out the newest slot. E1 grows by
+  ~58 instructions, and register allocation changes across the whole function (renames start in the first few
+  instructions). So the cost is spread through the code, not on one path.
+- **Partial idle completions don't help the flushed shapes.**
+  - Only fused-every-packet improves, by 7–8 per signal.
+  - N/S chunk 16 costs 107 per signal against §63's 85, and N/S chunk 8 costs 260 against 242.
+  - So §64's guess that N/S chunk 8 loses time to a blocking idle drain doesn't hold: not blocking is worse.
+
+**Recommendation:** go back to §63 and restore the guard: `variants/s63g`, byte-identical to §63 on every ERISC here.
+The open item is unchanged: §63 costs +2 to +3 on E1-bound rows that never signal (§63).
+
+## 67. Trimming the deferral: the idle drain in the completion `else` arm costs 2.5; nothing beats §63
+
+**The user's update** (`variants/s67`), aimed at §63's +2 to +3 on rows that never signal:
+1. **Idle drain moved** into the `else` (no progress) arm of the completion block's `if (progress)`. The aim was to stop
+   GCC from duplicating the completion block across a second progress test.
+2. **Header: only fused atomics defer.**
+   - Fused atomics stage and mark pending with no "landed yet?" check, since the payload write was just issued.
+   - Standalone atomics and scatter semaphore increments go back to §62's inline flush.
+3. **E/W drain moved:** on routers with one live direction (stateful NoC), the admission drain moves after
+   `forward_2d_dispatch`. N/S routers still drain before it.
+4. The `!any_sender_channel_serviced` guard is back, and the drain stays at the main-loop exit.
+
+**Reviewed: correct.**
+- E1's forwarding uses command buffer 2 (data) and 1 (credit), both posted (`RX_CH_0_FWD_DATA/SYNC_CMD_BUF_ID` = 2/1;
+  posted chunk and credit writes). So the forward neither touches the staged atomic in `write_at_cmd_buf` (3) nor the
+  non-posted counter the flush waits on.
+- The intermesh branch is dead on those routers: `use_2d_single_live_stateful_noc` excludes intermesh and edge routers.
+- One semantic difference: on E/W, packet N+1 is now forwarded before packet N's flushed writes are confirmed. Stock
+  waits for them first. Ethernet latency makes an inversion practically impossible, but the guarantee is weaker. N/S
+  forwarding uses the same posted command buffers 2 and 1.
+
+**Measured.** Every run passed: §67 stream 10/0, mesh 96/0, and every suite on every variant.
+- **Baseline: §62 behavior on this host** (`variants/s62x`): §63+guard with `can_defer_local_atomic_flush()` compiled
+  to false.
+  - It matches a04u24's §62: mix −0.01, 4352 −0.5, the 4352 gap almost all from the host-sensitive 3-hop row.
+  - E1 has 1699 instructions in the most common config.
+- **§67 ran twice;** the means agree to 0.02.
+- **One-change splits:**
+  - §67a: §67 with one drain before the forward on every router.
+  - §67b: §67 with the idle drain back at §63's place.
+  - §67c: the §63+guard router with §67's header.
+- Scripts: `dq67_runs.sh`, `dq67s_runs.sh`, `dq67_compare.py`.
+
+| Row (cycles/packet, a08u24) | §62x | §63g | §67 | §67a | §67b | §67c |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4352 / mix / flushed-signal mean vs §62x | 0 / 0 / 0 | +2.05 / +1.05 / −9.40 | +4.87 / +4.15 / −6.71 | +4.32 / +3.74 / −6.72 | **+2.30 / +1.62 / −9.66** | +2.19 / +1.33 / −8.13 |
+| forwarded 16 B write | 111.4 | 113.7 | 120.2 | 119.2 | 114.1 | 114.0 |
+| 1-hop scatter E/W / N/S | 164.0 / 172.3 | 167.0 / 175.6 | 173.6 / 177.5 | 172.6 / 177.6 | 167.5 / 179.2 | 167.3 / 175.6 |
+| atomic, flushed, nothing in flight E/W / N/S | 130.3 / 139.0 | 130.4 / 138.5 | 138.4 / 143.3 | 137.5 / 143.3 | 132.3 / 142.0 | 132.2 / 140.3 |
+| E1 instructions (most common config) | 1699 | 1742 | 1764 | 1770 | 1724 | 1734 |
+
+**Cost of one flushed signal** (flushed − unflushed × chunk length, cycles):
+
+| Shape | §62x | §63g | §67 | §67a | §67b | §67c |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| E/W chunk 8 / 16 fused | 203 / 199 | 100 / 70 | 134 / 75 | 130 / 75 | 92 / 64 | 101 / 65 |
+| N/S chunk 8 / 16 fused | 262 / 244 | 242 / 84 | 256 / 103 | 253 / 104 | 240 / 87 | 242 / 84 |
+| E/W / N/S chunk 8 standalone atomic | 89 / 168 | 61 / 110 | 173 / 198 | 168 / 198 | 59 / 189 | 122 / 184 |
+| fused every packet E/W / N/S | 341 / 340 | 284 / 276 | 274 / 271 | 277 / 271 | 276 / 269 | 285 / 277 |
+
+The chunk-8 standalone-atomic rows are noisy: the flushed E/W row ranges 138.7–146.5 across §63's three runs.
+
+**Latency** (this host): §67 is +5 to +16 ns over §62x, about the same as §66.
+
+**Findings:**
+- **The idle drain in the `else` arm is what made §67 slower.**
+  - Moving it back (§67b) takes 4352 from +4.87 to +2.30 and mix from +4.15 to +1.62.
+  - It cuts 40 instructions: 1764 → 1724.
+  - So that placement grew the code. §63's separate `!progress` test did not, and the jump-threading premise doesn't
+    hold here.
+  - Over §62, deferral adds 43 instructions in this config (§63g) or 25 (§67b), not the +132 (1610 → 1742) that comes
+    from comparing different configs.
+- **The E/W post-forward drain doesn't pay:** §67 is +0.5 slower than §67a, which drains before the forward.
+- **The header change (§67c) is about neutral in throughput** (+0.14 / +0.28 against §63g) and 8 instructions smaller.
+  - But standalone-atomic signals lose the deferral: N/S chunk 8 goes 110 → 184 per signal, E/W 61 → 122.
+  - A standalone atomic with nothing in flight costs 1.8–1.9 more.
+- **No variant gets the rows that never signal below §63g.**
+  - Code size doesn't predict speed: §67b's E1 is the smallest deferral build and is still +0.25 / +0.57 over §63g.
+  - The +2 (4352) / +1 (mix) that deferral costs over §62 survives every rearrangement tried (§63, §66, §67, splits),
+    so it is not one misplaced block.
+
+**Recommendation:** keep §63 + guard (`variants/s63g`).
+- §67b is the only variant that ties it: flushed-signal mean −0.26, fused every packet −8. But it is +0.25 / +0.57 on
+  4352 / mix and loses standalone-atomic deferral.
+- Next lever for the +2: profile, rather than rearranging blocks. Phase-profile §62x against §63g on the forwarded-write
+  row and find where the cycles go.
+
+## 68. Where deferral's +2 goes: one taken jump out of the local-write arm
+
+**Setup** (`fabric_exp/p68_runs.sh`, `p68_compare.py`, `streams/p68_profile.yaml`: the five rows deferral slows most).
+§62 behavior (`s62x`) against §63 + guard (`s63g`), flags 13129088, on a08u24. Each variant ran:
+- once without profiling;
+- with an E1 spin of +20 and +40 cycles per packet (slack test);
+- five single-phase level-2 profiles, no per-iteration timing: decode/admit, forward, local delivery, completion, and
+  the whole receiver step. Net = (ticks − 4.0 × occurrences) / packets, on the E1 with the most local deliveries (and,
+  for the forwarded rows, the E1 with the most forwards).
+
+All 16 runs passed.
+
+**These rows are E1-bound in both builds.** The spin moves them fully: +20 adds ~31 and +40 adds ~56.
+1-hop E/W 4352 write is the exception: partly E0-bound, +9 / +12 at +20. So the deferral cost on these rows is E1
+time.
+
+| Row (cycles/packet) | s62x | s63g | E1 local delivery s62x → s63g | E1 receiver step s62x → s63g |
+| --- | ---: | ---: | ---: | ---: |
+| forwarded 16 B write | 111.4 | 113.7 | 47.0 → 49.0 | 123.1 → 128.1 |
+| forwarded scatter | 163.8 | 167.0 | 103.1 → 105.1 | 177.5 → 179.5 |
+| 1-hop E/W scatter | 164.0 | 167.1 | 103.1 → 105.1 | 179.2 → 180.7 |
+| 1-hop E/W 4352 write | 132.7 | 133.3 | 47.1 → 49.1 | 126.3 → 127.8 |
+| 1-hop E/W fused, no flush | 153.9 | 156.1 | 90.1 → 90.1 | 167.7 → 170.2 |
+
+The other phases don't move:
+- decode/admit 18.0 (29.5 on the forwarding E1);
+- forward 60.0;
+- completion 15.3–17.7 per packet at 0.25–0.36 batches per packet, within ±0.2.
+
+**Local delivery is +2.0 on every write and scatter row and unchanged on fused.** In the disassembly (most common E/W
+E1 config, `variants/<v>/elf/10458260907906636366/`), the send-type jump table and the unicast-write arm are the same in
+both builds, instruction for instruction (registers renamed). What changes is how the arm exits:
+- **s62x:** the write arm falls through into the post-delivery block (sent-counter increment, buffer index,
+  packets-received decrement) that sits right after it.
+- **s63g:** that block is placed earlier, at `0xd744`, and the write arm (and the scatter arm) end with
+  `j d744 <.L72>`. That is one taken jump per packet.
+
+So the deferral's own per-packet work costs nothing measurable here: the pending test sits outside every phase that
+moved, and decode/admit and completion are unchanged. The +2 is block placement. The growth of the atomic arms and
+drain sites makes GCC put the shared post-delivery block before the switch instead of after the write arm. This also
+explains why §63, §65, §66 and §67 all kept "about +2" while their code sizes differed: any arrangement that leaves that
+merge block out of line pays the jump. The fused row's +2.2 is not in local delivery. It shows only in the whole
+receiver step, and is not traced.
+
+**Options:**
+1. **Accept the +2.** It is layout, not work, and may move with any unrelated change to `kernel_main`, as earlier ±5–10
+   swings did.
+2. **Make the write arm independent of placement:** do the post-delivery bookkeeping inside the hot arms (write,
+   scatter) in source, so neither needs a jump to a shared block. This is a structural change, not a hint, but GCC may
+   still merge identical tails.
+3. **Shrink what deferral adds inside the switch,** for example one non-inlined drain body, so the function's shape
+   returns to §62's. §33's non-leaf `kernel_main` spills make that risky.
+
+Block-layout hints (`[[likely]]`, `__builtin_expect`, `hot`/`cold`) are ruled out: they are compiler-fragile and have
+cost before (§32, §49).
+
+**Decision:** the user accepted the +2 for now (option 1).
+
+## 69. Opt-in flush field: §60's candidates mapped to how often they flush and which workloads run them
+
+**Method:** a code read on top of §59/§60, no device runs.
+- Flush frequency comes from each op's writer kernel and program factory.
+- Workloads come from callers under `models/` (tests excluded), and CI suites from `tests/pipeline_reorg/`.
+- The upper bound on the gain is §64's residual flush cost under §63's deferral. An opt-in can at most remove it, and
+  only if the router keeps servicing later packets instead of spinning.
+
+**Residual cost of a flush under §63** (§64): every packet ~280 cycles (439.9 against 156.0); a signal every 16 packets
+70–85; every 8 packets 100 (E/W) or 240 (N/S); a standalone atomic after 7 writes 65 (E/W) or 144 (N/S).
+
+**`ttnn.reduce_scatter` reaches the same kernels:** its program factory builds
+`build_{ring,line}_reduce_scatter_minimal_async_program_artifacts`. It does so unless the input goes to
+`reduce_scatter_minimal_direct`: ring or torus, no tuning arguments, ≤ 512 KB per device. That direct path flushes once
+per op.
+
+| Op | Flushed signal comes | Upper bound over §63 | Workloads (CI) |
+| --- | --- | --- | --- |
+| `deepseek_moe_reduce_scatter` | every packet: a scatter + increment per 2-tile packet (writer :238) | ~280 cycles/packet, up to ~2.8× this op's link time | DeepSeek V3 decode MoE: `deepseek_v3/tt/moe.py`, `moe_optimized.py`, `decoder_block/moe_decoder_block_2d.py`, `common/modules/moe/tt_moe_decode.py` (blackhole_e2e, BH multi-card sanity, T3K e2e, device perf) |
+| `reduce_scatter_minimal_async` ring/line, and `ttnn.reduce_scatter` above 512 KB | a chunk is 4 packets (`tile_granularity` = 4 × tiles per packet). Ring dims 1–3: every 4 chunks (16 packets), or every chunk (4 packets) when a step has ≤ 4 chunks. Line: every 20 chunks (80 packets). Ring dim 0: every 80 chunks (320 packets) | ring dims 1–3 ~4–5 cycles/packet (3–4%); short steps more (chunk of 4 not measured); line and dim 0 < 1 | broadest reach: `tt_transformers` (`mlp.py` w1/w3, `ccl.py`), `deepseek_v3`, `deepseek_v3_d_p`, `gpt_oss(_d_p)`, `llama3_70b_galaxy`, `minimax_m3`, `gemma4(_d_p, _31b_qb2)`, `blackhole/qwen36`, `qwen38_27b_qb2`, `llama31_8b_qb2`, `tt_dit`, `z_image_turbo`, `t3000/falcon40b` |
+| `high_bw_all_gather` | fused flushed signal after a page on granular stripes, plus standalone atomic signals; mux workers share a link, so each flush also waits on the others' writes | not quantified | prefill on BH (blaze suite, bh_sc1/sc4): `deepseek_v3_d_p`, `minimax_m3`, `llama_3p1_8b_d_p` |
+| `cq_relay` (dispatch) | per page batch | not quantified | only chips that dispatch reaches over fabric; which BH systems have those was not checked |
+
+**Safe, little to gain** (one flush per op or iteration): `reduce_scatter_minimal_direct` (decode-size
+`ttnn.reduce_scatter` on rings), `reduce_to_root`, DeepSeek V3 B1 sampling, the dit ops, `ttnn.all_gather` and the
+all-gather variants, broadcast, neighbor pad (`tt_dit` VAE), prefill 1D combine and dispatch, `all_to_all_combine`
+(`gpt_oss`, `deepseek_v3`).
+
+**Nothing to gain:** `ttnn.all_reduce` goes to `all_reduce_async`, whose fused writes pass `flush = false` (callers:
+`gpt_oss`, `gemma4`, `llama_3p1_8b_d_p`, `deepseek_v3`). The same holds for `rms_allgather` and B1
+`d2d_exchange`/`host_io`.
+
+**Must keep the default flush:** DeepSeek prefill `combine_fabric2d` and `dispatch_fabric2d` (§60, H2). Both are part of
+`deepseek_v3_d_p` prefill.
+
+**Caveats:**
+- These are static reads. The real gain also depends on the op's share of model time and on whether its links are the
+  bottleneck.
+- Decode-size `deepseek_moe_reduce_scatter` sends few packets per call, so a per-packet saving may show up mostly as
+  latency.
+- Rows not yet benchmarked:
+  - a flushed signal every 4 packets (RS short steps);
+  - a flushed scatter on every packet (deepseek_moe).
+  Both are expressible with §64's per-segment `flush` option.
+
+## 70. FLUSH_RELAXED opt-in: bypass works on chunked signals once the completion guard goes; per-packet flush is slower
+
+**The user's change (variant `s69`):**
+- **Header field:** `NocFlushType` (`FLUSH_NONE` 0, `FLUSH_STRICT` 1, `FLUSH_RELAXED` 2). `flush` becomes `uint8_t` in the
+  three atomic headers. The default is STRICT; sizes and offsets are unchanged.
+- **Pending state:** `pending_atomic_flush` becomes a single `uint32_t`:
+  - 1 means a strict atomic is pending (as in §63);
+  - `0x10 | trid` means a relaxed one is pending. The trid is the packet's own slot trid (fused, scatter) or the
+    previous slot's (standalone).
+- **At admission:** a relaxed atomic is drained unless the incoming packet is a plain unicast write (local delivery, or
+  the single-live stateful NoC) and the pending trid is still unacked. The drain, `complete_relaxed_atomic_flush`,
+  waits for trids s, s−1, s−2 and s−3, then sends.
+- **Completion guard:** no completion credits are returned while a relaxed atomic is pending.
+- **Test kernel:** `kActiveFlushMode = FLUSH_RELAXED` makes every flushed atomic the test kernel sends relaxed.
+
+**Diagnostic `s69a`:** `s69` without the completion guard. A plain write may bypass the pending atomic only while its slot's
+trid is outside the atomic's 4-trid window, which bounds bypass to 12 packets.
+
+**Runs** (`fabric_exp/dq69_runs.sh` a/b/c, `dq69_compare.py`; broker jobs 178–180):
+- `dq69`, `dq69r2`: s69 relaxed.
+- `dq69s`: s69 with the test kernel sending STRICT.
+- `a8s63g2`: s63g against the new header, so RELAXED is treated as STRICT. It is pooled with the earlier `a8s63*` runs.
+- `dq69a`, `dq69ar2`: s69a.
+
+Validation (stream and mesh sanity) passed on both s69 and s69a. The fused rows repeat within ±0.1. The chunk-of-8
+atomic rows are bimodal on s63g (EW 138.7–146.5, NS 141.6–153.2).
+
+| flushed row (cycles/packet) | §63g | §69 strict | §69 relaxed | §69a |
+| --- | ---: | ---: | ---: | ---: |
+| EW fused every packet | 439.8 | 439.4 | 571.4 | 494.2 |
+| NS fused every packet | 440.3 | 442.3 | 567.7 | 487.4 |
+| EW chunk 8 fused | 147.6 | 148.1 | 152.6 | **140.9** |
+| NS chunk 8 fused | 166.7 | 167.7 | 152.9 | **145.9** |
+| EW chunk 16 fused | 139.2 | 139.3 | 146.4 | **138.4** |
+| NS chunk 16 fused | 141.0 | 141.8 | 149.2 | **140.5** |
+| EW chunk 8 atomic | 142.5 (bimodal) | 137.9 | 138.5 | 139.0 |
+| NS chunk 8 atomic | 150.1 (bimodal) | 151.3 | 142.0 | 141.2 |
+
+**Cost per flushed signal** (§63g → §69a):
+- EW chunk 8 fused: 100 → 44.
+- NS chunk 8 fused: 242 → 75.
+- EW chunk 16 fused: 70 → 55.
+- NS chunk 16 fused: 84 → 76.
+
+**Findings:**
+- **The completion guard is s69's regression.**
+  - With a signal on every packet, a relaxed atomic is pending after almost every step. Credits then go back only on
+    idle steps: +131 per packet.
+  - On chunk-16 rows it costs +7 to +8.
+  - Removing it (s69a) makes every chunked row beat §63g.
+- **Fused on every packet is still +47 to +54 in s69a.** The next packet is fused, so it can't bypass, and the drain
+  runs at every admission, as in §63.
+  - The likely difference is 4 per-trid status reads against 1 global read (not measured).
+  - At admission no write has been issued since packet N, so the global counter is already exact there. Using it
+    whenever nothing has bypassed would make this row match §63.
+- **Strict packets on the new code** (`dq69s`) match §63g on the flushed rows.
+- **Cost on unflushed rows:**
+  - E1 grows by 66–100 instructions over s63g (+8 to +20 more in s69a).
+  - Mean: 4352 +0.60 / mix +0.72 (s69) and +0.05 / +0.34 (s69a).
+  - s69: NS scatter +4.0 (175.6 → 179.6), fused unflushed +1.8, atomics +1.5 to +1.9.
+  - s69a recovers NS scatter (175.5). That is layout, as in §68.
+- **Latency:** within +15 ns of §63 on this host.
+
+**Review notes:**
+1. **The 4-trid window does not guarantee C1 (§60).**
+   - Acks from different destinations return out of order, so a write five or more slots back can still be unacked
+     after s..s−3 are clean.
+   - `reduce_scatter_minimal_async` (a signal every 16 packets over interleaved DRAM banks) is that shape.
+   - For producers that signal on every packet (`deepseek_moe_reduce_scatter`), the packet's own trid alone is exact.
+   - Pick one of two semantics:
+     - own payload only: one trid, exact and cheap;
+     - channel-wide: exact tracking. Use the global counter while nothing has bypassed, and per-trid checks back to
+       the last drain only after a bypass.
+   - Inline writes carry no trid, so the window never covers them.
+2. **Scatter + atomic can't carry RELAXED.** The 2-bit chunk encoding uses all four values, so the header builder maps
+   RELAXED to STRICT.
+   - `deepseek_moe_reduce_scatter`, and `reduce_scatter_minimal_async` ring with 2-tile packets (bf16), both send
+     scatter + atomic. So §69's top two candidates can't opt in as is.
+   - Free room exists: the high bits of `chunk_count` (max 4), or the unused fourth chunk's encoding when
+     `chunk_count` = 3.
+3. **The `& 0xF` arithmetic assumes trid = slot mod 16.**
+   - `can_defer_local_atomic_flush()` forces 16 trids at offset 0. With fewer than 16 receiver slots, though, trids
+     wrap at the slot count (for example `TT_FABRIC_EXP_MAX_RECEIVER_SLOTS=8`).
+   - Then `(trid − 1) & 0xF` and the window point at unused trids, and the real previous writes are skipped.
+   - Fix: add a `static_assert` (receiver slots ≥ 16) to `can_defer_local_atomic_flush()`, or wrap by
+     min(slots, 16).
+4. **`kActiveFlushMode = FLUSH_RELAXED` is global in the test kernel**, so validation yamls' atomics now go out relaxed
+   as well. Better: default STRICT and a per-pattern `flush: relaxed`, using a 2-bit value in the increment word's
+   top bits.
+5. **Readers of the header field outside the ERISC v2 path** treat any nonzero value as flush, so RELAXED degrades to
+   STRICT there. That covers `api_common.h` scatter, the relay extension and DRISC. `linear/addrgen_api.h` and
+   `mesh/api.h` take `bool flush`, so they cannot request RELAXED.
+
+## 71. Exact relaxed flush: walking 16 trids costs too many status reads; a two-read check works
+
+**The user's change (variant `s71`):**
+- **Before any write bypasses** (`pending < 0x100`), the drain is the single global ack check, which is exact because
+  nothing has been issued since packet N.
+- **After a write bypasses,** an acked-trid pointer (bits 4–7) walks all 16 trids:
+  - before a bypassing packet reuses trid t, E1 waits for t's older write and steps past it;
+  - each bypass step advances the pointer over at most 5 more acked trids;
+  - the atomic fires when the pointer reaches s and s is acked.
+- **Completion guard removed.** Bypass is bounded to trids outside s..s−3, as in s69a.
+- **`can_defer_local_atomic_flush()` now requires** 16 receiver slots and 16 trids.
+- **Scatter + atomic can carry RELAXED** in bit 6 of `chunk_encoding`, the unused fourth chunk when `chunk_count` = 3.
+  Both builders start from 0, and the router reads it at the seminc chunk. No test sends fused scatter, so this is
+  untested on device.
+
+**Diagnostic `s71b`:** s71 with the walk replaced by a two-read test at the first bypass.
+- At that point nothing has been issued since N, so global outstanding (SW `noc_nonposted_writes_acked` − HW
+  `NIU_MST_WR_ACK_RECEIVED`; BH writes always update the SW counter, issue #28758) is read first, then trid s's
+  outstanding count. This repeats until the two are equal.
+- Counts only fall, so equality proves every older write is on trid s. From then on only trid s is watched:
+  `pending = 0x100 | s<<4 | s`, so the drain waits on s alone.
+- Cost: 2 reads once, then 1 read per bypassing packet. The check also covers writes that carry no trid (inline
+  writes).
+
+**New row:** `fabric_exp/streams/flush_mix4.yaml`, a chunk of 4 (3 writes + 1 flushed fused). This is the shape of
+reduce-scatter's short ring steps.
+
+**Runs** (`fabric_exp/dq71_runs.sh` a/b/c, `dq71_compare.py`; broker jobs 181–183):
+- s71 relaxed `dq71`, `dq71r2`; s71 strict `dq71s`;
+- s71b `dq71b`, `dq71br2`;
+- s63g `a8s63g3`, `a8s63g4`; s69a chunk of 4 `dq69a`.
+
+Validation (stream and mesh sanity) passed on s71 and s71b. The s63g chunk-of-4 E/W row is bimodal (204.8 / 180.7).
+
+| flushed row (cycles/packet) | §63g | §69a (4-trid, inexact) | §71 (walk) | §71b (two reads) |
+| --- | ---: | ---: | ---: | ---: |
+| EW fused every packet | 439.8 | 494.2 | 444.0 | 442.0 |
+| NS fused every packet | 440.3 | 487.4 | 438.9 | 437.4 |
+| EW chunk 4 fused | 192.8 | 162.8 | 223.5 | **162.1** |
+| NS chunk 4 fused | 210.8 | 169.1 | 230.5 | **189.2** |
+| EW chunk 8 fused | 147.6 | 140.9 | 170.4 | **143.9** |
+| NS chunk 8 fused | 166.7 | 145.9 | 175.5 | **157.4** |
+| EW chunk 16 fused | 139.2 | 138.4 | 141.8 | **137.2** |
+| NS chunk 16 fused | 141.0 | 140.5 | 148.7 | **139.2** |
+| EW chunk 8 atomic | 143.3 | 139.0 | 165.4 | **140.7** |
+| NS chunk 8 atomic | 150.7 | 141.2 | 171.8 | **146.0** |
+
+**Cost per flushed signal** (§63g → §71b):
+- E/W chunk 4: 226 → 102.
+- N/S chunk 4: 290 → 203.
+- E/W chunk 8: 100 → 70.
+- N/S chunk 8: 242 → 167.
+- E/W chunk 16: 70 → 36.
+- N/S chunk 16: 84 → 53.
+
+**Findings:**
+- **s71's walk is correct but slow.** I traced the invariant: the pointer stays at or ahead of every reused trid, so
+  only older writes are checked.
+  - Each NoC status read costs about 15 cycles: s69a's three extra reads per drain cost +54.
+  - s71 does up to ~8 reads per bypassing packet, so every chunked row ends up worse than §63g.
+- **The global check before any bypass fixes fused-every-packet** (444 / 439 against s69a's 494 / 487).
+- **s71b keeps exactness for 2 + 1 reads.**
+  - It beats §63g on every chunked row and matches it on fused-every-packet.
+  - It is within ~3 of s69a on E/W.
+  - On N/S it trails s69a by 11 to 20. The first bypass waits until the older writes are acked, which is the price
+    of exactness; N/S's older writes ack late (the same effect as §64's N/S chunk-8 anomaly).
+- **Unflushed rows:**
+  - s71b: 4352 −0.17, mix −0.05 against §63g, although E1 grows by 134–175 instructions (layout luck, §68).
+  - s71: −0.07 / +0.21.
+- **This config has 16 receiver slots:** deferral stays on under the new `== 16` condition.
+  - The condition is stricter than needed. Trids run sequentially mod 16 for any slot count ≥ 16 (power of two:
+    idx & 15; otherwise the counter).
+  - BH mesh's first slot option is {32, 32}. A config that gets 32 slots would silently lose all deferral, §63's
+    included. `>= NUM_TRANSACTION_IDS` is enough.
+- **The bypass bound s..s−3** only needs to keep trid s unused once tracking is exact (t ≠ s).
+
+## 72. Where the current build stands, and the E0/E1 split per packet
+
+**Setup** (`fabric_exp/p72_runs.sh`, `p72_compare.py`; broker job 184, all 26 runs passed):
+- The tree as it stands: the user's s71, flags 13129088, a08u24. On rows without a flush it is within ±0.2 of §63g
+  and s71b (§71).
+- Two yamls:
+  - `streams/p72_profile.yaml`: 1-hop E/W and N/S write and scatter; E/W unflushed fused, atomic and 16 B write;
+    forwarded 4352 B and 16 B writes;
+  - `exp_2d_4352.yaml`: adds bidirectional, 3-hop and multicast.
+- Per yaml:
+  - a run with no profiling;
+  - +20 spin on E0 and on E1 (a fully bound ERISC moves ~+27 to +31 here);
+  - level-2 single-phase profiles of every E0 and E1 phase. Net = (ticks − 4.0 × count) / packets.
+- The profiled phases run ~5–10% long: a multicast forwarder's phases add to 153 against a 140.8 interval. Use them
+  for attribution and the slack test for which ERISC binds.
+
+**Bandwidth** (payload GB/s, cycles/packet). "main" is §44's stock router (a04u24; throughput carries across hosts
+within ±0.2). Wire ceiling: 46.86 GB/s (125.4).
+
+| Traffic | main | now | vs main | E0 / E1 slack response (+20) | binds |
+| --- | ---: | ---: | ---: | --- | --- |
+| 1-hop write E/W | 26.5 (222) | **44.2** (132.9) | +67% | +27.0 / +13.1 | E0 (E1 close) |
+| 1-hop write N/S | 26.5 (222) | **44.1** (133.3) | +66% | +26.6 / +19.2 | both |
+| 1-hop bidirectional, per direction | 26.5 (221) | **42.2** (139.1) | +59% | +26.7 / +7.2 | E0 |
+| 1-hop scatter E/W / N/S | 26.6 (221) | **35.1 / 33.6** (167.6 / 174.8) | +32% / +26% | 0 / +31 | E1 |
+| 3-hop write | 26.6 (221) | **39.5** (148.8) | +49% | +14.7 / +20.4 | both |
+| multicast write | 32.3 (182) | **41.7** (140.8) | +29% | +23.5 / +22.8 | both |
+| multicast scatter | 27.5 (214) | **31.6** (186.0) | +15% | 0 / +28 | E1 |
+| forwarded write through a router | 31.3 (188) | **46.7** (125.7) | +49% | +16 / +20 | at the wire |
+| fused write + atomic, no flush | 26.6 (221) | **37.3** (157.5) | +40% | +2 / +31 | E1 |
+| atomic_inc (Mpkt/s) | 3.6 (374) | **10.26** (131.6) | ×2.8 | +28 / +31 | both |
+| E/W 16 B write | | 128.1 | | +33 / +18 | E0 |
+
+- **ERISC-only now matches DRISC offload v4 (§44)** on multicast write (140.8 against 141) and comes within 3% on 3-hop
+  (148.8 against 144), without the offload's +27–35% latency.
+- **Flushed traffic** (§63, §71): flush on every packet runs at 440, against 523 before the atomic work. Chunked signals
+  with s71b cost 36–203 cycles per signal, against 70–290 with §63.
+
+**E0 (TX) per packet:**
+
+| Row | send | credit returns (frames/packet) | connection checks | all channel visits (visits/packet) | rest of visits |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W write | 50.2 | 7.6 (0.22) | 0.1 | 129.6 (4.24) | ~72 |
+| 1-hop bidirectional | 51.3 | 8.1 (0.22) | 0.1 | 130.3 (4.25) | ~71 |
+| 3-hop (busiest E0) | 47.2 | 8.4 (0.23) | 0.2 | 147.9 (5.00) | ~92 |
+| multicast | 47.8 | 15.3 (0.44) | 5.9 | 140.2 (3.04) | ~71 |
+| forwarded write | 48.8 | 15.5 (0.44) | 0.1 | 126.6 (2.57) | ~62 |
+
+- The TX-queue spin is 0 everywhere.
+- **E0's largest item is visiting channels, not sending.** About 72 cycles per packet go to the worker channel's poll
+  and bookkeeping plus three idle forwarding channels (~1.06 loop iterations of 4 visits per packet). The send itself
+  is 50.
+- On 1-hop writes E0 is ~129 against a 132.9 interval: it binds.
+
+**E1 (RX) per packet:**
+
+| Row | decode/admit | forward | local delivery | completion (batches/packet) |
+| --- | ---: | ---: | ---: | ---: |
+| 1-hop E/W write | 20.1 | | 46.1 | 15.4 (0.26) |
+| 1-hop N/S write | 27.4 | | 50.1 | 15.3 (0.25) |
+| 1-hop E/W scatter | 20.0 | | 100.1 | 15.6 (0.26) |
+| 1-hop N/S scatter | 27.1 | | 110.1 | 15.4 (0.25) |
+| fused, no flush | 20.0 | | 89.1 | 15.7 (0.27) |
+| atomic | 20.0 | | 64.2 | 15.4 (0.26) |
+| 3-hop middle router | 30.3 | 60.0 | | 15.6 (0.26) |
+| multicast, forwarding + local | 30.7 | 60.1 | 46.3 | 16.0 (0.27) |
+
+- E1 has a further ~35–40 untimed per packet: poll, post-admit, retire, completion bookkeeping (§55).
+- On 1-hop writes E1 is ~115–120 (slack ~15).
+- **Local delivery decides every E1-bound row:** scatter 100–110, fused 89 and atomic 64, against 46 for a plain
+  write.
+- **Forwarding costs E1 ~90** (decode 30 + forward 60).
+
+## 73. Where E0's ~70 cycles of channel-visit overhead go
+
+**Method** (`fabric_exp/p73_runs.sh`, `p73_compare.py`; broker jobs 185–187, 33 runs, all passed). This mirrors §55
+for E0.
+- **Variant `e0seg`:** the tree's router (the user's s71) with timers around each piece of E0's loop. It reuses phase
+  IDs that E0 never closes in this config (job 184 counted every close: the RX phases and the TX-queue spins were 0).
+- **Profiler copy:** counts occurrences only for the timed phase, so a timed segment carries no other phase's counter
+  update.
+- **Runs:** level 2, one mask per run, no per-iteration timing. Net = (ticks − 4.0 × occurrences) / packets.
+- **Unprofiled check:** `e0seg` builds to s71's instructions on all 80 router configs (same registers, addresses
+  shifted). It ran 133.7 on the 1-hop E/W write against §72's 133.6, and every other row matched within 0.1.
+- **Disassembly:** the 1-hop E/W sender's E0 (eth channel 11, direction 1) in the unprofiled build.
+
+**1-hop E/W write, E0 per packet** (N/S within 0.3 on every line; 16 B, atomic and fused rows within ±2):
+
+| Segment | cycles/packet | passes/packet | per pass | instructions (sending pass) | What runs |
+| --- | ---: | ---: | ---: | ---: | --- |
+| loop top | 9.1 | 1.13 | 8.0 | 8 | issue the 4 grouped free-slot stream reads |
+| worker: packet + credit test | 17.6 | 1.12 | ~15.7 | 7 | wait for the grouped reads (the 0x1FFFF mask is reloaded from the stack and used at once); slot and receiver-credit test |
+| worker: pre-send | 29.0 | 1.00 | 29.0 | 10 | slot address from the stack → dependent L1 load of the header's payload size; TX-queue command + status reads (BH-55); `did_something` and `src_ch_id` byte stores; busy test |
+| worker: send | 50.2 | 1.00 | 50.2 | 35 | as §72 |
+| worker: completion test | 5.7 | 1.13 | ~5.0 | 1 | branch on the completion delta read in the send |
+| worker: credit returns | 7.6 | 0.22 | 34.2 | ~26 | as §72 |
+| worker: connection check | 14.8 | 1.15 | ~13.0 | 6 | teardown semaphore: stack load → dependent L1 load, used at once |
+| forwarding channels 1–3 | 18.5 | 1.16 | 16.0 | 11 | three idle tests, 4 taken branches; channel 3's sent/processed counts are on the stack (out-of-line path) |
+| back-edge + outer loop | | | ~2–3 | 2 + ~25/32 | |
+
+- **Cross-checks with one timer:**
+  - The whole worker visit is 116.3 per packet; its timed parts add to 124.9 (+7%).
+  - The iteration body is 146.1 (127.4 per pass); loop top + worker visit + forwarding channels add to 143.9.
+  - Splitting the visit adds ~2 cycles per timer boundary that the calibration misses. Read the parts as shares.
+- **Passes per packet:** unprofiled, E0 makes ~1.0–1.07 passes per packet. Profiling slows E1 as well, so the profiled
+  runs show 0.12–0.16 non-sending passes per packet: ~0.07 blocked on receiver credit, the rest with no packet yet.
+  That inflates the per-pass items by ~5–10% per packet. The whole body per pass (127.4) plus the back-edge is
+  consistent with the unprofiled 133.7.
+- **The "~72" of §72** is 69.4 in this build's own visit run: 127.3 − send 50.2 − credit returns 7.6 − connection
+  body 0.1. Per sending pass it splits:
+
+  | Item | per pass | share |
+  | --- | ---: | ---: |
+  | pre-send | 29 | 37% |
+  | packet + credit test | ~16 | 20% |
+  | forwarding channels | ~16 | 20% |
+  | connection check | ~13 | 17% |
+  | completion test | ~5 | 6% |
+
+  That is ~79 per pass against ~70 measured whole, the boundary cost again.
+
+**What it shows:**
+- **The overhead is the worker channel's own per-packet work, not idle polling.**
+  - The worker's test, pre-send, connection check and completion test are ~63 per pass.
+  - The three idle forwarding channels are ~16.
+- **Two loads behind a stack load, each used at once, make up ~40 of it:**
+  - the header's payload size (pre-send);
+  - the teardown semaphore (connection check).
+
+  The TX-queue busy read in the pre-send overlaps the size load. The mask reload in the packet test waits behind the
+  four grouped stream reads (§17: a stack load issued with reads outstanding waits for them).
+- **The connection check runs every pass for an event that happens once per connection.**
+  - It is ~13 per packet on every router that has a worker channel.
+  - v1's bit 3 (`EXP_TX_LAZY_CONN_CHECK`, every 16th visit) is not implemented in v2.
+  - Moving the teardown check to the outer loop (once per 32 passes) is ruled out (user, 2026-10-23). The worker's
+    close would wait up to 32 passes longer, which adds to every op's cost. The check stays on every pass. The only
+    way left at its ~13 is to hide the flag's load latency, without changing when teardown is seen.
+- **Forwarding routers pay for the idle worker channel.**
+  - The 3-hop middle router's E0 (busiest) spends 51.9 per packet in the worker visit: 1.48 passes, ~35 per pass
+    (test ~14, connection ~13, completion test ~3). Its forwarding channels take 110.1 (sends included), against a
+    148.7 interval.
+  - On the multicast forwarder the worker visit is 50.2 per packet. There the connection body itself runs on ~0.45
+    passes per packet (6.3), which is not investigated.
+- **Ceiling:** on the 1-hop E/W write E1's slack is ~13 (§72). A cut on E0 larger than that shows up there only once
+  E1 also gets faster. Bidirectional and 16 B writes have more E1 slack.
+- **Ruled out:** cutting the stack reloads (slot address, mask, channel 3's counts) means steering register allocation,
+  which the no-compiler-fragile rule excludes.
+
+## 74. Two-slot exact check (the user's s74): the best flushed-signal build so far, N/S included
+
+**The change** (variant `s74`, router + transmission; header, `api_common.h` and test kernel as s71):
+- **At the first bypassing write:**
+  - Global outstanding (SW `noc_nonposted_writes_acked` − HW `NIU_MST_WR_ACK_RECEIVED`), trid_s and
+    trid_p = (trid_s − 1) & 0xF are read in that order, in one fenced group.
+  - The read repeats until g == s + p. That proves every other trid is idle, whichever of s and p acks first.
+  - The pending state keeps only the non-zero one(s): `0x100 | b<<4 | a`.
+- **Later bypassing writes** check a, then b, narrowing to `b|b` if a acks first. The drain waits on a, then b.
+- **Standalone atomic:** last write trid = `transaction_id − 1`, the previous slot, since the atomic's own slot carries
+  no write.
+- **Bypass bound** `((trid_s − trid) & 0xF) > 1` protects s and p; up to 14 writes bypass.
+- **Slot condition:** `can_defer` takes `RECEIVER_NUM_BUFFERS_ARRAY[0] >= NUM_TRANSACTION_IDS`.
+
+**Review:** correct, no changes needed.
+- **The proof:** counts only fall and nothing is issued between the atomic and the first bypass (a non-bypassable
+  packet or the end-of-loop drain clears the pending state first). So g(t1) ≥ s(t1) + p(t1) ≥ s_out(t2) + p_out(t3),
+  and equality forces every other trid to 0 at t1.
+- **The counter pair** is the one the production strict flush (`ncrisc_noc_nonposted_writes_flushed`) relies on.
+- **A non-trid write** only makes the loop wait longer; it cannot fire the atomic early.
+- **Narrowing to `b|b`** moves the bypass window to b, b−1. That is safe: b (s−1) was inside the old window, so no
+  bypassing write landed on it, and writes on s are newer than the atomic.
+- **Untested here:** the 32-slot case (this mesh has 16 slots) and fused scatter with RELAXED (no test sends it).
+
+**Runs** (`fabric_exp/dq74_runs.sh` a/b, `dq74_compare.py`; broker jobs 188–189, all passed):
+- stream sanity 10/10, mesh sanity 96/96;
+- 4352, mix, flushmix, flushmix4, each twice;
+- a same-day s71b control on flushmix / flushmix4 (`dq71br3`).
+
+s74's two runs agree within 0.1 on 4352. The noisy rows are EW_MixCmd (excluded), E/W chunk 4 (156.8 / 154.4), and
+s71b's N/S chunk-8 atomic, which is bimodal (140.2 / 151.7 / 151.7).
+
+**Flushed rows** (cycles/packet; s71b as §71's mean / today's control):
+
+| Row | §63g | s69a (inexact) | s71b | s74 |
+| --- | ---: | ---: | ---: | ---: |
+| E/W fused, flush every packet | 439.8 | 494.2 | 442.0 / 442.1 | 441.2 |
+| E/W chunk 4 | 192.8 | 162.8 | 162.1 / 160.9 | **155.6** |
+| E/W chunk 8 fused | 147.6 | 140.9 | 143.9 / 142.9 | **139.4** |
+| E/W chunk 16 fused | 139.2 | 138.4 | 137.2 / 137.4 | **136.7** |
+| E/W chunk 8 atomic | 143.3 | 139.0 | 140.7 / 140.9 | **136.4** |
+| N/S fused, flush every packet | 440.3 | 487.4 | 437.4 / 437.4 | 437.9 |
+| N/S chunk 4 | 210.8 | 169.1 | 189.2 / 186.2 | **159.8** |
+| N/S chunk 8 fused | 166.7 | 145.9 | 157.4 / 155.7 | **143.6** |
+| N/S chunk 16 fused | 141.0 | 140.5 | 139.2 / 139.2 | **138.6** |
+| N/S chunk 8 atomic | 150.7 | 141.2 | 146.0 / 151.7 | **138.8** |
+
+Cost per flushed signal ((flushed − unflushed) × chunk):
+
+| Signal | §63g | s71b (today) | s74 |
+| --- | ---: | ---: | ---: |
+| E/W chunk 4 / 8 fused / 16 fused / 8 atomic | 226 / 100 / 70 / 76 | 97 / 62 / 38 / 57 | **78 / 36 / 34 / 24** |
+| N/S chunk 4 / 8 fused / 16 fused / 8 atomic | 290 / 242 / 84 / 124 | 191 / 153 / 54 / 131 | **87 / 59 / 48 / 29** |
+
+- **s74 is the fastest variant on every chunked row**, ahead even of the inexact s69a. Flushing every packet is
+  unchanged (~440).
+- **The gain is mostly N/S**: chunk 4 186 → 160, chunk 8 fused 156 → 144. §71 traced s71b's N/S deficit to the first
+  bypass waiting for packet s−1's ack (~110 cycles). Counting trid_p removes that wait.
+- **Unflushed rows are also ~1–2 faster than s71:**
+  - fused 157.5 → 155.2, atomic 131.6 → 130.1, scatter 167.5 → 165.3, forwarded small writes 114.3 → 112.0;
+  - N/S scatter is 1.3 slower;
+  - 4352 suite −0.8 on average.
+
+  These rows never take the changed path, so this is code layout, not the change. §62x (no deferral) is still
+  2.0 / 1.1 below §63g on 4352 / mix.
+- **E1 code size:** 1875–1986 instructions; s71 is 1911–1991 and s71b 1881–1952.
+- **Latency** was not rerun. The unflushed path is unchanged.
+
+## 75. Survey: fused scatter (scatter write + atomic increment)
+
+**Method:** a code read, no device runs.
+- It starts from §59's call sites and adds the fabric API helpers (`fabric_*_fused_scatter_write_atomic_inc*` in
+  `linear/api.h` and `mesh/api.h`) and their callers.
+- It also covers the router's scatter path in `fabric_edm_packet_transmission.hpp` and the bypass rule in s74
+  (§74).
+
+**Shape:**
+- Every fused scatter has exactly 2 write chunks plus the increment
+  (`NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS = 2`), so `chunk_count` = 3.
+- The RELAXED bit (bit 6 of `chunk_encoding`, §71) therefore fits on every producer.
+- On the ERISC path every scatter chunk write carries the slot's trid, as a plain write does.
+
+**Producers outside tests:** 4 ops, 6 sites. All flush (STRICT); none passes `false`.
+
+| Op | Site | When it sends a fused scatter | How often | Workloads |
+| --- | --- | --- | --- | --- |
+| `deepseek_moe_reduce_scatter` | writer :151 (state), :238 | every data packet: 2 tiles to 2 intermediate pages + increment of the op semaphore, 1 hop | every packet | DeepSeek V3 decode MoE (§69) |
+| `reduce_scatter_minimal_async`, ring writer | :226 (state), :340 | a chunk's last packet when it holds 2 tiles (bf16; bfp8 packs 4 and falls back to a standalone increment, 1 tile goes as fused unicast). Only in the tiled intermediate layout: ring with scatter dim 0, or a caller-supplied intermediate that doesn't match the chunk-paged spec | dim 0: every 80 chunks (320 packets). Most model callers pass no intermediate, so ring dims 1–3 use the chunk-paged layout (plain writes + fused unicast, no scatter) | ring dim 0 users only |
+| `ring_attention_all_gather_async`, neighbor-halo writer | :234 | the last packet of each (input, batch-head) when its 2 pages are not adjacent | once per batch-head | `ring_joint_sdpa` with a sliding window: `gemma4_d_p` ring prefill, `gpt_oss_d_p` dense SP, `minimax_m3` |
+| DeepSeek V3 B1 sampling | `sampling.hpp` :1505 | top-K scores and indices to two slots + increment, connection opened and closed around it | once per decode step | DeepSeek V3 B1 |
+
+**What RELAXED can do for them under s74:** nothing yet.
+- s74 lets only a plain unicast write (`NOC_UNICAST_WRITE`) pass a pending relaxed atomic. Any other packet drains it
+  first.
+- **`deepseek_moe_reduce_scatter`:** the next packet is always another fused scatter, so each one drains the previous
+  atomic. That is §63's strict deferral.
+- **The reduce-scatter tiled layout:** its data packets are pure scatter writes, which drain at the first data packet
+  of the next chunk.
+- **Halo and sampling** flush once per batch-head or per op; there is nothing to gain.
+
+**What would change that (untested):**
+1. **Let pure scatter writes bypass.** Their chunk writes are trid-tracked like a plain write, so s74's two-slot check
+   covers them unchanged.
+   - Admission must read the scatter's chunk encoding to exclude fused scatters. That is one more header load, only
+     while an atomic is pending.
+   - A fused packet's own increment would overwrite the pending state, so fused packets must keep draining.
+   - Only the rare reduce-scatter tiled layout benefits.
+2. **Per-packet producers (`deepseek_moe`) need fused packets to bypass.**
+   - That means more than one atomic pending, fired in order as their trids ack (C2).
+   - Alternatively, "own payload only" semantics for those packets (§70 note 1), which needs no queue.
+   - Both are design changes beyond s74.
+
+**Data gap:** no test sends a fused scatter, so its cost is unmeasured, flushed or not.
+- Expectation: §74's flush-every-packet cost (~285 over unflushed) plus scatter's dearer delivery on E1 (100–110 against
+  46 for a write, §72).
+- Measuring it needs a fused-scatter traffic type in the stream test, built in the streams worktree first, plus rows for
+  every packet and for a chunk ending in a fused scatter.
 
 ## Reproducing
 

@@ -563,6 +563,46 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     }
 }
 
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
+inline __attribute__((always_inline)) void noc_fast_atomic_increment_set_state(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t addr,
+    uint32_t vc,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | (posted ? CMD_BUF_MISC_POSTED : 0) |
+                    (linked ? CMD_BUF_MISC_LINKED : 0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
+    if constexpr (program_ret_addr) {
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(atomic_ret_val));
+    }
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, addr);
+    uint64_t at_len =
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)incr);
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_cmdbuf_chk = false>
+inline __attribute__((always_inline)) void noc_fast_atomic_increment_with_state(
+    uint32_t noc, uint32_t cmd_buf, bool posted = false) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+    if (!posted) {
+        noc_nonposted_atomics_acked[noc] += 1;
+    }
+}
+
 // Quasar NoC CAS: a 4-BIT compare-and-swap on one 4-byte word of a 16B L1 atom. Succeeds
 // iff word == {28'b0, cmp4}, then word <- {28'b0, swap4}; the PRE-OP word is returned to
 // this hart's R_SRC_ADDR slot. Usable ONLY for words whose value stays in [0, 15].
