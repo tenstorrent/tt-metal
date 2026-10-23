@@ -140,22 +140,30 @@ def chain_row(max_batch, source=None, limit=0, relay=False, hslots=None):
 
 
 # ---------------------------------------------------------------------- the kernel (spec_chain.cpp)
+def _header(verify, accept, argmax):
+    """The chain step's result header before its status (the accept page, the argmax ids and positions of the pass's
+    slots), the verify's positions and chain row, and the accepted count m of group 0."""
+    b = len(verify) // VERIFY_ROWS
+    pos = verify[b : 2 * b]
+    header = [0] * HEADER_WORDS
+    header[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS] = [int(w) & 0xFFFFFFFF for w in accept]
+    header[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS] = [int(t) & 0xFFFFFFFF for t in argmax[:SPEC_SLOTS]]
+    header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] = [int(p) & 0xFFFFFFFF for p in pos[:SPEC_SLOTS]]
+    header[STATUS_AT : STATUS_AT + 4] = [0, NO_SLOT, 0, 0]
+    return header, pos, verify[CHAIN_ROW * b : (CHAIN_ROW + 1) * b], int(accept[0])
+
+
 def chain_step(verify, accept, argmax, layers=1):
     """The chain step (mode 0): ``verify`` the verify upload's int32 values [VERIFY_ROWS * B], ``accept`` the accept
     page's uint32 words [ACCEPT_WORDS], ``argmax`` the verify's greedy tokens [B]. Returns (the draft's packed upload,
     int32 values [MTP_ROWS * B]; the result header, uint32 words [HEADER_WORDS]). ``layers`` > 1: the upload is the
     commit's description (pack_mtp_layers) and the anchor the last slot."""
-    b = len(verify) // VERIFY_ROWS
-    pos = verify[b : 2 * b]
-    chain = verify[CHAIN_ROW * b : (CHAIN_ROW + 1) * b]
+    header, pos, chain, m = _header(verify, accept, argmax)
+    b = len(pos)
     # pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
     mtp = [0] * b + [-1 if layers == 1 else 0] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
-    header = [0] * HEADER_WORDS
-    header[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS] = [int(w) & 0xFFFFFFFF for w in accept]
-    header[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS] = [int(t) & 0xFFFFFFFF for t in argmax[:SPEC_SLOTS]]
-    header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] = [int(p) & 0xFFFFFFFF for p in pos[:SPEC_SLOTS]]
     status = [0, NO_SLOT, 0, 0]
-    m, columns, limit = int(accept[0]), chain[CHAIN_COLUMNS], chain[CHAIN_LIMIT]
+    columns, limit = chain[CHAIN_COLUMNS], chain[CHAIN_LIMIT]
     if chain[CHAIN_SOURCE] != 0 and 1 <= m <= columns <= SPEC_SLOTS:
         anchor = chain[CHAIN_SLOTS + m - 1]
         bonus = pos[anchor] + 1
@@ -289,6 +297,85 @@ def tokens_step(tokens0, heads, layer):
     for j in range(SPEC_SLOTS):
         x = j + layer
         out[j] = tokens0[x] if x < SPEC_SLOTS else heads[x - SPEC_SLOTS][SPEC_SLOTS - 1]
+    return out
+
+
+# ---------------------------------------------------------------------- DFlash (tt/dflash.py)
+DFLASH_TILE = 32  # TtDFlash's block tile: the rows of its token, block, context and ring-row sections
+
+
+@dataclass(frozen=True)
+class DFlashLayout:
+    """TtDFlash's packed upload (uint32 words, ``words`` of them): the tokens [TILE] at TOKENS (word 0 the anchor
+    token, word 1 the anchor slot + 1 that the drafts step reads, 0 for an idle draft; both embedded, only row 0
+    kept), the queries' RoPE rows [block * heads] at QUERY (query r * heads + h: block row r), the block rows' [TILE]
+    at BLOCK, the context rows' [TILE] at CONTEXT and their ring rows [TILE] at RING_ROWS (``ring``: no write). A
+    RoPE row past ``last``, the tables' last row, reads it."""
+
+    ring: int
+    block: int
+    heads: int
+    last: int
+
+    QUERY = DFLASH_TILE
+
+    @property
+    def BLOCK(self):
+        return self.QUERY + self.block * self.heads
+
+    @property
+    def CONTEXT(self):
+        return self.BLOCK + DFLASH_TILE
+
+    @property
+    def RING_ROWS(self):
+        return self.CONTEXT + DFLASH_TILE
+
+    @property
+    def words(self):
+        return self.RING_ROWS + DFLASH_TILE
+
+
+def dflash_inputs(layout, context, anchor, start, anchor_slot=None):
+    """The packed upload of one DFlash draft (uint32 words): ``context`` [(tap row, position)] the committed rows to
+    write into the ring, ``anchor`` the last committed token, at position ``start``, from slot ``anchor_slot`` of the
+    pass (None: an idle draft, whose drafts the drafts step does not report)."""
+    t, last = DFLASH_TILE, layout.last
+    block = [min(start + min(j, layout.block - 1), last) for j in range(t)]
+    ctx, rows = [0] * t, [layout.ring] * t
+    for row, pos in context:
+        ctx[row], rows[row] = min(int(pos), last), int(pos) % layout.ring
+    tokens = [int(anchor), 0 if anchor_slot is None else int(anchor_slot) + 1] + [0] * (t - 2)
+    query = [block[r] for r in range(layout.block) for _ in range(layout.heads)]
+    return [w & 0xFFFFFFFF for w in tokens + query + block + ctx + rows]
+
+
+def dflash_chain_step(verify, accept, argmax, layout):
+    """The chain step with DFlash drafting (mode 0, ``drafter`` 1): as chain_step, but the upload it writes is the
+    DFlash draft's (dflash_inputs) of the commit: the committed columns' slots as context rows at P[slots[c]], the
+    last committed token at the bonus as the anchor, from slot slots[m - 1]; dflash_inputs([], 0, 0) when declined."""
+    header, pos, chain, m = _header(verify, accept, argmax)
+    packed = dflash_inputs(layout, [], 0, 0)
+    columns, limit = chain[CHAIN_COLUMNS], chain[CHAIN_LIMIT]
+    if chain[CHAIN_SOURCE] != 0 and 1 <= m <= columns <= SPEC_SLOTS:
+        anchor = chain[CHAIN_SLOTS + m - 1]
+        bonus = pos[anchor] + 1
+        if bonus < limit:
+            slots = chain[CHAIN_SLOTS : CHAIN_SLOTS + m]
+            context = [(s, pos[s]) for s in slots if 0 <= s < DFLASH_TILE and pos[s] >= 0]
+            packed = dflash_inputs(layout, context, accept[m], bonus, anchor)
+            header[STATUS_AT : STATUS_AT + 4] = [1, anchor, bonus, 0]
+    return packed, header
+
+
+def dflash_drafts_step(packed, head):
+    """The drafts step with DFlash drafting (mode 1, ``drafter`` 1): ``packed`` the draft's upload (dflash_inputs),
+    ``head`` its GreedyHead's tokens [B] (row k: draft k). Returns the result's drafts section, as drafts_step."""
+    anchor = int(packed[1]) - 1 if int(packed[1]) != 0 else None
+    out = [0] * (RESULT_WORDS - DRAFTS_AT)
+    out[0] = NO_SLOT if anchor is None else anchor
+    for k in range(MAX_DRAFTS):
+        out[1 + k] = NO_TOKEN if anchor is None else int(head[k]) & 0xFFFFFFFF
     return out
 
 

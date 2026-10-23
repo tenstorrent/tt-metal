@@ -26,9 +26,12 @@ matmul (32 rows); o_proj and the dense SiLU MLP's down projection are row-parall
 norm's rows 1..MAX_DRAFTS (moved to rows 0.. by a one-hot matmul) go through the target's LM head into a GreedyHead:
 its token row is the drafts.
 
-Inputs per draft (``enqueue``, host-planned): one packed uint32 row with the anchor token, the RoPE positions of the
-queries, the block and the context rows (rows of the decode RoPE tables), and each context row's ring row (the
-scatter P [32, RING] is rows of an identity table; a skipped row reads its zero row).
+Inputs per draft: one packed uint32 row (reference.spec_chain.DFlashLayout) with the anchor token, the RoPE
+positions of the queries, the block and the context rows (rows of the decode RoPE tables), and each context row's ring
+row (the scatter P [32, RING] is rows of an identity table; a skipped row reads its zero row). The host uploads it
+(``enqueue``, a host-planned draft), or the verify's accept trace writes it from what the device committed
+(``enqueue_chained``, tt/spec_chain.py), and the draft program ends with the chain's drafts step, which copies the
+drafts into the pass's result page.
 """
 
 import os
@@ -39,6 +42,7 @@ import torch
 import ttnn
 
 from ..reference.dflash import DFlashConfig, load_dflash_weights
+from ..reference.spec_chain import DFlashLayout, dflash_inputs
 from ..reference.spec_decode import MAX_DRAFTS
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .decoder import TtRMSNorm
@@ -248,23 +252,26 @@ class TtDFlash:
         eye = torch.zeros(r + 1, r)
         eye[:r] = torch.eye(r)
         self.eye = self._tensor(eye, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.layout = DFlashLayout(r, cfg.block, self.queries // cfg.block, self.rope_positions - 1)
         self.packed = [TILE, self.queries, TILE, TILE, TILE]  # tokens, query / block / context RoPE rows, ring rows
+        assert sum(self.packed) == self.layout.words
         self.inputs = {
             "packed": self._tensor(
-                torch.zeros(1, sum(self.packed), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                torch.zeros(1, self.layout.words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
             )
         }
         self.head = GreedyHead(self.plan, m.vocab_local, MAX_DRAFTS, b)
         if m.verify_sampler is not None:
-            # The verify's accept trace ends with the chain step, which writes the pass's result page
-            # (tt/spec_chain.py); DFlash drafts are host-planned (no chain), so its drafts step, which reads
-            # ``heads``, is never replayed.
+            # The verify's accept trace ends with the chain step, which writes the pass's result page and, when a
+            # draft chains behind the pass, this draft's packed upload; the draft program ends with the drafts step
+            # (tt/spec_chain.py).
             m.spec_chain = SpecChain(
                 self.plan,
                 m.spec_inputs,
                 m.verify_sampler.out,
                 m.greedy_head.next_tokens,
-                [self.head.next_tokens] * MAX_DRAFTS,
+                [self.head.next_tokens],
+                dflash=(self.inputs["packed"], self.layout),
             )
 
     def reset(self):
@@ -505,6 +512,8 @@ class TtDFlash:
         hs.deallocate(True)
         self.head(logits)
         logits.deallocate(True)
+        if m.spec_chain is not None:
+            m.spec_chain.drafts()
 
     def _unpack(self):
         """The packed upload's parts (uint32 [1, n] each): tokens, the query / block / context RoPE positions, the
@@ -565,36 +574,39 @@ class TtDFlash:
             self.trace = None
 
     # ------------------------------------------------------------------ host
-    def host_inputs(self, context, anchor, start):
-        """The packed upload of one draft (uint32 [1, n], see ``_unpack``): ``context`` [(tap row, position)] the
-        committed rows to write into the ring, ``anchor`` the last committed token, at position ``start``. Positions
-        past the RoPE tables (a draft at the context's end, which the verify then drops) read their last row."""
-        cfg, last = self.cfg, self.rope_positions - 1
-        heads = self.queries // cfg.block
-        block = [min(start + min(j, cfg.block - 1), last) for j in range(TILE)]
-        ctx, slots = [0] * TILE, [self.ring] * TILE
-        for row, pos in context:
-            ctx[row], slots[row] = min(int(pos), last), int(pos) % self.ring
-        tokens = [int(anchor)] + [0] * (TILE - 1)
-        query = [block[r] for r in range(cfg.block) for _ in range(heads)]
-        packed = torch.tensor([tokens + query + block + ctx + slots], dtype=torch.int32)
+    def host_inputs(self, context, anchor, start, anchor_slot=None):
+        """The packed upload of one draft (uint32 [1, n], reference.spec_chain.dflash_inputs): ``context`` [(tap row,
+        position)] the committed rows to write into the ring, ``anchor`` the last committed token, at position
+        ``start``, from slot ``anchor_slot`` (the drafts step reports the drafts of a draft with one). Positions past
+        the RoPE tables (a draft at the context's end, which the verify then drops) read their last row."""
+        words = dflash_inputs(self.layout, context, anchor, start, anchor_slot)
+        packed = torch.tensor([[w - (1 << 32) if w >= 1 << 31 else w for w in words]], dtype=torch.int32)
         return ttnn.from_torch(
             packed, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
         )
 
-    def upload(self, context, anchor, start):
+    def upload(self, context, anchor, start, anchor_slot=None):
         t = time.perf_counter()
-        host = self.host_inputs(context, anchor, start)
+        host = self.host_inputs(context, anchor, start, anchor_slot)
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, self.inputs["packed"])
 
-    def enqueue(self, context, anchor, start):
+    def enqueue(self, context, anchor, start, anchor_slot=None):
         """Draft after the replica's last decode or verify step (non-blocking): writes ``context`` (see host_inputs)
         from the taps that step left, then drafts the block after ``anchor`` at ``start``."""
+        self._require_trace()
+        self.upload(context, anchor, start, anchor_slot)
+        ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
+
+    def enqueue_chained(self):
+        """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
+        the packed upload from the pass's accepted count and committed tokens, so nothing is copied."""
+        self._require_trace()
+        ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
+
+    def _require_trace(self):
         if self.trace is None:
             raise RuntimeError("a DFlash draft before warmup_model_decode captured the draft trace")
-        self.upload(context, anchor, start)
-        ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
 
     def read_drafts(self):
         """The drafts (blocks until the draft finished)."""

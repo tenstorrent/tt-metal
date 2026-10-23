@@ -43,6 +43,12 @@
 //
 // Mode 4, the tokens step (before MTP pass `layer`, every layer): that pass's tokens, slot j taking the layer-0 token
 // of slot j + layer, or past the last slot the anchor's greedy token of an earlier pass (a draft).
+//
+// With DFlash drafting (drafter 1, tt/dflash.py) modes 0 and 1 read and write the DFlash draft's packed upload
+// (reference.spec_chain.DFlashLayout, dwords words) instead of mtp: mode 0 writes the commit's draft (the committed
+// columns' slots as context rows at P[slots[c]], the last committed token at the bonus as the anchor, word 1 the
+// anchor slot + 1), or the idle draft; mode 1 takes the anchor from word 1 and the drafts from the drafter's
+// GreedyHead tokens (one head row, draft k at word k).
 
 #include <cstdint>
 
@@ -83,14 +89,25 @@ void kernel_main() {
     constexpr uint32_t layers = get_compile_time_arg_val(18);       // MTP layers drafting (1, or one per draft)
     constexpr uint32_t table_rows = get_compile_time_arg_val(19);   // the hidden table's step rows (mode 3)
     constexpr uint32_t layer = get_compile_time_arg_val(20);        // the pass whose tokens mode 4 writes
+    constexpr uint32_t drafter = get_compile_time_arg_val(21);      // 0: MTP, 1: DFlash
+    constexpr uint32_t dwords = get_compile_time_arg_val(22);       // DFlash: the packed upload's words
+    constexpr uint32_t dring = get_compile_time_arg_val(23);        // DFlash: the context ring's rows
+    constexpr uint32_t dblock = get_compile_time_arg_val(24);       // DFlash: the block's rows
+    constexpr uint32_t dheads = get_compile_time_arg_val(25);       // DFlash: query heads per block row
+    constexpr int32_t dlast = get_compile_time_arg_val(26);         // DFlash: the RoPE tables' last row
     static_assert(S <= B && B * 4 <= 1024 && 3 + S <= B && mtp_rows == 7 && chain_row < verify_rows);
     static_assert(chain_relay == 3 + S && chain_relay < B && ctrl_drafts + D <= ctrl_words);
     static_assert(3 + 2 * S <= B && 2 * S <= B && B <= table_rows && layer < layers + (layers == 1));
     static_assert(accept_words <= argmax_at && argmax_at + S <= positions_at && positions_at + S <= status_at);
     static_assert(status_at + 4 <= drafts_at && 1 + D <= accept_words);
     static_assert(drafts_at + 1 + D <= result_words && drafts_at % 16 == 0 && result_words % 16 == 0);
+    constexpr uint32_t kTile = 32;  // DFlash's token, block, context and ring-row sections
+    constexpr uint32_t dquery = kTile, dblock_at = dquery + dblock * dheads, dctx = dblock_at + kTile;
+    constexpr uint32_t drows = dctx + kTile;
+    static_assert(drafter <= 1 && (drafter == 0 || (dwords == drows + kTile && dblock >= 1 && dblock <= kTile)));
+    static_assert(drafter == 0 || (layers == 1 && B <= kTile));
     constexpr uint32_t result_bytes = result_words * 4;
-    constexpr uint32_t mtp_bytes = mtp_rows * B * 4;
+    constexpr uint32_t mtp_bytes = drafter == 1 ? dwords * 4 : mtp_rows * B * 4;  // the draft's upload
     constexpr uint32_t row_bytes = B * 4;
 
     cb_reserve_back(cb_scratch, 1);
@@ -122,10 +139,6 @@ void kernel_main() {
         volatile tt_l1_ptr int32_t* mtp = reinterpret_cast<volatile tt_l1_ptr int32_t*>(mtp_l1);
         volatile tt_l1_ptr uint32_t* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_l1);
 
-        // pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
-        for (uint32_t i = 0; i < mtp_rows * B; ++i) {
-            mtp[i] = (layers == 1 && i >= B && i < 4 * B) ? -1 : 0;
-        }
         for (uint32_t i = 0; i < drafts_at; ++i) {
             header[i] = 0;
         }
@@ -141,7 +154,48 @@ void kernel_main() {
         auto cache = [](int32_t t) -> int32_t { return t >= 0 ? static_cast<int32_t>(ring + t % ring) : -1; };
         const uint32_t m = accept[0];
         const uint32_t columns = static_cast<uint32_t>(chain[1]);
-        if (chain[0] != 0 && m >= 1 && m <= columns && columns <= S) {
+        const bool chained = chain[0] != 0 && m >= 1 && m <= columns && columns <= S;
+        if constexpr (drafter == 1) {
+            // dflash_inputs: the idle draft (dflash_inputs([], 0, 0)), or the commit's.
+            const uint32_t anchor = chained ? static_cast<uint32_t>(chain[3 + m - 1]) : 0;
+            const int32_t bonus = chained ? pos[anchor] + 1 : 0;
+            const bool drafting = chained && bonus < chain[2];
+            const int32_t start = drafting ? bonus : 0;
+            for (uint32_t i = 0; i < dwords; ++i) {
+                mtp[i] = 0;
+            }
+            for (uint32_t j = 0; j < kTile; ++j) {
+                const int32_t p = start + static_cast<int32_t>(j < dblock - 1 ? j : dblock - 1);
+                mtp[dblock_at + j] = p < dlast ? p : dlast;
+                mtp[drows + j] = static_cast<int32_t>(dring);
+            }
+            for (uint32_t r = 0; r < dblock; ++r) {
+                for (uint32_t h = 0; h < dheads; ++h) {
+                    mtp[dquery + r * dheads + h] = mtp[dblock_at + r];
+                }
+            }
+            if (drafting) {
+                mtp[0] = static_cast<int32_t>(accept[m]);
+                mtp[1] = static_cast<int32_t>(anchor + 1);
+                for (uint32_t c = 0; c < m; ++c) {
+                    const uint32_t s = static_cast<uint32_t>(chain[3 + c]);
+                    const int32_t t = pos[s];
+                    if (s < kTile && t >= 0) {
+                        mtp[dctx + s] = t < dlast ? t : dlast;
+                        mtp[drows + s] = t % static_cast<int32_t>(dring);
+                    }
+                }
+                header[status_at] = 1;
+                header[status_at + 1] = anchor;
+                header[status_at + 2] = static_cast<uint32_t>(bonus);
+            }
+        } else {
+            // pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
+            for (uint32_t i = 0; i < mtp_rows * B; ++i) {
+                mtp[i] = (layers == 1 && i >= B && i < 4 * B) ? -1 : 0;
+            }
+        }
+        if (drafter == 0 && chained) {
             const uint32_t anchor = static_cast<uint32_t>(chain[3 + m - 1]);
             const int32_t bonus = pos[anchor] + 1;
             if (layers > 1 && bonus < chain[2]) {
@@ -184,7 +238,8 @@ void kernel_main() {
         const uint32_t heads_l1 = mtp_l1 + align64(mtp_bytes);
         const uint32_t out_l1 = heads_l1 + D * align64(row_bytes);
         noc_async_read(dram_addr(mtp_addr, mtp_bytes), mtp_l1, mtp_bytes);
-        for (uint32_t k = 0; k < D; ++k) {
+        constexpr uint32_t heads = drafter == 1 ? 1 : D;  // DFlash: one GreedyHead row, draft k at word k
+        for (uint32_t k = 0; k < heads; ++k) {
             const uint32_t head_addr = get_arg_val<uint32_t>(2 + k);
             noc_async_read(dram_addr(head_addr, row_bytes), heads_l1 + k * align64(row_bytes), row_bytes);
         }
@@ -192,7 +247,10 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_l1);
         uint32_t anchor = kNone;
-        if constexpr (layers > 1) {
+        if constexpr (drafter == 1) {
+            const uint32_t word1 = reinterpret_cast<const uint32_t*>(mtp_l1)[1];
+            anchor = word1 != 0 ? word1 - 1 : kNone;
+        } else if constexpr (layers > 1) {
             anchor = reinterpret_cast<const int32_t*>(mtp_l1)[0] != 0 ? S - 1 : kNone;
         } else {
             const int32_t* step2 = reinterpret_cast<const int32_t*>(mtp_l1) + 2 * B;
@@ -208,8 +266,9 @@ void kernel_main() {
         }
         out[0] = anchor;
         for (uint32_t k = 0; k < D; ++k) {
-            const uint32_t* head = reinterpret_cast<const uint32_t*>(heads_l1 + k * align64(row_bytes));
-            out[1 + k] = anchor == kNone ? kNone : head[anchor];
+            const uint32_t* head =
+                reinterpret_cast<const uint32_t*>(heads_l1 + (heads == 1 ? 0 : k * align64(row_bytes)));
+            out[1 + k] = anchor == kNone ? kNone : head[heads == 1 ? k : anchor];
         }
         noc_async_write(out_l1, dram_addr(result_addr, result_bytes, drafts_at * 4), drafts_bytes);
         noc_async_write_barrier();

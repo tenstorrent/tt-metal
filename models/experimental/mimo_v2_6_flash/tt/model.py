@@ -41,7 +41,7 @@ from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_table
 from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
-from .verify_sampler import VerifySampler
+from .verify_sampler import GreedyVerify, VerifySampler
 
 # Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
 # verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
@@ -369,10 +369,14 @@ class TtMiMoModel:
         self.sampler = None
         if self.decode_users <= 4:
             self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        if (self.mtp is not None or self.dflash is not None) and self.sampler is not None:
+        if self.mtp is not None or self.dflash is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
-            # inputs and output, like the samplers' buffers, before any capture.
-            self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
+            # inputs and output, like the samplers' buffers, before any capture. A verify whose slots the device
+            # sampler does not serve (MIMO_SPEC_SLOTS=8) accepts greedy requests only.
+            if self.sampler is not None and self.sampler.users >= SPEC_SLOTS:
+                self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
+            else:
+                self.verify_sampler = GreedyVerify(self.plan, self.max_batch)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -1180,6 +1184,9 @@ class TtMiMoModel:
             # Keeps the persistent buffers: GreedyHead's and the sampler's tokens and the final norm's "hidden" (the
             # MTP drafter's input).
             self._release(warm)
+        if self.verify_sampler is not None and not isinstance(self.verify_sampler, VerifySampler):
+            # The greedy accept step, which no sampled step compiled above.
+            self.verify_sampler(None, self.greedy_head.next_tokens)
         if self.spec_chain is not None:
             # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
             # step, compile here too, on the persistent buffers their captures use; so do the history's kernel steps

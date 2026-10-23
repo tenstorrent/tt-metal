@@ -145,8 +145,8 @@ ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
 # references run with the num_nextn_predict_layers patch; needs the decode RoPE tables); 1: MTP layer MIMO_MTP_LAYER
 # (default 0) drafts every token, feeding itself its own output (vLLM's MTP proposer, upstream vLLM for MiMo).
 # MIMO_SPEC_DECODE=dflash: the checkpoint's DFlash draft model (``dflash/``, tt/dflash.py) drafts instead, from the
-# target layers' outputs the decode and verify steps keep; every draft is host-planned after the plugin's walk (no
-# chain), and prompts prefill one row at a time (each chunk writes its last rows into the lane's DFlash context ring).
+# target layers' outputs the decode and verify steps keep, chained behind the verify as the MTP's; prompts prefill one
+# row at a time (each chunk writes its last rows into the lane's DFlash context ring).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
 DFLASH = SPEC_DECODE == "dflash"
 MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", "3"))
@@ -156,7 +156,7 @@ MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 MTP_BACKFILL = os.environ.get("MIMO_MTP_BACKFILL", "1") == "1"
 # MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
 # argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
-SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1" and not DFLASH
+SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1"
 # MIMO_SPEC_CHAIN_CHECK=1 (debug): a draft chained behind a verify is drafted again from the host plan of the commit it
 # drafted from (the same MTP inputs, rewriting the same ring entries) and compared; mismatches are logged
 # (``chain_stats``). A synchronous verify's chained draft is checked at its propose when the plugin committed what the
@@ -398,7 +398,8 @@ class MiMoV2ForCausalLM:
         # row the handle's page gives (``_ring``). A draft for another request, or past a gap, backfills first.
         self.mtp_ring = [None] * self.dp
         # Per lane: (lane slot, last position) of the request whose context the DFlash ring holds up to that position,
-        # None when it holds none (tt/dflash.py); a draft or prefill chunk that does not continue it resets it.
+        # None when it holds none (tt/dflash.py), or (lane slot, VerifyHandle) after a draft chained behind a verify
+        # (``_ring``); a draft or prefill chunk that does not continue it resets it.
         self.dflash_ring = [None] * self.dp
         self.chain_stats["dflash_resets"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
@@ -493,8 +494,9 @@ class MiMoV2ForCausalLM:
             # argmax_ids for all-greedy steps; fused_sample (acceptance on device) when a sampled request shares
             # the step and the device sampler serves every request's sampling; logits otherwise (the plugin's host
             # accept walk then samples losslessly, ``_verify``).
-            # fused_sample needs the device verify sampler, which serves 4 slots (MIMO_SPEC_SLOTS=4).
-            accept_modes=("argmax_ids", "logits", "fused_sample") if SPEC_SLOTS == 4 else ("argmax_ids", "logits"),
+            # The device verify sampler serves 4 slots (MIMO_SPEC_SLOTS=4); a wider verify accepts greedy requests
+            # only (GreedyVerify) and raises on a sampled one.
+            accept_modes=("argmax_ids", "logits", "fused_sample"),
             drafter_state="internal",
             supports_narrow_decode=True,
         )
@@ -1040,7 +1042,7 @@ class MiMoV2ForCausalLM:
             lanes.append(passes)
             source = sources[lane] = draft_source(passes)
             # A draft source runs one pass: its chain row goes with it.
-            chained = accept and SPEC_CHAIN and source is not None and model.mtp is not None
+            chained = accept and SPEC_CHAIN and source is not None and self._drafter(lane) is not None
             chained = chained and model.rope_tables is not None
             relay = source is not None and source.row in relayed
             chains.append((source, limit, relay) if chained else None)
@@ -1071,14 +1073,19 @@ class MiMoV2ForCausalLM:
                     if TIMING:
                         handle.timing_events[lane] = ttnn.record_event(model.mesh_device, 0)
                     source, slot = sources[lane], sources[lane].row - lane * self.per_lane
+                    rings = self.mtp_ring if model.mtp is not None else self.dflash_ring
                     if not chains[lane][2]:
                         # A pass the host built: its draft's first row is its column 0's position, and the rings may
                         # not hold the rows before it (a prompt over the deferred verify before it reset them). A
                         # relayed pass continues the draft chained behind the step it chained onto.
-                        self._backfill(lane, slot, int(p[k].positions[source.slots[0]]))
-                    model.mtp.enqueue_chained()
+                        first = int(p[k].positions[source.slots[0]])
+                        if model.mtp is not None:
+                            self._backfill(lane, slot, first)
+                        else:
+                            self._dflash_continue(lane, slot, first)
+                    self._drafter(lane).enqueue_chained()
                     # The rings now hold the request's rows up to the bonus - 1, which the page gives (``_ring``).
-                    self.mtp_ring[lane] = (slot, handle)
+                    rings[lane] = (slot, handle)
                     handle.sources[lane] = source
                 handle.pages.append((lane, p[k], model.spec_chain, model.spec_chain.read_async()))
         for lane, p in enumerate(lanes):
@@ -1196,8 +1203,14 @@ class MiMoV2ForCausalLM:
 
     def _chains_on_device(self):
         """A fused verify may be deferred (MIMO_SPEC_DEFER): every lane chains its draft behind a verify
-        (MIMO_SPEC_CHAIN, the decode RoPE tables, an MTP layer)."""
-        return SPEC_DEFER and SPEC_CHAIN and all(m.mtp is not None and m.rope_tables is not None for m in self.models)
+        (MIMO_SPEC_CHAIN, the decode RoPE tables, a drafter)."""
+        drafters = all(self._drafter(lane) is not None for lane in range(self.dp))
+        return SPEC_DEFER and SPEC_CHAIN and drafters and all(m.rope_tables is not None for m in self.models)
+
+    def _drafter(self, lane):
+        """The lane's drafter: its TtMiMoMTP or TtDFlash (None: none)."""
+        model = self.models[lane]
+        return model.mtp if model.mtp is not None else model.dflash
 
     def _verify_unchained(self, spec_mode, lanes, tables, shape, t0):
         """A logits verify, or an argmax_ids verify with MIMO_SPEC_CHAIN=0: no accept trace; each pass's greedy
@@ -1378,9 +1391,7 @@ class MiMoV2ForCausalLM:
         waited = 0.0
         for lane, r, anchor, hit in jobs:
             t = time.perf_counter()
-            model = self.models[lane]
-            got = model.mtp.read_drafts(anchor) if model.mtp is not None else model.dflash.read_drafts()
-            host = torch.tensor(got[:num_drafts], dtype=torch.int32)
+            host = torch.tensor(self._read_drafts(lane, anchor)[:num_drafts], dtype=torch.int32)
             waited += time.perf_counter() - t
             if hit:
                 self._check_chained(lane, drafts[r], host)
@@ -1396,6 +1407,11 @@ class MiMoV2ForCausalLM:
         if TIMING:
             self._spec_timing("propose", t0, waited, planned, inputs_s, chained=hits)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
+
+    def _read_drafts(self, lane, anchor):
+        """The drafts of the lane's last host-planned draft (blocks): the MTP's of slot ``anchor``, or DFlash's."""
+        model = self.models[lane]
+        return model.mtp.read_drafts(anchor) if model.mtp is not None else model.dflash.read_drafts()
 
     def _enqueue_host_draft(self, lane, source, tokens, positions, m):
         """The MTP draft of the host plan for the commit of ``m`` tokens ``tokens`` at ``positions`` of the lane's
@@ -1417,18 +1433,20 @@ class MiMoV2ForCausalLM:
         mtp.enqueue(slot_tokens, plan)
         return plan.anchor
 
-    def _dflash_continue(self, lane, slot, first, last):
+    def _dflash_continue(self, lane, slot, first, last=None):
         """Before DFlash context rows ``first`` .. ``last`` of the request in lane ``slot`` (a prefill chunk, or a
         draft's committed rows): reset the lane's ring unless it holds that request's rows up to ``first`` - 1 (a new
-        request, another request's rows, or a gap the lane did not draft), then record it up to ``last``."""
+        request, another request's rows, or a gap the lane did not draft), then record it up to ``last`` (None: a
+        chained draft, which the caller records)."""
         dflash = self.models[lane].dflash
         if dflash is None:
             return
-        ring = self.dflash_ring[lane]
+        ring = self._ring(lane, self.dflash_ring)
         if ring is None or ring[0] != slot or ring[1] < first - 1:
             dflash.reset()
             self.chain_stats["dflash_resets"] += 1
-        self.dflash_ring[lane] = (slot, max(last, ring[1]) if ring is not None and ring[0] == slot else last)
+        if last is not None:
+            self.dflash_ring[lane] = (slot, max(last, ring[1]) if ring is not None and ring[0] == slot else last)
 
     def _enqueue_dflash(self, lane, source, tokens, positions, m):
         """The DFlash draft for the commit of ``m`` tokens ``tokens`` at ``positions`` of the lane's DraftSource
@@ -1439,7 +1457,7 @@ class MiMoV2ForCausalLM:
         first, last = int(positions[0]) - 1, int(positions[m - 1]) - 1
         self._dflash_continue(lane, slot, first, last)
         context = [(source.slots[c], int(positions[c]) - 1) for c in range(m)]
-        self.models[lane].dflash.enqueue(context, int(tokens[m - 1]), int(positions[m - 1]))
+        self.models[lane].dflash.enqueue(context, int(tokens[m - 1]), int(positions[m - 1]), source.slots[m - 1])
         return None
 
     def _check_deferred(self, handle):
@@ -1454,10 +1472,11 @@ class MiMoV2ForCausalLM:
             result = next(res for ln, _, res in results if ln == lane)
             chained = chained_draft(result, source, layers=self._mtp_layers(lane))
             if chained is not None:
-                anchor = self._enqueue_host_draft(lane, source, chained.tokens, chained.positions, len(chained.tokens))
+                enqueue = self._enqueue_host_draft if self.models[lane].mtp is not None else self._enqueue_dflash
+                anchor = enqueue(lane, source, chained.tokens, chained.positions, len(chained.tokens))
                 jobs.append((lane, chained, anchor))
         for lane, chained, anchor in jobs:
-            host = torch.tensor(self.models[lane].mtp.read_drafts(anchor), dtype=torch.int32)
+            host = torch.tensor(self._read_drafts(lane, anchor), dtype=torch.int32)
             self._check_chained(lane, torch.tensor(chained.drafts, dtype=torch.int32), host)
 
     def _propose_deferred(self, handle, num_drafts, committed_tokens, committed_positions, accepted_counts):
@@ -1499,19 +1518,22 @@ class MiMoV2ForCausalLM:
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
     def _mtp_layers(self, lane):
-        """The MTP layers drafting on ``lane`` (1, or MAX_DRAFTS: the chain's anchor is then the last slot)."""
-        return len(self.models[lane].mtp.layers)
+        """The MTP layers drafting on ``lane`` (1, or MAX_DRAFTS: the chain's anchor is then the last slot); DFlash's
+        chain anchors at the last committed column, as one layer's."""
+        mtp = self.models[lane].mtp
+        return 1 if mtp is None else len(mtp.layers)
 
-    def _ring(self, lane):
-        """``mtp_ring[lane]``: (lane slot, last row) or None. A draft chained behind a verify left (slot, its
-        VerifyHandle): the rows run up to its page's bonus - 1, or, when the chain declined (nothing written), unknown
-        (None). Reads the handle on the engine thread (by then the plugin has read it: a later step was built from
-        it), so the answer is ordered with the prefills that reset the ring."""
-        ring = self.mtp_ring[lane]
+    def _ring(self, lane, rings=None):
+        """``rings[lane]`` (default ``mtp_ring``; ``dflash_ring``): (lane slot, last row) or None. A draft chained
+        behind a verify left (slot, its VerifyHandle): the rows run up to its page's bonus - 1, or, when the chain
+        declined (nothing written), unknown (None). Reads the handle on the engine thread (by then the plugin has read
+        it: a later step was built from it), so the answer is ordered with the prefills that reset the ring."""
+        rings = self.mtp_ring if rings is None else rings
+        ring = rings[lane]
         if ring is not None and isinstance(ring[1], VerifyHandle):
             result = next(res for ln, _, res in ring[1].read() if ln == lane)
             drafted = result.drafting and result.draft_anchor == result.anchor
-            ring = self.mtp_ring[lane] = (ring[0], result.bonus - 1) if drafted else None
+            ring = rings[lane] = (ring[0], result.bonus - 1) if drafted else None
         return ring
 
     def _backfill(self, lane, slot, a):

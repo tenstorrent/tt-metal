@@ -33,6 +33,11 @@ after a capture.
 The relay reads the result page in place: everything the next verify needs (the accept page, the bonus, the drafts)
 is there, at a fixed address, until the next pass of the lane rewrites it. Steps on a pass the host built leave the
 relay nothing to do, so one verify trace serves both.
+
+With DFlash drafting (``dflash``, tt/dflash.py) the chain step writes the DFlash draft's packed upload instead of
+``mtp_packed`` (reference.spec_chain.dflash_chain_step), and the drafts step, at the end of the DFlash draft trace,
+reads its anchor from that upload and the drafts from the drafter's GreedyHead (dflash_drafts_step). The result page
+and the relay are the same.
 """
 
 import torch
@@ -77,18 +82,26 @@ def _align64(nbytes):
 
 
 class SpecChain:
-    def __init__(self, plan, spec_inputs, accept, argmax, heads, layer_inputs=None):
+    def __init__(self, plan, spec_inputs, accept, argmax, heads, layer_inputs=None, dflash=None):
         """``spec_inputs``: the replica's SpecInputs (``verify_packed``, ``mtp_packed``). ``accept``: VerifySampler's
         output page. ``argmax``: the verify step's greedy tokens (GreedyHead's ``next_tokens``). ``heads``: the MTP
         passes' greedy token rows (TtMiMoMTP's heads). ``layer_inputs``: with every MTP layer, TtMiMoMTP's
-        LayerInputs (the plan and tokens steps' outputs, the stash page, ``table_rows``); None with one layer. All
-        persistent DRAM buffers; allocates the result page."""
+        LayerInputs (the plan and tokens steps' outputs, the stash page, ``table_rows``); None with one layer.
+        ``dflash``: with DFlash drafting, (TtDFlash's packed upload, its reference.spec_chain.DFlashLayout), and
+        ``heads`` its GreedyHead's token row alone (row k: draft k). All persistent DRAM buffers; allocates the result
+        page."""
         self.plan, self.max_batch, self.spec_inputs = plan, spec_inputs.max_batch, spec_inputs
         self.verify, self.mtp = spec_inputs.verify_packed, spec_inputs.mtp_packed
         self.accept, self.argmax, self.heads = accept, argmax, list(heads)
         self.layer_inputs = layer_inputs
         self.layers = MAX_DRAFTS if layer_inputs is not None else 1
-        assert len(self.heads) == MAX_DRAFTS and accept.shape[-1] == ACCEPT_WORDS and ACCEPT_WORDS % OUT_WORDS == 0
+        self.dflash = None if dflash is None else dflash[1]
+        if dflash is not None:
+            # The chain step writes the DFlash draft's upload, which the drafts step reads.
+            assert layer_inputs is None and dflash[0].shape[-1] == self.dflash.words
+            self.mtp = dflash[0]
+        assert len(self.heads) == (1 if dflash is not None else MAX_DRAFTS)
+        assert accept.shape[-1] == ACCEPT_WORDS and ACCEPT_WORDS % OUT_WORDS == 0
         steps = []
         if layer_inputs is not None:
             li = layer_inputs
@@ -130,9 +143,21 @@ class SpecChain:
             self.layers,
             self.layer_inputs.table_rows if self.layer_inputs is not None else self.max_batch,
             layer,
+            *self._dflash_args(),
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])
+
+    def _dflash_args(self):
+        """The kernel's drafter and DFlash layout arguments (zeros with MTP drafting)."""
+        d = self.dflash
+        if d is None:
+            return [0] * 6
+        return [1, d.words, d.ring, d.block, d.heads, d.last]
+
+    def _draft_bytes(self):
+        """The draft's upload that the chain step writes and the drafts step reads."""
+        return self.dflash.words * 4 if self.dflash is not None else MTP_ROWS * self.max_batch * 4
 
     # ------------------------------------------------------------------ device (trace-capturable)
     def chain(self):
@@ -143,17 +168,19 @@ class SpecChain:
             _align64(VERIFY_ROWS * b * 4)
             + _align64(ACCEPT_WORDS * 4)
             + _align64(b * 4)
-            + _align64(MTP_ROWS * b * 4)
+            + _align64(self._draft_bytes())
             + _align64(DRAFTS_AT * 4)
         )
         prog = self._program(CHAIN, args, scratch)
         ttnn.generic_op([self.verify, self.accept, self.argmax, self.mtp, self.result], prog)
 
     def drafts(self):
-        """The drafts step (after the MTP passes wrote their heads' tokens)."""
+        """The drafts step (after the drafter's passes wrote their heads' tokens)."""
         b = self.max_batch
         args = [self.mtp.buffer_address(), self.result.buffer_address()] + [h.buffer_address() for h in self.heads]
-        scratch = _align64(MTP_ROWS * b * 4) + MAX_DRAFTS * _align64(b * 4) + _align64((RESULT_WORDS - DRAFTS_AT) * 4)
+        scratch = (
+            _align64(self._draft_bytes()) + MAX_DRAFTS * _align64(b * 4) + _align64((RESULT_WORDS - DRAFTS_AT) * 4)
+        )
         prog = self._program(DRAFTS, args, scratch)
         ttnn.generic_op([self.mtp, *self.heads, self.result], prog)
 

@@ -112,6 +112,7 @@ class FakeLane:
         self.mesh_device = None
         self.chain = self.spec_chain = FakeChain(self)
         self.mtp = FakeMTP(self)
+        self.dflash = None
         self.verify_sampler = SimpleNamespace(tally=lambda out: None, groups=0, truncated=0)
         self.mtp_words = pack_mtp(B).tolist()
         self.verify_words = self.argmax = None
