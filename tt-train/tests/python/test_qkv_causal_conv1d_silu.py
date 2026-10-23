@@ -21,6 +21,7 @@ BF16 = ttnn.DataType.BFLOAT16
 FP32 = ttnn.DataType.FLOAT32
 REL_OF_MAX = 1e-2
 ABS_FLOOR = 2e-2
+MIN_PCC = 0.999
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,8 @@ def _assert_close(actual, expected, what):
     tolerance = ABS_FLOOR + REL_OF_MAX * np.abs(expected).max()
     max_err = np.abs(actual - expected).max()
     assert max_err <= tolerance, f"{what}: max abs err {max_err} > {tolerance}"
+    pcc = np.corrcoef(actual.ravel(), expected.ravel())[0, 1]
+    assert pcc > MIN_PCC, f"{what}: pcc {pcc} <= {MIN_PCC}"
 
 
 def _to_ttml(array, layout, requires_grad):

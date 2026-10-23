@@ -98,6 +98,8 @@ xt::xarray<double> grad_input_f64(const Shape& s, const Problem& p) {
     return xt::view(grad_window, xt::all(), xt::range(3, 3 + T), xt::all());
 }
 
+// Tolerance relative to the tensor's largest magnitude: inputs and outputs are bf16, and grad_input sums four
+// bf16-rounded products, so an element's error scales with the tensor's range rather than with its own value.
 void expect_close(const xt::xarray<float>& expected, const xt::xarray<float>& actual, const std::string& name) {
     ASSERT_EQ(expected.shape(), actual.shape()) << name;
     const float scale = static_cast<float>(xt::amax(xt::abs(expected))());
