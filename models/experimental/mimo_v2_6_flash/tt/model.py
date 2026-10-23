@@ -36,7 +36,7 @@ from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
-from .moe_stream import zero_output
+from .moe_stream import user_rows, zero_output
 from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_table
 from .dflash import TtDFlash
@@ -251,6 +251,15 @@ class TtMiMoModel:
         )
 
     # ------------------------------------------------------------------ setup
+    def _set_decode_users(self, num_users):
+        """Size the decode programs for ``num_users`` users: the MoE streams and the compact attention rows (4 up to 4
+        users, 8 up to 8)."""
+        rows = user_rows(num_users) if num_users <= 8 else 4
+        for layer in self.layers:
+            if layer.is_moe:
+                layer.mlp.set_decode_users(num_users)
+            layer.attn.set_decode_rows(rows)
+
     def setup_kv_cache(self, num_users):
         """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
 
@@ -269,9 +278,7 @@ class TtMiMoModel:
                 for t in kv:
                     t.deallocate(True)
         self.decode_users = num_users
-        for layer in self.layers:
-            if layer.is_moe:
-                layer.mlp.set_decode_users(num_users)
+        self._set_decode_users(num_users)
         self.kv_caches, tables = [], {}
         max_blocks = page_table_width(self.max_seq_len // self.block_size)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
@@ -325,9 +332,7 @@ class TtMiMoModel:
         assert self.decode_trace is None and self.kv_caches is None, "the KV cache is already set up"
         assert len(kv_caches) == len(layer_groups) == len(self.layers)
         self.decode_users = num_users
-        for layer in self.layers:
-            if layer.is_moe:
-                layer.mlp.set_decode_users(num_users)
+        self._set_decode_users(num_users)
         self.kv_caches = kv_caches
         self.layer_groups = list(layer_groups)
         empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
@@ -474,7 +479,7 @@ class TtMiMoModel:
                 zero_output(self.plan, self.cfg.hidden_size),
             )
         for i, layer in enumerate(self.layers):
-            if layer.attn_reduce is None and self.decode_users <= 4 and layer.can_compact_attention():
+            if layer.attn_reduce is None and self.decode_users <= 8 and layer.can_compact_attention():
                 layer.set_compact_attention(self.plan)
             if layer.fused_norm is not None or not layer.can_fuse_norms():
                 continue
@@ -483,9 +488,9 @@ class TtMiMoModel:
         self._setup_swa_qkv()
 
     def _uses_swa_qkv(self):
-        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 4
+        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 8
         users) and not turned off (MIMO_SWA_QKV=0 keeps the ttnn ops)."""
-        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 4:
+        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 8:
             return False
         return all(layer.can_fuse_norms() for layer in self.layers if layer.is_swa)
 

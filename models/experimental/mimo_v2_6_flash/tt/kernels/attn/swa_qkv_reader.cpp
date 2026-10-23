@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NCRISC of the SWA decode qkv split + RoPE + KV-cache update (SwaDecodeQkv in tt/attention.py). Every core reads
-// rows 0-3 (the users) of the six [*, 32] tiles of its slice of the fused qkv row (role Q: query head `head`, K: the
-// key head, V: the value head) into cb_x: rows 0-3 of faces 0 and 1 land where they were, so a tile's row u is
-// still user u. Q and K cores also read rows 0-3 of the cos / sin tiles and the RoPE transformation tile. K and V
+// the user rows 0..rows-1 of the six [*, 32] tiles of its slice of the fused qkv row (role Q: query head `head`, K:
+// the key head, V: the value head) into cb_x: those rows of faces 0 and 1 land where they were, so a tile's row u is
+// still user u. Q and K cores also read the user rows of the cos / sin tiles and the RoPE transformation tile. K and V
 // cores then read their user's cache tiles: physical block = page_table[user][pos / block] (the table is indexed by
 // absolute position), the six tiles of the block's tile row holding pos (an inactive user, pos < 0, reads block 0
 // and is flagged so the writer leaves the cache alone).
@@ -26,10 +26,11 @@ void kernel_main() {
     constexpr uint32_t pos_page_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t pt_page_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t cache_tile_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t rows = get_compile_time_arg_val(12);  // the user rows: 4 or 8
     constexpr uint32_t pt_chunk_bytes = 64;  // the aligned piece of the page table row read for one entry
     constexpr uint32_t tile_bytes = 2048;    // bf16 32x32
     constexpr uint32_t face_bytes = 512;
-    constexpr uint32_t rows_bytes = 128;  // rows 0-3 of a bf16 face
+    constexpr uint32_t rows_bytes = rows * 32;  // the user rows of a bf16 face
     constexpr uint32_t row_tiles = block_size / 32;
 
     const uint32_t qkv_addr = get_arg_val<uint32_t>(0);

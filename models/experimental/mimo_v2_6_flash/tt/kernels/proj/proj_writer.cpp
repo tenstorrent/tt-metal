@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC: rows 0-3 of every bf16 x tile into cb_x (block_rows tiles per push, the order compute consumes), then this
-// core's output tiles: rows 0-3 from the packed results, rows 4-31 zero.
+// BRISC: the user rows 0..rows-1 (rows 4 or 8) of every bf16 x tile into cb_x (block_rows tiles per push, the order
+// compute consumes), then this core's output tiles: the user rows from the packed results, the other rows zero.
 //
 // x arrives one of three ways (runtime arg role): 0 reads every tile from the x tensor; 1 (the loader of a bank group)
 // does the same and, after each block, raises the x semaphore of each of its peers by block_rows; 2 (a peer) waits
 // until its loader's count covers the block and copies it from the loader's cb_x, which sits at the same L1 address.
-// One 640 B read per tile covers rows 0-3 of faces 0 and 1 (and face 0's rows 4-15 between them).
+// One read per tile covers the user rows of faces 0 and 1 (and face 0's other rows between them).
 //
-// Only rows 0-3 of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
+// Only the user rows of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
 // reach only output rows that are written as zeros.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -30,12 +30,14 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(6);
     constexpr uint32_t col_stride = get_compile_time_arg_val(7);
     constexpr uint32_t sem_id = get_compile_time_arg_val(8);
-    // > 0: write rows 0-3 of output tile column n into the compact rows layout instead (DRAM tiles: rows 4c..4c+3
-    // of compact tile n % compact_tiles, c = n / compact_tiles), the layout the row reduction moves.
+    // > 0: write the user rows of output tile column n into the compact rows layout instead (DRAM tiles: rows
+    // rows * c .. of compact tile n % compact_tiles, c = n / compact_tiles), the layout the row reduction moves.
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
-    constexpr uint32_t face_bytes = 512;   // bf16 16x16
-    constexpr uint32_t user_bytes = 128;   // rows 0-3 of a face
+    constexpr uint32_t rows = get_compile_time_arg_val(10);  // the user rows: 4 or 8
+    constexpr uint32_t tile_bytes = 2048;                    // bf16 32x32
+    constexpr uint32_t face_bytes = 512;                     // bf16 16x16
+    constexpr uint32_t user_bytes = rows * 32;               // the user rows of a face
+    constexpr uint32_t blocks_per_face = 16 / rows;
     constexpr uint32_t x_read_bytes = face_bytes + user_bytes;
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -90,7 +92,7 @@ void kernel_main() {
             const uint32_t n = first_col + j * col_stride;
             const uint32_t c = n / compact_tiles;
             const uint64_t dst = page_noc_addr<true>(out_addr, n % compact_tiles, tile_bytes) +
-                                 (c / 4) * 2 * face_bytes + (c % 4) * user_bytes;
+                                 (c / blocks_per_face) * 2 * face_bytes + (c % blocks_per_face) * user_bytes;
             noc_async_write(src, dst, user_bytes);
             noc_async_write(src + face_bytes, dst + face_bytes, user_bytes);
             src += tile_bytes;
