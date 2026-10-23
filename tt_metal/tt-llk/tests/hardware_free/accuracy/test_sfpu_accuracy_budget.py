@@ -1066,6 +1066,31 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 }
 
 
+# Acknowledgements that hold on one architecture's table only, read beside the ones
+# above for the session's MEASURED_ARCH.
+_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {
+    ChipArchitecture.BLACKHOLE: {
+        (
+            MathOperation.Reciprocal,
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            DestAccumulation.Yes,
+        ): (
+            "the approximate reciprocal answers 65280 where 1/x is past 65504 (|x| below "
+            "1.6e-5), a finite value for an infinite golden: the approximation's own "
+            "shortfall at fp16's overflow edge, two lanes"
+        ),
+        (
+            MathOperation.Rdiv,
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            DestAccumulation.Yes,
+        ): "the same shortfall through rdiv's approximate reciprocal, two lanes",
+    },
+}
+
 # How many not-measurable cells each *wildcard* acknowledgement above covers today, so
 # a newly demoted cell is a change someone has to read rather than one an op-wide
 # acknowledgement approves for any cause. Exact-cell keys need no pin.
@@ -1105,6 +1130,45 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (MathOperation.Lgamma, None, None, None, None): 1,
     (MathOperation.Polygamma, None, None, None, None): 11,
     (MathOperation.Rpow, None, None, None, None): 10,
+}
+
+# The same pins where another architecture's table parks a different number of cells
+# under a wildcard acknowledgement: Blackhole sweeps no fp16-in-Dest cell, and its I1
+# overflows on twice the cells.
+_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
+    ChipArchitecture.BLACKHOLE: {
+        (
+            MathOperation.Exp,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            None,
+        ): 1,
+        (
+            MathOperation.Exp,
+            DataFormat.Float32,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            None,
+        ): 1,
+        (
+            MathOperation.ExpWithBase,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            None,
+        ): 1,
+        (
+            MathOperation.ExpWithBase,
+            DataFormat.Float32,
+            DataFormat.Float16,
+            ApproximationMode.Yes,
+            None,
+        ): 1,
+        (MathOperation.Expm1Cw, None, None, None, None): 13,
+        (MathOperation.I1, None, None, None, None): 20,
+        (MathOperation.Polygamma, None, None, None, None): 12,
+    },
 }
 
 
@@ -1158,11 +1222,19 @@ def _key_name(key):
 
 
 def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
+    acknowledged = {
+        **_UNMEASURABLE_CELLS_ACKNOWLEDGED,
+        **_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON.get(MEASURED_ARCH, {}),
+    }
+    pinned_counts = {
+        **_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS,
+        **_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON.get(MEASURED_ARCH, {}),
+    }
     cells = _not_measurable_cells()
     unacknowledged = [
         cell
         for cell in cells
-        if not any(_acknowledges(key, cell) for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED)
+        if not any(_acknowledges(key, cell) for key in acknowledged)
     ]
     assert (
         not unacknowledged
@@ -1171,16 +1243,14 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     )
     stale = [
         key
-        for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED
+        for key in acknowledged
         if not any(_acknowledges(key, cell) for cell in cells)
     ]
     assert not stale, "acknowledgements no row needs any more: " + ", ".join(
         _key_name(key) for key in stale
     )
-    wildcard = [
-        k for k in _UNMEASURABLE_CELLS_ACKNOWLEDGED if any(v is None for v in k[1:])
-    ]
-    unpinned = [k for k in wildcard if k not in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS]
+    wildcard = [k for k in acknowledged if any(v is None for v in k[1:])]
+    unpinned = [k for k in wildcard if k not in pinned_counts]
     assert (
         not unpinned
     ), "wildcard acknowledgements with no cell count pinned: " + ", ".join(
@@ -1188,7 +1258,7 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     )
     moved = {
         key: (sum(1 for cell in cells if _acknowledges(key, cell)), pinned)
-        for key, pinned in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS.items()
+        for key, pinned in pinned_counts.items()
     }
     moved = {key: counts for key, counts in moved.items() if counts[0] != counts[1]}
     assert (
@@ -1197,7 +1267,7 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
         f"{_key_name(k)}: {now} cells, pinned {pinned}"
         for k, (now, pinned) in moved.items()
     )
-    orphaned = set(_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS) - set(wildcard)
+    orphaned = set(pinned_counts) - set(wildcard)
     assert not orphaned, f"count pins with no acknowledgement: {sorted(orphaned)}"
 
 

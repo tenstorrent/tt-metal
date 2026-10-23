@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import torch
-from helpers.chip_architecture import get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import (
     _dest_acc_flag,
     effective_dest_acc,
@@ -77,13 +77,35 @@ _SWEEP_TENSOR = 2**16
 _INF = float("inf")
 
 
+def fp16_dest_unusable(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    arch: ChipArchitecture,
+) -> bool:
+    """Whether the SFPU on *arch* cannot compute on the fp16 a 16-bit Dest holds for
+    this cell. On Blackhole a ``Float16`` input, or a ``Float16`` output from a
+    ``Float32`` input, at ``dest_acc=No`` puts fp16 in Dest, and there every op that
+    reads the value answers garbage (p100a, 2026-10-23: Square 1.2e9 steps and Sign
+    1.3e8 into Float32, every lane into Float16 NaN; only the sign-bit ops Abs, Neg and
+    Identity are exact). The functional unary driver skips the same cells
+    (``_skip_bh_unless_fp32``); the sweep leaves them out, so the table has no row for
+    them."""
+    return (
+        arch == ChipArchitecture.BLACKHOLE
+        and dest_acc == DestAccumulation.No
+        and DataFormat.Float16 in (input_format, output_format)
+    )
+
+
 def sweep_cells(
     arch=None,
 ) -> list[tuple[DataFormat, DataFormat, ApproximationMode, DestAccumulation]]:
     """Every ``(input, output, approx_mode, dest_acc)`` cell the sweep runs on *arch*
     (default: the chip this session targets), less the cells TestConfig would run as
     another: an exponent-B input packed to Float16 needs a 32-bit Dest, so a
-    ``dest_acc=No`` request runs the ``Yes`` kernel and must not be keyed as ``No``."""
+    ``dest_acc=No`` request runs the ``Yes`` kernel and must not be keyed as ``No``;
+    and less the cells :func:`fp16_dest_unusable` names."""
     if arch is None:
         arch = get_chip_architecture()
     return [
@@ -93,6 +115,7 @@ def sweep_cells(
         for approx in ApproximationMode
         for dest in DestAccumulation
         if effective_dest_acc(in_fmt, out_fmt, dest, arch) == dest
+        and not fp16_dest_unusable(in_fmt, out_fmt, dest, arch)
     ]
 
 

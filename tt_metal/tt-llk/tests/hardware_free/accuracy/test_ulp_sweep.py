@@ -58,6 +58,7 @@ from helpers.ulp_sweep import (
     finish_emit,
     floor_covered,
     floored_profile,
+    fp16_dest_unusable,
     golden_input,
     measurable_mask,
     merge_measured,
@@ -885,6 +886,21 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
             assert has_ulp_gate(entry.output), where
 
 
+def test_no_blackhole_cell_holds_fp16_in_a_16_bit_dest():
+    """Blackhole's SFPU reads garbage from fp16 in a 16-bit Dest, so no `Float16` cell
+    at `dest_acc=No` is swept there; every one is swept on Wormhole."""
+    fp16_at_16_bit = lambda cells: {  # noqa: E731
+        (i, o) for i, o, _, d in cells if d == D_NO and F16 in (i, o)
+    }
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.BLACKHOLE)) == set()
+    assert fp16_at_16_bit(sweep_cells(ChipArchitecture.WORMHOLE)) == {
+        (F16, F16),
+        (F16, F16B),
+        (F16, F32),
+        (F32, F16),
+    }
+
+
 @pytest.mark.parametrize(
     "arch",
     [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE],
@@ -892,7 +908,8 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
 )
 def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypatch):
     """A cell is swept exactly when the TestConfig built for it runs the Dest it asks
-    for; the promoted exponent-B -> Float16 `No` cells are the ones left out."""
+    for; the promoted exponent-B -> Float16 `No` cells are the ones left out, and on
+    Blackhole the cells that would hold fp16 in a 16-bit Dest."""
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
     built_as_asked = [
         (i, o, a, d)
@@ -907,18 +924,23 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
             skip_build_header=True,
         ).dest_acc
         == d
+        and not fp16_dest_unusable(i, o, d, arch)
     ]
     cells = sweep_cells(arch)
     assert cells == built_as_asked
-    promoted = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
+    one_dest = {(i, o) for i, o, _, d in cells if d == D_NO} ^ {
         (i, o) for i, o, _, d in cells if d == D_YES
     }
-    assert promoted == {(F16B, F16)}
+    fp16_in_dest = {(F16, F16), (F16, F16B), (F16, F32), (F32, F16)}
+    assert one_dest == {(F16B, F16)} | (
+        fp16_in_dest if arch == ChipArchitecture.BLACKHOLE else set()
+    )
 
 
 def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
-    """`sweep_cells` applies only the Dest promotion off Wormhole, not another arch's
-    format support; a ULP row naming one would send unsupported cells to the device."""
+    """`sweep_cells` applies only the Dest promotion and Blackhole's fp16 rule, not a
+    third architecture's format support; a ULP row naming one would send unsupported
+    cells to the device."""
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
 
     elsewhere = [

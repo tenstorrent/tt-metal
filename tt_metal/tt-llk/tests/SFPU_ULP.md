@@ -57,7 +57,11 @@ infinity or NaN is fed: the unpack flushes a subnormal, so a lane there would me
 flush rather than the op. The domain is not clipped to the op's safe range: undefined
 inputs reach the hardware and are masked out afterwards. An exponent-B input packed to
 `Float16` needs a 32-bit Dest on Wormhole and Blackhole, so those cells run at
-`dest_acc=Yes` only (`ulp_sweep.sweep_cells`).
+`dest_acc=Yes` only (`ulp_sweep.sweep_cells`). On Blackhole no cell that would hold
+fp16 in a 16-bit Dest (a `Float16` input, or a `Float16` output from `Float32`, at
+`dest_acc=No`) is swept: the SFPU answers garbage there and the functional driver
+skips the same cells (`ulp_sweep.fp16_dest_unusable`), so the Blackhole table has no
+row for them.
 
 The binary, ternary and scalar rows, and the hand-built unary sweeps, are measured over
 their own drivers' stimuli, and those drivers gate on the whole contract. No functional
