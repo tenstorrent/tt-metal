@@ -99,6 +99,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <fmt/ranges.h>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -931,6 +932,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
     uint64_t local_cb_mask,
+    uint32_t num_local_dfbs,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -939,7 +941,8 @@ KernelGroup::KernelGroup(
 
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
-    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
+    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()),
+    num_local_dfbs(num_local_dfbs) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     auto kernel_config = this->launch_msg.view().kernel_config();
@@ -954,6 +957,7 @@ KernelGroup::KernelGroup(
     }
 
     std::set<NOC_MODE> noc_modes;
+    bool brisc_specifies_noc = false;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
         auto num_binaries = kernel->expected_num_binaries();
@@ -983,6 +987,7 @@ KernelGroup::KernelGroup(
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
                             kernel_config.brisc_noc_id() = arg.noc;
+                            brisc_specifies_noc = true;
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
@@ -992,10 +997,11 @@ KernelGroup::KernelGroup(
                             kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
-                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
-                            // validation
-                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // Use 1-ncrisc's noc (the other noc) unless brisc specifies a noc: the two agree
+                            // except when both kernels share one dedicated noc, where brisc's is the one in use
+                            if (!brisc_specifies_noc) {
+                                kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            }
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
@@ -1253,8 +1259,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {
                             continue;
                         }
-                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
-                        // KernelGroup to hold value of number of dfbs
                         auto local_dfb_val = per_core_num_dfbs_.find(core);
                         if (local_dfb_val != per_core_num_dfbs_.end()) {
                             num_dfbs = local_dfb_val->second;
@@ -1276,7 +1280,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 "local_cb_mask: {}, num_dfbs: {}",
                 local_cb_mask,
                 num_dfbs);
-            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by processor index, so loops over this array will be in processor order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
@@ -1297,6 +1300,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 std::move(kernel_ids),
                 local_cb_mask,
+                num_dfbs,
                 min_remote_cb_start_index,
                 cores,
                 hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
@@ -2319,7 +2323,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
     if (mesh_device != nullptr) {
         // Mesh device: track all sub-devices
-        const auto sub_devices = mesh_device->get_devices();
+        const auto sub_devices = mesh_device->impl().get_devices();
         devices_to_track.reserve(sub_devices.size());
         for (IDevice* sub_device : sub_devices) {
             devices_to_track.push_back(sub_device);
@@ -2527,7 +2531,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             physical_allocators.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 physical_allocators.push_back(dev->allocator_impl().get());
@@ -2543,7 +2547,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             devices_for_svc_check.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 devices_for_svc_check.push_back(dev);
@@ -3707,10 +3711,9 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
-        // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
-        // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
-        if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
-            program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
+        // Only now that the CB and DFB config regions are placed may local_cb_mask describe the DFBs.
+        if (!dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(metal_ctx, kernel_groups_getter(index), dataflow_buffers);
         }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
