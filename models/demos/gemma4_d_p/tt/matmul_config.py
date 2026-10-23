@@ -21,6 +21,12 @@ _MAX_SHORT_M_TILES = 8
 # in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep; shallow blocks are much slower.
 _SHARD_K_TILES = (8, 7, 6, 4)
 
+# Blockings from the matmul LLK team for two fp32-accumulating attention projections on the 12-column grid: local QKV
+# at chunk 8192 and global QKV at chunk 4096. Keyed by (M, K, N tiles, grid_x); each is (per_core_N, in0_block_w,
+# out_subblock_h, out_subblock_w). 1x4 subblocks over deeper K blocks run these two about 8% faster than the generic
+# blocking.
+_TUNED_2D_BLOCKING = {(32, 168, 128, 12): (12, 21, 1, 4), (16, 168, 144, 12): (12, 24, 1, 4)}
+
 
 def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False):
     """2D-multicast program config for hidden_states @ weight on a grid_x x grid_y core grid, or None
@@ -39,12 +45,16 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     if per_core_m > _MAX_PER_CORE_M:
         return None
     per_core_n = ttnn.core.divup(n_tiles, grid_x)
+    in0_block_w = _in0_block_w(k_tiles)
     subblock_w = 2 if per_core_n % 2 == 0 else 1
     max_subblock_tiles = 4 if fp32_dest_acc else 8
+    subblock_h = next(h for h in (4, 3, 2, 1) if per_core_m % h == 0 and h * subblock_w <= max_subblock_tiles)
+    if fp32_dest_acc and (tuned := _TUNED_2D_BLOCKING.get((m_tiles, k_tiles, n_tiles, grid_x))):
+        per_core_n, in0_block_w, subblock_h, subblock_w = tuned
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=_in0_block_w(k_tiles),
-        out_subblock_h=next(h for h in (4, 3, 2, 1) if per_core_m % h == 0 and h * subblock_w <= max_subblock_tiles),
+        in0_block_w=in0_block_w,
+        out_subblock_h=subblock_h,
         out_subblock_w=subblock_w,
         per_core_M=per_core_m,
         per_core_N=per_core_n,
