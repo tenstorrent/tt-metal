@@ -302,6 +302,7 @@ class TTBottleneck:
             dram_activation="conv3" in dram_convs,
             dram_conv_slices=dram_conv_slices,
             input_dtype=conv3_dtype,
+            l1_output=True,
         )
 
         if self.is_downsample:
@@ -329,16 +330,23 @@ class TTBottleneck:
             # A 1x1 conv1 runs as ttnn.linear, which emits TILE.
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x, _, _ = self.conv2(x)
-        x, _, _ = self.conv3(x)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-
+        # Before conv3, whose output may stay in L1 for the add and would crowd the downsample's.
         if self.is_downsample:
             x_identity, _, _ = self.downsample(x_identity)
         x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.add(x, x_identity, dtype=self.output_dtype, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
-
+        x, _, _ = self.conv3(x)
+        if not self.conv3.output_in_l1:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.add(
+            x,
+            x_identity,
+            dtype=self.output_dtype,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x)
         ttnn.deallocate(x_identity)
-        return x
+        return out
 
 
 class TTResNet:
