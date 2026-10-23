@@ -820,10 +820,11 @@ class Model:
         sb = getattr(self, "_slot_b", None)  # prefill slot (r * Up + u) -> global decode user (None: identity)
         for u in range(U):
             lg, tk = pm.head_out[u]
+            s0s = PSG.slot_s0(s0, rows * U)  # (per-row chunk starts: one start per prefill slot)
             todo = [
-                (r, (int(self._last_pos[r * U + u]) - s0) % 32, r * U + u if sb is None else sb[r * U + u])
+                (r, (int(self._last_pos[r * U + u]) - s0s[r * U + u]) % 32, r * U + u if sb is None else sb[r * U + u])
                 for r in range(rows)
-                if s0 <= int(self._last_pos[r * U + u]) < s0 + C
+                if s0s[r * U + u] <= int(self._last_pos[r * U + u]) < s0s[r * U + u] + C
             ]
             if not todo:
                 continue
@@ -1481,10 +1482,18 @@ class Model:
         if apc is not None and not apc.active():
             apc = None
         t_pre = time.perf_counter() - t_start
-        for st0 in sorted(
-            {st for _, _, st, _ in items}, reverse=True
-        ):  # continuations FIRST: a new prompt of the same call must not evict a slot a continuation still needs
-            grp = [it for it in items if it[2] == st0]
+        per_row = (
+            bool(getattr(pm.dyn, "per_row", False)) and masked
+        )  # per-row chunk starts (tt/prefill_single.py): users at different positions replay in ONE pass
+        if per_row:
+            groups = [
+                sorted(items, key=lambda it: it[2] == 0)
+            ]  # (continuations first: a new prompt of the same call must not evict a slot a continuation still needs)
+        else:
+            groups = [
+                [it for it in items if it[2] == st0] for st0 in sorted({st for _, _, st, _ in items}, reverse=True)
+            ]  # continuations FIRST: a new prompt of the same call must not evict a slot a continuation still needs
+        for grp in groups:
             if general:  # waves: at most Up users of a mesh row per wave
                 by_row = {}
                 for it in grp:
@@ -1496,37 +1505,49 @@ class Model:
             else:
                 waves = [grp]
             for wave in waves:
-                if apc is not None and st0 == 0:
-                    wave = self._apc_restore_wave(
-                        wave, apc, vis
+                if apc is not None and any(it[2] == 0 for it in wave):
+                    new_ = self._apc_restore_wave(
+                        [it for it in wave if it[2] == 0], apc, vis
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
+                    wave = [it for it in wave if it[2] != 0] + new_ if per_row else new_
                 slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
-                s0_list = list(range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C))
+                if per_row:
+                    # window k of user it = positions [start + k * C, ...): every user advances at ITS OWN position in a replay
+                    win_keys = list(range(max(-(-(e - st) // C) for _, _, st, e in wave)))
+                    s0_of = lambda it, k: it[2] + k * C  # noqa: E731
+                else:
+                    win_keys = list(range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C))
+                    s0_of = lambda it, k: k  # noqa: E731
 
-                def _build(s0, wave=wave):
-                    """host inputs of the window at s0 (tokens, Engram hashes, Engram rows gathered / dequantised): None when no user of the wave is active in it. Pure host work: DSV41_PF_OVERLAP=1 (default) runs it for the NEXT window while the device replays the current one."""
+                def _build(k, wave=wave):
+                    """host inputs of the window ``k`` (an absolute chunk start; per-row: the round) (tokens, Engram hashes, Engram rows gathered / dequantised): None when no user of the wave is active in it. Pure host work: DSV41_PF_OVERLAP=1 (default) runs it for the NEXT window while the device replays the current one."""
                     th_h = 0.0
-                    part = [it for it in wave if it[2] <= s0 < it[3]]
+                    part = [it for it in wave if (s0_of(it, k) < it[3] if per_row else it[2] <= k < it[3])]
                     if not part:
                         return None
                     active, lens = torch.zeros(rows * Up, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
                     tok = torch.zeros(rows * Up, C, dtype=torch.long)
                     slot_b = [None] * (rows * Up)
-                    for b, t, st, e in part:
+                    s0v = [0] * (rows * Up)
+                    for it in part:
+                        b, t, st, e = it
                         sl = slot_of[b]
+                        s0 = s0_of(it, k)
                         n = min(e - s0, C)
                         tok[sl, :n] = t[s0 : s0 + n]
                         tok[sl, n:] = t[e - 1]
-                        active[sl], lens[b], slot_b[sl] = True, e, b
+                        active[sl], lens[b], slot_b[sl], s0v[sl] = True, e, b, s0
                     idx = active.nonzero().reshape(-1)
                     hs = None
                     vw = None  # (image mask [rows*Up, C], embedding override [rows*Up, C, dim]) of this window, None without images
                     if vis:
                         img, ovr = torch.zeros(rows * Up, C, dtype=torch.bool), None
-                        for b, t, st, e in part:
+                        for it in part:
+                            b, t, st, e = it
                             vs = vis.get(b)
                             if vs is None:
                                 continue
+                            s0 = s0_of(it, k)
                             n = min(e - s0, C)
                             m_, emb_ = vs.window(s0, n)
                             if m_.any():
@@ -1537,21 +1558,22 @@ class Model:
                     if self.host_rows is not None:
                         hs = self.hasher(
                             tok[idx],
-                            torch.full((len(idx),), s0, dtype=torch.long),
+                            torch.tensor([s0v[i] for i in idx.tolist()], dtype=torch.long),
                             rows=torch.tensor([slot_b[i] for i in idx.tolist()]),
                             token_mask=None if vw is None else ~vw[0][idx],
                         )
                     th_h = time.perf_counter() - th0
                     prepped = pm.prep_inputs(tok, hs, active.nonzero().reshape(-1), vis=vw)
-                    return part, active, lens, tok, slot_b, vw, hs, prepped, th_h
+                    return part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v
 
                 ahead = {}
-                for k_s0, s0 in enumerate(s0_list):
-                    bw = ahead.pop(s0) if s0 in ahead else _build(s0)
+                for k_s0, k in enumerate(win_keys):
+                    bw = ahead.pop(k) if k in ahead else _build(k)
                     if bw is None:
                         continue
-                    part, active, lens, tok, slot_b, vw, hs, prepped, th_h = bw[:9]
-                    rec_ops = bw[9] if len(bw) > 9 else None
+                    part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v = bw[:10]
+                    rec_ops = bw[10] if len(bw) > 10 else None
+                    s0 = s0v if per_row else k
                     t_hash += th_h
                     self.sink.set_lengths(lens)
                     self.sink.set_map(slot_b if general else None)
@@ -1563,45 +1585,51 @@ class Model:
                     def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b):
                         if os.environ.get("DSV41_PF_OVERLAP", "1") != "1":
                             return
-                        for s0n in s0_list[k_s0 + 1 :]:
-                            nbw = _build(s0n)
+                        for kn in win_keys[k_s0 + 1 :]:
+                            nbw = _build(kn)
                             if nbw is None:
-                                ahead[s0n] = None
+                                ahead[kn] = None
                                 continue
                             # the whole host side of the next window's uploads (RoPE tables, masks, hand-off index tables, Engram rows) is built NOW, the device copies are recorded and replayed right before its trace
                             self.sink.set_lengths(nbw[2])
                             self.sink.set_map(nbw[4] if general else None)
-                            ops = pm.record_window(nbw[7], s0n, C, nbw[1])
+                            ops = pm.record_window(nbw[7], nbw[9] if per_row else kn, C, nbw[1])
                             self.sink.set_lengths(lens)
                             self.sink.set_map(slot_b if general else None)
-                            ahead[s0n] = nbw + (ops,)
+                            ahead[kn] = nbw + (ops,)
                             return
 
                     th, td = pm.replay_window(
                         tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops
                     )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
-                    done = [b for b, _, _, e in part if e <= s0 + C]
+                    done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
                     te0 = time.perf_counter()
-                    if done:
+                    for s_end in sorted({x for _, x in done}):
                         self._export_keys_users(
-                            done, ends, s0 + C, (lambda b: slot_of[b] % Up) if general else (lambda b: b % U)
+                            [b for b, x in done if x == s_end],
+                            ends,
+                            s_end,
+                            (lambda b: slot_of[b] % Up) if general else (lambda b: b % U),
                         )
                     t_exp += time.perf_counter() - te0
-                    for b, _, _, e in part:
-                        if e <= s0 + C:
+                    for it in part:
+                        b, _, _, e = it
+                        s_end = s0_of(it, k) + C
+                        if e <= s_end:
                             resume.pop(b, None)
                             if e % C == 0:
                                 resume[b] = e
                         else:
-                            resume[b] = s0 + C
+                            resume[b] = s_end
                     if (
                         apc is not None
                     ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
-                        for b, t, st, e in part:
-                            if s0 + C <= e and not (vis and b in vis):
+                        for it in part:
+                            b, t, st, e = it
+                            if s0_of(it, k) + C <= e and not (vis and b in vis):
                                 t_apc0 = time.perf_counter()
-                                apc.maybe_snapshot(b, s0 + C, t)
+                                apc.maybe_snapshot(b, s0_of(it, k) + C, t)
                                 t_apc += time.perf_counter() - t_apc0
                     if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
                         for b in [b for b in resume if b not in {p[0] for p in part}]:

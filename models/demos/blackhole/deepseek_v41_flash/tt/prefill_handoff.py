@@ -22,6 +22,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0
 
 SKIP = 0xFFFFFFFF
 
@@ -61,7 +62,7 @@ class PagedStateSink:
     def _host_values(self, s0, C):
         """host tensors of the chunk: ring ids, {src: latent ids}, last-token idx, mask."""
         U, R, pool, RING = self.U, self.rows, self.pool, self.pool.ring_rows
-        pos = torch.arange(s0, s0 + C)
+        s0s = slot_s0(s0, R * U)  # (one chunk start per prefill slot: per-row chunk starts)
         ring = torch.full((R, U * C), SKIP, dtype=torch.int64)
         lat = {s: torch.full((R, U * (C // P.SRC_RATIO[s])), SKIP, dtype=torch.int64) for s in P.SOURCES}
         idx = torch.zeros(R * U, 1, dtype=torch.int32)
@@ -76,6 +77,8 @@ class PagedStateSink:
         )  # ragged-head selector: 1 at (user u, 32-token sub-chunk c) holding the user's last prompt token
         for r in range(R):
             for u in range(U):
+                s0 = s0s[r * U + u]
+                pos = torch.arange(s0, s0 + C)
                 b = self._user_of(r, u)
                 S = 0 if b is None else int(self.lens[b])
                 ud = u if b is None else b % self.Ud  # in-row index of the decode user (its ring rows / prev_cs row)

@@ -102,6 +102,47 @@ def test_chunk_probe(mesh_device):
     SAME = os.environ.get("PROBE_SAME") == "1"  # every user gets the SAME prompt: their logits must agree
     if SAME:
         toks = toks[:1].expand(B, -1).contiguous()
+    if os.environ.get(
+        "PROBE_RAGGED"
+    ):  # users at DIFFERENT chunk positions in one call (per-row chunk starts): every user's last-token logits must equal those of its own lone prefill
+        E0 = int(os.environ["PROBE_RAGGED"])
+        Es = [E0 - 512 * u - 37 for u in range(B)]
+        cuts = [512 * (u + 1) for u in range(B)]
+        assert all(c < e for c, e in zip(cuts, Es)), (cuts, Es)
+        sp = WMAX if MODE == "single" else None
+        refs = {}
+        for u in range(B):
+            for b_ in range(B):
+                m.release_user(b_)
+            refs[u] = (
+                m.prefill_interleaved([(u, toks[u], 0, Es[u])], CHUNK, s_pad_max=sp, want_logits=True)[u][1]
+                .float()
+                .flatten()
+            )
+        for b_ in range(B):
+            m.release_user(b_)
+        t_ = time.perf_counter()
+        m.prefill_interleaved([(u, toks[u], 0, cuts[u]) for u in range(B)], CHUNK, s_pad_max=sp, want_logits=False)
+        n1 = pm.timing.get("replays")
+        r2 = m.prefill_interleaved(
+            [(u, toks[u], cuts[u], Es[u]) for u in range(B)], CHUNK, s_pad_max=sp, want_logits=True
+        )
+        log(
+            f"PROBE RAGGED call timing: replays {m.timing.get('replays')} (per-row: max chunks of one user; grouped: sum over distinct starts) {time.perf_counter() - t_:.1f} s"
+        )
+        lg_r = {u: r2[u][1].float().flatten() for u in range(B)}
+        for u in range(B):
+            d = float((lg_r[u] - refs[u]).abs().max())
+            pc = float(torch.corrcoef(torch.stack([lg_r[u], refs[u]]))[0, 1])
+            log(
+                f"PROBE RAGGED user {u} (cut {cuts[u]}, end {Es[u]}): max |logit - lone| {d:.4f} pcc {pc:.6f} top {int(lg_r[u].argmax())} vs {int(refs[u].argmax())}"
+            )
+        torch.save(
+            {"ragged": lg_r, "lone": refs},
+            os.environ.get("PROBE_RAGGED_SAVE", "/tmp/ragged.pt") + f".perrow{os.environ.get('DSV41_PF_PERROW', '1')}",
+        )
+        log("PROBE RAGGED DONE")
+        return
     for E in LENS:
         USERS = [
             int(x) for x in os.environ.get("PROBE_USERS", ",".join(str(b) for b in range(B))).split(",")

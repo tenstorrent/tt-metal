@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0
 
 TAP_LAYERS = (37, 38, 39)  # dspark_target_layer_ids
 TAP_ROWS = 128  # attention window of the drafter = positions kept per user
@@ -72,10 +73,11 @@ class PrefillTaps:
         (SKIP: not a tap row: the user is not in this replay / the position is not among its last 128). ``user_of(r, u)`` = global decode user of prefill slot u of row r (None: empty).
         """
         rtok = U * C
-        pos = torch.arange(s0, s0 + C)
+        s0s = slot_s0(s0, self.rows * U)  # (one chunk start per prefill slot: per-row chunk starts)
         tok = torch.full((self.rows, rtok), SKIP, dtype=torch.int64)
         for r in range(self.rows):
             for u in range(U):
+                pos = torch.arange(s0s[r * U + u], s0s[r * U + u] + C)
                 b = user_of(r, u)
                 S = 0 if b is None else int(lens[b])
                 if S <= 0:

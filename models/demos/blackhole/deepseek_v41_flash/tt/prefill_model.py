@@ -730,7 +730,7 @@ class DSV41PrefillModel:
         for _, pl in self.layers:
             ratios.add(pl.pa.ratio)
             rope_src.setdefault(pl.pa.compressed, pl.pa.a)
-        self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src)
+        self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src, per_row=_PS.per_row_enabled(self.U))
         # interleaved prefill (DSV41_PF_UMASK=1): per-user 0/1 mask [U,1,1,1] (per mesh row, persistent, refreshed before every replay) that gates every write of
         # the carried per-user prefill state (halo, latent / index-key FIFOs) INSIDE the trace, so users that are not part of a replay keep their state
         self.dyn.umask = None

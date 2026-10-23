@@ -81,8 +81,11 @@ def visibility_mask(pcol, off, lim, C, L):
     return out
 
 
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0  # noqa: E402
+
+
 class DynCtx:
-    def __init__(self, md, C, S_pad, ratios, rope_src):
+    def __init__(self, md, C, S_pad, ratios, rope_src, per_row=False):
         """ratios: set of compress ratios present (0 = window only); rope_src: {compressed?: an attention object providing ``_rope_inputs``}."""
         self.md, self.C, self.S_pad = md, C, S_pad
         self.rope_src = rope_src
@@ -90,15 +93,19 @@ class DynCtx:
         self.L = {r: S_pad // r for r in self.ratios}
         rep = ttnn.ReplicateTensorToMesh(md)
         self._rep = rep
+        # per_row (tt/prefill_single.py per_row_enabled): every per-chunk tensor holds one copy PER MESH ROW (sharded over the rows, the same [1, ...] per device), so every row replays its own chunk position
+        self.per_row = bool(per_row)
+        self.rows, self.cols = tuple(md.shape)
+        self._shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
 
         def mk(shape, dtype=ttnn.bfloat16, fill=0.0):
             return ttnn.from_torch(
-                torch.full(shape, fill),
+                torch.full(([self.rows * shape[0]] if self.per_row else [shape[0]]) + list(shape[1:]), fill),
                 device=md,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep,
+                mesh_mapper=self._shard if self.per_row else rep,
             )
 
         self.tabs = {k: tuple(mk([1, 1, C, HEAD_DIM]) for _ in range(3)) for k in rope_src}  # key: compressed?
@@ -126,34 +133,55 @@ class DynCtx:
         self.masks = {}  # ratio -> full mask [1,1,C,128+C+L] built inside the traced forward by ``build_masks``
 
     def _host(self, t, dtype):
-        return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._rep)
+        return ttnn.from_torch(
+            t.contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._shard if self.per_row else self._rep,
+        )
 
-    def update(self, s0):
-        """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path)."""
+    def _values(self, s0):
+        """host values of every per-chunk tensor of the chunk [s0, s0 + C): {key: [tensors] (each [1, ...])}"""
         C = self.C
-        up = h2d
         pos = s0 + torch.arange(C)
+        out = {}
         for k, src in self.rope_src.items():
             c, s = src._rope_inputs(pos)
-            for t, dev in zip((c, s, -s), self.tabs[k]):
-                up(self._host(t.reshape(1, 1, C, HEAD_DIM), ttnn.bfloat16), dev)
-        for r, tabs in self.lat_tabs.items():
-            src = self.rope_src[True]
-            c, s = src._rope_inputs(s0 + r * torch.arange(C // r))
-            for t, dev in zip((c, s, -s), tabs):
-                up(self._host(t.reshape(1, 1, C // r, HEAD_DIM), ttnn.bfloat16), dev)
+            out[("tab", k)] = [t.reshape(1, 1, C, HEAD_DIM) for t in (c, s, -s)]
+        for r in self.lat_tabs:
+            c, s = self.rope_src[True]._rope_inputs(s0 + r * torch.arange(C // r))
+            out[("lat", r)] = [t.reshape(1, 1, C // r, HEAD_DIM) for t in (c, s, -s)]
         t = pos.view(-1, 1)
         kp = torch.cat([s0 - WINDOW + torch.arange(WINDOW), pos]).view(1, -1)
-        up(
-            self._host(
-                torch.where((kp <= t) & (kp > t - WINDOW) & (kp >= 0), 0.0, NEG).reshape(1, 1, C, WINDOW + C),
-                ttnn.bfloat16,
-            ),
-            self.win_mask,
-        )
+        out["win"] = [torch.where((kp <= t) & (kp > t - WINDOW) & (kp >= 0), 0.0, NEG).reshape(1, 1, C, WINDOW + C)]
         for r in self.ratios:
-            up(self._host(((pos + 1) // r).float().reshape(1, 1, C, 1), ttnn.float32), self.lim[r])
-            up(self._host(torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r)), ttnn.float32), self.off[r])
+            out[("lim", r)] = [((pos + 1) // r).float().reshape(1, 1, C, 1)]
+            out[("off", r)] = [torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r))]
+        return out
+
+    def update(self, s0):
+        """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path). ``s0``: one start, or (per_row) one per mesh row."""
+        up = h2d
+        if self.per_row:
+            s0s = slot_s0(s0, self.rows)
+            cache = {x: self._values(x) for x in set(s0s)}
+            vals = {
+                k: [torch.cat([cache[x][k][i] for x in s0s], dim=0) for i in range(len(v))]
+                for k, v in cache[s0s[0]].items()
+            }
+        else:
+            assert not hasattr(s0, "__len__") or len(set(int(x) for x in s0)) == 1, "per-row chunk starts need per_row"
+            vals = self._values(int(s0[0]) if hasattr(s0, "__len__") else int(s0))
+        for k in self.rope_src:
+            for t, dev in zip(vals[("tab", k)], self.tabs[k]):
+                up(self._host(t, ttnn.bfloat16), dev)
+        for r, tabs in self.lat_tabs.items():
+            for t, dev in zip(vals[("lat", r)], tabs):
+                up(self._host(t, ttnn.bfloat16), dev)
+        up(self._host(vals["win"][0], ttnn.bfloat16), self.win_mask)
+        for r in self.ratios:
+            up(self._host(vals[("lim", r)][0], ttnn.float32), self.lim[r])
+            up(self._host(vals[("off", r)][0], ttnn.float32), self.off[r])
         t0 = time.perf_counter()
         for hk in self.upd_hooks:
             hk(self, s0)

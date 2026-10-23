@@ -63,6 +63,19 @@ def _rep(md, t, dtype, layout):
     )
 
 
+def _rowsh(md, t, dtype, layout):
+    """one slice of the leading dim per mesh row (per-row chunk starts)"""
+    rows, cols = tuple(md.shape)
+    return ttnn.from_torch(
+        t.contiguous(),
+        device=md,
+        dtype=dtype,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols)),
+    )
+
+
 FIFO_CHUNK = (
     os.environ.get("DSV41_PF_FIFO_CHUNK", "1") == "1"
 )  # latent FIFO shift in row pieces instead of a full copy of the table
@@ -1048,11 +1061,13 @@ class DSV41PrefillSparse:
             ctx.upd_hooks.append(self._upd_hook)
             if not single:  # (the single-trace indexer needs no [C, L] visibility masks)
                 ctx.build_hooks.append(self._build_hook)
+        mk_ = _rowsh if getattr(ctx, "per_row", False) else _rep  # per-row chunk starts: one copy per mesh row
+        nr_ = ctx.rows if getattr(ctx, "per_row", False) else 1
         if not hasattr(ctx, "sp_perm"):
-            ctx.sp_perm = _rep(self.md, perm_table(True), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            ctx.sp_perm = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:
-            ctx.sp_win[r] = _rep(
-                self.md, torch.zeros(1, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            ctx.sp_win[r] = mk_(
+                self.md, torch.zeros(nr_, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
             )
 
     def _free_tables(self):
@@ -1108,24 +1123,32 @@ class DSV41PrefillSparse:
 
     @staticmethod
     def _upd_hook(ctx, s0):
+        pr = getattr(ctx, "per_row", False)
+        s0s = PS.slot_s0(s0, ctx.rows if pr else 1)
+        mp = ctx._shard if pr else ctx._rep
         h2d(
-            ttnn.from_torch(perm_table(s0 == 0), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ctx._rep),
+            ttnn.from_torch(
+                torch.cat([perm_table(x == 0) for x in s0s], dim=0),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mp,
+            ),
             ctx.sp_perm,
         )
         for r, dev in ctx.sp_win.items():
             L, C = ctx.L[r], ctx.C
             i = torch.arange(C).view(-1, 1)
             c = torch.arange(WINDOW).view(1, -1)
-            if s0 == 0:
-                p = (i - (WINDOW - 1)).clamp(min=0) + c
-                rows = torch.where(p <= i, L + WINDOW + p, torch.full_like(p, SKIP))
-            else:
-                rows = (L + 1 + i + c).expand(C, WINDOW)
+            parts = []
+            for x in s0s:
+                if x == 0:
+                    p = (i - (WINDOW - 1)).clamp(min=0) + c
+                    rows = torch.where(p <= i, L + WINDOW + p, torch.full_like(p, SKIP))
+                else:
+                    rows = (L + 1 + i + c).expand(C, WINDOW)
+                parts.append(rows.reshape(1, 1, C, WINDOW).to(torch.int64).to(torch.int32))
             host = ttnn.from_torch(
-                rows.reshape(1, 1, C, WINDOW).to(torch.int64).to(torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ctx._rep,
+                torch.cat(parts, dim=0), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp
             )
             h2d(host, dev)
 

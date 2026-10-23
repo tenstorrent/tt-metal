@@ -41,6 +41,22 @@ def enabled():
     return os.environ.get("DSV41_PF_SINGLE", "0") == "1"
 
 
+def per_row_enabled(slots_per_row=1):
+    """Per-ROW chunk starts (DSV41_PF_PERROW, default on with the single trace): every mesh row replays its own chunk position in ONE trace replay (users admitted step by step by the scheduler sit at
+    different positions; the window loop needed one replay per distinct position). Needs one prefill slot per mesh row (DSV41_PREFILL_UP=1).
+    """
+    return enabled() and int(slots_per_row) == 1 and os.environ.get("DSV41_PF_PERROW", "1") == "1"
+
+
+def slot_s0(s0, n):
+    """chunk start of every prefill slot: ``s0`` is one int (all slots) or a sequence of n ints."""
+    if hasattr(s0, "__len__"):
+        v = [int(x) for x in s0]
+        assert len(v) == n, (len(v), n)
+        return v
+    return [int(s0)] * n
+
+
 def kv_len_tensor_available():
     """True when the loaded ttnn build has the ``kv_len_tensor`` argument of ``ttnn.experimental.indexer_score_dsa`` (C++ change of this release, ttnn/cpp/.../indexer_score; the shared build of the
     previous release lacks it). Checked on the nanobind signature, no device needed."""
@@ -133,6 +149,7 @@ class SingleCtx:
 
     def __init__(self, md, ctx, U):
         self.md, self.ctx, self.U = md, ctx, U
+        self.per_row = bool(getattr(ctx, "per_row", False))
         self.rows, self.cols = tuple(md.shape)
         self.nvalid, self.kofs = {}, {}
         self._rep = ttnn.ReplicateTensorToMesh(md)
@@ -144,12 +161,12 @@ class SingleCtx:
             return
         md, U = self.md, self.U
         self.nvalid[r] = ttnn.from_torch(
-            torch.zeros(1, 1, 1, 1, dtype=torch.int32),
+            torch.zeros(self.rows if self.per_row else 1, 1, 1, 1, dtype=torch.int32),
             device=md,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._rep,
+            mesh_mapper=self._shard if self.per_row else self._rep,
         )
         self.kofs[r] = ttnn.from_torch(
             torch.zeros(self.rows * U, 32, dtype=torch.int32),
@@ -161,14 +178,13 @@ class SingleCtx:
         )
 
     def values(self, r, s0, active):
-        """(local valid slots, append row block per (row, user)) of ratio r for a replay at chunk start s0; ``active`` bool [rows * U]"""
+        """(local valid slots per slot, append row block per (row, user)) of ratio r for a replay at chunk start s0 (int, or one start per slot); ``active`` bool [rows * U]"""
         cols, C = self.cols, self.ctx.C
+        n = self.rows * self.U
         Cc8 = (C // r) // cols
-        nloc = Cc8 + (s0 // r) // cols
-        assert nloc % 32 == 0, (r, s0, nloc)
-        ko = torch.where(
-            active, torch.full((self.rows * self.U,), nloc // 32), torch.zeros(self.rows * self.U, dtype=torch.long)
-        )
+        nloc = [Cc8 + (x // r) // cols for x in slot_s0(s0, n)]
+        assert all(v % 32 == 0 for v in nloc), (r, s0, nloc)
+        ko = torch.where(active, torch.tensor([v // 32 for v in nloc]), torch.zeros(n, dtype=torch.long))
         return nloc, ko
 
     def update(self, ctx, s0):
@@ -177,12 +193,17 @@ class SingleCtx:
         act = torch.ones(self.rows * self.U, dtype=torch.bool) if act is None else torch.as_tensor(act).bool()
         for r in self.nvalid:
             nloc, ko = self.values(r, s0, act)
+            if self.per_row:
+                nv = torch.tensor(nloc, dtype=torch.int32).reshape(self.rows, 1, 1, 1)
+            else:
+                assert len(set(nloc)) == 1, "per-row chunk starts need DSV41_PF_PERROW"
+                nv = torch.full((1, 1, 1, 1), nloc[0], dtype=torch.int32)
             h2d(
                 ttnn.from_torch(
-                    torch.full((1, 1, 1, 1), nloc, dtype=torch.int32),
+                    nv,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=self._rep,
+                    mesh_mapper=self._shard if self.per_row else self._rep,
                 ),
                 self.nvalid[r],
             )

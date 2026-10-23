@@ -22,6 +22,7 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0
 
 DEFAULT_MODE = "read"  # shipped default (release 2026-10): paged prefill, reads the pool; DSV41_PF_PAGED=0 selects the previous dense-table release path
 MODE = os.environ.get("DSV41_PF_PAGED", DEFAULT_MODE)
@@ -79,24 +80,29 @@ class PagedCtx:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard,
         )
+        self.per_row = bool(
+            getattr(ctx, "per_row", False)
+        )  # per-row chunk starts: off / win hold one copy per mesh row (U == 1 slot per row)
+        self._m = shard if self.per_row else rep
+        nr = self.rows if self.per_row else 1
         self.off = {
             r: ttnn.from_torch(
-                torch.zeros(1, 32, dtype=torch.int32),
+                torch.zeros(nr, 32, dtype=torch.int32),
                 device=md,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep,
+                mesh_mapper=self._m,
             )
             for r in ctx.ratios
         }
         self.win = ttnn.from_torch(
-            torch.zeros(U, 1, ctx.C, WINDOW, dtype=torch.int32),
+            torch.zeros(U * nr, 1, ctx.C, WINDOW, dtype=torch.int32),
             device=md,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=rep,
+            mesh_mapper=self._m,
         )
 
     def scratch_base(self, u):
@@ -113,24 +119,29 @@ class PagedCtx:
                 if b is not None:
                     pt[r * U + u] = tab[b]
         h2d(ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._shard), self.pt)
+        s0s = slot_s0(s0, self.rows if self.per_row else 1)
         for r, dev in self.off.items():
-            o = torch.zeros(1, 32, dtype=torch.int32)
-            o[0, 0] = (
-                s0 // r if PS.enabled() else ctx.L[r] - (s0 + C) // r
-            )  # single trace: first entry of the chunk (scratch slots); FIFO: slot - off = entry
-            h2d(ttnn.from_torch(o, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep), dev)
+            o = torch.zeros(len(s0s), 32, dtype=torch.int32)
+            for k, x in enumerate(s0s):
+                o[k, 0] = (
+                    x // r if PS.enabled() else ctx.L[r] - (x + C) // r
+                )  # single trace: first entry of the chunk (scratch slots); FIFO: slot - off = entry
+            h2d(ttnn.from_torch(o, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), dev)
         i = torch.arange(C).view(-1, 1)
         c = torch.arange(WINDOW).view(1, -1)
-        if s0 == 0:  # kv of position p at scratch row base + 128 + p; valid positions max(0, i - 127) .. i
-            p = (i - (WINDOW - 1)).clamp(min=0) + c
-            rel = torch.where(p <= i, WINDOW + p, torch.full_like(p, -1))
-        else:  # position p = s0 + i - 127 + c at scratch row base + p - (s0 - 128) = base + 1 + i + c
-            rel = (1 + i + c).expand(C, WINDOW)
-        w = torch.stack(
-            [torch.where(rel >= 0, self.scratch_base(u) + rel, torch.full_like(rel, -1)) for u in range(U)]
-        ).reshape(U, 1, C, WINDOW)
-        w = torch.where(w < 0, torch.full_like(w, -1), w).to(torch.int64).to(torch.int32)  # -1 -> 0xFFFFFFFF
-        h2d(ttnn.from_torch(w, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep), self.win)
+        ws = {}
+        for x in set(s0s):
+            if x == 0:  # kv of position p at scratch row base + 128 + p; valid positions max(0, i - 127) .. i
+                p = (i - (WINDOW - 1)).clamp(min=0) + c
+                rel = torch.where(p <= i, WINDOW + p, torch.full_like(p, -1))
+            else:  # position p = x + i - 127 + c at scratch row base + p - (x - 128) = base + 1 + i + c
+                rel = (1 + i + c).expand(C, WINDOW)
+            w = torch.stack(
+                [torch.where(rel >= 0, self.scratch_base(u) + rel, torch.full_like(rel, -1)) for u in range(U)]
+            ).reshape(U, 1, C, WINDOW)
+            ws[x] = torch.where(w < 0, torch.full_like(w, -1), w).to(torch.int64).to(torch.int32)  # -1 -> 0xFFFFFFFF
+        w = torch.cat([ws[x] for x in s0s], dim=0)
+        h2d(ttnn.from_torch(w, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), self.win)
 
     def translate(self, ids, ratio, src_layer):
         """ids [U,1,C,512] uint32 RM (FIFO slots; single trace: slots of the scratch / history layout, tt/prefill_single.py) -> pool rows (same shape)."""
