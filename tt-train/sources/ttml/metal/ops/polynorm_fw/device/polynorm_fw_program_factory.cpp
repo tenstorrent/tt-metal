@@ -60,7 +60,7 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
     const auto& bias = tensor_args.bias;
     auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNorm3Forward currently supports BF16 input only");
     const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);

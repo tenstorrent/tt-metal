@@ -178,7 +178,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     const ttnn::Tensor& softmax_output = tensor_args.softmax_output;
     const ttnn::Tensor& upstream_grad = tensor_args.upstream_grad;
     auto* device = softmax_output.device();
-    Program program = CreateProgram();
+    Program program = CreateProgram(*device);
 
     uint32_t num_rows, width_tiles, mask_w;
     DataFormat input_data_format, output_data_format, intermed_data_format;
