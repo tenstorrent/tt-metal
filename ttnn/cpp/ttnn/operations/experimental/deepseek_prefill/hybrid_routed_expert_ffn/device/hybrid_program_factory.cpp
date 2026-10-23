@@ -680,6 +680,22 @@ void append_to_descriptor(
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }
 
+    // The reader rebuilds any grid core's coordinates from its own row's and column's lists, which
+    // holds only while virtual x depends on the column alone and virtual y on the row alone.
+    for (uint32_t y = 0; y < kgroups; ++y) {
+        for (uint32_t x = 0; x < hgroups; ++x) {
+            const auto v = virtual_core(device, x, OY + y);
+            TT_FATAL(
+                v.first == virtual_core(device, x, OY).first && v.second == virtual_core(device, 0, OY + y).second,
+                "moe_fused_swiglu: virtual coordinates of the {}x{} grid are not separable at ({}, {})",
+                hgroups,
+                kgroups,
+                x,
+                y);
+        }
+    }
+    const auto h_mcast_rect = mcast_rect_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
+
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
             const CoreCoord core{x, OY + y};
@@ -687,9 +703,8 @@ void append_to_descriptor(
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
             const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY + y, hgroups - 1, OY + y);
-            const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, OY, hgroups - 1, OY + kgroups - 1);
             reader_args.reserve(
-                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
+                17 + 2 * kgroups + x_mcast_args.size() + h_mcast_rect.size() +
                 h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
             reader_args.push_back(0u);  // reserved runtime slot
             reader_args.push_back(tensor_arguments.activations.buffer());
@@ -714,7 +729,9 @@ void append_to_descriptor(
                 reader_args.push_back(vy);
             }
             reader_args.append(x_mcast_args);
-            reader_args.append(h_mcast_args);
+            for (const uint32_t arg : h_mcast_rect) {
+                reader_args.push_back(arg);
+            }
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
             }

@@ -207,12 +207,20 @@ constexpr uint32_t XMCAST_READY_SEM = get_compile_time_arg_val(CT_XMCAST + 1);
 constexpr uint32_t XMCAST_FREE_SEM = get_compile_time_arg_val(CT_XMCAST + 2);
 constexpr uint32_t XMCAST_CONSUMERS = get_compile_time_arg_val(CT_XMCAST + 3);
 constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
-// h's descriptor has a rotating sender list of the whole grid.  The grouped
-// rectangle follows that list; only the rectangles are used by this raw path.
-constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
+// h's descriptor is the whole-grid rectangle alone, and the grouped rectangle follows it. The
+// standalone kernel also takes every grid core's coordinates here; this copy rebuilds them from the
+// two short lists above instead (grid_vx / grid_vy), because per-core runtime args sit in the
+// kernel-config ring the union program is short of.
+constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
 // W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
 constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
+
+// Virtual coordinates of the grid core at column x / row y. The grid's virtual coordinates are
+// separable (the factory checks), so x comes from this row's x-multicast senders and y from this
+// column's peer list.
+inline uint32_t grid_vx(uint32_t x) { return get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * x + 0); }
+inline uint32_t grid_vy(uint32_t y) { return get_arg_val<uint32_t>(RT_PEERS + 2 * y + 1); }
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
 // non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
@@ -376,9 +384,7 @@ void kernel_main() {
     for (uint32_t t = 0; t < M_BLOCK; ++t) {
         uint32_t packed = 0;
         if (t < KGROUPS && t < HGROUPS) {
-            const uint32_t sidx = t * HGROUPS + t;
-            packed = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0) |
-                     (get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1) << 16);
+            packed = grid_vx(t) | (grid_vy(t) << 16);
         }
         mailbox_words[moe_fused_swiglu::MBOX_ROW_AGG + t] = packed;
     }
@@ -712,10 +718,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < hrp.per_row; ++j) {
                     const uint32_t wrow = my_row * hrp.per_row + j;
                     for (uint32_t x = 0; x < HGROUPS; ++x) {
-                        const uint32_t sidx = wrow * HGROUPS + x;
-                        const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                        const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                        hrow_free.up(noc, vx, vy, 1);
+                        hrow_free.up(noc, grid_vx(x), grid_vy(wrow), 1);
                     }
                 }
                 noc.async_atomic_barrier();
@@ -1140,10 +1143,7 @@ void kernel_main() {
                         const uint32_t hdst = get_write_ptr(cb_h);
                         while (next_ack < lr + ahead && next_ack < round_count) {
                             const uint32_t gr = round_base + next_ack;
-                            const uint32_t sidx = gr * HGROUPS + gr;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, grid_vx(gr), grid_vy(gr), 1);
                             ++next_ack;
                         }
 
@@ -1234,10 +1234,7 @@ void kernel_main() {
                         // Acking first is what makes this deadlock-free: every sender's window ack comes
                         // from a core that has already reserved, so no core waits on a core waiting on it.
                         while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
-                            const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
-                            const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                            const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                            Semaphore<>(SEM_H_FREE).up(noc, svx, svy, 1);
+                            Semaphore<>(SEM_H_FREE).up(noc, grid_vx(next_ack), grid_vy(next_ack % KGROUPS), 1);
                             ++next_ack;
                         }
                         const bool i_send = (is_root && r == my_col);
