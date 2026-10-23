@@ -69,10 +69,11 @@ def is_pointwise(conv):
 class TTConv2D:
     """``conv`` carries the conv's geometry and its input's batch, height and width.
 
-    Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
-    interleaved DRAM tensor every call receives; conv2d lays its weights out for that
-    input, so they are prepared here against it and a forward does no host work, and a
-    call with a different input fails instead of running on mismatched weights.
+    Most convs run through conv2d. ``input_dtype``, ``input_layout`` and
+    ``input_memory_config`` describe the tensor every call receives, interleaved in DRAM unless
+    given; conv2d lays its weights out for that input, so they are prepared here against it and a
+    forward does no host work, and a call with a different input fails instead of running on
+    mismatched weights.
     With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
     takes any layout, sharding or dtype and ignores ``input_dtype``, ``input_layout`` and
     ``output_layout``; its ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)``
@@ -110,6 +111,7 @@ class TTConv2D:
         dram_conv_slices=None,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_dtype=None,
         output_layout=None,
     ):
@@ -119,6 +121,7 @@ class TTConv2D:
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
+        self.input_memory_config = input_memory_config
         self.output_dtype = output_dtype
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -206,6 +209,7 @@ class TTConv2D:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        warmup_input = ttnn.to_memory_config(warmup_input, self.input_memory_config)
         warmup_output, _, _ = self._conv2d(warmup_input)
         ttnn.deallocate(warmup_output)
 
@@ -236,16 +240,14 @@ class TTConv2D:
         if self.dram_activation and self.is_pointwise:
             return self._pointwise_as_linear(x), self.input_height, self.input_width
 
-        memory_config = x.memory_config()
         assert (
-            memory_config.buffer_type == ttnn.BufferType.DRAM
-            and not memory_config.is_sharded()
+            x.memory_config() == self.input_memory_config
             and x.dtype == self.input_dtype
             and x.layout == self.input_layout
         ), (
-            f"conv {self.in_channels}->{self.out_channels} k={tuple(self.kernel_size)}: weights prepared for an "
-            f"interleaved DRAM {self.input_dtype} {self.input_layout} input, got {memory_config.buffer_type} "
-            f"sharded={memory_config.is_sharded()} {x.dtype} {x.layout}"
+            f"conv {self.in_channels}->{self.out_channels} k={tuple(self.kernel_size)}: weights prepared for a "
+            f"{self.input_dtype} {self.input_layout} input in {self.input_memory_config}, got {x.dtype} "
+            f"{x.layout} in {x.memory_config()}"
         )
         return self._conv2d(x)
 

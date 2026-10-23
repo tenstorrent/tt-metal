@@ -45,13 +45,37 @@ class TTModulatedDeformConv2dPack:
             relu=relu,
         )
 
+        # The DCN's input, height-sharded over the grid in whole 32-row blocks where that pays
+        # (DCN_SHARDED_INPUT_CHANNELS): the op gives each core the output rows of its own shard, so
+        # most bilinear corners are in its own L1 and the rest in a neighbour's, instead of spread
+        # over every core's. conv_offset then reads that same shard, so the block input reaches L1
+        # once, as TILE, and is untilized there. Otherwise the DCN reads an interleaved L1 copy and
+        # conv_offset a ROW_MAJOR one in DRAM.
+        self.input_memory_config = None
+        conv_offset_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if offset_args.in_channels in DCN_SHARDED_INPUT_CHANNELS:
+            grid = device.compute_with_storage_grid_size()
+            rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
+            shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            self.input_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                    [shard_rows, offset_args.in_channels],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            conv_offset_memory_config = self.input_memory_config
+
         # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits, the
         # order the DCN op takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
         # whatever the input dtype, since the offsets set the sampling positions. Offsets can
         # reach tens of pixels, and accumulating in a bfloat16 destination register errs by up to
         # a few of them, so the register is fp32. The partial sums conv2d writes back between
         # reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial sums gain no
-        # accuracy here.
+        # accuracy here. On the shared L1 input conv2d sizes its activation blocks to the whole
+        # shard, and their buffers then overrun the L1 that input holds; one tile row at a time fits.
         self.conv_offset = TTConv2D(
             offset_args,
             conv_pth.conv_offset,
@@ -60,46 +84,34 @@ class TTModulatedDeformConv2dPack:
             fp32_dest_acc_en=True,
             input_dtype=input_dtype,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_memory_config=conv_offset_memory_config,
+            act_block_h=None if self.input_memory_config is None else ttnn.TILE_SIZE,
             output_dtype=ttnn.bfloat16,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        # The DCN's input, height-sharded over the grid in whole 32-row blocks where that pays
-        # (DCN_SHARDED_INPUT_CHANNELS): the op gives each core the output rows of its own shard, so
-        # most bilinear corners are in its own L1 and the rest in a neighbour's, instead of spread
-        # over every core's. Otherwise interleaved in L1.
-        self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        if offset_args.in_channels not in DCN_SHARDED_INPUT_CHANNELS:
-            return
-        grid = device.compute_with_storage_grid_size()
-        rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
-        shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        self.input_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
-                [shard_rows, offset_args.in_channels],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
         )
 
     def __call__(self, x):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
-        # One ROW_MAJOR copy feeds both conv_offset and the DCN: conv2d reshapes its input
-        # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if self.input_memory_config is not None:
+            x = ttnn.to_memory_config(x, self.input_memory_config)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_dcn = x
+        else:
+            # One ROW_MAJOR copy feeds both conv_offset and the DCN: conv2d reshapes its input
+            # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # The DCN's reads are many small scattered sticks, which L1 serves far faster than
+            # DRAM; conv_offset's weights are prepared for a DRAM input, so only the DCN gets the
+            # L1 copy.
+            x_dcn = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         offset_mask, out_h, out_w = self.conv_offset(x)
         # The DCN op reads one interleaved stick per row; L1 serves those small reads faster.
         offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
         offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 
-        # At stride 1 the input has the output's height and width. The DCN's reads are many
-        # small scattered sticks, which L1 serves far faster than DRAM; conv_offset's weights
-        # are prepared for a DRAM input, so only the DCN gets the L1 copy.
-        x_nhwc = ttnn.to_memory_config(x, self.input_memory_config)
-        x_nhwc = ttnn.reshape(x_nhwc, (self.batch_size, out_h, out_w, x.shape[-1]))
+        # At stride 1 the input has the output's height and width.
+        x_nhwc = ttnn.reshape(x_dcn, (self.batch_size, out_h, out_w, x.shape[-1]))
         out = self.device_dcn(x_nhwc, offset_mask)
         ttnn.deallocate(x_nhwc)
         ttnn.deallocate(offset_mask)
