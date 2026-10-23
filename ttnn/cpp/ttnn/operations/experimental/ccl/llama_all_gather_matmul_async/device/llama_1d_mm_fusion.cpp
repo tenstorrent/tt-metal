@@ -159,9 +159,8 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
     uint32_t max_packet_size = 8192;
     uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
-    uint32_t in1_block_page_size_last =
-        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
+    uint32_t in1_block_page_size_last = per_core_N_size_bytes - (in1_block_width_num_pages - 1) * in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {
         in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
