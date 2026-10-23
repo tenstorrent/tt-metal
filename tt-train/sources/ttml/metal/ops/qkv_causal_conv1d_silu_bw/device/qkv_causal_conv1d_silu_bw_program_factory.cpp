@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 
+#include "metal/common/program_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace m2 = tt::tt_metal::experimental;
@@ -50,37 +51,6 @@ m2::TensorBinding tensor(const m2::TensorParamName& name) {
     return {name, name.get()};
 }
 
-struct WorkDist {
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    std::vector<uint32_t> wi_start;
-    std::vector<uint32_t> wi_count;
-    tt::tt_metal::CoreRangeSet core_set;
-};
-
-WorkDist distribute(tt::tt_metal::CoreCoord grid, uint32_t total) {
-    const uint32_t count = std::min<uint32_t>(total, grid.x * grid.y);
-    WorkDist dist;
-    uint32_t offset = 0;
-    for (uint32_t index = 0; index < count; ++index) {
-        const uint32_t item_count = total / count + (index < total % count ? 1 : 0);
-        dist.cores.push_back({index % grid.x, index / grid.x});
-        dist.wi_start.push_back(offset);
-        dist.wi_count.push_back(item_count);
-        offset += item_count;
-    }
-    dist.core_set = tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
-    return dist;
-}
-
-m2::KernelRunArgs run_args_for(const m2::KernelSpecName& kernel, const WorkDist& dist) {
-    m2::KernelRunArgs args{.kernel = kernel};
-    for (uint32_t i = 0; i < dist.cores.size(); ++i) {
-        m2::AddRuntimeArgsForNode(
-            args.runtime_arg_values, dist.cores[i], {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-    }
-    return args;
-}
-
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFactory::create_program_artifacts(
@@ -99,7 +69,18 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const uint32_t channel_tiles_per_block = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t channel_blocks = channel_tiles / channel_tiles_per_block;
     const uint32_t row_splits = attrs.row_splits;
-    const auto dist = distribute(input.device().compute_with_storage_grid_size(), channel_blocks * row_splits);
+    const auto grid = input.device().compute_with_storage_grid_size();
+    const auto [num_cores, all_cores, core_group_1, core_group_2, items_per_core_1, items_per_core_2] =
+        tt::tt_metal::split_work_to_cores(grid, channel_blocks * row_splits);
+    const auto run_args_for = [&](const m2::KernelSpecName& kernel) {
+        m2::KernelRunArgs args{.kernel = kernel};
+        for_each_core_with_work(
+            num_cores, grid.y, core_group_1, core_group_2, items_per_core_1, items_per_core_2, [&](const CoreWork& w) {
+                m2::AddRuntimeArgsForNode(
+                    args.runtime_arg_values, w.core, {{"wi_start", w.start}, {"wi_count", w.num_units}});
+            });
+        return args;
+    };
 
     const m2::DFBSpecName X_SHIFTED_RM{"x_shifted_rm"}, X_SHIFTED_TILE{"x_shifted_tile"}, WEIGHTS{"weights"},
         GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, GRAD_PREACT_TILE{"grad_preact_tile"},
@@ -220,11 +201,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
                 {.unique_id = GRAD_INPUT, .spec = grad_input.tensor_spec()},
                 {.unique_id = GRAD_TAP_PARTIAL, .spec = grad_tap_partial.tensor_spec()},
             },
-        .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = dist.core_set}},
+        .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
 
     m2::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {run_args_for(READER, dist), run_args_for(WRITER, dist), run_args_for(COMPUTE, dist)};
+    run_args.kernel_run_args = {run_args_for(READER), run_args_for(WRITER), run_args_for(COMPUTE)};
     run_args.tensor_args = {
         {INPUT, input},
         {HISTORY, in.history.mesh_tensor()},
