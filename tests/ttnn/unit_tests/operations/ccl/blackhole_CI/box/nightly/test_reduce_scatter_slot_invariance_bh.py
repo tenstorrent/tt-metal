@@ -11,7 +11,7 @@ partials are added, from the chunk's tile index inside a (batch, channel) unit. 
 flattened into one [1, 1, 32 * 128, W] unit, users at different row offsets start at different
 chunk positions and can round differently. The llama3_70b_galaxy TT_CCL prefill reduce-scatter
 therefore gives each user its own unit, [1, 32, 128, W]. This test asserts that this layout is
-slot-invariant, and logs how many users differ in the flat layout.
+slot-invariant and matches the torch sum, and logs how many users differ in the flat layout.
 
 Uses bh_1d_mesh_device (auto-sizes to the BH box as a 1D ring). Summation order matters only with
 three or more partials, so the test needs at least three chips:
@@ -23,6 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 NUM_USERS = 32
 USER_ROWS = 128
@@ -74,8 +75,9 @@ def _users_differing_from_user_0(out_per_user):
 
 
 # slice_wt is the output width per chip in tiles. The flat layout keeps users aligned to chunk
-# boundaries only for some widths, so cover several.
-@pytest.mark.parametrize("slice_wt", [1, 3, 20], ids=lambda wt: f"slice_wt{wt}")
+# boundaries only for some widths, so cover several. 5 and 25 are the Qwen3-32B FF2 and FF1/FF3
+# widths on Galaxy.
+@pytest.mark.parametrize("slice_wt", [1, 3, 5, 20, 25], ids=lambda wt: f"slice_wt{wt}")
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize(
@@ -129,6 +131,12 @@ def test_reduce_scatter_slot_invariance(bh_1d_mesh_device, dtype, num_links, sli
             f"Ring reduce_scatter is slot-dependent with one unit per user (dtype={dtype}, num_links={num_links}, "
             f"slice_wt={slice_wt}): users {per_user_differing} differ from user 0 on identical input"
         )
+
+        # Every user equals user 0 (asserted above), so checking user 0 covers all of them.
+        ref = torch.stack(torch.chunk(user, num_devices, DIM)).sum(0)
+        passed, pcc = comp_pcc(ref, out_per_user[:, :1], 0.999)
+        logger.info(f"[{dtype} {num_links}link slice_wt={slice_wt}] per-user PCC vs torch: {pcc}")
+        assert passed, f"Ring reduce_scatter per-user output does not match the torch sum: {pcc}"
     finally:
         mesh_device.reset_sub_device_stall_group()
         mesh_device.clear_loaded_sub_device_manager()
