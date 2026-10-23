@@ -1132,7 +1132,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         std::nullopt,   // addcmul_input_tensor2
         std::nullopt);  // mm_progress_counters (fused MM->RS only)
 
-    tt::tt_metal::Program program{program_descriptor};
+    tt::tt_metal::Program program{*input_tensor.device(), program_descriptor};
     return {std::move(program), std::move(shared_vars)};
 }
 
