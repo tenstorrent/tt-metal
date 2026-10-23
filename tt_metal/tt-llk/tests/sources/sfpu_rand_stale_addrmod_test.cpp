@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression test: rand must store every row of the tile even when the dest address-mode slot it
-// stores under (physical slot 6) was last programmed by another op's init. The kernel seeds the
-// PRNG once (as a host-set seed does), runs the topk init, which sets slot 6 to dest incr 32,
-// then runs rand with no further rand init into a Dest tile pre-filled with a sentinel. With a
-// 32-bit Dest every element must be overwritten by a draw; a rand that depends on its own init for
-// the address mode leaves the sentinel in the odd columns and rows 4-15 of every face. With a
-// 16-bit Dest only the top half of each face's rows can hold a draw and the stale pattern differs;
-// test_sfpu_rand_stale_addrmod.py describes the mapping and checks the rows that carry draws.
+// Regression test: rand must store the whole tile when another op's init (topk, slot 6 = dest incr 32)
+// last programmed its dest address mode; seed once, sentinel into Dest, topk init, rand with no rand init.
 
 #include <cstdint>
 
@@ -72,6 +66,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
+    // The row mapping the test checks holds only with Dest address remapping off; an earlier pack_untilize
+    // test on the same core leaves it on (Blackhole; a no-op on Wormhole).
+    _llk_math_reconfig_remap_wrapper_(false);
 
     // Seed once, as a host-set seed's kernel does; no rand init follows after this point.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
