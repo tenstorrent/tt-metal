@@ -400,8 +400,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         args.num_parts);
     if (args.num_parts > 1) {
         TT_FATAL(
-            !is_candidate_source,
-            "fused_lightning_select_kv: candidate source mode does not support num_parts > 1 yet");
+            !tensor_args.candidate_blocks_output.has_value() && !tensor_args.pool_count_output.has_value(),
+            "fused_lightning_select_kv: with num_parts > 1 merge_select_kv writes the candidate blocks and pool count");
         TT_FATAL(
             !tensor_args.output_tensor.has_value(),
             "fused_lightning_select_kv: with num_parts > 1 the op outputs candidates, not an output_tensor");
@@ -424,7 +424,7 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     spec_return_value_t specs = {
         args.num_parts > 1
             ? tt::tt_metal::TensorSpec(
-                  ttnn::Shape({1, 1, 1, 2 * args.k + 16}),
+                  ttnn::Shape({1, 1, 1, 2 * args.k + 16 + 2 * args.candidate_topk_blocks}),
                   tt::tt_metal::TensorLayout(
                       DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}))
         : tensor_args.output_tensor.has_value()
@@ -439,7 +439,7 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
             tt::tt_metal::TensorLayout(
                 DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{})),
     };
-    if (args.candidate_topk_blocks > 0) {
+    if (args.candidate_topk_blocks > 0 && args.num_parts == 1) {
         const auto int32_spec = [](const ttnn::Shape& shape) {
             return tt::tt_metal::TensorSpec(
                 shape,
@@ -465,7 +465,7 @@ FusedLightningSelectKvDeviceOperation::create_output_tensors(
         tensor_args.output_tensor.has_value() ? tensor_args.output_tensor.value()
                                               : ttnn::create_device_tensor(specs[0], tensor_args.kv_cache.device()));
     outputs.push_back(ttnn::create_device_tensor(specs[1], tensor_args.kv_cache.device()));
-    if (args.candidate_topk_blocks > 0) {
+    if (args.candidate_topk_blocks > 0 && args.num_parts == 1) {
         outputs.push_back(
             tensor_args.candidate_blocks_output.has_value()
                 ? tensor_args.candidate_blocks_output.value()

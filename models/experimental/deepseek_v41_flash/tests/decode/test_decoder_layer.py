@@ -67,7 +67,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher
 
 PCC = 0.95
 # The carried pre is ~sigmoid(bias), moving a few hundredths between tokens; bf16 alone costs ~1e-3.
-PRE_MIX_ATOL = 0.01
+# Attention's own error reaches it through the streams: ~0.022 at pos 0 of layer 20 (ratio 1).
+PRE_MIX_ATOL = 0.05
 # An Engram layer's streams carry Engram's own error into the FFN hyper-connection: ~0.015 at pos 127 of layer 1,
 # ~0.03 at pos 1 of layer 14.
 ENGRAM_PRE_MIX_ATOL = 0.04

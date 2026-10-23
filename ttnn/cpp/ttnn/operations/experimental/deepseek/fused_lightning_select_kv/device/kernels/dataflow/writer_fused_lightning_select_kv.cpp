@@ -4,7 +4,8 @@
 
 // Writes this core's index scores to the scores output, selects the global top-k with the other
 // cores, then gathers the second half of this core's selected kv_cache rows into the output. With
-// PARTIAL_OUTPUT the top-k is this device's part only and is written out as candidates instead.
+// PARTIAL_OUTPUT the top-k is this device's part only and is written out as candidates instead,
+// and in CANDIDATE_SOURCE mode so are the part's best candidate blocks.
 
 #include <cstdint>
 
@@ -66,6 +67,13 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t kSelRowsOffset = 4;  // sel: {num_rows, output_offset, pad, pad, rows...}
     constexpr uint32_t output_row_offset = get_arg(args::output_row_offset);  // output row of selected row 0
     constexpr uint32_t num_parts = get_arg(args::num_parts);
+    [[maybe_unused]] constexpr uint32_t candidate_topk_blocks = get_arg(args::candidate_topk_blocks);
+    [[maybe_unused]] constexpr uint32_t candidate_block_size = get_arg(args::candidate_block_size);
+    // PARTIAL_OUTPUT candidates page: {k rows, k order keys, header}, then in CANDIDATE_SOURCE mode
+    // {candidate_topk_blocks blocks, their order keys}. Header: {keys selected, blocks selected,
+    // selectable keys, pad...}.
+    [[maybe_unused]] constexpr uint32_t kCandHeaderWord = 2 * k;
+    [[maybe_unused]] constexpr uint32_t kCandBlocksWord = 2 * k + 16;
 
     // ---- Runtime args ----
     const uint32_t core_index = get_arg(args::core_index);
@@ -559,6 +567,8 @@ void kernel_main() {
     const uint32_t* local_scores = const_cast<const uint32_t*>(scores_l1);
     const SelectResult key_share = radix_select(
         k, num_local_keys, /*ready_base=*/0, [local_scores](uint32_t i) { return topk_order_key(local_scores[i]); });
+    // A later select overwrites the header.
+    [[maybe_unused]] const uint32_t num_keys_selected = select[kHdrAbove] + select[kHdrNeeded];
     const uint32_t final_prefix = key_share.final_prefix;
     const uint32_t final_shift = key_share.final_shift;
     const uint32_t num_contribute = key_share.num_contribute;
@@ -586,8 +596,8 @@ void kernel_main() {
     invalidate_l1_cache();
 #endif
 #ifdef PARTIAL_OUTPUT
-    // Candidates {k rows, k order keys, number selected, pad}: each core lists its run straight into
-    // core 0's layout, at the same kv_wr address it then writes to on core 0.
+    // Each core lists its runs straight into the candidates page's layout (see kCandHeaderWord), at
+    // the same kv_wr address it then writes to on core 0.
     kv_wr_dfb.reserve_back(kv_stage_rows);
     const uint32_t cand_addr = kv_wr_dfb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_addr);
@@ -625,28 +635,36 @@ void kernel_main() {
     }
 
 #ifdef PARTIAL_OUTPUT
-    {
+    // Every active core copies its runs into core 0's page, at the offsets it listed them at locally;
+    // core 0 then zeroes the unused entries, fills the header and writes the page. A run is `count`
+    // ids from word `first`, with their order keys `keys_stride` words later.
+    auto write_partial = [&](uint32_t first_block, uint32_t num_blocks_listed, uint32_t num_blocks_selected) {
         DeviceZoneScopedN("SEL-PARTIAL");
         // hist_arrived is back at zero: core 0 consumed the last counts before the allocation.
         if (core_index != 0 && is_active) {
-            if (num_rows != 0) {
-                (void)ckernel::load_blocking(&keys[num_rows - 1]);
-                const uint32_t rows_addr = cand_addr + key_share.output_offset * sizeof(uint32_t);
-                const uint32_t keys_addr = rows_addr + k * sizeof(uint32_t);
+            auto send_run = [&](uint32_t first, uint32_t count, uint32_t keys_stride) {
+                if (count == 0) {
+                    return;
+                }
+                (void)ckernel::load_blocking(&cand[first + keys_stride + count - 1]);
+                const uint32_t ids_addr = cand_addr + first * sizeof(uint32_t);
+                const uint32_t keys_addr = ids_addr + keys_stride * sizeof(uint32_t);
                 noc.async_write(
                     UnicastEndpoint{},
                     UnicastEndpoint{},
-                    num_rows * sizeof(uint32_t),
-                    {.addr = rows_addr},
-                    {.noc_x = coord_x, .noc_y = coord_y, .addr = rows_addr});
+                    count * sizeof(uint32_t),
+                    {.addr = ids_addr},
+                    {.noc_x = coord_x, .noc_y = coord_y, .addr = ids_addr});
                 noc.async_write(
                     UnicastEndpoint{},
                     UnicastEndpoint{},
-                    num_rows * sizeof(uint32_t),
+                    count * sizeof(uint32_t),
                     {.addr = keys_addr},
                     {.noc_x = coord_x, .noc_y = coord_y, .addr = keys_addr});
-                noc.async_write_barrier();
-            }
+            };
+            send_run(key_share.output_offset, num_rows, k);
+            send_run(kCandBlocksWord + first_block, num_blocks_listed, candidate_topk_blocks);
+            noc.async_write_barrier();
             hist_arrived.up(noc, coord_x, coord_y, 1);
             noc.async_atomic_barrier();
         }
@@ -656,25 +674,33 @@ void kernel_main() {
                 hist_arrived.set(0);
             }
             invalidate_l1_cache();
-            const uint32_t num_selected = select[kHdrAbove] + select[kHdrNeeded];
-            for (uint32_t j = num_selected; j < k; ++j) {
+            for (uint32_t j = num_keys_selected; j < k; ++j) {
                 cand[j] = 0;
                 cand[k + j] = 0;
             }
-            for (uint32_t j = 0; j < 16; ++j) {
-                cand[2 * k + j] = 0;
+            for (uint32_t j = num_blocks_selected; j < candidate_topk_blocks; ++j) {
+                cand[kCandBlocksWord + j] = 0;
+                cand[kCandBlocksWord + candidate_topk_blocks + j] = 0;
             }
-            cand[2 * k] = num_selected;
-            (void)ckernel::load_blocking(&cand[2 * k + 15]);
+            for (uint32_t j = 0; j < 16; ++j) {
+                cand[kCandHeaderWord + j] = 0;
+            }
+            cand[kCandHeaderWord] = num_keys_selected;
+            cand[kCandHeaderWord + 1] = num_blocks_selected;
+            cand[kCandHeaderWord + 2] = num_keys;
+            (void)ckernel::load_blocking(&cand[kCandHeaderWord + 15]);
             noc.async_write(
                 kv_wr_dfb,
                 output,
-                (2 * k + 16) * sizeof(uint32_t),
+                (kCandBlocksWord + 2 * candidate_topk_blocks) * sizeof(uint32_t),
                 {.offset_bytes = 0},
                 {.page_id = 0, .offset_bytes = 0});
             noc.async_write_barrier();
         }
-    }
+    };
+#ifndef CANDIDATE_SOURCE
+    write_partial(0, 0, 0);
+#endif
 #else
     sel[0] = num_rows;
     sel[1] = output_offset;
@@ -693,15 +719,10 @@ void kernel_main() {
     // the newest key is only partly filled and always kept. The candidate_topk_blocks best blocks go
     // to candidate_blocks in ascending order (zero past the last), and pool_count is the number of
     // valid keys in them. Page blocks are whole multiples of a candidate block, so no candidate block
-    // spans two cores.
+    // spans two cores (or two parts). With PARTIAL_OUTPUT the best blocks of this part go into the
+    // candidates page with their order keys instead, for merge_select_kv to pick the global best.
     {
         DeviceZoneScopedN("SEL-CAND");
-        constexpr uint32_t candidate_topk_blocks = get_arg(args::candidate_topk_blocks);
-        constexpr uint32_t candidate_block_size = get_arg(args::candidate_block_size);
-        constexpr uint32_t kCountOffsetWords = (candidate_topk_blocks * sizeof(uint32_t) + 63) / 64 * 16;
-        const auto candidate_blocks = TensorAccessor(tensor::candidate_blocks);
-        const auto pool_count = TensorAccessor(tensor::pool_count);
-
         const uint32_t num_blocks = tt::data_movement::common::div_up(num_keys, candidate_block_size);
         const uint32_t pinned_block = num_blocks - 1;
         const uint32_t first_local_block = first_local_key / candidate_block_size;
@@ -729,25 +750,41 @@ void kernel_main() {
         auto block_key = [block_keys](uint32_t b) { return block_keys[b]; };
         const SelectResult block_share =
             radix_select(candidate_topk_blocks, num_local_blocks, /*ready_base=*/kAllocReady, block_key);
+        [[maybe_unused]] const uint32_t num_blocks_selected = select[kHdrAbove] + select[kHdrNeeded];
 
+#ifdef PARTIAL_OUTPUT
+        // The blocks go after this core's key run in the same staging page.
+        volatile tt_l1_ptr uint32_t* list = cand + kCandBlocksWord;
+#else
         // kv_wr is free once this core's gather is done, and core 0's is done before the allocation,
         // so every core lists its blocks at the same L1 offsets it then writes to on core 0.
         const uint32_t list_addr = kv_wr_dfb.get_write_ptr();
         volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(list_addr);
+#endif
         uint32_t num_listed = 0;
         uint32_t from_bin_left = block_share.num_from_bin;
         for (uint32_t b = 0; b < num_local_blocks && num_listed < block_share.num_contribute; ++b) {
-            const uint32_t top = block_key(b) >> block_share.final_shift;
+            const uint32_t key = block_key(b);
+            const uint32_t top = key >> block_share.final_shift;
             bool take = top > block_share.final_prefix;
             if (top == block_share.final_prefix && from_bin_left != 0) {
                 --from_bin_left;
                 take = true;
             }
             if (take) {
+#ifdef PARTIAL_OUTPUT
+                list[candidate_topk_blocks + block_share.output_offset + num_listed] = key;
+#endif
                 list[block_share.output_offset + num_listed++] = first_local_block + b;
             }
         }
 
+#ifdef PARTIAL_OUTPUT
+        write_partial(block_share.output_offset, num_listed, num_blocks_selected);
+#else
+        constexpr uint32_t kCountOffsetWords = (candidate_topk_blocks * sizeof(uint32_t) + 63) / 64 * 16;
+        const auto candidate_blocks = TensorAccessor(tensor::candidate_blocks);
+        const auto pool_count = TensorAccessor(tensor::pool_count);
         if (core_index != 0 && is_active) {
             if (num_listed != 0) {
                 const uint32_t addr = list_addr + block_share.output_offset * sizeof(uint32_t);
@@ -792,6 +829,7 @@ void kernel_main() {
                 {.page_id = 0, .offset_bytes = 0});
             noc.async_write_barrier();
         }
+#endif
     }
 #endif
 

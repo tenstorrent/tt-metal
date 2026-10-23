@@ -1161,7 +1161,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             total += len(missing)
             for (buffer_type, address), size in missing:
-                logger.warning(
+                logger.debug(
                     f"submesh {i}: {buffer_type} buffer at {address:#x} ({size} B/bank) allocated after the prefill "
                     "capture is not in the resident snapshot"
                 )
