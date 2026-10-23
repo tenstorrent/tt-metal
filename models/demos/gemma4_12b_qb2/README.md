@@ -61,6 +61,11 @@ the AIME24 chat reference (100 tokens): top-1 95-96%, top-5 / top-100 100%.
   number of K chunks; the padded keys lie past every query's causal range, and nothing is padded when the width
   already divides (vLLM's rows).
 - **Prefix caching is off.**
+- **Decode attention uses the batch-32 core split at every batch** (`sdpa_decode_max_cores`, `tt/optimized_decoder.py`)
+  so a seeded sampled request gives the same text whatever the server's load. One user decodes slower at long
+  context than the op default would allow (measured locally: 15.9 / 22.3 / 44.1 ms/token at 4K / 32K / 128K, vs
+  13.5 / 14.6 / 18.7); 32 users are unchanged. The user-split full-layer attention (8+ users past
+  `decode_user_split_min_position`) still has its own reduction order.
 
 ## Test
 

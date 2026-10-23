@@ -123,10 +123,12 @@ DEFAULT_POLICY = {
     # K chunks larger than a block pad the page-table row (see _table_for_k_chunk).
     "sdpa_decode_fid": "hifi2fp32",
     # decode SDPA per layer kind and batch, {max batch: value} (smallest key >= batch wins): K chunk (None = one
-    # cache block) and cores per (user, KV head). Full layers at batch 1 (one KV head) spread over 24 cores:
-    # +3 us at position 4096, -14 us at 32768, -117 us at 262000 vs the op default of 16 (README "Attention").
-    "sdpa_decode_k_chunk": {"sliding": {1: 128, MAX_DECODE_BATCH: None}, "full": {1: 128, MAX_DECODE_BATCH: None}},
-    "sdpa_decode_max_cores": {"sliding": {MAX_DECODE_BATCH: 16}, "full": {1: 24, MAX_DECODE_BATCH: 16}},
+    # cache block) and cores per (user, KV head). Both are the same at every batch: the K split sets the reduction
+    # order, so a row's logits would otherwise depend on how many users share the step, and a seeded sampled request
+    # would change with the server's load. The cores are what batch 32 gets on the 110-core grid (64 sliding /
+    # 32 full (user, KV head) pairs). Costs one user ~3 ms/token at 4K, ~8 at 32K and ~28 at 128K; 32 users unchanged.
+    "sdpa_decode_k_chunk": {"sliding": {MAX_DECODE_BATCH: None}, "full": {MAX_DECODE_BATCH: None}},
+    "sdpa_decode_max_cores": {"sliding": {MAX_DECODE_BATCH: 1}, "full": {MAX_DECODE_BATCH: 3}},
     "sdpa_decode_grid": None,  # (x, y) SDPA decode core grid; None = full grid
     "sdpa_decode_exp_approx": False,
     "sdpa_prefill_fid": {"sliding": "hifi2", "full": "hifi2fp32"},
