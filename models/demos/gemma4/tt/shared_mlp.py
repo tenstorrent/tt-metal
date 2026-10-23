@@ -288,8 +288,33 @@ class SharedMLP:
                 hidden_states.deallocate(True)
                 hidden_states = owner_rows
                 owner_fast = owner
-        gate_up = self.gate_up_proj(hidden_states)
         shard = self._inter_per_device
+        if (
+            flag("GEMMA4_MLP_GEGLU_SHARDED")
+            and not lane_sharded
+            and isinstance(self.gate_up_proj, DramShardedLinear)
+            and isinstance(self.down_proj, DramShardedLinear)
+            and self.down_proj.accepts_sharded_rows()
+            and len(hidden_states.shape) == 4
+            and 1 <= int(hidden_states.shape[2]) <= TILE_SIZE
+            and shard % TILE_SIZE == 0
+        ):
+            # GEMMA4_MLP_GEGLU_SHARDED=1: gate_up's L1 width-sharded output -> up * gelu(gate) straight into
+            # down's L1 activation layout (custom_ops/geglu_sharded): no sharded -> interleaved copy after
+            # gate_up, no reshard before down, the 2I-wide activation never leaves L1.
+            from models.demos.gemma4.custom_ops.geglu_sharded import GegluShardedDecode
+
+            rows = int(hidden_states.shape[2])
+            gate_up_sh = self.gate_up_proj(hidden_states, keep_sharded=True)
+            hidden_sh = GegluShardedDecode.op(gate_up_sh, self.down_proj.act_memory_config)
+            gate_up_sh.deallocate(True)
+            output = self.down_proj(hidden_sh, rows=rows)
+            if self._fractured:
+                output = ccl_allreduce_fractured(output, self.mesh_config, self.ccl_manager)
+            elif self.mesh_config is not None and self.mesh_config.tp > 1:
+                output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+            return output
+        gate_up = self.gate_up_proj(hidden_states)
         s = gate_up.shape[-2]
         if flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up) and shard % TILE_SIZE == 0:
             # GEMMA4_MLP_GEGLU_FUSED=1: up * gelu(gate) over the fused [up | gate] output as one program

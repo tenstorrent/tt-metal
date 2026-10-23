@@ -9,7 +9,9 @@ precision_overrides.json, lm_head bf16), the activation is the ``[1, 1, b, K]`` 
 program config is timed as a traced loop (``GEMMA4_LAB_OPS_PER_TRACE`` calls per trace, ``GEMMA4_LAB_REPLAYS``
 replays per batch, ``GEMMA4_LAB_BATCHES`` batches; the median of the batch means is the reported us). One
 ``RESULT lab ...`` line per candidate (knobs, PCC vs the baseline and vs the fp32 golden, us, DRAM MB, roofline us
-at ``GEMMA4_LAB_DRAM_GBPS`` = 512 GB/s per P150, ratio) and one ``RESULT best ...`` line per shape.
+at ``GEMMA4_LAB_DRAM_GBPS`` = 512 GB/s per P150, ratio) and one ``RESULT best ...`` line per shape; every line
+carries ``chip=`` (TT_VISIBLE_DEVICES): the same weight-bound op measured 4 % apart on two chips, so candidates are
+compared within one job only.
 
 Boundary layouts (what the fused ops around the matmul produce / consume) are parameters:
 ``GEMMA4_LAB_ACT`` = ``dram`` (DRAM interleaved, today's), ``l1`` (L1 interleaved), ``ws`` (the DRAM-sharded decode
@@ -544,7 +546,7 @@ class ShapeLab:
         self.dram_bytes, self.roofline_us = self.space.dram_bytes, self.space.roofline_us
         self.tag = (
             f"model={model} op={op} shape={shape_tag} tp={tp} b={batch} K={k} N={n} wdtype={DTYPE_TAG[wdtype]} "
-            f"act={ACT} outcfg={OUT}"
+            f"act={ACT} outcfg={OUT} chip={os.environ.get('TT_VISIBLE_DEVICES', '?')}"
         )
 
     def _act_layout(self):
