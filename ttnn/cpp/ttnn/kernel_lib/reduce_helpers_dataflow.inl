@@ -245,6 +245,12 @@ template <
     uint32_t value_bits>
 FORCE_INLINE void prepare_reduce_auxiliary_tile() {
     using ttnn::kernel_lib::ReduceAuxiliaryTileType;
+    if constexpr (tile_type == ReduceAuxiliaryTileType::Placeholder) {
+        DataflowBuffer dfb(dfb_id);
+        dfb.reserve_back(1);
+        dfb.push_back(1);
+        return;
+    }
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
@@ -265,7 +271,9 @@ FORCE_INLINE void prepare_reduce_auxiliary_tile() {
         static_assert(
             valid_elements <= tile_r_dim, "Column-oriented auxiliary tile valid-element count exceeds the tile height");
     } else {
-        static_assert(tile_type == ReduceAuxiliaryTileType::Zero, "Unknown reduction auxiliary tile type");
+        static_assert(
+            tile_type == ReduceAuxiliaryTileType::Zero || tile_type == ReduceAuxiliaryTileType::Placeholder,
+            "Unknown reduction auxiliary tile type");
     }
 
     DataflowBuffer dfb(dfb_id);
@@ -305,6 +313,28 @@ FORCE_INLINE void prepare_reduce_auxiliary_tile() {
     flush_l2_cache_range(write_addr, get_tile_size(dfb_id));
 #endif
     dfb.push_back(1);
+}
+
+// =============================================================================
+// Host-planned auxiliary recipe
+// =============================================================================
+
+namespace reduce_auxiliary_detail {
+
+template <typename Auxiliary, uint32_t tile_index = 0>
+FORCE_INLINE void prepare_tiles() {
+    if constexpr (tile_index < Auxiliary::num_tiles) {
+        using Tile = typename Auxiliary::template Tile<tile_index>;
+        prepare_reduce_auxiliary_tile<Auxiliary::cb_id, Tile::type, Tile::num_valid_elements, Tile::value_bits>();
+        prepare_tiles<Auxiliary, tile_index + 1>();
+    }
+}
+
+}  // namespace reduce_auxiliary_detail
+
+template <typename Auxiliary>
+FORCE_INLINE void prepare_reduce_auxiliary_tiles() {
+    reduce_auxiliary_detail::prepare_tiles<Auxiliary>();
 }
 
 }  // namespace dataflow_kernel_lib

@@ -1302,4 +1302,89 @@ ALWI void reduce(
     }
 }
 
+namespace detail {
+
+template <typename Call, typename PostReduceOp>
+ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
+    auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
+    auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
+                                        : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
+    if constexpr (Call::is_tail) {
+        static_assert(
+            Call::reduce_dim != ReduceDim::REDUCE_SCALAR ||
+                (!should_pop(Call::input_policy) && Call::batches == 1 && Call::logical_h % 32 == 0 &&
+                 Call::logical_w == Call::columns * 32),
+            "HW tails require resident whole tile rows at the full width, in a single batch");
+        shape = ReduceInputBlockShape::of((Call::logical_h + 31) / 32, (Call::logical_w + 31) / 32, Call::batches);
+        if constexpr (!should_pop(Call::input_policy)) {
+            // A resident tail keeps the pitches of the full block it lives in.
+            constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
+            layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
+        }
+    }
+    if constexpr (Call::accumulation_mode != ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        // Each call packs every partial before the next call reloads any, on this same thread.
+        [[maybe_unused]] const uint32_t outputs =
+            Call::reduce_dim == ReduceDim::REDUCE_ROW   ? shape.rows * shape.batches
+            : Call::reduce_dim == ReduceDim::REDUCE_COL ? shape.cols * shape.batches
+                                                        : shape.batches;
+        UNPACK(ASSERT(get_dfb_num_pages(Call::accumulator_cb_id) >= outputs));
+    }
+    // Out of line, the call keeps its shape and accumulation as runtime values and compiles the generic
+    // reduce body, several times the inlined size per call. TODO: forcing it inline grows kernel_main past
+    // GCC's large-function limits, which then stops inlining further down; find a structure that keeps
+    // planned calls constant-folded without forcing it.
+    auto issue = [&](auto accumulate, auto post_op) __attribute__((always_inline)) {
+        reduce<
+            Call::reduce_type,
+            Call::reduce_dim,
+            Call::input_cb_id,
+            Call::auxiliary_cb_id,
+            Call::output_cb_id,
+            Call::input_policy,
+            Call::reconfig_mode,
+            Call::fp32_mode,
+            Call::algorithm,
+            Call::within_tile,
+            Call::scale_bits>(
+            shape,
+            layout,
+            accumulate,
+            post_op,
+            Call::partial_mode,
+            Call::output_chunk_tiles,
+            Call::auxiliary_tile_offset);
+    };
+
+    if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        issue(NoAccumulation{}, post_reduce_op);
+    } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
+        issue(
+            Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
+            post_reduce_op);
+    } else {
+        static_assert(
+            Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
+            "Unknown planned reduction accumulation mode");
+        issue(Accumulate::at(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode), NoOp{});
+    }
+}
+
+}  // namespace detail
+
+template <typename Call, typename PostReduceOp>
+ALWI void reduce(PostReduceOp post_reduce_op) {
+    if constexpr (Call::has_tail_variant) {
+        // One compiled call serves the whole grid; the runtime override selects the tail's traversal,
+        // masks, auxiliary slice and normalization together.
+        if (Call::use_tail()) {
+            detail::reduce_planned_variant<typename Call::Tail>(post_reduce_op);
+        } else {
+            detail::reduce_planned_variant<Call>(post_reduce_op);
+        }
+    } else {
+        detail::reduce_planned_variant<Call>(post_reduce_op);
+    }
+}
+
 }  // namespace compute_kernel_lib
