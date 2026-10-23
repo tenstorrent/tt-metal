@@ -538,11 +538,13 @@ uint64_t BankManager::allocate_buffer(
     // Addresses should already be aligned to alignment_bytes_
     std::optional<DeviceAddr> chosen;
     if (requested_address.has_value()) {
+        // Legacy L1 and L1_SMALL free lists align to the DRAM alignment, which can exceed alignment_bytes_.
+        const DeviceAddr required_alignment = std::max<DeviceAddr>(alignment_bytes_, alloc->align(1));
         TT_FATAL(
-            requested_address.value() % alignment_bytes_ == 0,
+            requested_address.value() % required_alignment == 0,
             "Requested buffer address {} is not aligned to {} B",
             requested_address.value(),
-            alignment_bytes_);
+            required_alignment);
         for (const auto& [start, end] : available_ranges) {
             // Subtract only after checking the bounds, to avoid unsigned overflow.
             if (requested_address.value() >= start && requested_address.value() <= end &&
