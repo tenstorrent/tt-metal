@@ -49,8 +49,9 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it. Tiny tiles are not supported.
  * @note Math thread (T1) contract: math runs no datacopy MOP here (skip @ref _llk_math_eltwise_unary_datacopy_init_); it
  *       only forwards UNPACK_MATH into MATH_PACK. Once per program, @ref _llk_math_pack_sync_init_ (seeds MATH_PACK, the
- *       semaphore T1 posts) and then @ref _llk_sync_spin_until_posted_ (semaphore::UNPACK_MATH) before T1's first wait,
- *       so the wait is armed only after T0's seed of UNPACK_MATH has landed. Per section, T1 waits on UNPACK_MATH
+ *       semaphore T1 posts). Right before T1's first UNPACK_MATH wait, not at init, @ref _llk_sync_spin_until_posted_
+ *       (semaphore::UNPACK_MATH), so the wait is armed only after T0's seed has landed; a program with no sections
+ *       never posts, so a spin at init would never end. Per section, T1 waits on UNPACK_MATH
  *       (@ref _llk_sync_wait_), does its work, posts MATH_PACK (@ref _llk_sync_post_) and gets UNPACK_MATH
  *       (@ref _llk_sync_get_). SyncHalf: T1 flips its own section base (@ref _llk_sync_advance_dest_section_) so its
  *       SFPU work follows the bank the unpacker wrote.
