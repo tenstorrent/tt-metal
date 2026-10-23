@@ -894,6 +894,46 @@ def test_encode_reference(mesh_device, sp_axis, tp_axis, h_axis, topology, num_l
         ttnn.synchronize_device(mesh.device)
 
 
+UNALIGNED_SIZES = [(880, 1168), (400, 736), (1232, 816)]
+"""Prepared reference sizes BFL's own sizing produces for real photos (liam.jpeg 1152x1536 -> 880x1168, girls.jpeg
+415x739 -> 400x736, a 3000x2000 photo -> 1232x816) whose VAE levels have row counts that are not multiples of 32
+(16060 / 2300 / 15708 rows at the /8 level): the plain GroupNorm takes ``_forward_unaligned`` there (2026-10-21)."""
+
+
+@vae_rows
+@pytest.mark.parametrize("size", UNALIGNED_SIZES, ids=[f"{w}x{h}" for w, h in UNALIGNED_SIZES])
+def test_encode_unaligned_reference(mesh_device, sp_axis, tp_axis, h_axis, topology, num_links, snapshot, size) -> None:
+    """E5: a reference whose VAE levels are NOT tile-aligned encodes through the exact unaligned GroupNorm path and
+    matches the CPU reference encode at the E1 gate (the admission policy used to refuse these sizes)."""
+    from PIL import Image
+
+    width, height = size
+    rng = torch.Generator().manual_seed(width * 7919 + height)
+    noise = torch.rand(height, width, 3, generator=rng)
+    yy, xx = torch.meshgrid(torch.linspace(0, 1, height), torch.linspace(0, 1, width), indexing="ij")
+    rgb = torch.stack([xx, yy, 0.5 * (xx + yy)], dim=-1) * 0.7 + 0.3 * noise  # smooth gradient + noise
+    image = Image.fromarray((rgb.clamp(0, 1) * 255).round().to(torch.uint8).numpy(), "RGB")
+    h, w = packing.latent_shape(height, width)
+    oracle, oracle_ids = cached_reference_encode(snapshot, image, f"unaligned {width}x{height}")
+    assert torch.equal(oracle_ids, packing.latent_ids(h, w))
+    mesh = open_encoder(mesh_device, tp_axis, topology, num_links, snapshot)
+    row = f"encode_unaligned[{width}x{height}] {mesh.tag}"
+    try:
+        first = mesh.helper.encode(image)
+        wall_first = mesh.helper.last_wall_s
+        second = mesh.helper.encode(image)
+        wall_warm = mesh.helper.last_wall_s
+        assert first.shape == (h * w, 128) and torch.isfinite(first.float()).all()
+        assert torch.equal(first, second), "second encode differs from the first"
+        p, r = encode_report(row, oracle, first, wall_first, wall_warm, memory_line(mesh.device))
+        gate_encode(p, r)
+    finally:
+        mesh.helper.release_trace()
+        ttnn.synchronize_device(mesh.device)
+        mesh.encoder.deallocate_weights()
+        ttnn.synchronize_device(mesh.device)
+
+
 @vae_rows
 @pytest.mark.parametrize(
     "case_dir", REFERENCE_CASES or [None], ids=[f"{p.parent.name}-{p.name}" for p in REFERENCE_CASES] or ["no_goldens"]

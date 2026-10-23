@@ -30,8 +30,8 @@ Rows:
                                         text structural worst case ADMITTED with ``measured["total_tokens"] ==
                                         110592`` (no token budget since 2026-10-19); a 4112 side -> ``side``;
                                         11 refs -> ValueError at resolve; an
-                                        80x80 reference (level rows 6400 / 1600 / 400 / 100) -> ``reference_size``;
-                                        a 1000x1000 reference (canvas 1008, level 15876 rows) -> ``reference_size``;
+                                        80x80 reference (level rows 6400 / 1600 / 400 / 100) -> ADMITTED (2026-10-21);
+                                        a 1000x1000 reference (canvas 1008, level 15876 rows) -> ADMITTED;
                                         the measured dict carries every field of design section 6.
 """
 
@@ -290,15 +290,30 @@ def test_policy_references(expect_error) -> None:
         Flux3KleinRequest(prompt="x", model="distilled", images=(Image.new("RGB", (80, 80)),)).resolve(), text_length=80
     )
     s = admit(small, (4, 8))
-    assert not s.ok and s.budget == "reference_size", s
-    assert vae_level_rows(80, 80) == (6400, 1600, 400, 100)
+    # The REFERENCE is admitted since 2026-10-21 (the encoder's GroupNorm has an exact path for row counts that are
+    # not tile multiples: layers/normalization.py _forward_unaligned, test_encode_unaligned_reference; the former
+    # ``reference_size`` refusal rejected most real photos at BFL's own prepared sizes). With no explicit size the
+    # CANVAS defaults to the reference's 80x80, which the decoder's canvas rule still refuses.
+    assert not s.ok and s.budget == "canvas_size", s
+    assert vae_level_rows(80, 80) == (6400, 1600, 400, 100) and not vae_levels_tile_aligned(80, 80)
+    small_on_1024 = replace(
+        Flux3KleinRequest(prompt="x", model="distilled", width=1024, height=1024, images=(Image.new("RGB", (80, 80)),)).resolve(),
+        text_length=80,
+    )
+    assert admit(small_on_1024, (4, 8)).ok, admit(small_on_1024, (4, 8))
     # a 1000x1000 reference pads to 1008x1008 whose /8 level has 15876 rows
     padded = replace(
         Flux3KleinRequest(prompt="x", model="distilled", images=(Image.new("RGB", (1000, 1000)),)).resolve(),
         text_length=80,
     )
     pd = admit(padded, (4, 8))
-    assert not pd.ok and pd.budget == "reference_size" and pd.measured["reference_sizes"] == [[1008, 1008]], pd
+    # the reference itself is admitted; the DEFAULT canvas (1008x1008, from the reference) is what the canvas rule refuses
+    assert not pd.ok and pd.budget == "canvas_size" and pd.measured["reference_sizes"] == [[1008, 1008]], pd
+    padded_on_1024 = replace(
+        Flux3KleinRequest(prompt="x", model="distilled", width=1024, height=1024, images=(Image.new("RGB", (1000, 1000)),)).resolve(),
+        text_length=80,
+    )
+    assert admit(padded_on_1024, (4, 8)).ok, admit(padded_on_1024, (4, 8))
     # an explicit canvas with a non-tile-aligned level, no references
     canvas = replace(
         Flux3KleinRequest(prompt="x", model="distilled", width=1008, height=1008).resolve(), text_length=80
