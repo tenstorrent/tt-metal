@@ -25,7 +25,7 @@ from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
 # ---------------------------------------------------------------------------
-MODEL_NAME = resolve_checkpoint("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
+CHECKPOINT_NAME = resolve_checkpoint("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
 DIM = 5120
 FFN_DIM = 13824
 NUM_HEADS = 40
@@ -51,15 +51,15 @@ def _load_model_and_golden(test_name, param_id):
     golden data exists for this commit/test/param.
     """
     _, commit_hash = TorchWanTransformer3DModel.load_config(
-        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+        CHECKPOINT_NAME, subfolder="transformer", return_commit_hash=True
     )
-    commit_hash = commit_hash or local_revision(MODEL_NAME)
-    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+    commit_hash = commit_hash or local_revision(CHECKPOINT_NAME)
+    logger.info(f"Loaded {CHECKPOINT_NAME} (subfolder=transformer) at commit: {commit_hash}")
 
     golden = load_golden(commit_hash, test_name, param_id)
 
     torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+        CHECKPOINT_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
     )
     return commit_hash, golden, torch_model
 
