@@ -213,15 +213,34 @@ _SENDER_SOURCE = (
 
 using namespace tt::tt_fabric;
 
-// The route of one packet. 2D fabrics route by destination fabric node (the fabric picks the path); 1D fabrics by hop
-// count in this connection's direction (ROUTING_MODE from the build). mcast_range > 0 (1D only; the host refuses it on
-// 2D): write at each of the next mcast_range chips.
+// The route of one packet, by hop count in this connection's direction: hops = count | direction << 8, mcast =
+// range | direction << 8 (direction: eth_chan_directions, from the host; used on 2D only, ROUTING_MODE from the
+// build). range > 0: write at each of the next `range` chips; otherwise at the chip `count` hops away. On 2D both run
+// straight along the connection's direction, never by destination: a destination route picks its own path (a tie on
+// an even ring, the short way round for count > G/2), which loses packets injected on the other direction's router.
+// A ring that turns corners cannot be one multicast (host-refused).
 inline void set_route(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint32_t hops, uint32_t mcast_range, uint16_t chip_id, uint16_t mesh_id) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint32_t hops, uint32_t mcast, uint16_t chip_id, uint16_t mesh_id) {
+    const uint32_t mcast_range = mcast & 0xFF;
 #if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)) || defined(EMULE_FABRIC_2D)
-    (void)hops;
-    (void)mcast_range;
-    (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
+    if (mcast_range > 0) {
+        const uint32_t dir = mcast >> 8;
+        fabric_set_mcast_route(
+            hdr,
+            chip_id,
+            mesh_id,
+            dir == static_cast<uint32_t>(eth_chan_directions::EAST) ? mcast_range : 0,
+            dir == static_cast<uint32_t>(eth_chan_directions::WEST) ? mcast_range : 0,
+            dir == static_cast<uint32_t>(eth_chan_directions::NORTH) ? mcast_range : 0,
+            dir == static_cast<uint32_t>(eth_chan_directions::SOUTH) ? mcast_range : 0);
+    } else {
+        // as fabric_set_unicast_route for a straight path (test_fabric_set_unicast_route.cpp checks the two agree)
+        hdr->dst_start_node_id = ((uint32_t)mesh_id << 16) | (uint32_t)chip_id;
+        hdr->mcast_params_64 = 0;
+        hdr->is_mcast_active = 0;
+        hdr->routing_fields.value = 0;
+        fabric_set_route(hdr, static_cast<eth_chan_directions>(hops >> 8), 0, 0, hops & 0xFF, true);
+    }
 #else
     (void)chip_id;
     (void)mesh_id;
@@ -229,7 +248,7 @@ inline void set_route(
     if (mcast_range > 0) {
         h->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_range)});
     } else {
-        (void)fabric_set_unicast_route<false>(h, static_cast<uint16_t>(hops));
+        (void)fabric_set_unicast_route<false>(h, static_cast<uint16_t>(hops & 0xFF));
     }
 #endif
 }
@@ -911,10 +930,10 @@ def plan(
     assert G >= 2, "a group needs at least two chips"
     if mode != "relay" and not ring:
         raise ValueError(f"fabric_all_gather: mode {mode!r} needs a ring")
-    if mode != "relay" and "2D" in str(ttnn.get_fabric_config()):
-        # A 2D fabric routes a unicast by destination: the path to a chip 2+ hops away is the fabric's choice (a tie on
-        # an even ring), not this connection's direction, and a 2D multicast follows one physical direction only.
-        raise ValueError(f"fabric_all_gather: mode {mode!r} needs a 1D fabric (FABRIC_1D_RING)")
+    if mode != "relay" and "2D" in str(ttnn.get_fabric_config()) and (scheme != "ring" or cluster_axis is None):
+        # on 2D every route runs straight along its connection's physical direction (set_route); a send that skips
+        # chips on a ring that turns corners (snake, dual cycles) would leave the ring
+        raise ValueError(f"fabric_all_gather: mode {mode!r} on a 2D fabric needs a straight ring (cluster_axis 0 / 1)")
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     chips = {}
     for grp, rings in zip(groups, ring_lists):
@@ -1196,16 +1215,13 @@ def create_mesh_program_descriptor(
             # readies: wait for one from every chip I write into; send one to every port that writes into me
             ready_to = rg[f"{d}_ready_to"] if peer is not None else []
             args += [rg[f"{d}_ready_expect"] if sends else 0, len(ready_to)]
+            # 2D: every route runs along this connection's physical direction (plan() keeps multicast rings straight)
+            mdir = ttnn.get_eth_forwarding_direction(node(coord), node(peer)) if two_d and peer is not None else 0
             for h, s, sd in ready_to:
                 sc, sn = virt(chips[s]["ports"][(j, sd, l)]), node(s)
-                args += [h, int(sn.mesh_id), int(sn.chip_id), sc.x, sc.y]
+                args += [h | mdir << 8, int(sn.mesh_id), int(sn.chip_id), sc.x, sc.y]
             args += [len(sends)] + packed
             for (h, m, _), ds in zip(routes, dsts):
-                if m and two_d:
-                    raise ValueError(
-                        "fabric_all_gather: mode 'mcast' needs a 1D fabric (2D multicast follows one "
-                        "physical direction, which a bent ring does not)"
-                    )
                 counter = lambda t: virt(chips[t]["sinks" if sinks else "ports"][(j, d, l)])  # noqa: E731
                 cores = {(counter(t).x, counter(t).y) for t in ds}
                 if len(cores) > 1:
@@ -1214,7 +1230,7 @@ def create_mesh_program_descriptor(
                         "on every chip (placement='uniform')"
                     )
                 (px, py), tn = next(iter(cores)), node(ds[0] if m else ds[-1])
-                args += [h, m, int(tn.mesh_id), int(tn.chip_id), px, py]
+                args += [h | mdir << 8, m | (mdir << 8 if m else 0), int(tn.mesh_id), int(tn.chip_id), px, py]
             if rg.get(f"{d}_links") and (sends or ready_to):
                 args += list(ttnn.setup_fabric_connection(node(coord), node(peer), rg[f"{d}_links"][l], program, core))
             sender_rt[core.x][core.y] = args
@@ -1344,8 +1360,8 @@ def fabric_all_gather(
     mode: "relay" (default; intermediate chips forward other chips' shards), or, on a ring, "direct" (each chip
         unicasts its own shard to every other chip, the fabric routing it through the chips in between), "mcast"
         (one multicast per direction), "mcast_split" (each half of the shard multicast both ways, the far chip
-        getting one half from each side) or "mcast_halves" (one half multicast all the way round each way); the mcast
-        modes are 1D fabrics only. See _schedule_routes.
+        getting one half from each side) or "mcast_halves" (one half multicast all the way round each way). On a 2D
+        fabric every mode but "relay" needs a straight ring (cluster_axis 0 / 1). See _schedule_routes.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
     topology=Ring). The output is always in row-major chip order (as high_bw_all_gather's), for snakes too.

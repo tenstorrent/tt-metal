@@ -154,18 +154,23 @@ Run it on a Galaxy with `--topology 4x8_snake_ring,4x8_dual_cycles` (or the `4x4
 | `mcast_split` | two halves, each multicast both ways (half A over G/2 chips + half B over G/2 − 1 toward p+1, the reverse toward p−1) | 3.5 |
 | `mcast_halves` | half A multicast over all G − 1 other chips toward p+1, half B over all of them toward p−1 | 3.5 |
 
-- `direct` and the multicast modes need a ring along one mesh axis on a 1D fabric (`FABRIC_1D_RING`): a 1D route goes
-  straight along the connection's direction, and the host refuses them on 2D fabrics. A ring that turns corners
-  (snake, dual cycles) can only use `relay`.
+- `direct` and the multicast modes need a ring along one mesh axis (`cluster_axis` 0 / 1), on a 1D fabric
+  (`FABRIC_1D_RING`) or a 2D one (e.g. `FABRIC_2D_TORUS_XY`). Every route runs by hop count along its connection's
+  direction: the 1D header does that by construction; on 2D the sender sets the route from the connection's
+  E/W/N/S direction (`ttnn.get_eth_forwarding_direction`) rather than by destination, which would let the fabric
+  pick a path (a tie at G/2 hops, the short way round beyond it) and lose packets injected on the other direction's
+  router. A ring that turns corners (snake, dual cycles) can only use `relay`.
 - **Placement and sink cores.** A multicast packet bumps one arrival-counter address on every chip it writes. With
   `placement="uniform"` (chip 0's ports on every chip) the receiving port holds that counter. With per-chip placement
   (`"auto"`) the multicast modes add a *sink core* per ring, direction and link, on the same core of every chip:
   it holds the counter, waits for every arrival and re-arms it, while the port cores sit next to their Ethernet
   cores.
-- Measured on a Blackhole Galaxy (4- and 8-chip rings, 4 to 8,192 tiles): [`results/`](results/README.md). Briefly:
-  at size only the busiest hop's bytes matter (relay ≈ split multicasts, whole-shard multicast G/2 ÷ (G/2 − ½)
-  slower); `mcast_halves` with `auto` placement is the fastest from ~16–64 tiles; whole-shard multicast with `auto`
-  wins below that.
+- Measured on Blackhole Galaxies (4- and 8-chip rings, 4 to 8,192 tiles, `FABRIC_1D_RING` and
+  `FABRIC_2D_TORUS_XY`): [`results/`](results/README.md). Briefly, on the 1D ring: at size only the busiest hop's
+  bytes matter (relay ≈ split multicasts, whole-shard multicast G/2 ÷ (G/2 − ½) slower); `mcast_halves` with `auto`
+  placement is the fastest from ~16–64 tiles; whole-shard multicast with `auto` wins below that. On the 2D torus the
+  relay is unchanged but multicast over 3 or more chips runs at 16–18 GB/s per link direction instead of ~24, so
+  `relay` with `auto` placement is the large-size choice there.
 - Sweep: `tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather_modes.py` (variants `base`, `b`, `d`,
   `db`, `m`, `mb`, `ms`, `mh`, each optionally `@auto`), per-port device zones:
   `test_fabric_all_gather_zones.py`; tables: `fag_modes_analyze.py`, `fag_zones_analyze.py`.

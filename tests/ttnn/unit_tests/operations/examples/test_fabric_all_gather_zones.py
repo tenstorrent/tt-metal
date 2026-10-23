@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device-zone capture of fabric_all_gather send modes on a 1D ring (run under --profile).
+"""Device-zone capture of fabric_all_gather send modes on a ring, under --profile (ZONES_FABRIC=1d_ring|2d_torus_xy).
 
 Per case: trace [filler (~113 us ttnn.add), all-gather] x ROUNDS, replay REPLAYS times, read the device profiler.
 Prints `FAG_ZONES <case> rids=<first>-<last>`: the host op IDs of the all-gather calls captured for that case, so the
@@ -26,6 +26,8 @@ SHAPES = [
 ROUNDS, REPLAYS = 4, 2
 MESH = tuple(int(v) for v in os.environ.get("FAG_MESH", "1,4").split(","))
 AXIS = int(os.environ.get("FAG_AXIS", "1"))
+_FABRICS = {"1d_ring": "FABRIC_1D_RING", "2d_torus_xy": "FABRIC_2D_TORUS_XY"}
+FABRIC = os.environ.get("ZONES_FABRIC", "1d_ring")
 _KW = {
     "b": dict(mode="relay", balance=True),
     "m": dict(mode="mcast", balance=False),
@@ -59,14 +61,14 @@ def _op_id():
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": getattr(ttnn.FabricConfig, _FABRICS[FABRIC]),
             "fabric_router_config": _router(),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "trace_region_size": 64 * 1024 * 1024,
         }
     ],
     indirect=True,
-    ids=["fabric_1d_ring"],
+    ids=[f"fabric_{FABRIC}"],
 )
 @pytest.mark.parametrize("mesh_device", [MESH], ids=[f"mesh{MESH[0]}x{MESH[1]}"], indirect=True)
 def test_fabric_all_gather_zones(mesh_device):
