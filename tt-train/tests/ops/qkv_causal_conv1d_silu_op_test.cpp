@@ -140,21 +140,49 @@ protected:
     }
 };
 
-// Runs the fused backward directly: (grad_input, grad_tap0..3).
-auto run_metal_bw(const Shape& s, const Problem& p, uint32_t chunk, uint32_t splits) {
+struct DeviceInputs {
+    ttnn::Tensor input, history, grad_q, grad_k, grad_v;
+    std::array<ttnn::Tensor, 4> taps;
+};
+
+DeviceInputs make_inputs(const Shape& s, const Problem& p) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
-    auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
-    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
-    std::array<ttnn::Tensor, 4> taps;
-    for (size_t j = 0; j < 4; ++j) {
-        taps[j] = core::from_xtensor(p.taps[j], device);
-    }
-    auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
-    auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
-    auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
-    return metal::qkv_causal_conv1d_silu_bw(
-        grad_q, grad_k, grad_v, input, history, taps[0], taps[1], taps[2], taps[3], s.Q, s.K, s.V, chunk, splits);
+    DeviceInputs d{
+        .input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR),
+        .history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR),
+        .grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device),
+        .grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device),
+        .grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device),
+        .taps = {
+            core::from_xtensor(p.taps[0], device),
+            core::from_xtensor(p.taps[1], device),
+            core::from_xtensor(p.taps[2], device),
+            core::from_xtensor(p.taps[3], device)}};
+    return d;
+}
+
+// Runs the fused backward directly: (grad_input, grad_tap0..3).
+auto run_metal_bw(const Shape& s, const DeviceInputs& d, uint32_t chunk, uint32_t splits) {
+    return ttml::metal::qkv_causal_conv1d_silu_bw(
+        d.grad_q,
+        d.grad_k,
+        d.grad_v,
+        d.input,
+        d.history,
+        d.taps[0],
+        d.taps[1],
+        d.taps[2],
+        d.taps[3],
+        s.Q,
+        s.K,
+        s.V,
+        chunk,
+        splits);
+}
+
+auto run_metal_bw(const Shape& s, const Problem& p, uint32_t chunk, uint32_t splits) {
+    return run_metal_bw(s, make_inputs(s, p), chunk, splits);
 }
 
 // Checks every gradient against the xtensor reference.
@@ -204,9 +232,26 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{256, 128, 64, 64}, 0, 0},     // auto chunk: 256
         MetalCase{{96, 96, 64, 32}, 0, 2}));     // auto chunk: 192 (C = 192 is not a multiple of 256)
 
-TEST_F(QkvCausalConv1dSiluTest, RepeatedRunsAreStable) {
-    for (uint32_t i = 0; i < 10; ++i) {
-        check_metal_bw({128, 64, 64, 64}, 64, 2 + (i % 3), 100 + i, "repeat" + std::to_string(i));
+// A program-cache hit reads the new run's buffers: the first run's inputs stay alive so the second lands elsewhere.
+TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{128, 64, 64, 64};
+    const auto p_a = random_problem(s, 100);
+    const auto p_b = random_problem(s, 101);
+    const auto a = make_inputs(s, p_a);
+    const auto out_a = run_metal_bw(s, a, 64, 2);
+    const auto entries_after_first = device->num_program_cache_entries();
+    const auto b = make_inputs(s, p_b);
+    ASSERT_NE(a.input.buffer()->address(), b.input.buffer()->address());
+    ASSERT_NE(a.grad_q.buffer()->address(), b.grad_q.buffer()->address());
+    const auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, b, 64, 2);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first) << "the second run must hit the cache";
+    const auto ref = reference(s, p_b);
+    expect_close(ref.grad_input, core::to_xtensor(grad_input), "grad_input");
+    const std::array<ttnn::Tensor, 4> grads = {*g0, *g1, *g2, *g3};
+    for (size_t j = 0; j < 4; ++j) {
+        expect_close(ref.grad_taps[j], core::to_xtensor(grads[j]), "grad_tap" + std::to_string(j));
     }
 }
 
@@ -250,7 +295,7 @@ TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
     }
 }
 
-TEST_F(QkvCausalConv1dSiluTest, RandomShapes) {
+TEST_F(QkvCausalConv1dSiluTest, NIGHTLY_RandomShapes) {
     std::mt19937 gen(42);
     const auto pick = [&](uint32_t lo, uint32_t hi) { return std::uniform_int_distribution<uint32_t>(lo, hi)(gen); };
     for (uint32_t i = 0; i < 12; ++i) {
