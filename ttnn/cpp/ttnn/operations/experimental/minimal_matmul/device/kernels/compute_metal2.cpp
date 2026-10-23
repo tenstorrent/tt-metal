@@ -21,6 +21,7 @@
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
 #include "swiglu_sfpu.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 // Quasar: the packer's destination buffer descriptor (BFD) is baked in by the last PACK init;
 // pack_reconfig_data_format only reprograms the format gasket, and none of the inits this kernel
@@ -548,7 +549,7 @@ void kernel_main() {
     constexpr auto M_block_tiles = get_arg(args::M_block_tiles);
     constexpr auto K_block_tiles = get_arg(args::K_block_tiles);
     constexpr auto N_block_tiles = get_arg(args::N_block_tiles);
-    constexpr auto M_blocks_per_core = get_arg(args::M_blocks_per_core);
+    constexpr auto M_cores = get_arg(args::M_cores);
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
@@ -556,10 +557,16 @@ void kernel_main() {
     constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
     constexpr bool swiglu_block_float_output = get_arg(args::swiglu_block_float_output) == 1;
 
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    const auto in0_idx = get_arg(args::in0_idx);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
+
+    // The row count is a common runtime arg; the DM kernels derive the same range from it.
+    const uint32_t M_tiles = get_arg(args::M_tiles);
+    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, M_cores);
+    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
+    const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
 
 #ifdef FUSE_TERNARY
     const auto fused_ternary_scalar_uint = get_arg(args::fused_ternary_scalar);

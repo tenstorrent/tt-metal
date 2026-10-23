@@ -37,10 +37,13 @@
 #include <cstdint>
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_runtime_args.hpp"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
+using Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reader;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -53,28 +56,22 @@ constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-[[maybe_unused]] constexpr uint32_t input_channel_num_pages =
-    get_compile_time_arg_val(8);  // C=1 is validated on host; reserved for future C>1 support
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t slice_C = get_compile_time_arg_val(11);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
-constexpr uint32_t dim = get_compile_time_arg_val(13);
-constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(14);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(15);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(16);
-constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(17);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(18);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(19);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
-// [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(7);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
+constexpr uint32_t slice_C = get_compile_time_arg_val(9);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t dim = get_compile_time_arg_val(11);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(12);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(13);
+constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(14);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(15);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(16);
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(17);
+// [18]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 // Rolling L1 window over the matmul output, in M blocks; 0 = no window (the whole output is
 // resident, so a row's address is its row). With a window the matmul recycles slot m % this, and a
 // row's address is remapped into the window — see windowed_slice_row below.
-constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(24);
+constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(19);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -87,16 +84,22 @@ void kernel_main() {
     CircularBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t arg_idx = 0;
-    // Load the input tensor spec
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 25;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
-                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht, [24]=mm_window_blocks
+    // The row count, buffer addresses and semaphores are common runtime args (one word per launch).
+    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::slice_Ht);
+    const address_t input_tensor_address = get_common_arg_val<address_t>(Crta::input);
+    const address_t intermediate_tensor_address = get_common_arg_val<address_t>(Crta::intermediate);
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::semaphore_0 + direction);
+    // Same split as the matmul's in0 kernels: equal rows per MM core, whole M blocks per core.
+    const uint32_t slice_Ht_per_core = ttnn::runtime_length::tiles_per_core(slice_Ht, mm_cores_y);
+    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::blocks_per_core(slice_Ht_per_core, mm_block_ht);
+    const uint32_t input_batch_num_pages = slice_C * slice_Ht * input_tensor_Wt;
+
+    constexpr uint32_t ct_idx = 20;  // [17]=mm_block_wt, [18]=fuse_mm_op (via FUSE_MM_OP_SIGNALER
+                                     // define), [19]=mm_window_blocks
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -165,9 +168,8 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_RS_ADDCMUL
-    // Addcmul tensor addresses — appended at the end of the RT args list.
-    const address_t addcmul_a_address = get_arg_val<address_t>(arg_idx++);
-    const address_t addcmul_b_address = get_arg_val<address_t>(arg_idx++);
+    const address_t addcmul_a_address = get_common_arg_val<address_t>(Crta::addcmul_a);
+    const address_t addcmul_b_address = get_common_arg_val<address_t>(Crta::addcmul_b);
 
     // Derive CT indices for addcmul a/b CBs and tensor accessor args.
     // Factory appends: addcmul_a_cb_index, addcmul_b_cb_index, TensorAccessorArgs(a), TensorAccessorArgs(b)
@@ -247,7 +249,7 @@ void kernel_main() {
                     // At the final ring step the local chip's slice is written to DRAM by the writer.
                     // This is where we fuse the addcmul: load a and b tiles in parallel with input/intermediate.
                     const bool is_final_ring_step = (i == ring_size - 1);
-                    constexpr uint32_t addcmul_a_batch_pages = mm_cores_y * slice_Ht_per_core * slice_Wt;
+                    const uint32_t addcmul_a_batch_pages = mm_cores_y * slice_Ht_per_core * slice_Wt;
 #endif
 
                     const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
