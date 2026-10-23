@@ -9,18 +9,26 @@
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
-#define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
-#define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
+#define TT_IP_INSN(IP, ENC, MOD, DST, SRC) __builtin_rvtt_ttinsn((IP), (ENC), MOD, DST, SRC)
 #elif defined(ARCH_WORMHOLE) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
-// it. So icky. See #58141
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte %0" ::"n"(unsigned((((ENCODING) >> 30) & 3) | (((ENCODING) & 0x3fffffff) << 2)))); })
-#define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+// it. So icky. See #58141.
+#define TT_IP_INSN(IP, ENC, MOD, DST, SRC)                                                                            \
+    (((IP) ? (({ __asm__ __volatile__(".error \"TT_IP_INSN in non-tensix code\""); }), void(ENC))                     \
+           : ({ __asm__ __volatile__(".4byte ((%0 >> 30) & 3) | ((%0 & 0x3fffffff) << 2)" ::"n"(unsigned(ENC))); })), \
+     void(MOD),                                                                                                       \
+     void(DST),                                                                                                       \
+     void(SRC))
 #else
-#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
-#define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+// We can't just make these compile errors, because our headers are
+// not sufficiently clean. Turn them into assembler errors, should they
+// ever get that far.
+#define TT_IP_INSN(IP, ENC, MOD, DST, SRC) \
+    (({ __asm__ __volatile__(".error \"TT_IP_INSN in non-tensix code\""); }), void(IP), void(ENC), void(MOD), void(DST), void(SRC))
 #endif
 
+#define TT_INSN(ENC)          TT_IP_INSN(::ckernel::instrn_buffer, (ENC), 0, 0, 0)
+#define TTI_INSN(ENC)         TT_IP_INSN(nullptr, (ENC), 0, 0, 0)
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
