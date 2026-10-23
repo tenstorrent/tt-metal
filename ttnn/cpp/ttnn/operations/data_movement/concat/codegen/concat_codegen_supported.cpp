@@ -91,6 +91,11 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
     if (!codegen_supported_on_arch(first)) {
         return false;
     }
+    // The live-L1 planning below reads the local allocator, which a mesh with no local device does not have; the
+    // launcher short-circuits such a mesh, so only the gate has to keep it on the native path.
+    if (first.device()->is_remote_only()) {
+        return false;
+    }
     const uint32_t rank = first.logical_shape().rank();
     if (rank == 0 || attrs.dim >= rank) {
         return false;
