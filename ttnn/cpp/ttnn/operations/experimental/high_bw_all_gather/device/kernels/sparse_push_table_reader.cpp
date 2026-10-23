@@ -22,7 +22,7 @@ constexpr uint32_t kData = 0, kMeta = 1, kTable = 2, kScalar = 3;  // CB ids (sp
 constexpr uint32_t kBatch = 4;                                     // packets per read barrier
 constexpr uint32_t kTablePageBytes = 4096;                         // plan table pages
 constexpr uint32_t kWindowBytes = 128;   // 64 B aligned read window covering one block's bitmap words
-constexpr uint32_t kBlocksPerFill = 16;  // blocks fetched per bitmap read barrier
+constexpr uint32_t kBlocksPerFill = 64;  // blocks fetched per bitmap read barrier
 
 inline uint32_t lowest_bit(uint32_t x) {
     // de Bruijn count-trailing-zeros (x != 0)
@@ -85,13 +85,15 @@ void kernel_main() {
     }
     const uint32_t slot_base = slot * pages_per_slot;
 
-    // kTable holds the requester's table header and per-owner counts, then a window of its bitmap blocks.
+    // kTable: a window of bitmap blocks, then the header and per-owner counts of every requester this sender serves,
+    // then (the remainder) each one's first block window. Headers and those windows are read in one batch each, not
+    // one DRAM round trip per requester.
+    constexpr uint32_t kHeaderBytes = (owner_prefix_off + 32) * 4;
+    static_assert(kHeaderBytes % 64 == 0, "header slots stay 64 B aligned");
     cb_reserve_back(kTable, 1);
-    const uint32_t header_l1 = get_write_ptr(kTable);
-    const uint32_t blocks_l1 = header_l1 + 512;
-    auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(header_l1);
-    auto* counts = header + owner_off;
-    auto* prefix_counts = header + owner_prefix_off;
+    const uint32_t blocks_l1 = get_write_ptr(kTable);
+    const uint32_t headers_l1 = blocks_l1 + kBlocksPerFill * kWindowBytes;
+    const uint32_t first_windows_l1 = headers_l1 + num_devices * kHeaderBytes;
 
     uint32_t batched = 0;
     auto flush_batch = [&]() {
@@ -102,10 +104,10 @@ void kernel_main() {
             batched = 0;
         }
     };
-    // Packets of a channel are dealt round robin to its sub_count senders (every sender walks all of them).
-    uint32_t packet_turn = 0;
-    uint32_t nth_on_dir = 0;
-    for (uint32_t dest = 0; dest < num_devices; ++dest) {
+    // The requesters this sender serves: those whose first hop is this direction, alternating between links.
+    uint32_t served[num_devices];
+    uint32_t n_served = 0;
+    for (uint32_t dest = 0, nth_on_dir = 0; dest < num_devices; ++dest) {
         const bool on_dir = dest == my_rank ? dir == 0
                                             : sparse_push::route<MESH_ROWS, MESH_COLS>(
                                                   my_rank,
@@ -113,14 +115,58 @@ void kernel_main() {
                                                   static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
                                                       dest_mesh_ids[dest], dest_chip_ids[dest])))
                                                       .dir == dir;
-        // Requesters on this direction alternate between links.
-        if (!on_dir || nth_on_dir++ % links != link) {
-            continue;
+        if (on_dir && nth_on_dir++ % links == link) {
+            served[n_served++] = dest;
         }
-        const uint32_t first_page = dest * table_pages;
-        noc_async_read(table.get_noc_addr(first_page), header_l1, (owner_prefix_off + 32) * 4);
+    }
+    // Bitmap window of block jb (local block index) of a requester's table: 64 B aligned, possibly split by a page.
+    auto read_window = [&](uint32_t first_page, uint32_t jb, uint32_t dst) {
+        const uint32_t word = bitmap_off + (my_rank + jb * num_devices) * words_per_block;
+        const uint32_t start = (word * 4) & ~63u;
+        const uint32_t page = first_page + start / kTablePageBytes;
+        const uint32_t in_page = start % kTablePageBytes;
+        const uint32_t first = kTablePageBytes - in_page < kWindowBytes ? kTablePageBytes - in_page : kWindowBytes;
+        noc_async_read(table.get_noc_addr(page) + in_page, dst, first);
+        if (first < kWindowBytes) {
+            noc_async_read(table.get_noc_addr(page + 1), dst + first, kWindowBytes - first);
+        }
+    };
+    // This owner's blocks of a requester's table: my_rank, my_rank + N, ... below its active blocks; and those
+    // before the split block (the chunk start's block): my_rank + j * N < split. The split is chunk aligned only when
+    // the chunk start is (a padded/rotated chunk starts mid-slab), so it is NOT a whole block row of every owner:
+    // owners below split % N have one more prefix block.
+    auto owned_blocks = [&](const volatile tt_l1_ptr uint32_t* header) {
+        const uint32_t active_blocks = header[3] < num_blocks ? header[3] : num_blocks;
+        return active_blocks > my_rank ? (active_blocks - my_rank + num_devices - 1) / num_devices : 0;
+    };
+    auto split_blocks = [&](const volatile tt_l1_ptr uint32_t* header) {
+        const uint32_t split_block = header[4];
+        return split_block > my_rank ? (split_block - my_rank + num_devices - 1) / num_devices : 0;
+    };
+    for (uint32_t i = 0; i < n_served; ++i) {
+        noc_async_read(table.get_noc_addr(served[i] * table_pages), headers_l1 + i * kHeaderBytes, kHeaderBytes);
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    if constexpr (push_part == 2) {
+        for (uint32_t i = 0; i < n_served; ++i) {
+            auto* h = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1 + i * kHeaderBytes);
+            const uint32_t jb = split_blocks(h);
+            if (jb < owned_blocks(h)) {
+                read_window(served[i] * table_pages, jb, first_windows_l1 + i * kWindowBytes);
+            }
+        }
         noc_async_read_barrier();
         invalidate_l1_cache();
+    }
+    // Packets of a channel are dealt round robin to its sub_count senders (every sender walks all of them).
+    uint32_t packet_turn = 0;
+    for (uint32_t i = 0; i < n_served; ++i) {
+        const uint32_t dest = served[i];
+        const uint32_t first_page = dest * table_pages;
+        auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1 + i * kHeaderBytes);
+        auto* counts = header + owner_off;
+        auto* prefix_counts = header + owner_prefix_off;
         uint32_t base = 0;
         for (uint32_t o = 0; o < my_rank; ++o) {
             base += (counts[o] + unit - 1) / unit * unit;
@@ -163,13 +209,8 @@ void kernel_main() {
         open_packet();
 
         // This chip's blocks: my_rank, my_rank + N, ...; block jb holds local rows [jb * sc, (jb + 1) * sc).
-        const uint32_t active_blocks = header[3] < num_blocks ? header[3] : num_blocks;
-        uint32_t my_blocks = active_blocks > my_rank ? (active_blocks - my_rank + num_devices - 1) / num_devices : 0;
-        // This owner's blocks before the split block (the chunk start's block): my_rank + j * N < split. The split is
-        // chunk aligned only when the chunk start is (a padded/rotated chunk starts mid-slab), so it is NOT a whole
-        // block row of every owner: owners below split % N have one more prefix block.
-        const uint32_t split_block = header[4];
-        const uint32_t split_j = split_block > my_rank ? (split_block - my_rank + num_devices - 1) / num_devices : 0;
+        uint32_t my_blocks = owned_blocks(header);
+        const uint32_t split_j = split_blocks(header);
         uint32_t jb_first = 0;
         if constexpr (push_part == 1) {
             my_blocks = my_blocks < split_j ? my_blocks : split_j;
@@ -178,26 +219,19 @@ void kernel_main() {
         }
         for (uint32_t jb0 = jb_first; jb0 < my_blocks; jb0 += kBlocksPerFill) {
             const uint32_t fill = my_blocks - jb0 < kBlocksPerFill ? my_blocks - jb0 : kBlocksPerFill;
-            for (uint32_t f = 0; f < fill; ++f) {
-                const uint32_t word = bitmap_off + (my_rank + (jb0 + f) * num_devices) * words_per_block;
-                const uint32_t start = (word * 4) & ~63u;
-                const uint32_t page = first_page + start / kTablePageBytes;
-                const uint32_t in_page = start % kTablePageBytes;
-                const uint32_t first =
-                    kTablePageBytes - in_page < kWindowBytes ? kTablePageBytes - in_page : kWindowBytes;
-                const uint32_t dst = blocks_l1 + f * kWindowBytes;
-                noc_async_read(table.get_noc_addr(page) + in_page, dst, first);
-                if (first < kWindowBytes) {
-                    noc_async_read(table.get_noc_addr(page + 1), dst + first, kWindowBytes - first);
-                }
+            // The remainder's first window was prefetched with the headers.
+            const bool prefetched = push_part == 2 && jb0 == jb_first;
+            const uint32_t windows_l1 = prefetched ? first_windows_l1 + i * kWindowBytes : blocks_l1;
+            for (uint32_t f = prefetched ? 1 : 0; f < fill; ++f) {
+                read_window(first_page, jb0 + f, blocks_l1 + f * kWindowBytes);
             }
             noc_async_read_barrier();
             invalidate_l1_cache();
             for (uint32_t f = 0; f < fill; ++f) {
                 const uint32_t jb = jb0 + f;
                 const uint32_t word = bitmap_off + (my_rank + jb * num_devices) * words_per_block;
-                auto* w =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blocks_l1 + f * kWindowBytes + (word * 4) % 64);
+                auto* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    (prefetched && f == 0 ? windows_l1 : blocks_l1 + f * kWindowBytes) + (word * 4) % 64);
                 for (uint32_t k = 0; k < words_per_block; ++k) {
                     uint32_t bits = w[k];
                     while (bits) {
