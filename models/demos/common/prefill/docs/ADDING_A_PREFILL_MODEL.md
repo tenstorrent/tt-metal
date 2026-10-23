@@ -227,8 +227,8 @@ validated on the first rank (`forward_entries.validate_forward_entries`):
 
 - at least one non-empty entry; empty entries only after every non-empty one;
 - a slot's entries are one run of consecutive chunks (`start` of each = `end` of the previous), and only
-  the run's last entry may be partial; the exception is a last entry moved back to end at the cache end
-  (`start + chunk_size == max_seq_len`), which may start inside the previous entry and re-run its tail;
+  the run's last entry may be partial; entries never overlap, so a last chunk near the cache end pads into
+  the cache instead of moving back over its predecessor;
 - `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
 - runs of different slots may come in any order.
 
