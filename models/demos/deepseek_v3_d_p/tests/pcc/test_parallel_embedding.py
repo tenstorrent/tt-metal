@@ -19,6 +19,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -32,12 +33,14 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 @pytest.mark.parametrize(
     "isl_per_chip, vocab_size, emb_dim",
-    [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, MistralSmall4Config.VOCAB_SIZE, MistralSmall4Config.EMB_SIZE),
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.VOCAB_SIZE, KimiK3Config.EMB_SIZE),
-    ],
-    ids=["isl_5k", "mistral4", "kimi_k3"],
+    with_sp4_depth(
+        [
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, MistralSmall4Config.VOCAB_SIZE, MistralSmall4Config.EMB_SIZE),
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.VOCAB_SIZE, KimiK3Config.EMB_SIZE),
+        ],
+        ids=["isl_5k", "mistral4", "kimi_k3"],
+    ),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, sp_axis",
