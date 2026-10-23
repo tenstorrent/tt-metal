@@ -47,7 +47,7 @@ class TTModulatedDeformConv2dPack:
 
         # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits, the
         # order the DCN op takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
-        # whatever the input dtype, since the offsets set the sampling positions. Trained offsets
+        # whatever the input dtype, since the offsets set the sampling positions. Offsets can
         # reach tens of pixels, and accumulating in a bfloat16 destination register errs by up to
         # a few of them, so the register is fp32. The partial sums conv2d writes back between
         # reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial sums gain no
