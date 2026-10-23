@@ -86,3 +86,16 @@ models:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "meta-llama/Llama-3.1-70B-Instruct"
       output_file: "data/tokenized_shakespeare_llama70b"
+
+  - name: "Llama 8B TP=4 FSDP=8 Shakespeare"
+    filename: "llama_8b_tp4_fsdp8_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_fsdp8.yaml"
+      - "--track_memory"
+      - "--max_steps=600"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+      output_file: "data/tokenized_shakespeare_llama8b"
