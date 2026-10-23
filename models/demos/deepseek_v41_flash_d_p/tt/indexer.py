@@ -52,6 +52,7 @@ import torch
 import ttnn
 
 from . import ccl
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
@@ -175,7 +176,9 @@ class TtIndexer:
         # reduce-scatter by row blocks: its block is the chip's Sq query rows (no all_gather, mesh_partition, casts)
         rs = self.glue and settings.get("HC_TP_SUM") == "gather_add"
         pdt = ccl.partial_dtype(self.mesh) if rs else ttnn.float32
-        part = ttnn.linear(x, self.wproj, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        part = mm.linear(
+            x, self.wproj, site="indexer.weights_proj", dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         sub = ccl.sum_rows(self.mesh, part) if rs else None
         if sub is not None:
             dealloc(part)
@@ -203,7 +206,7 @@ class TtIndexer:
         if qq is not sub:
             dealloc(sub)
         qdt = ttnn.bfloat16 if self.stock else ttnn.float32  # ROPE_IMPL=on: the bf16 heads the stock rope reads
-        q = ttnn.linear(qq, self.wq_b, dtype=qdt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        q = mm.linear(qq, self.wq_b, site="indexer.wq_b", dtype=qdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         dealloc(qq)
         if self.stock:
             return self._query_stock(q, start)

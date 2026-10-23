@@ -60,6 +60,7 @@ import torch
 import ttnn
 
 from . import ccl
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, dense_dtype, sum_cols
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
@@ -493,7 +494,9 @@ class TtWindowAttention:
         """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
         xq = cast(q_resid, ttnn.bfloat16)
-        qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        qf = mm.linear(
+            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         if xq is not q_resid:
             dealloc(xq)
         q4 = ttnn.transpose(ttnn.reshape(qf, [1, rows, self.h_l, self.d]), 1, 2, memory_config=DRAM)
@@ -510,7 +513,9 @@ class TtWindowAttention:
         split by nlp_create_q_heads_split (a data move), RoPE on the [.., 64] tail only, the scale's multiply writing
         bf16 (= ttnn.typecast's RNE), the interleave a PairPerm matmul on the bf16 tail."""
         xq = cast(q_resid, ttnn.bfloat16)
-        qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        qf = mm.linear(
+            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         if xq is not q_resid:
             dealloc(xq)
         qn, qr = ttnn.experimental.nlp_create_q_heads_split(
@@ -536,7 +541,9 @@ class TtWindowAttention:
         cast was), wq_b writing bf16, the heads split by nlp_create_q_heads_split, ONE stock rotary op on the [.., 64]
         tails with the nope prepended (tt/rope.rope_stock)."""
         xq = ttnn.multiply(q_resid, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
-        qb = ttnn.linear(xq, self.wq_b, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM)
+        qb = mm.linear(
+            xq, self.wq_b, site="attn.wq_b", dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         dealloc(xq)
         qn, qr = ttnn.experimental.nlp_create_q_heads_split(
             qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
@@ -643,7 +650,7 @@ class TtWindowAttention:
         og = ttnn.reshape(og, [1, self.g_l, rows, self.hpg * self.d])
         # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it
         ydt = ttnn.bfloat16 if (self.glue and bf16_activations()) else ttnn.float32
-        y = ttnn.matmul(og, self.wo_a, dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        y = mm.matmul(og, self.wo_a, site="attn.wo_a", dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
         dealloc(og)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:
@@ -666,7 +673,7 @@ class TtWindowAttention:
             dealloc(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
-        z = ttnn.linear(yq, self.wo_b, dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        z = mm.linear(yq, self.wo_b, site="attn.wo_b", dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         dealloc(yq)
         if self.geo.tp == 1:
             return z
