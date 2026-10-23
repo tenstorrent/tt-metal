@@ -26,7 +26,8 @@ test_chained_spec_decode_tp8_dp4: the plugin's chained verifies (async schedulin
 on lane 1: a deferred fused_sample verify, then each verify chained onto the one in flight (its block built on device
 by the relay step from the pending step's result page, at positions the host only bounds), the older one read on
 another thread and proposed after the newer one's submission. The chained greedy tokens must equal the plain greedy
-ones, and each readout's p0 the request's real position.
+ones, and each readout's p0 the request's real position. With both drafters (the relay reads pages the 3-layer program
+wrote, anchor in slot 3) and the backfill on: only the first draft (host-planned, after the prompt) backfills.
 
 Both drafters run: every MTP layer (MIMO_MTP_LAYERS=3, draft i + 1 from layer i, the passes planned on device from the
 stash; the chain checks then also cover a draft planned again on the stash its chained twin left) and one layer
@@ -270,12 +271,15 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
     assert first_diff is None, f"speculative tokens diverge from greedy at position {first_diff}"
 
 
+@pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_chained_spec_decode_tp8_dp4(mesh_device, monkeypatch):
+def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")
+    monkeypatch.setattr(generator_vllm, "MTP_LAYERS", mtp_layers)
+    monkeypatch.setattr(generator_vllm, "MTP_BACKFILL", True)
     monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", True)
     monkeypatch.setattr(generator_vllm, "SPEC_DEFER", True)
     monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", [0] * cfg.num_hidden_layers)
@@ -390,5 +394,7 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, monkeypatch):
         f"{1e3 * spec_s / (len(seq) - prompt.numel() - 2):.1f} ms/token; {model.chain_stats}"
     )
     assert model.chain_stats["uncovered"] == 0
+    # The only host-planned draft (the first, after the prompt) backfilled the rings; every chained one continued them.
+    assert model.chain_stats["backfills"] == 1
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
     assert first_diff is None, f"chained speculative tokens diverge from greedy at position {first_diff}"

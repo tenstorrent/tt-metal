@@ -11,7 +11,13 @@ The calls follow the plugin's async contract (vllm-tt-plugin docs/SPEC_DECODE_CO
 ordinary steps are submitted without reading (``read_from_device=False``) and read a step later, and the propose for
 a step comes when it commits, after the next step's submission. Checked: the declared capabilities, a verify asked to
 defer its read answering host tensors, the reads passing a verify's host output through, and a propose for an older
-ordinary step enqueueing nothing (placeholder drafts that make the plugin drain and propose again)."""
+ordinary step enqueueing nothing (placeholder drafts that make the plugin drain and propose again).
+
+Every test runs with both drafters (MIMO_MTP_LAYERS): one MTP layer (the lanes' oracle drafter on pack_mtp's upload)
+and every layer (``OracleLayersMTP``: the draft trace's kernel steps' mirrors, the plan step on the lane's stash, the
+tokens and drafts steps with the anchor in slot 3, on the commit's description whoever wrote it, the chain step or the
+host; the oracle's tokens as each pass's head). With every layer the chained flow must plan every draft exactly as
+the synchronous one (the same rows, positions, tokens and stash hits)."""
 
 import threading
 from types import SimpleNamespace
@@ -21,6 +27,7 @@ import torch
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.tests.test_spec_chain_adapter_host import (
+    B,
     DP,
     MAX_SEQ_LEN,
     PER_LANE,
@@ -29,12 +36,20 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_chain_adapter_host impo
     TABLE,
     VOCAB,
     FakeLane,
+    FakeMTP,
     draft_of,
     propose,
     start,
     verify,
 )
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS
+from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
+    drafts_step,
+    plan_step,
+    stash_page,
+    tokens_step,
+)
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_layers
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 
@@ -58,12 +73,54 @@ class FakeMesh:
         return 7  # a served prefill compiles nothing: no decode trace recapture
 
 
+class OracleLayersMTP(FakeMTP):
+    """Every MTP layer on a fake lane: plan_step on the description (the chain step's, or the host's pack_mtp_layers)
+    and the lane's stash, the oracle drafter's tokens as the passes' heads at the anchor (slot 3), tokens_step before
+    passes 1 and 2, then drafts_step. Checks every planned row's layer-0 token (the committed token after its
+    position) and records each draft's plan (``plans``)."""
+
+    def __init__(self, lane):
+        super().__init__(lane)
+        self.layers, self.multi = [0, 1, 2], True
+        self.stash, self.plans = stash_page(B), []
+
+    def _run(self):
+        lane, mtp = self.lane, self.lane.mtp_words
+        inputs, self.stash = plan_step(mtp, self.stash, B)
+        heads = [[0] * B for _ in range(MAX_DRAFTS)]
+        anchor = SPEC_SLOTS - 1
+        rows = [j for j in range(SPEC_SLOTS) if inputs["pos"][j] >= 0]
+        if rows:
+            for j in rows:
+                q = inputs["rope"][j]
+                assert inputs["tokens0"][j] == SEQ[q + 1], f"row {j} at {q}: not the committed token after it"
+            bonus = inputs["rope"][anchor] + 1
+            for k in range(MAX_DRAFTS):
+                heads[k][anchor] = draft_of(bonus, k)
+            for layer in range(1, MAX_DRAFTS):
+                tokens = tokens_step(inputs["tokens0"], heads, layer)
+                assert tokens[anchor] == heads[layer - 1][anchor], "pass i's anchor token is draft i"
+            self.plans.append([(inputs["rope"][j], inputs["hidden"][j], inputs["tokens0"][j]) for j in rows])
+        lane.chain.words[64:] = drafts_step(mtp, heads, layers=MAX_DRAFTS)
+
+    def enqueue_layers(self, source, tokens, positions, m):
+        self.planned += 1
+        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self._run()
+
+    def reset(self):
+        self.stash = stash_page(B)
+
+
 class AsyncLane(FakeLane):
     """FakeLane with the ordinary decode step: the oracle's token after each active slot's position, fed back into
-    the resident tokens and positions (TtMiMoModel._feed_back)."""
+    the resident tokens and positions (TtMiMoModel._feed_back). ``layers``: the drafter's MTP layers (1, or 3:
+    OracleLayersMTP)."""
 
-    def __init__(self):
+    def __init__(self, layers=1):
         super().__init__()
+        if layers > 1:
+            self.mtp = OracleLayersMTP(self)
         self.decode_trace = {"id": 0}
         self.mesh_device = FakeMesh()
         self.resident = None
@@ -76,6 +133,8 @@ class AsyncLane(FakeLane):
 
     def _reset_mtp(self):
         self.mtp_resets += 1
+        if self.mtp.multi:
+            OracleLayersMTP.reset(self.mtp)
 
     def _decode(self, pos):
         self.decodes += 1
@@ -103,12 +162,12 @@ class AsyncLane(FakeLane):
         return self._decode(self.resident[1].clone())
 
 
-@pytest.fixture
-def adapter(monkeypatch):
+@pytest.fixture(params=[1, MAX_DRAFTS], ids=["mtp1", "mtp3"])
+def adapter(monkeypatch, request):
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t], raising=False)
     monkeypatch.setattr(ttnn, "to_torch", lambda t: t.values, raising=False)
     gen = SimpleNamespace(
-        models=[AsyncLane() for _ in range(DP)],
+        models=[AsyncLane(request.param) for _ in range(DP)],
         dp=DP,
         users_per_replica=PER_LANE,
         cfg=SimpleNamespace(vocab_size=VOCAB),
@@ -450,11 +509,21 @@ def test_chained_greedy_equals_the_synchronous_path(adapter, defer):
     assert seq == SEQ[: len(seq)]
     assert lane.mtp.planned == 1, "only the first draft is host-planned: every other one chained on device"
     assert adapter.chain_stats["uncovered"] == 0
+    plans = lane.mtp.plans if lane.mtp.multi else None
+    if plans is not None:
+        lane.mtp.reset()
+        lane.mtp.plans = []
     sync = MiMoV2ForCausalLM(adapter.gen, MAX_SEQ_LEN)
     sync.layer_groups = [0]
     sync_seq, sync_counts = run_synchronous(sync, 200, len(counts))
     assert sync_seq == seq and sync_counts == counts, "token for token, step for step"
     assert sum(counts) > len(counts), "some drafts accepted"
+    if plans is not None:
+        # Every layer: each chained draft (its description from the relayed verify's device positions) planned the
+        # rows, positions, tokens and stash hits of the synchronous one; after the first two every draft re-runs the
+        # rows its layers 1 and 2 drafted (3 rows, 4 when every draft was accepted).
+        assert plans == lane.mtp.plans and len(plans) == 1 + len(counts)
+        assert all(len(rows) == max(MAX_DRAFTS, m) for rows, m in zip(plans[2:], counts[1:]))
 
 
 def test_the_chain_survives_the_ring_and_reads_its_pages_late(adapter, defer):

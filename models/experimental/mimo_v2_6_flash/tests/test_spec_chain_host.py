@@ -32,6 +32,8 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     ACCEPT_AT,
     ACCEPT_WORDS,
     ARGMAX_AT,
+    CHAIN_HSLOTS,
+    CHAIN_RELAY,
     CHAIN_WORDS,
     DRAFTS_AT,
     HEADER_WORDS,
@@ -137,6 +139,12 @@ def test_chain_row():
     assert row[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 0] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
     relayed = chain_row(B, draft_source([vp]), 1000, relay=True)
     assert relayed[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 1]
+    # The MTP history's request slots follow the relay word (kernels/mtp_history.cpp reads them there).
+    both = chain_row(B, draft_source([vp]), 1000, relay=True, hslots=[2, 2, 2, None])
+    assert CHAIN_HSLOTS == CHAIN_RELAY + 1 == CHAIN_WORDS
+    assert both[:CHAIN_WORDS] == relayed[:CHAIN_WORDS] and both[CHAIN_WORDS : CHAIN_WORDS + SPEC_SLOTS] == [3, 3, 3, 0]
+    assert both[CHAIN_WORDS + SPEC_SLOTS :] == [0] * (B - CHAIN_WORDS - SPEC_SLOTS)
+    assert chain_row(B, hslots=[0, 1, None, 3])[:CHAIN_WORDS] == [0] * CHAIN_WORDS
 
 
 def test_the_chain_row_leaves_the_verify_inputs_alone():
@@ -235,11 +243,12 @@ def test_drafts_step_reads_the_anchor():
     assert idle[0] == NO_SLOT and idle[1 : 1 + MAX_DRAFTS] == [NO_TOKEN] * MAX_DRAFTS
 
 
-def chain_pass(vp, accept, argmax, heads, limit=MAX_SEQ_LEN - MAX_DRAFTS, source=True):
-    """The result page after the accept trace's chain step and the MTP trace's drafts step."""
+def chain_pass(vp, accept, argmax, heads, limit=MAX_SEQ_LEN - MAX_DRAFTS, source=True, layers=1):
+    """The result page after the accept trace's chain step and the MTP trace's drafts step (``layers``: the
+    drafter's MTP layers; with every layer the heads' anchor is the last slot)."""
     chain = chain_row(B, draft_source([vp]), limit) if source else None
-    mtp, header = chain_step(upload(vp, chain), accept, argmax)
-    return header + drafts_step(mtp, heads)
+    mtp, header = chain_step(upload(vp, chain), accept, argmax, layers)
+    return header + drafts_step(mtp, heads, layers)
 
 
 def test_the_result_page_round_trips_into_a_chained_draft():
@@ -324,13 +333,13 @@ def test_a_pass_of_two_requests_chains_nothing():
 
 
 # ---------------------------------------------------------------------- the relay step (a chained verify)
-def pending_page(p, m, rng, limit=MAX_SEQ_LEN - MAX_DRAFTS):
+def pending_page(p, m, rng, limit=MAX_SEQ_LEN - MAX_DRAFTS, layers=1):
     """The result page of a deferred verify of one request at p with MAX_DRAFTS drafts that committed m tokens, and
-    its committed tokens and drafts' head rows."""
+    its committed tokens and drafts' head rows (``layers``: the drafter's MTP layers)."""
     vp = one_row_pass(p, MAX_DRAFTS, rng)
     committed = [rng.randrange(VOCAB) for _ in range(m)]
     heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
-    page = chain_pass(vp, accept_page([(m, committed)]), list(range(B)), heads, limit=limit)
+    page = chain_pass(vp, accept_page([(m, committed)]), list(range(B)), heads, limit=limit, layers=layers)
     return page, committed, heads
 
 
@@ -347,17 +356,21 @@ def chained_block(bound, n, limit=MAX_SEQ_LEN - MAX_DRAFTS):
     return upload(vp, chain_row(B, draft_source([vp]), limit, relay=True)), control_words(pass_inputs(vp, None)[1])
 
 
+@pytest.mark.parametrize("layers", [1, MAX_DRAFTS], ids=["mtp1", "mtp3"])
 @pytest.mark.parametrize("bonus", BONUS + [MAX_SEQ_LEN - 1 - MAX_DRAFTS])
-def test_the_relay_writes_the_block_the_host_would_build(bonus):
+def test_the_relay_writes_the_block_the_host_would_build(bonus, layers):
+    """With either drafter: the relay reads the page the step chained onto left (with every layer the drafts are the
+    last slot's, wherever the commit ended)."""
     rng = random.Random(bonus)
     for m in range(1, MAX_DRAFTS + 2):
         p = bonus - m
         if p < 0:
             continue
-        page, committed, heads = pending_page(p, m, rng)
+        page, committed, heads = pending_page(p, m, rng, layers=layers)
         result = unpack_result(page)
         assert result.drafting and result.bonus == bonus
         anchor = result.anchor
+        assert anchor == (SPEC_SLOTS - 1 if layers > 1 else m - 1)
         for n in range(1, MAX_DRAFTS + 1):
             drafts = [heads[k][anchor] for k in range(n)]
             want_upload, want_ctrl, vp = host_block(committed[-1], bonus, drafts)
@@ -379,8 +392,8 @@ def test_the_relay_writes_the_block_the_host_would_build(bonus):
                 argmax = [rng.randrange(VOCAB) for _ in range(B)]
                 accept = verify_pass(None, None, argmax, got_ctrl, VOCAB // 8)
                 assert accept == verify_pass(None, None, argmax, want_ctrl, VOCAB // 8)
-                assert chain_step(got, accept, argmax) == chain_step(want_upload, accept, argmax)
-                header = chain_step(got, accept, argmax)[1]
+                assert chain_step(got, accept, argmax, layers) == chain_step(want_upload, accept, argmax, layers)
+                header = chain_step(got, accept, argmax, layers)[1]
                 assert header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] == [
                     (q if q >= 0 else q & 0xFFFFFFFF) for q in vp.positions
                 ]
@@ -404,16 +417,17 @@ def test_the_relay_leaves_every_other_slot_and_unrelayed_uploads_alone():
     assert relay_step(plain, page, plain_ctrl) == (plain, plain_ctrl)
 
 
-def test_a_page_that_drafted_nothing_idles_the_relayed_pass():
+@pytest.mark.parametrize("layers", [1, MAX_DRAFTS], ids=["mtp1", "mtp3"])
+def test_a_page_that_drafted_nothing_idles_the_relayed_pass(layers):
     """The step chained onto declined its draft at the context limit, or its drafts are not the chain's (a host-planned
     draft ran after it): the relayed columns go idle (no K / V written), the pass drafts nothing, and its page reports
     position -1, which the adapter raises on."""
     rng = random.Random(12)
     limit = 2000
-    declined, _, _ = pending_page(limit - 2, 2, rng, limit=limit)  # the bonus reaches the limit
+    declined, _, _ = pending_page(limit - 2, 2, rng, limit=limit, layers=layers)  # the bonus reaches the limit
     assert not unpack_result(declined).drafting
-    other, _, _ = pending_page(700, 1, rng)
-    other[DRAFTS_AT] = 3  # the drafts step's anchor is not the chain's
+    other, _, _ = pending_page(700, 1, rng, layers=layers)
+    other[DRAFTS_AT] = 2  # the drafts step's anchor is not the chain's
     for page in (declined, other):
         overlay, ctrl = chained_block(limit + 4, MAX_DRAFTS, limit=MAX_SEQ_LEN - MAX_DRAFTS)
         got, got_ctrl = relay_step(overlay, page, ctrl)
@@ -421,49 +435,74 @@ def test_a_page_that_drafted_nothing_idles_the_relayed_pass():
             1 + MAX_DRAFTS
         )
         assert got_ctrl[4 : 4 + MAX_DRAFTS] == [0] * MAX_DRAFTS and got[2 * B] == 0, "the source is cleared"
-        mtp, header = chain_step(got, accept_page([(1, [5])]), [0] * B)
-        assert mtp == pack_mtp(B).tolist() and header[STATUS_AT] == 0
-        result = unpack_result(header + drafts_step(mtp, [[0] * B] * MAX_DRAFTS))
-        assert result.positions == [-1] * SPEC_SLOTS
+        mtp, header = chain_step(got, accept_page([(1, [5])]), [0] * B, layers)
+        assert mtp == (pack_mtp(B) if layers == 1 else pack_mtp_layers(B)).tolist() and header[STATUS_AT] == 0
+        result = unpack_result(header + drafts_step(mtp, [[0] * B] * MAX_DRAFTS, layers))
+        assert result.positions == [-1] * SPEC_SLOTS and result.draft_anchor is None
 
 
-def test_a_chain_of_relays_follows_the_host_built_steps():
+@pytest.mark.parametrize("layers", [1, MAX_DRAFTS], ids=["mtp1", "mtp3"])
+def test_a_chain_of_relays_follows_the_host_built_steps(layers):
     """Steps chained one onto the other on the mirrors (relay, the oracle's argmax, the accept walk, the chain and
-    drafts steps) commit exactly what host-built steps over the read pages commit."""
+    drafts steps; with every layer the draft trace's plan step on its stash and the tokens steps) commit exactly what
+    host-built steps over the read pages commit, and with every layer plan the same rows (stash hits included)."""
     rng = random.Random(13)
     seq = [rng.randrange(VOCAB) for _ in range(600)]
 
-    def run(upload_words, ctrl):
+    def wrong(bonus, k):
+        """A drafter wrong at every third bonus position on its second draft."""
+        return seq[bonus + 1 + k] if bonus % 3 or k != 1 else (seq[bonus + 1 + k] + 1) % VOCAB
+
+    def run(upload_words, ctrl, flow):
         argmax = [seq[q + 1] if q >= 0 else 0 for q in upload_words[B : 2 * B]]
         accept = verify_pass(None, None, argmax, ctrl, VOCAB // 8)
-        mtp, header = chain_step(upload_words, accept, argmax)
-        # A drafter wrong at every third bonus position on its second draft.
+        mtp, header = chain_step(upload_words, accept, argmax, layers)
         heads = [[0] * B for _ in range(MAX_DRAFTS)]
-        for s in range(SPEC_SLOTS):
-            if mtp[2 * B + s] >= 0:
-                bonus = mtp[5 * B + s]
+        if layers == 1:
+            for s in range(SPEC_SLOTS):
+                if mtp[2 * B + s] >= 0:
+                    bonus = mtp[5 * B + s]
+                    for k in range(MAX_DRAFTS):
+                        heads[k][s] = wrong(bonus, k)
+        else:
+            inputs, flow["stash"] = plan_step(mtp, flow["stash"], B)
+            rows = [j for j in range(SPEC_SLOTS) if inputs["pos"][j] >= 0]
+            assert all(inputs["tokens0"][j] == seq[inputs["rope"][j] + 1] for j in rows), "committed tokens"
+            flow["plans"].append([(inputs["rope"][j], inputs["hidden"][j]) for j in rows])
+            anchor = SPEC_SLOTS - 1
+            if rows:
+                bonus = inputs["rope"][anchor] + 1
                 for k in range(MAX_DRAFTS):
-                    heads[k][s] = seq[bonus + 1 + k] if bonus % 3 or k != 1 else (seq[bonus + 1 + k] + 1) % VOCAB
-        return header + drafts_step(mtp, heads)
+                    heads[k][anchor] = wrong(bonus, k)
+                for layer in range(1, MAX_DRAFTS):
+                    assert tokens_step(inputs["tokens0"], heads, layer)[anchor] == heads[layer - 1][anchor]
+        return header + drafts_step(mtp, heads, layers)
 
+    chained_flow = {"stash": stash_page(B), "plans": []}
+    host_flow = {"stash": stash_page(B), "plans": []}
     first, ctrl, _ = host_block(seq[100], 100, seq[101:104])
-    page = run(first, ctrl)
+    page = run(first, ctrl, chained_flow)
+    host_flow["stash"], host_flow["plans"] = list(chained_flow["stash"]), list(chained_flow["plans"])
     chained_seq = seq[:101] + unpack_result(page).accept[0][1]
     host_seq = list(chained_seq)
     host_page = page
     while len(chained_seq) < 400:
         # Chained: the relay builds the block from the page; host-built: from the page read on the host.
         overlay, ctrl = chained_block(len(chained_seq) + 2 * MAX_DRAFTS, MAX_DRAFTS)
-        page = run(*relay_step(overlay, page, ctrl))
+        page = run(*relay_step(overlay, page, ctrl), chained_flow)
         r = unpack_result(page)
         assert r.positions[0] == len(chained_seq) - 1
         chained_seq += r.accept[0][1]
         h = unpack_result(host_page)
         upload_words, host_ctrl, _ = host_block(host_seq[-1], len(host_seq) - 1, h.drafts)
-        host_page = run(upload_words, host_ctrl)
+        host_page = run(upload_words, host_ctrl, host_flow)
         host_seq += unpack_result(host_page).accept[0][1]
         assert chained_seq == host_seq
     assert chained_seq == seq[: len(chained_seq)]
+    assert chained_flow["plans"] == host_flow["plans"] and chained_flow["stash"] == host_flow["stash"]
+    if layers > 1:
+        # After the first two drafts every draft re-runs the rows layers 1 and 2 drafted: 3 or 4 rows.
+        assert all(len(rows) in (MAX_DRAFTS, SPEC_SLOTS) for rows in chained_flow["plans"][2:])
 
 
 # ---------------------------------------------------------------------- every MTP layer (MIMO_MTP_LAYERS=3)
