@@ -88,12 +88,12 @@ _EXPECTED_NS: dict[tuple[str, str, str], int] = {
     ("swiglu", "glm_53", "8x32"): 495_122,
     ("swiglu", "glm_53", "32x32"): 1_971_322,
     ("swiglu", "glm_53", "32xmixed"): 2_758_621,
-    ("hybrid", "kimi_k2_7", "8x32"): 623_495,
-    ("hybrid", "kimi_k2_7", "32x32"): 2_463_880,
-    ("hybrid", "kimi_k2_7", "32xmixed"): 3_249_681,
-    ("hybrid", "glm_53", "8x32"): 543_061,
-    ("hybrid", "glm_53", "32x32"): 2_141_537,
-    ("hybrid", "glm_53", "32xmixed"): 2_908_282,
+    ("hybrid", "kimi_k2_7", "8x32"): 588_442,
+    ("hybrid", "kimi_k2_7", "32x32"): 2_324_302,
+    ("hybrid", "kimi_k2_7", "32xmixed"): 3_121_716,
+    ("hybrid", "glm_53", "8x32"): 496_016,
+    ("hybrid", "glm_53", "32x32"): 1_962_987,
+    ("hybrid", "glm_53", "32xmixed"): 2_761_435,
 }
 
 # Same measurement and key with the weights DRAM ND-sharded, the placement TtRoutedExpert picks on
@@ -111,12 +111,12 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, str, str], int] = {
     ("swiglu", "glm_53", "8x32"): 430_887,
     ("swiglu", "glm_53", "32x32"): 1_717_338,
     ("swiglu", "glm_53", "32xmixed"): 2_429_721,
-    ("hybrid", "kimi_k2_7", "8x32"): 540_548,
-    ("hybrid", "kimi_k2_7", "32x32"): 2_135_313,
-    ("hybrid", "kimi_k2_7", "32xmixed"): 2_792_500,
-    ("hybrid", "glm_53", "8x32"): 456_733,
-    ("hybrid", "glm_53", "32x32"): 1_796_511,
-    ("hybrid", "glm_53", "32xmixed"): 2_518_752,
+    ("hybrid", "kimi_k2_7", "8x32"): 490_720,
+    ("hybrid", "kimi_k2_7", "32x32"): 1_934_679,
+    ("hybrid", "kimi_k2_7", "32xmixed"): 2_710_286,
+    ("hybrid", "glm_53", "8x32"): 423_474,
+    ("hybrid", "glm_53", "32x32"): 1_672_406,
+    ("hybrid", "glm_53", "32xmixed"): 2_419_340,
 }
 
 
