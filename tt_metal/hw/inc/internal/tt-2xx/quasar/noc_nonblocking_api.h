@@ -33,8 +33,10 @@
 //   The two complex buffers (0, 1) are functionally identical and support reads, writes,
 //   and DMA transfers. They are programmed via __builtin_riscv_ttrocc_cmdbuf_wr_reg which
 //   takes an explicit buffer index (0 or 1). Callers can select either buffer to enable
-//   concurrent transaction setup (e.g. fast dispatch uses buffer 0 for bulk writes and
-//   buffer 1 for a second independent write stream).
+//   concurrent transaction setup. Fast dispatch keeps every write on buffer 0 (NCRISC_WR_CMD_BUF and
+//   NCRISC_WR_REG_CMD_BUF both alias it, so the stateful inline writes land there too) and every read on
+//   buffer 1; dispatch_s passes cmd_buf 1 only to noc_fast_write_dw_inline, which uses the simple buffer.
+//   So a buffer armed for stateful reads never carries a write.
 //
 //   The simple command buffer is programmed via __builtin_riscv_ttrocc_scmdbuf_wr_reg and
 //   SCMDBUF_ISSUE_INLINE_TRANS / SCMDBUF_ISSUE_TRANS. Atomic increments and inline (dword)

@@ -123,6 +123,7 @@
 #define NOC_SENT_BYTE_ENABLE_6 (NOC_REGS_START_ADDR + 0xE0)
 #define NOC_SENT_BYTE_ENABLE_7 (NOC_REGS_START_ADDR + 0xE4)
 
+// Quasar-only: the fence checks only 64 B of a byte-enable/inline write; put fence ranges on 256-byte boundaries.
 #define NOC_SEC_FENCE_RANGE(cnt) (NOC_REGS_START_ADDR + 0x400 + ((cnt) * 4))      // 32 inst
 #define NOC_SEC_FENCE_ATTRIBUTE(cnt) (NOC_REGS_START_ADDR + 0x480 + ((cnt) * 4))  // 8 inst
 #define NOC_SEC_FENCE_MASTER_LEVEL (NOC_REGS_START_ADDR + 0x4A0)
@@ -273,6 +274,8 @@
 #define INVALID_FENCE_END_ADDR_LO_2 0x1e
 #define INVALID_FENCE_END_ADDR_HI_2 0x1f
 #define FLEX_PORT_ADDR_FN0 0x24
+// Quasar-only: the per-VC initiator throttler desynchronises the router state machine for that VC, so it stays at
+// reset (0); DM0 checks it at boot.
 #define VC_THROTTLER_HANDSHAKES_PER_WINDOW_0 0x2C
 #define VC_THROTTLER_HANDSHAKES_PER_WINDOW_1 0x2D
 #define VC_THROTTLER_HANDSHAKES_PER_WINDOW_2 0x2E

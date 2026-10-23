@@ -323,6 +323,12 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         init_go_signalling(mailboxes);
         trigger_sync_register_init();
+#if WATCHER_ASSERT_ENABLED
+        // Quasar-only: the droop detector wait-counter delay never works; register stays at 0.
+        ASSERT(droop_ctrl_at_reset());
+        // Quasar-only: per-VC initiator throttler desynchronises the router state machine for that VC; stays at reset.
+        ASSERT(noc_throttler_at_reset());
+#endif
 
         DeviceProfilerInit();
         while (1) {

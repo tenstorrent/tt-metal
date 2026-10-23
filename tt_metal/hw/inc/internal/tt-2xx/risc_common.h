@@ -138,6 +138,29 @@ inline void deassert_trisc_reset() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
 }
 
+// Quasar-only: the droop detector wait-counter delay never works; register must stay at reset (0).
+static_assert(
+    T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_CONSC_TRIGGER_MASK_reset == 0 &&
+        T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_CONSC_TRIGGER_DISABLE_reset == 0 &&
+        T6_DEBUG_REGS__ACTIVITY_BASED_PLL_DROOP_CTRL_1__DROOP_TRIGGER_HOLD_reset == 0,
+    "ACTIVITY_BASED_PLL_DROOP_CTRL_1 must reset to 0");
+
+// True when ACTIVITY_BASED_PLL_DROOP_CTRL_1 reads 0 on all four NEOs. Reads NEO MMIO: DM0 calls it at boot.
+inline bool droop_ctrl_at_reset() {
+    constexpr uintptr_t droop_ctrl_1_regs[] = {
+        NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+        NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_ACTIVITY_BASED_PLL_DROOP_CTRL_1_REG_ADDR,
+    };
+    for (uintptr_t addr : droop_ctrl_1_regs) {
+        if (READ_REG(addr) != 0) {  // whole register: the wait-counter field is not named in the map
+            return false;
+        }
+    }
+    return true;
+}
+
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     if (special_b == TILE_WORD_8_BIT) {
         return a * TILE_WORD_8_BIT;
