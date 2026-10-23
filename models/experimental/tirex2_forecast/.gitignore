@@ -1,0 +1,5 @@
+# Raw profiler output and logs from the optimization rounds (the compact reports are kept)
+doc/optimize/**/tracy/
+doc/optimize/**/ops_perf_results.csv
+doc/optimize/**/*.log
+doc/optimize/scratch/

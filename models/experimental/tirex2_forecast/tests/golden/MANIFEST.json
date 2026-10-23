@@ -1,0 +1,197 @@
+{
+  "model": "NX-AI/TiRex-2-gifteval-pretrain",
+  "hf_revision": "54f88ac06ccfba9fe3e727aa8856b39775481f0f",
+  "checkpoint_files": {
+    "model.safetensors": "b184d7ea3847a7cd769b24fedeb8daaae95094cb06aa58470ac6003da8410371",
+    "config.json": "4ff442a0eb80e86b4205b750a6e7ffb794b17130627d7d14b99140c5bfb999ea"
+  },
+  "code": {
+    "tirex-2": {
+      "repo": "https://github.com/NX-AI/tirex-2",
+      "tag": "v0.4.0",
+      "commit": "614f46fd7c60e332d8a32e525403b341c2c1ce1e"
+    },
+    "flashrnn": {
+      "repo": "https://github.com/NX-AI/flashrnn",
+      "version": "1.0.8",
+      "commit": "0b84fc30120ecccbde97976bc5b086f3215572d2"
+    },
+    "mlstm_kernels": {
+      "repo": "https://github.com/NX-AI/mlstm_kernels",
+      "version": "2.0.6",
+      "commit": "99b3677991c02595f08919dd18b28ec7b191608a"
+    }
+  },
+  "source_sha256": {
+    "tirex2/model/tirex2.py": "59e51931c5e1209bcd443e89fbede7ea1dcb94819fd1b9b2c8d70b96f8554633",
+    "tirex2/model/component/variate_mixing_block.py": "68e5a1ee24dee026764860c63bb08e28215f1e89decb363e7b700d60854d0ef8",
+    "tirex2/model/component/bi_xlstm.py": "8137b0a70e2bc33e31aca2cc677bf7c816790cdf41082b6c4cccf45a99d6d067",
+    "tirex2/model/component/mlstm_block.py": "f4307934bb763d0116e7f9aeba22a828765efb75218c94cc1bded52997353f3c",
+    "tirex2/model/component/flashrnn_slstm.py": "823a64b856a9f02edc58b7435483d219aebcaf8d6b98c32958745640e22382c7",
+    "tirex2/model/component/attention_block.py": "3416ecd0c9182bd814d41337d68d6061c4ca09015a912a768c7c7ee7b1438f98",
+    "tirex2/model/component/feedforward.py": "15e9c487c8e2e27b53f86a43704f362f841979c7b91d9c352b1450c709a21945",
+    "tirex2/model/component/norm.py": "747eb2b4e7387e0741429c46a99f0641c8c82ae620e307ffe7d472c4177f8dc6",
+    "tirex2/model/component/residual_block.py": "67ae78ab6e3c9cad129aed1c2af933f003d62b0762f19ebf15380a82e725b206",
+    "tirex2/model/component/scaler.py": "a0726a9075f241a9eb2213604138ded3f21401f2a04854964daf9bb135f3610e",
+    "tirex2/model/component/patch_tokenizer.py": "6f68e35136095484bd1c998fb7f500707e381f4800aca5d2c5fa165f85690fb9",
+    "tirex2/model/component/postprocessor.py": "6ca844289dda76d4c005d523705ba466c0a6ee673cc2527ec0997411f66a445c",
+    "flashrnn/flashrnn/vanilla/slstm.py": "f5a84a53851207f7cb20656aa489228890abb2702fa19e83b75b8094bebdae9e",
+    "flashrnn/flashrnn/vanilla/__init__.py": "ea0e8c02b633d762778965a467cdb5e5a86682d1739a6b6e3a1621df24a48148",
+    "mlstm_kernels/torch/chunkwise/native/fw.py": "8d582e8e59f3a14104683a486b3f2f06c673ced166122ff14eaeb98f3ef5eef0"
+  },
+  "python": "3.12.12",
+  "torch": "2.14.1+cpu",
+  "pip_freeze": [
+    "anyio==4.15.1",
+    "click==8.5.0",
+    "contourpy==1.4.0",
+    "cycler==0.12.1",
+    "einops==0.8.2",
+    "filelock==3.32.3",
+    "flashrnn==1.0.8",
+    "fonttools==4.67.0",
+    "fsspec==2026.7.0",
+    "h11==0.16.0",
+    "hf-xet==1.7.0",
+    "httpcore2==2.16.0",
+    "httpx2==2.16.0",
+    "huggingface-hub==2.3.0",
+    "idna==3.20",
+    "jinja2==3.1.6",
+    "kiwisolver==1.5.1",
+    "markupsafe==3.0.3",
+    "matplotlib==3.11.2",
+    "mlstm-kernels==2.0.6",
+    "mpmath==1.3.0",
+    "narwhals==2.27.1",
+    "networkx==3.6.1",
+    "ninja==1.13.2",
+    "numpy==2.5.4",
+    "packaging==26.3",
+    "pillow==13.0.0",
+    "pyparsing==3.3.3",
+    "python-dateutil==3.0.0",
+    "pyyaml==6.0.3",
+    "safetensors==0.8.0",
+    "setuptools==78.1.0",
+    "six==1.17.0",
+    "sympy==1.14.0",
+    "tirex-2==0.4.0",
+    "torch==2.14.1+cpu",
+    "tqdm==4.70.1",
+    "triton==3.8.0",
+    "truststore==0.10.5",
+    "typing-extensions==4.16.0",
+    "tzdata==2026.5"
+  ],
+  "threads": 8,
+  "env": {
+    "TORCHDYNAMO_DISABLE": "1",
+    "HF_HUB_OFFLINE": "1"
+  },
+  "calls": {
+    "load": "load_model(\"NX-AI/TiRex-2-gifteval-pretrain\", device=\"cpu\", hf_kwargs={\"revision\": \"54f88ac06ccfba9fe3e727aa8856b39775481f0f\"})",
+    "q_one": "fm.forecast(ts, prediction_length=H, output_type=\"torch\", batch_size=len(ts), tta_sign_flip=False)",
+    "q_full": "fm.forecast(ts, prediction_length=H, output_type=\"torch\", batch_size=len(ts), tta_sign_flip=True)",
+    "pad_context": "default (True)"
+  },
+  "input_generator": {
+    "function": "make_series(n, length, seed, nan_frac=0.005) in tests/golden/make_goldens.py",
+    "description": "scale 10**U(-1,2) x (level + trend + daily/weekly sines + AR(1) noise), 0.5 % interior NaNs",
+    "seeds": {
+      "single": 1,
+      "model16": 2,
+      "multivar4": 3,
+      "bench_paper": 10,
+      "bench_long_context": 11,
+      "bench_multivariate": 12,
+      "e2e64": 20,
+      "pad_check": [
+        100,
+        101,
+        102,
+        103
+      ]
+    },
+    "multivariate": "groups of 1 target + 7 past covariates; target += 0.5 * nanmean-free covariate mean"
+  },
+  "bench_shapes": {
+    "paper": {
+      "kind": "uni",
+      "n": 1024,
+      "context": 2048,
+      "horizon": 64,
+      "seed": 10
+    },
+    "long_context": {
+      "kind": "uni",
+      "n": 32,
+      "context": 8192,
+      "horizon": 928,
+      "seed": 11
+    },
+    "multivariate": {
+      "kind": "multi",
+      "n": 128,
+      "covariates": 7,
+      "context": 2048,
+      "horizon": 64,
+      "seed": 12
+    }
+  },
+  "timings_s": {
+    "single": 2.4261985877528787,
+    "model16": 15.782257216982543,
+    "multivar4": 17.755121001973748,
+    "bench": 926.8100655609742,
+    "e2e64": 50.98023295076564,
+    "pad": 2.875490647740662
+  },
+  "files": {
+    "bench_long_context.pt": {
+      "sha256": "d2e3a793ce562c5c80aebfccf187a9646b34ff0d43b33e62d52febb3f512d441",
+      "bytes": 4357593
+    },
+    "bench_multivariate.pt": {
+      "sha256": "9841a451f3dc2d4e6dd66539d95c5a5e1903cfa9e34d0bb2d0a500fdfa99147c",
+      "bytes": 48409753
+    },
+    "bench_paper.pt": {
+      "sha256": "621e4a9e23d6f8436c0fd9c01165b6b5954f811e5acfa14cee3552dea022d817",
+      "bytes": 50474053
+    },
+    "e2e64.pt": {
+      "sha256": "983244b07fb32dc2fc2fcbb4d0ef602f4ebd59683ef2bf7be03064ba81bf2684",
+      "bytes": 821135
+    },
+    "mlstm_chunks.pt": {
+      "sha256": "5bd46c6e3fd2beaeee1c2aaac58f48868418f51fd689f062b2b33aa3a752bbe2",
+      "bytes": 4762149
+    },
+    "model16.pt": {
+      "sha256": "4a68f0719a7e784e2d1582b330989735f672a7b703d6c403fe70b93f62e2c055",
+      "bytes": 199542010
+    },
+    "multivar4.pt": {
+      "sha256": "19f0057bce00aeabdc40aed7a13a77f6d9747c60412a257719031db69fe815ca",
+      "bytes": 150949660
+    },
+    "pad_check.json": {
+      "sha256": "f77fbee7b3f003d450e3b2a580b00194477fa0096ef7efc6081ead171b954237",
+      "bytes": 3899
+    },
+    "pad_states.pt": {
+      "sha256": "127e2139e8601f9d3323a802a34b3850369c5a1445cae72e3fd8397cd20de243",
+      "bytes": 854837
+    },
+    "single.pt": {
+      "sha256": "83c9b52e590a6958a6484b7f7ff9bb001b91bdb91ba758b38af75c4543ea545d",
+      "bytes": 61560097
+    },
+    "slstm_short.pt": {
+      "sha256": "b63e4a736ad31b032de46c8d028cc076996277095a891e97e28e75579fef1c8f",
+      "bytes": 63709075
+    }
+  },
+  "generated": "2026-10-23 14:25:00"
+}
