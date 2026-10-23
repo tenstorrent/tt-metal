@@ -235,3 +235,12 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Files: `mhc_pre_xing.cpp`, `device/mhc_pre_xing_device_operation.cpp`, `device/mhc_pre_xing_program_factory.cpp`,
      `device/mhc_engram_pack_program_factory.cpp`, `kernels/mhc_pre_xing_compute.cpp`,
      `kernels/mhc_engram_pack_{reader,compute}.cpp`, `tests/unit/test_xing_bf16_streams.py`.
+
+12. Model cases for deepseek_v41_flash_d_p (O.1, 2026-10-23): 16 mhc_pre_xing calls (partials 2, collapse_pre, bf16
+    streams, deepseek math; each layer's captured scale / base) and 2 mhc_pre_xing_pack calls (bf16 pack, engram mode),
+    `tests/xing_cases.py`, run by test_mhc_pre_xing_ds41; every output within noise_limit at its formats (hc fp32
+    math: reference.mhc_pre_xing_coefficients(dtype=); the sums with one fp32 running accumulator,
+    reference.running_sum). Worst device / limit 0.73. No op change.
+    - Needed by: deepseek_v41_flash_d_p O.1
+    - Files: `tests/xing_cases.py`, `tests/cases.py` (engram mode -> op mhc_pre_xing_pack), `tests/reference.py`,
+      `tests/test_mhc_pre_xing.py`.

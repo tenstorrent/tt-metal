@@ -89,7 +89,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
   neighbours (ValueError "not a direct link", CHANGELOG.md "Direct hops only").
 - Emulator (tt-emule): FABRIC_1D rejected by the control plane on a 2D mesh, FABRIC_1D_RING aborts in the emulator
   (`README_python.md`).
-- Model cases cover glm53_flash_d_p's 2x2 calls only (`tests/cases.py`); no DeepSeek-V4.1 case yet.
+- Model cases cover glm53_flash_d_p's and deepseek_v41_flash_d_p's 2x2 calls (`tests/cases.py`).
 
 ## How to call
 ```python

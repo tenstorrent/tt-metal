@@ -5856,8 +5856,214 @@
   "waiting": null
  },
  "O.1": {
-  "attempts": 0,
-  "status": "TODO"
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "1f2f6824-0df3-44c3-a460-9e647f15037a"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "3a81858569143578c4beac9c613747508e11748f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 3716.8,
+    "session_id": "20c25816-bffe-40e6-a43e-7959972dcd1a",
+    "t": "2026-10-23T03:33:39"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/O.1.optests.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "3a81858569143578c4beac9c613747508e11748f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [
+     "DS41-109"
+    ],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/O.1.optests.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 141.3,
+    "session_id": "d90b8147-905f-49e1-b056-634cbd931762",
+    "t": "2026-10-23T03:56:00"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 3,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/O.1.optests.3.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "3a81858569143578c4beac9c613747508e11748f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": [
+     "no knowledge report O.1.optests.3.json"
+    ],
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/O.1.optests.3.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "aborted by the overseer: the uncovered call's signature includes extra_key, a value that changes every run (DS41-109); no case can match it: framework fix (signature without volatile args) by the overseer"
+    ],
+    "rc": 143,
+    "role": "optests",
+    "seconds": 20.3,
+    "session_id": "36e96bdd-a86a-4f1a-96a5-d46aaddd01d7",
+    "t": "2026-10-23T03:56:25"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 4,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/O.1.optests.4.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "3a81858569143578c4beac9c613747508e11748f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [
+     "DS41-110"
+    ],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/O.1.optests.4.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 1904.3,
+    "session_id": "1f2f6824-0df3-44c3-a460-9e647f15037a",
+    "t": "2026-10-23T05:01:19"
+   }
+  ],
+  "attempt": 4,
+  "attempts": 3,
+  "duration_s": 1.4,
+  "history": [
+   {
+    "s": 492.7,
+    "status": "FAIL",
+    "t": "2026-10-23T02:31:37"
+   },
+   {
+    "s": 1188.5,
+    "status": "FAIL",
+    "t": "2026-10-23T03:53:35"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-10-23T03:56:25",
+    "why": "the uncovered call's signature includes extra_key, a value that changes every run (DS41-109); no case can match it: framework fix (signature without volatile args) by the overseer"
+   },
+   {
+    "attempt": 3,
+    "from": "RUNNING",
+    "role": "optests",
+    "status": "RESUMED",
+    "t": "2026-10-23T04:08:58"
+   },
+   {
+    "s": 1220.5,
+    "status": "FAIL",
+    "t": "2026-10-23T04:29:31"
+   },
+   {
+    "reused": [
+     "O.1"
+    ],
+    "s": 1.4,
+    "status": "PASS",
+    "t": "2026-10-23T05:01:28"
+   }
+  ],
+  "last_run": "2026-10-23T05:01:27",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/O.1.log",
+  "metrics": {
+   "fork_calls_uncovered": 0,
+   "fork_tests_failed": 0,
+   "forks_used": 8
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "optests",
+  "stamp": {
+   "reused": [
+    "O.1"
+   ],
+   "units": {
+    "O.1": "0aa94b7233aa4113"
+   }
+  },
+  "started": "2026-10-23T05:01:25",
+  "status": "PASS",
+  "units": {
+   "O.1": "PASS"
+  },
+  "waiting": null
  },
  "P.1": {
   "ab": {

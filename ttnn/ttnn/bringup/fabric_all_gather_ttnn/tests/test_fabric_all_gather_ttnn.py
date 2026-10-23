@@ -34,6 +34,10 @@ CASES = _load("cases").CASES
 def _device_params(c):
     p = dict(c["device_params"])
     p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    if "fabric_payload_bytes" in p:  # the model's fabric packet payload (harness.device_params)
+        rc = ttnn._ttnn.fabric.FabricRouterConfig()
+        rc.max_packet_payload_size_bytes = int(p.pop("fabric_payload_bytes"))
+        p["fabric_router_config"] = rc
     # A case runs on a box of its own mesh size only: a smaller mesh opened on a bigger box fails the FABRIC_2D router
     # handshake, and the groups depend on the mesh.
     p["require_exact_physical_num_devices"] = True
@@ -51,6 +55,26 @@ def _put(mesh_device, host, spec, mapper):
     )
 
 
+_BITS = {"BFLOAT16": torch.int16, "FLOAT32": torch.int32, "UINT32": torch.int32}
+
+
+def _random(shape, dtype, g):
+    """Random values in the captured dtype: bf16 / fp32 normal, uint32 random 31-bit words (as torch int32)."""
+    if dtype == "UINT32":
+        return torch.randint(0, 2**31 - 1, shape, generator=g, dtype=torch.int32)
+    return torch.randn(shape, generator=g).to(torch.float32 if dtype == "FLOAT32" else torch.bfloat16)
+
+
+def _semaphores(mesh_device, c):
+    """The caller-owned pair the model passes (ready, data_valid): zero, the whole worker grid, L1_SMALL."""
+    if not c.get("semaphores"):
+        return {}
+    g = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+    s0, s1 = [ttnn.create_global_semaphore(mesh_device, crs, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    return {"ready_semaphore": s0, "data_valid_semaphore": s1}
+
+
 def _inputs(mesh_device, c, seed):
     """Host per-device inputs (row-major list) and the output's prior fill; the device input, chip (r, c) holding
     xs[r * cols + c]. Distribution as the model declares it: along an axis, 2D (chip (r, c) = host[r, c]); over the
@@ -58,8 +82,8 @@ def _inputs(mesh_device, c, seed):
     rows, cols = c["mesh"]
     g = torch.Generator().manual_seed(seed)
     _, _, n, w = c["input"]["shape"]
-    host = torch.randn(rows, cols, n, w, generator=g).to(torch.bfloat16)
-    fill = torch.randn(c["output"]["shape"], generator=g).to(torch.bfloat16)
+    host = _random((rows, cols, n, w), c["input"]["dtype"], g)
+    fill = _random(c["output"]["shape"], c["input"]["dtype"], g)
     xs = [host[r, cc].reshape(c["input"]["shape"]) for r in range(rows) for cc in range(cols)]
     if c["cluster_axis"] is None:
         tt_in = _put(
@@ -72,10 +96,11 @@ def _inputs(mesh_device, c, seed):
     return xs, fill, tt_in
 
 
-def _call(mesh_device, c, tt_in, fill):
+def _call(mesh_device, c, tt_in, fill, sems=None):
     """One call into a fresh output holding `fill` on every chip."""
     out = _put(mesh_device, fill, c["input"], ttnn.ReplicateTensorToMesh(mesh_device))
     kw = {"gathered_dim_size": c["gathered_dim_size"]} if c.get("gathered_dim_size") is not None else {}
+    kw.update(sems or {})
     res = ttnn.bringup.fabric_all_gather(
         tt_in, dim=c["dim"], output_tensor=out, cluster_axis=c["cluster_axis"], num_links=c["num_links"], **kw
     )
@@ -93,8 +118,9 @@ def test_fabric_all_gather_ttnn(mesh_device, device_params, case):
     c = case
     assert c["exact"]
     rows, cols = c["mesh"]
+    sems = _semaphores(mesh_device, c)
     xs, fill, tt_in = _inputs(mesh_device, c, c["seed"])
-    out = _call(mesh_device, c, tt_in, fill)
+    out = _call(mesh_device, c, tt_in, fill, sems)
     outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
     assert len(outs) == rows * cols
     for d in range(rows * cols):
@@ -107,14 +133,15 @@ def test_fabric_all_gather_ttnn(mesh_device, device_params, case):
             fill=fill,
             gathered_dim_size=c.get("gathered_dim_size"),
         )
-        got = outs[d].reshape(want.shape).to(torch.bfloat16)
-        bad = got.view(torch.int16) != want.view(torch.int16)
+        got = outs[d].reshape(want.shape).to(want.dtype)
+        bits = _BITS[c["input"]["dtype"]]
+        bad = got.view(bits) != want.view(bits)
         n_bad = int(bad.sum())
         assert n_bad == 0, f"dev {d}: {n_bad}/{want.numel()} elements differ, first at {bad.nonzero()[0].tolist()}"
     _, fill_b, tt_in_b = _inputs(mesh_device, c, c["seed"] + 1)
     determinism.assert_deterministic(
-        lambda: _call(mesh_device, c, tt_in, fill),
-        lambda: _call(mesh_device, c, tt_in_b, fill_b),
+        lambda: _call(mesh_device, c, tt_in, fill, sems),
+        lambda: _call(mesh_device, c, tt_in_b, fill_b, sems),
         first=out,
         label=c["id"],
     )

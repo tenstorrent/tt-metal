@@ -1,0 +1,17 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "O.1",
+  "role": "optests",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T03:56:25",
+  "head": "6c052789ab5",
+  "touched": []
+ }
+}

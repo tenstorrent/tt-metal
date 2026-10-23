@@ -59,7 +59,8 @@ wts, idx = ttnn.bringup.moe_grouped_topk(
     fp32_selection=True, fp32_activation=True,
 )  # wts [1, 1, S, 6] bf16 TILE, idx [1, 1, S, 6] uint16 TILE
 ```
-Caller: `models/demos/deepseek_v41_flash_d_p/tt/router.py:TtRouter._fused`. Tests: `tests/unit/`.
+Caller: `models/demos/deepseek_v41_flash_d_p/tt/router.py:TtRouter._fused`. Tests: `tests/unit/`; model cases
+`tests/cases.py` + `tests/test_moe_grouped_topk.py` (O.1).
 
 ## Used by
 deepseek_v41_flash_d_p (P.22)

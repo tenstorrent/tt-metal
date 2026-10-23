@@ -123,7 +123,8 @@ fe = FlatRoutedExpert(mesh, weights, m=cap, H=H, I=I, gids=gids, n_global=NG, wd
 y = fe(x_rm_bf16, counts, regions, down_fp32=True)          # y [rows, H] bfp8 TILE
 ```
 (deepseek_v41_flash_d_p/tt/shared_expert.py `_load_flat`; glm53_flash_d_p/tt/experts_ag.py.)
-Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
+Model cases (O.1): tests/cases.py + tests/test_flat_routed_expert_ttnn.py (deepseek_v41_flash_d_p's shared-expert
+call and its routed call with the weighted combine fused in, tests/weighted_case.py). Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
 test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py), tests/test_flat_bench.py (perf, fake
 weights); tests/source.yaml is empty. flat_combine_overlap:
 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted /

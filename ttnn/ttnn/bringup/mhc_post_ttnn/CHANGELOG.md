@@ -132,3 +132,10 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
    - Needed by: deepseek_v41_flash_d_p P.20 (tt/residual.py, tt/engram_add.py, setting BF16_ACTIVATIONS).
    - Files: `mhc_post_ttnn.cpp`, `device/mhc_post_stats_program_factory.cpp`,
      `kernels/mhc_post_stats_{reader,writer,compute}.cpp`, `tests/unit/test_mhc_post_bf16_streams.py`.
+
+5. Model cases for deepseek_v41_flash_d_p (O.1, 2026-10-23): 3 calls (bf16 streams; the engram add's stats call, the
+   packed-mixes call, the packed-mixes stats call at HiFi2), run by test_mhc_post_ds41; every output within
+   noise_limit at its formats (X' 1.66e-3 vs 3.3e-3; the projection with the FPU's HiFi2 operand bits,
+   reference.fpu_operands: 4.06e-3 vs 8.2e-3; sum of squares 5.9e-8 vs 1.0e-7). No op change.
+   - Needed by: deepseek_v41_flash_d_p O.1
+   - Files: `tests/cases.py`, `tests/reference.py`, `tests/test_mhc_post_ttnn.py`.
