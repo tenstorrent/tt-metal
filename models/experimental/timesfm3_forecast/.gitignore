@@ -1,0 +1,4 @@
+# Raw profiler output and logs of the optimization rounds (summaries are committed)
+doc/optimize/**/tracy/
+doc/optimize/**/ops_perf_results*.csv
+doc/optimize/**/*.log
