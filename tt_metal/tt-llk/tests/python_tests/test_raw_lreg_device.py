@@ -37,6 +37,7 @@ class RawLregCase(TemplateParameter):
     force_move: bool = False
     dead_output: bool = False
     old_destination_gap: bool = False
+    config_handoff: int = 0
 
     def convert_to_cpp(self):
         return "\n".join([
@@ -48,23 +49,24 @@ class RawLregCase(TemplateParameter):
             f"constexpr bool FORCE_MOVE = {int(self.force_move)};",
             f"constexpr bool DEAD_OUTPUT = {int(self.dead_output)};",
             f"constexpr bool OLD_DESTINATION_GAP = {int(self.old_destination_gap)};",
+            f"constexpr unsigned CONFIG_HANDOFF = {self.config_handoff};",
         ])
 
 
 def _run_case(
     scheme, mmio, lreg, live_before, partial=False, force_move=False,
-    dead_output=False, old_destination_gap=False,
+    dead_output=False, old_destination_gap=False, config_handoff=0,
 ):
     if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
         pytest.skip("Blackhole-specific raw instruction encoding")
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     source = torch.full((1024,), 2.0, dtype=torch.bfloat16)
-    if partial:
+    if partial or config_handoff:
         source[(torch.arange(1024) % 4) >= 2] = -2.0
     config = TestConfig(
         "sources/sfpu_raw_lreg_device.cpp", formats,
         templates=[RawLregCase(scheme, mmio, lreg, live_before, partial, force_move,
-                              dead_output, old_destination_gap)], runtimes=[],
+                              dead_output, old_destination_gap, config_handoff)], runtimes=[],
         variant_stimuli=StimuliConfig(
             source, formats.input_format, torch.zeros_like(source),
             formats.input_format, formats.output_format,
@@ -85,6 +87,10 @@ def _run_case(
         first = 4 * (row // 2)
         expected[first:first + 4, row % 2::2] = 1.0 + row / 128.0
     expected = expected.flatten()
+    if config_handoff:
+        expected = source.clone()
+        if config_handoff == 3:
+            expected = torch.where(source < 0, source, 3.0)
     if partial:
         expected = torch.where(source < 0, expected, 3.0)
     bad = 0 if dead_output else int((observed != expected).sum())
@@ -97,7 +103,7 @@ def _run_case(
           f"mismatches={bad}/1024 input_mismatches={input_bad}/1024 "
           f"active_mismatches={active_bad} inactive_mismatches={inactive_bad}")
     required_correct = (
-        scheme in (2, 5)
+        config_handoff or scheme in (2, 5)
         or (not old_destination_gap and (scheme == 4 or (scheme == 3 and not dead_output)))
     )
     if required_correct:
@@ -110,6 +116,13 @@ def _run_case(
 def cleared_output(monkeypatch):
     # Existing harness repeats clear output to a sentinel before each run.
     monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
+
+
+@pytest.mark.parametrize("config_handoff", [1, 2, 3],
+                         ids=["disabled-flags-full-copy", "row-mask-full-copy", "live-value-preserves-inactive"])
+def test_raw_lreg_config_handoff(config_handoff, cleared_output):
+    """Config12's fixed-L0 input copy is full-lane; an LV merge must remain predicated."""
+    _run_case(2, 0, 0, False, config_handoff=config_handoff)
 
 
 @pytest.mark.parametrize("scheme", [0, 1, 2, 3, 4], ids=["none", "pairs", "effects", "threaded", "pinned-threaded"])

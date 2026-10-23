@@ -104,9 +104,45 @@ template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
     }
 }
 
+template <unsigned Row> __attribute__((always_inline)) inline void probe_config_handoff_row()
+{
+    __builtin_rvtt_sfpencc_all_lanes();
+    __builtin_rvtt_sfpconfig_i(0, 15, 1);
+    issue_word<TT_OP_SFPLOADI(0, 0, 0x4040)>(); // Old physical L0: 3.0.
+    __builtin_rvtt_sfprawlreg_effect(0, 1);
+    issue_word<TT_OP_SFPLOAD(1, 0, 7, 2 * Row)>();
+    __builtin_rvtt_sfprawlreg_effect(0, 2);
+    if constexpr (CONFIG_HANDOFF == 1)
+        __builtin_rvtt_sfpencc(10, 0); // No lane flags enabled.
+    else if constexpr (CONFIG_HANDOFF == 2)
+        __builtin_rvtt_sfpconfig_i(1, 15, 1); // Nonzero ROW_MASK.
+
+    if constexpr (CONFIG_HANDOFF == 3) {
+        sfpi::vFloat old(__builtin_rvtt_sfpreadlreg(0));
+        sfpi::vFloat replacement(__builtin_rvtt_sfpreadlreg(1));
+        v_if (replacement < 0.0f) { old = replacement; } v_endif;
+        __builtin_rvtt_sfpwriteconfig_v(old.get(), 0, 12);
+    } else {
+        auto replacement = __builtin_rvtt_sfpreadlreg(1);
+        __builtin_rvtt_sfpwriteconfig_v(replacement, 0, 12);
+    }
+    // A partial raw read/write needs the physical old destination. Identity
+    // preserves an exact numerical oracle even with flags/ROW_MASK disabled.
+    issue_word<TT_OP_SFPMOV(0, 0, 0, 0)>();
+    __builtin_rvtt_sfprawlreg_effect(1, 1);
+    __builtin_rvtt_sfpencc_all_lanes();
+    __builtin_rvtt_sfpconfig_i(0, 15, 1);
+    // Inspect physical L0 after restoring lanes, not the lane-gated config12.
+    issue_word<TT_OP_SFPSTORE(0, 0, 7, 64 + 2 * Row)>();
+    __builtin_rvtt_sfprawlreg_effect(1, 0);
+}
+
 template <std::size_t... Row> inline void probe_rows(std::index_sequence<Row...>)
 {
-    (probe_row<Row>(), ...);
+    if constexpr (CONFIG_HANDOFF)
+        (probe_config_handoff_row<Row>(), ...);
+    else
+        (probe_row<Row>(), ...);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
