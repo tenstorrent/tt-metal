@@ -74,20 +74,17 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
   kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;
-  # Kimi-K3 with RadixArk's DSpark drafter. Same knobs as its verifier manifest plus PREFILL_DFLASH; the
-  # drafter partial rides the AttnRes handoff as one more plane, so the D2D FIFO keeps its default.
+  # Kimi-K3 with RadixArk's DSpark drafter, eager at 1M with the 34 slots the drafter's K/V leaves on the last
+  # rank, as K3's own SC4 leg runs eager at its slot ceiling. The drafter partial rides the AttnRes handoff as
+  # one more plane, so the D2D FIFO keeps its default.
   kimi_k3) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json" ;;
-  # Traced K3 holds one KDA slot, so its multi-user leg (64 slots, as Kimi-K2.7's allocates 68) runs eager.
-  kimi_k3_eager) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark_eager.json" ;;
-  # The same at K3's full 1M context, as K3's own SC4 leg runs eager with its slot ceiling at 1M.
-  kimi_k3_eager_1m) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark_eager_1m.json" ;;
   *)
-    echo "unknown model key '${MODEL}' (expected kimi27, kimi_k3, kimi_k3_eager or kimi_k3_eager_1m -- only those ship a drafter)" >&2
+    echo "unknown model key '${MODEL}' (expected kimi27 or kimi_k3 -- only those ship a drafter)" >&2
     exit 2
     ;;
 esac
 
-# A manifest that pins its own depth (the 1M leg) is timed to that depth instead of 256k.
+# A manifest that pins its own depth (Kimi-K3's 1M) is timed to that depth instead of 256k.
 MANIFEST_MAX_SEQ_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"].get("PREFILL_MAX_SEQ_LEN", ""))' "${MANIFEST}")
 MAX_SEQ_LEN="${MANIFEST_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}"
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
