@@ -498,14 +498,23 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll);
     // a group: PG packets' slots reserved, read, one barrier, pushed whole (padded) with its packet count in CBM - a
     // share not landed yet ends the group early (never hold read packets while waiting)
-    uint32_t b = 0, wp = 0;
+    // (two groups in flight: a group's pages pushed once its reads are issued, its packet count (CBM - what the sender
+    // waits for first) once they landed - its transaction id's barrier, after the next group's reads went out: a
+    // barrier a group was the reader's - and the gather's - pace, ~16 GB/s a link of 23.7)
+    uint32_t b = 0, wp = 0, gt = 1, pend_b = 0, pend_t = 0;
+    auto land_pending = [&]() {
+        if (pend_t) {
+            noc_async_read_barrier_with_trid(pend_t);
+            cb_reserve_back(CBM, 1);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CBM)) = pend_b;
+            cb_push_back(CBM, 1);
+            pend_t = 0;
+        }
+    };
     auto flush = [&]() {
-        noc_async_read_barrier();
-        cb_reserve_back(CBM, 1);
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CBM)) = b;
-        cb_push_back(CBM, 1);
         cb_push_back(CBP, PG * RP);
-        b = 0;
+        land_pending();
+        pend_b = b, pend_t = gt, gt = 3 - gt, b = 0;
     };
     // (the shares' landed words polled a unit at a time: every not-yet-seen share's word in one batch of NoC reads,
     // one barrier - one round trip a share in turn was the gather's pace; a share still not in is then waited alone)
@@ -542,6 +551,7 @@ void kernel_main() {
                 };
                 if (!seen[si] && !in()) {
                     if (b > 0) flush();
+                    land_pending();  // (the sender has everything read so far while I wait)
                     DeviceZoneScopedN("TP-RWAIT");  // (a share not landed / tilized yet)
                     while (!in()) {
                     }
@@ -551,11 +561,13 @@ void kernel_main() {
                 cb_reserve_back(CBP, PG * RP);
                 wp = get_write_ptr(CBP);
             }
+            noc_async_read_set_trid(gt);
             noc_async_read(get_noc_addr(ox, oy, land + (s * SHMAX + t0 - k0) * 2048), wp + b * RP * 2048, m * 2048);
             if (++b == PG) flush();
         });
     }
     if (b > 0) flush();
+    land_pending();
 }
 """
 )
@@ -919,7 +931,8 @@ class TailEngine:
         cb(CB_L0, "land", self.NOWNMAX * self.SHMAX * 2048, ttnn.bfloat16, 2048, [self.SHMAX])
         cb(CB_RM, "rm", self.NOWNMAX * self.SHMAX * 2048, ttnn.bfloat16, 2048, [1])
         # the ports' staging (carved at the arena's start on the port cores) and their poll word after it
-        PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151)
+        PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151; <= 8: a packet header each, the RISC's pool)
+        assert PG <= 12, "a port group's packets take a packet header each: 12 a RISC (16 / 24 hung)"
         PSTAGE = 2 * PG * self.RP
         # (then the poll word, the group counts (CB 1), the shares' polled words: 16 B a (row tile, column))
         assert PSTAGE * 2048 + 64 + 64 + RT * GX * 16 <= self.arena_bytes
