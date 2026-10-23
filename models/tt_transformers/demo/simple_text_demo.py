@@ -307,6 +307,16 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, local_data_parallel, local_submesh_indices
 
 
+def hf_max_context_len():
+    hf_model = os.getenv("HF_MODEL")
+    if not hf_model:
+        return None
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true").to_dict()
+    return config.get("max_position_embeddings", config.get("text_config", {}).get("max_position_embeddings"))
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -1010,6 +1020,13 @@ def test_demo_text(
     profiler.start("run")
 
     is_seqlen_sweep = "seqlen-sweep" in test_id
+
+    # Skip before the model and its max_seq_len KV cache are built.
+    max_context_len = None if is_seqlen_sweep else hf_max_context_len()
+    if max_context_len is not None and max_context_len < max_seq_len:
+        pytest.skip(
+            f"Max seq len {max_seq_len} not supported by model {os.getenv('HF_MODEL')}. The model's max context len is {max_context_len}"
+        )
 
     # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
     # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full 128k-capacity

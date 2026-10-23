@@ -23,6 +23,7 @@
 #include <sys/resource.h>
 #include <numa.h>
 #include <tt-metalium/device.hpp>
+#include "impl/device/device_impl.hpp"
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -511,7 +512,7 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
+    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
@@ -649,7 +650,7 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
 }
 
