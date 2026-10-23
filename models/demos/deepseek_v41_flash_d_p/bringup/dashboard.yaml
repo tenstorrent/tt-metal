@@ -1,4 +1,5 @@
-# Dashboard section metadata (F181): per-stage parallel split on this run's mesh (quietbox_2x2, scaled model).
+# Dashboard metadata (F181): per-stage parallel split (quietbox_2x2, scaled model) and one line per TTNN op.
+# op_notes: first rule whose section, op and (optional) shape substring match.
 profile_sections:
   attn_hc:
     what: 'mHC mixes. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip projects its 2560 of 5120 hidden columns of the 4 streams; the 25-wide partial mixes are all-gathered over the 2 columns,
@@ -219,3 +220,223 @@ profile_sections:
       - inter 0–1151
     - - tok 1024–2047
       - inter 1152–2303
+op_notes:
+- section: attention
+  op: linear
+  shape: 1280x8192
+  what: wq_b, the query up-projection (q_lora 1280 -> this chip's 16 heads x 512)
+- section: attention
+  op: linear
+  shape: 2048x5120
+  what: wo_b, the output projection (2 wo_a groups x 1024 -> hidden 5120), K-split partials
+- section: attention
+  op: matmul
+  what: 'wo_a, grouped output projection (per group of 8 heads: 4096 -> o_lora 1024)'
+- section: attention
+  op: experimental.nlp_create_q_heads_split
+  what: split the q projection into per-head tensors
+- section: attention
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the 64-dim rotary tail of each head (applied to q, then undone on the output)
+- section: attention
+  op: experimental.all_to_all_async_generic
+  what: head <-> sequence reshard over the mesh columns (sparse attention needs 32 heads per chip)
+- section: attention
+  op: transformer.sparse_sdpa
+  what: 'sparse attention: each query over its window + top-k selected compressed keys (+ sink)'
+- section: attention
+  op: experimental.nlp_concat_heads
+  what: merge the per-head attention outputs back into rows
+- section: attention
+  op: bringup.fabric_reduce_scatter
+  what: sum wo_b's partial outputs over the columns, each chip keeps its hidden slice
+- section: attention
+  op: bringup.fabric_all_gather
+  what: gather window KV rows from the other mesh row (the chunk's other half)
+- section: attention
+  op: experimental.slice_write
+  what: append this chunk's KV rows to the persistent attention table (P.21)
+- section: attention
+  op: experimental.deepseek_prefill.update_padded_kv_cache
+  what: write the window KV into the served cache (serving contract)
+- section: attention
+  op: embedding
+  what: gather KV rows by index (served-cache order)
+- section: attention
+  op: multiply
+  what: scale q_resid before the head split
+- section: attention
+  op: mesh_partition
+  what: take this chip's part of the index list
+- section: q_a
+  op: linear
+  what: 'fused wq_a | wkv: hidden -> q_lora 1280 + kv 512, K-split over the columns'
+- section: q_a
+  op: bringup.fabric_reduce_scatter
+  what: sum the K-split partials over the columns
+- section: q_a
+  op: bringup.fabric_all_gather
+  what: gather the summed projection rows back to every chip of the row
+- section: q_a
+  op: bringup.rms_norm
+  what: q_norm, read in place from the fused projection (input_window)
+- section: kv
+  op: bringup.rms_norm
+  what: kv_norm, read in place from the fused projection (input_window)
+- section: kv
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the KV's 64-dim rotary tail
+- section: attn_norm
+  op: bringup.rms_norm
+  shape: 1024x128
+  what: 'attention RMSNorm: partial sum of squares, then normalize with the gathered total'
+- section: attn_norm
+  op: bringup.rms_norm
+  what: 'attention RMSNorm: this chip''s partial sum of squares (stats_out)'
+- section: ffn_norm
+  op: bringup.rms_norm
+  shape: 1024x128
+  what: 'FFN RMSNorm: partial sum of squares, then normalize with the gathered total'
+- section: ffn_norm
+  op: bringup.rms_norm
+  what: 'FFN RMSNorm: this chip''s partial sum of squares (stats_out)'
+- section: attn_norm
+  op: bringup.fabric_all_gather
+  what: gather the norm's partial sums over the columns
+- section: ffn_norm
+  op: bringup.fabric_all_gather
+  shape: '5120'
+  what: gather the normalized rows to full hidden 5120 (router and experts read whole rows)
+- section: ffn_norm
+  op: bringup.fabric_all_gather
+  what: gather the norm's partial sums over the columns
+- section: attn_hc
+  op: matmul
+  what: 'mHC projection: 4 streams x hidden -> 24 mix logits (fp32)'
+- section: attn_hc
+  op: bringup.mhc_pre_xing_pack
+  what: 'mHC: pack this chip''s partial mixes'
+- section: attn_hc
+  op: bringup.mhc_pre_xing
+  what: 'mHC: sum the partial mixes, fp32 Sinkhorn, collapse the 4 streams into the layer input'
+- section: ffn_hc
+  op: bringup.mhc_pre_xing
+  what: 'mHC: sum the partial mixes, fp32 Sinkhorn, collapse the 4 streams into the FFN input'
+- section: attn_hc
+  op: bringup.fabric_all_gather
+  what: gather the partial mixes over the columns (exact fp32)
+- section: ffn_hc
+  op: bringup.fabric_all_gather
+  what: gather the partial mixes over the columns (exact fp32)
+- section: attn_residual
+  op: bringup.mhc_post
+  what: 'mHC post: residual update of the 4 streams with the attention output'
+- section: ffn_residual
+  op: bringup.mhc_post
+  what: 'mHC post: residual update of the 4 streams with the MoE output'
+- section: ffn_residual
+  op: from_torch
+  what: per-chunk host input upload
+- section: router
+  op: linear
+  what: 'gate logits: x @ gate^T (bf16 weights, fp32 accumulation)'
+- section: router
+  op: bringup.moe_grouped_topk
+  what: 'fused routing: sqrt(softplus), selection bias, top-6, renormalize, route scale (Marko''s op, fp32 selection)'
+- section: experts
+  op: bringup.flat_routed_expert_with_program
+  what: 'routed experts: dispatch, this chip''s 24 experts (bfp4 SwiGLU), weighted combine'
+- section: experts
+  op: generic_op
+  what: dispatch / combine planning programs (routing tables, offsets)
+- section: experts
+  op: bringup.fabric_all_gather
+  what: gather the token rows of the mesh row for dispatch
+- section: experts
+  op: all_gather
+  what: gather the top-k ids and weights over the row
+- section: experts
+  op: to_layout
+  what: tile -> row-major for dispatch
+- section: experts
+  op: typecast
+  what: expert ids to uint16
+- section: shared_expert
+  op: bringup.flat_routed_expert
+  what: 'shared expert: SwiGLU on this chip''s 1152 of 2304 intermediate columns'
+- section: moe_add
+  op: bringup.fabric_reduce_scatter
+  what: sum routed + shared outputs over the columns, each chip keeps its hidden slice
+- section: moe_add
+  op: add
+  what: add the shared expert's output to the routed experts'
+- section: indexer
+  op: linear
+  shape: 2560x32
+  what: 'indexer weights_proj: per-head score weights'
+- section: indexer
+  op: linear
+  shape: 1280x4096
+  what: 'indexer wq_b: q_lora -> 32 index heads x 128'
+- section: indexer
+  op: bringup.ring_indexer_score_dsa
+  what: 'index scores: queries x every compressed key (ring over the mesh rows), summed over 32 heads'
+- section: indexer
+  op: experimental.topk_large_indices
+  what: top-k compressed keys per query (the sparse attention's selection)
+- section: indexer
+  op: scatter
+  what: 're-indexer bias: boost the candidate pool''s keys'
+- section: indexer
+  op: experimental.nlp_create_q_heads_split
+  what: split the index query into its 32 heads
+- section: indexer
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the index query's rotary tail
+- section: indexer
+  op: mesh_partition
+  what: take this chip's query rows (TP sub-shard)
+- section: indexer
+  op: bringup.fabric_reduce_scatter
+  what: sum the weights_proj partials over the columns
+- section: indexer
+  op: bringup.fabric_all_gather
+  what: gather the selected key ids over the columns
+- section: compressor
+  op: linear
+  shape: 2560x
+  what: 'compressor projection: hidden -> compressed latent (and gate), K-split'
+- section: compressor
+  op: linear
+  shape: x128
+  what: index key projection (wk) from the compressed latent
+- section: compressor
+  op: bringup.rms_norm
+  what: norm of the compressed latent / index key
+- section: compressor
+  op: bringup.fabric_reduce_scatter
+  what: sum the compressor's K-split partials over the columns
+- section: compressor
+  op: experimental.deepseek_prefill.update_padded_kv_cache
+  what: write compressed KV / index keys into the served caches
+- section: compressor
+  op: experimental.slice_write
+  what: append compressed rows to the persistent attention table (P.21)
+- section: compressor
+  op: exp
+  what: pair softmax over the pooled pairs
+- section: compressor
+  op: embedding
+  what: gather rows by index (served-cache order)
+- section: engram_kv
+  op: linear
+  what: 'engram wkv: the looked-up n-gram embeddings (6144) -> 5 x hidden slices'
+- section: engram_add
+  op: bringup.mhc_pre_xing_pack
+  what: 'engram gate: pack the partial dot products'
+- section: engram_add
+  op: bringup.mhc_post
+  what: 'engram: add the gated n-gram value into the streams'
+- section: engram_add
+  op: sigmoid
+  what: engram gate (sqrt-sigmoid of the q.k score)

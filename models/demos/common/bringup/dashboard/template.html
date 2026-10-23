@@ -127,6 +127,7 @@ footer{color:var(--muted);font-size:12px}
 .opchain li+li::before{content:"";position:absolute;left:12px;top:-6px;height:12px;border-left:1.5px solid var(--line)}
 .opchain .oi{font:12px var(--f-mono);color:var(--muted);text-align:center;border:1.5px solid var(--line);border-radius:50%;width:22px;height:22px;line-height:19px;background:var(--surface)}
 .opchain .on{font:500 13px/1.3 var(--f-mono);overflow-wrap:break-word}
+.opchain .od{display:block;font:12.5px/1.35 var(--f-sans);color:var(--ink);margin-top:2px}
 .opchain .os{display:block;font:11.5px/1.35 var(--f-mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .opchain .ob{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
 .opchain .ob i{display:block;height:100%;border-radius:4px}
@@ -691,7 +692,7 @@ function profile(){
       (hasTL ? ` · idle gaps ${fmu(sg)} · host dispatch ${fmu(sh)}` : "") + ` · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
     const fm = x => x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x.toFixed(3);
     $("#pd-ops").innerHTML = O.map((o, i) => { const c = o.calls, cs = Math.abs(c - 1) > 1e-6 ? ` ×${Number.isInteger(c) ? c : c.toFixed(1)}` : "";
-      return `<li><span class="oi">${i + 1}</span><span class="ox"><span class="on">ttnn.${esc(o.op).replace(/([._])/g, "$1<wbr>")}${cs}</span><span class="os">${esc(o.shape || "—")}</span>${memLine(o.mem)}</span>` +
+      return `<li><span class="oi">${i + 1}</span><span class="ox"><span class="on">ttnn.${esc(o.op).replace(/([._])/g, "$1<wbr>")}${cs}</span>${o.what ? `<span class="od">${esc(o.what)}</span>` : ""}<span class="os">${esc(o.shape || "—")}</span>${memLine(o.mem)}</span>` +
         `<span class="ob" title="${fm(o.ms)} ms"><i style="width:${(100 * o.ms / mx).toFixed(1)}%;background:var(--b-${s.bound})"></i></span>` +
         `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span>` +
         (o.gap_ms != null ? `<span class="ot">device idle before it ${fmu(o.gap_ms)} · host dispatch ${fmu(o.host_ms)}</span>` : "") + `</li>`; }).join("");
