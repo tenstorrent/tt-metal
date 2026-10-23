@@ -122,6 +122,10 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
     q2, k2, v2 = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated)
     gq, gk = _gamma_tiles(weights, config.head_dim)
     nq, nk, nv = QkvNormRope.op(q2, k2, v2, gq, gk, cos_pos, sin_pos, eps)
+    # the shards the two paths consumed are dead: free their L1 like the model does (at 32 users on the head_dim-512
+    # layers the decode SDPA program's static buffers need the room)
+    for t in (q, k, v, q2, k2, v2):
+        t.deallocate(True)
 
     # stage 1: the three head tensors
     pq = _report(
@@ -201,6 +205,8 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
             block_size=eff_bs,
             num_kv_heads=nkv_local,
         )
+    for t in (kc_sh, vc_sh, nk, nv):  # consumed by the cache update
+        t.deallocate(True)
     kcs = [_dev0(c[0], mesh_device) for c in caches]
     vcs = [_dev0(c[1], mesh_device) for c in caches]
     rows_ref, rows_got = [], []
