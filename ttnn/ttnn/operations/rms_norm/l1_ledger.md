@@ -56,7 +56,7 @@ axis of the R2 combine, extent `w_group_size` (`gw`).
 | `d_x` = `x_depth_blocks` | x buffer depth | `1` (Phase 0) | constant in `BlockingPlan`; lamp L1 |
 | `o` | output depth by layout | 2 (TILE) / 1 (RM) | layout |
 | `T_in`, `T_out`, `T_g`, `F32`, `e_g`, `dram_align` | tile / element / alignment bytes | `T ∈ {2048, 4096}`, `e_g ∈ {2, 4}`, `dram_align = ttnn.get_dram_alignment()` | dtype, HAL query |
-| `l1_budget_bytes` | CB-allocatable worker L1 | `device.l1_size_per_core() − GetAllocatorBaseAddress(device, L1)` | runtime query |
+| `l1_budget_bytes` | CB-allocatable worker L1 | free run from the L1 allocator base (`GetAllocatorBaseAddress`, 111 744 B on BH p150) up to the lowest allocated L1 buffer, i.e. `GetMemoryView(device, L1)`: `total_bytes_per_bank` (1 461 120 B on BH) clipped by the lowest allocated block | runtime query (`_l1_budget_bytes`). Implementation note: `ttnn.get_max_worker_l1_unreserved_size()` (1 531 776 B) over-states it by ~70 KB on BH and produced a CB-region overflow on the fp32 `4096×8192` R2 case |
 
 ## Footprint (per core, bytes) — the closed form `_select_blocking` evaluates
 
@@ -82,6 +82,8 @@ them in that order.
 Worked check (bf16 x/out/gamma, TILE, RM gamma, R1, `b = 1`): `n = 128, c = 128` →
 `256 Ki + 8 Ki + 256 Ki + 4 Ki + 8 Ki + 4 Ki + 512 Ki + 512 Ki ≈ 1.53 MiB` > L1 ⇒ `k = 2, c = 64` → ≈ 1.03 MiB fits
 (this is regime-pinned test `(1,1,8192,4096)`).
+
+Implemented check (BH p150, 120 cores, budget 1 461 120 B): fp32 `(1,1,4096,8192)` + fp32 RM gamma selects `gw = 2, n = 128, k = 5, c = 26, L = 1, b = 1` (footprint 1 433 600 B); the `k = 4, c = 32` candidate (1 490 944 B) does not fit.
 
 ## Data-movement budget (chosen split)
 

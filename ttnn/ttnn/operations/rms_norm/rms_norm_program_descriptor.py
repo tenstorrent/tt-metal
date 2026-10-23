@@ -212,17 +212,18 @@ def _geometry(input_tensor, output_tensor, gamma) -> Geometry:
     )
 
 
-def _l1_budget_bytes(tensors):
-    """Worker L1 available to CBs: the unreserved region minus any L1-resident interleaved tensor's per-core share."""
-    budget = ttnn.get_max_worker_l1_unreserved_size()
-    for t in tensors:
-        if t is None:
-            continue
-        mc = t.memory_config()
-        if mc.buffer_type == ttnn.BufferType.L1:
-            grid = t.device().compute_with_storage_grid_size()
-            banks = grid.x * grid.y
-            budget -= -(-t.buffer_num_pages() // banks) * t.buffer_aligned_page_size()
+def _l1_budget_bytes(device):
+    """Worker-L1 bytes available to CBs: from the allocator base up to the lowest allocated L1 buffer.
+
+    CBs grow up from the L1 allocator base (``GetAllocatorBaseAddress``) while L1 buffers (including any
+    L1-interleaved input / output / gamma) are allocated top-down, so the budget is the free run at the bottom of
+    the bank as reported by the allocator's memory view. No safety fraction.
+    """
+    view = ttnn._ttnn.device.GetMemoryView(device, ttnn.BufferType.L1)
+    budget = view.total_bytes_per_bank
+    for block in view.block_table:
+        if block["allocated"] == "yes":
+            budget = min(budget, int(block["address"]))
     return budget
 
 
@@ -276,7 +277,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
     geo = _geometry(input_tensor, output_tensor, gamma)
     grid = device.compute_with_storage_grid_size()
     num_cores_available = grid.x * grid.y
-    plan = _select_blocking(geo, num_cores_available, _l1_budget_bytes([input_tensor, output_tensor, gamma]))
+    plan = _select_blocking(geo, num_cores_available, _l1_budget_bytes(device))
 
     gw, gr = plan.w_group_size, plan.num_row_groups
     used = plan.used_cores
