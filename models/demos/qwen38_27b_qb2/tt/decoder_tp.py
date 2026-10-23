@@ -74,6 +74,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             output_block=6,
             down_cores=8,
             down_block=17,
+            dram_multicore=True,
             # Materialize the reader-alignment tail in the logical projection
             # output.  Older release images require every DRAM reader to own
             # an output shard; the wrapper crops this zero-padded tail back to
@@ -248,6 +249,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             ]
             self.a_neg = upload(-state_dict["linear_attn.A_log"].float().exp().reshape(1, 1, -1), ttnn.float32, dim=2)
             self.dt_bias = upload(state_dict["linear_attn.dt_bias"].float().reshape(1, 1, -1), ttnn.float32, dim=2)
+            self.decode_a_neg, self.decode_unit = self._decode_time_masks(upload)
             self.weights["linear_attn.norm.weight"] = upload(state_dict["linear_attn.norm.weight"].reshape(-1))
             masks = torch.zeros(1, 1, 32, 96)
             masks[:, :, :16, :16] = 1

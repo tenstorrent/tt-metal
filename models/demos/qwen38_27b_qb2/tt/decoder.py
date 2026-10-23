@@ -78,6 +78,12 @@ DEFAULT_POLICY = {
 }
 
 
+def dram_multicore_workers(bank_tiles):
+    """Workers per DRAM bank for the multi-core DRAM-sharded matmul pipeline
+    on Blackhole: about one per 8 output tiles of a bank, between 2 and 4."""
+    return min(4, max(2, (bank_tiles + 7) // 8))
+
+
 @dataclass
 class DecoderState:
     key: object = None
@@ -156,6 +162,7 @@ class Qwen38Decoder(LightweightModule):
             self.conv_taps = [upload(conv[:, 0, i].reshape(1, 1, -1)) for i in range(4)]
             self.a_neg = upload(-state_dict["linear_attn.A_log"].float().exp().reshape(1, 1, -1), ttnn.float32)
             self.dt_bias = upload(state_dict["linear_attn.dt_bias"].float().reshape(1, 1, -1), ttnn.float32)
+            self.decode_a_neg, self.decode_unit = self._decode_time_masks(upload)
             # Constants supplied explicitly: the native op's default builds them on host.
             c = 32
             masks = torch.zeros(1, 1, 32, 96)
@@ -248,6 +255,14 @@ class Qwen38Decoder(LightweightModule):
                 )
                 self.dram_weights[name] = ttnn.to_memory_config(tensor, memory)
         return self
+
+    def _decode_time_masks(self, upload):
+        """Setup only: a_neg and ones in time row 0 of one tile, zero below."""
+        import torch
+
+        unit = torch.zeros(1, 32, self.a_neg.shape[-1])
+        unit[:, 0, :] = 1
+        return ttnn.pad(self.a_neg, [(0, 0), (0, 31), (0, 0)], 0.0), upload(unit)
 
     def allocate_state(self, *, batch_size, num_pages=None):
         """Setup only. Page ownership and page-table construction belong to caller."""
@@ -352,19 +367,19 @@ class Qwen38Decoder(LightweightModule):
             memory = self._width_memory(cores, ((batch + 31) // 32) * 32, shard_tiles * 32)
             x = ttnn.reshape(x, [1, 1, batch, k])
             x = ttnn.to_memory_config(x, memory)
+            bank_tiles = self.dram_weights[name + ".weight"].memory_config().shard_spec.shape[1] // 32
+            # A single row runs on the multi-core DRAM-sharded pipeline, which
+            # streams the weight in 2-tile K blocks and spreads each bank's columns.
+            multicore = self.policy.get("dram_multicore", False) and batch == 1 and not activation
             program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=block,
+                in0_block_w=2 if multicore else block,
                 per_core_M=(batch + 31) // 32,
-                per_core_N=(
-                    self.dram_weights[name + ".weight"].memory_config().shard_spec.shape[1]
-                    // 32
-                    * self.device.dram_grid_size().x
-                    + cores
-                    - 1
-                )
-                // cores,
+                per_core_N=(bank_tiles * self.device.dram_grid_size().x + cores - 1) // cores,
                 fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation else None,
-                num_workers_per_dram_bank=self.policy.get(role + "_readers", 1),
+                num_workers_per_dram_bank=(
+                    dram_multicore_workers(bank_tiles) if multicore else self.policy.get(role + "_readers", 1)
+                ),
+                use_multicore_pipeline=multicore,
             )
             output = ttnn.linear(
                 x,
@@ -902,17 +917,21 @@ class Qwen38Decoder(LightweightModule):
                 row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d), self.conv_actual_start
             )
         else:
+            # A single short request has few 32-row tiles; narrower channel
+            # chunks spread its convolution over more cores.
+            channel_chunk = 64 if b == 1 and padded_t <= 128 else 256
             chunks = []
             for user in range(b):
                 chunks.append(
                     ttnn.experimental.kda.qkv_causal_conv1d_silu(
-                        row_qkv[user : user + 1],
+                        # The op reads TILE input in place and tilizes ROW_MAJOR input.
+                        padded_qkv if b == 1 else row_qkv[user : user + 1],
                         state.conv[user : user + 1],
                         *self.conv_taps,
                         h * d,
                         h * d,
                         hv * d,
-                        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+                        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk),
                         actual_start=self.conv_actual_start,
                         predecessor_carry=state.conv[user : user + 1],
                     )
@@ -923,12 +942,17 @@ class Qwen38Decoder(LightweightModule):
         )
         ttnn.copy(history_tail, state.conv)
 
+        single = t == 1 and b == 1
         g = ttnn.mul(
-            self.a_neg,
+            self.decode_a_neg if single else self.a_neg,
             ttnn.add(a, self.dt_bias),
             input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
         )
-        if padded_t != t:
+        if single:
+            # Row-0 masks give g above and beta here their zero time padding,
+            # in place of two single-core pads.
+            beta = ttnn.mul(beta, self.decode_unit)
+        elif padded_t != t:
 
             def pad_time(a):
                 return ttnn.pad(a, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)

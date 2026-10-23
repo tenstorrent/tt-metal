@@ -15,7 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 
 import ttnn
 from models.common.tt_ccl import TT_CCL
-from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
+from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState, dram_multicore_workers
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
@@ -261,14 +261,18 @@ class Qwen38Model:
         )
 
     def _dram_logits(self, hidden):
+        # A single row streams each chunk through the multi-core pipeline.
+        multicore = hidden.shape[-2] == 1
         parts = []
         for weight in self.head_decode_weights:
+            bank_tiles = weight.memory_config().shard_spec.shape[1] // 32
             config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=5,
+                in0_block_w=2 if multicore else 5,
                 per_core_M=1,
-                per_core_N=weight.memory_config().shard_spec.shape[1] // 32,
-                num_workers_per_dram_bank=2,
+                per_core_N=bank_tiles,
+                num_workers_per_dram_bank=dram_multicore_workers(bank_tiles) if multicore else 2,
                 fused_activation=None,
+                use_multicore_pipeline=multicore,
             )
             out = ttnn.linear(
                 hidden,
