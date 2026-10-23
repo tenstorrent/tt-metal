@@ -6,7 +6,11 @@
 
 #include <cstdint>
 
+// Host tensor tests include device side headers and provide their own ASSERT macro overload.
+// See: #62337
+#ifndef ASSERT
 #include "api/debug/assert.h"
+#endif
 
 // Device HW DataFormat from tensix_types.h. Declared here so get_dataformat(token) can return it
 // without including the arch-specific header. LLKMetadata::kNoFormat is DataFormat::Invalid (0xFF).
