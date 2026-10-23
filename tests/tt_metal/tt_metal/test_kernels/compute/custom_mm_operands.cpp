@@ -62,13 +62,12 @@ void kernel_main() {
                 activation.pop_front(1);
                 compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
                     tt::CBIndex::c_0, b, tt::CBIndex::c_16);
-                compressed_custom_mm_block<false, CustomMmDestLayout::Dense>(
-                    tt::CBIndex::c_0, b, metadata_address, 0, 2);
+                compressed_custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, b, metadata_address, 0, 2);
             } else {
                 const Activation a(
                     a_base + experimental::tile_stride_words(DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}));
                 compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(a, b, tt::CBIndex::c_16);
-                compressed_custom_mm_block<false, CustomMmDestLayout::Dense>(a, b, metadata_address, 0, 2);
+                compressed_custom_mm_block<CustomMmDestLayout::Dense>(a, b, metadata_address, 0, 2);
             }
         } else {
             if constexpr (mixed) {

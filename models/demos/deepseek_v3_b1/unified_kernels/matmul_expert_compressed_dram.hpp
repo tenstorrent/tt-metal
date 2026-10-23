@@ -642,8 +642,7 @@ struct MatmulExpertCompressedDRAM {
             }
             reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            // The compressed API ignored split_acc and finalize before it took a layout, so this path has always run
-            // without split accumulation.
+            // Compressed custom_mm has no split accumulation; Default is what this path has always run.
             compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Default>(
                 CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
@@ -763,7 +762,7 @@ struct MatmulExpertCompressedDRAM {
                             }));
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -771,7 +770,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -897,7 +896,7 @@ struct MatmulExpertCompressedDRAM {
                         }));
                         uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
                         if (sb_k < num_subblocks_k_local - 1) {
-                            compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                            compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -905,7 +904,7 @@ struct MatmulExpertCompressedDRAM {
                                 CTArgs::subblock_k,
                                 CTArgs::subblock_n);
                         } else {
-                            compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                            compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                 CTArgs::cb_in0,
                                 CTArgs::cb_in1,
                                 meta_addr,
@@ -1058,7 +1057,7 @@ struct MatmulExpertCompressedDRAM {
                             uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,
@@ -1066,7 +1065,7 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::subblock_k,
                                     CTArgs::subblock_n);
                             } else {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Default>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Default>(
                                     CTArgs::cb_in0,
                                     CTArgs::cb_in1,
                                     meta_addr,

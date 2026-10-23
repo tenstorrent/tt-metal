@@ -90,15 +90,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
     // The Dense layout brings the DEST tile-to-tile stride down from 64 rows to 32, matching the partial-tile packer
     // below and the silicon-validated matmul_custom_compressed_test.cpp.
-    _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense>(params.in0_face_r_dim);
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense>();
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    // finalize == false because the Dense layout has no split partials to merge. The math primitive reads the same
-    // metadata buffer as the unpacker.
-    _llk_math_compressed_custom_mm_<false /* finalize */, CustomMmDestLayout::Dense>(
+    // The math primitive reads the same metadata buffer as the unpacker.
+    _llk_math_compressed_custom_mm_<CustomMmDestLayout::Dense>(
         params.buffer_C[0], // base_address_meta -- raw byte address, see the unpack-side note above
-        params.in0_face_r_dim,
         0 /* dst_index */,
         params.KT_DIM,
         params.CT_DIM);

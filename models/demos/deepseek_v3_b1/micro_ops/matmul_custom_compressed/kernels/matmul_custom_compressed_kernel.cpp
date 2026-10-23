@@ -124,7 +124,7 @@ void kernel_main() {
     compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed, dest_layout>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
-    compressed_custom_mm_block<false /*finalize*/, dest_layout>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+    compressed_custom_mm_block<dest_layout>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
 #endif
 
     tile_regs_commit();

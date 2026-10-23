@@ -185,8 +185,7 @@ struct MatmulExpertCompressedSRAM {
                 cb_wait_front(cb_in0, num_tiles_k);
             }
             if constexpr (CTArgs::use_compression) {
-                // The compressed API ignored split_acc and finalize before it took a layout, so this path has always
-                // run Dense.
+                // Compressed custom_mm has no split accumulation; Dense is what this path has always run.
                 compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(cb_in0, cb_in1, cb_out);
             } else {
                 custom_mm_block_init_short<false, CustomMmDestLayout::DenseSplitAcc>(cb_in0, cb_in1, cb_out, out_w);
@@ -244,7 +243,7 @@ struct MatmulExpertCompressedSRAM {
 
                         if (++sram_idx < num_sram_experts) {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Dense>(
                                     cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<false, false, CustomMmDestLayout::DenseSplitAcc>(
@@ -252,7 +251,7 @@ struct MatmulExpertCompressedSRAM {
                             }
                         } else {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                                compressed_custom_mm_block<CustomMmDestLayout::Dense>(
                                     cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<true, false, CustomMmDestLayout::DenseSplitAcc>(
@@ -301,7 +300,7 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_acquire();
 
                     if constexpr (CTArgs::use_compression) {
-                        compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                        compressed_custom_mm_block<CustomMmDestLayout::Dense>(
                             cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                     } else {
                         // DenseSplitAcc: this single call accumulates and finalizes its split partials.

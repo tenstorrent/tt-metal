@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout>(params.in0_face_r_dim);
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout>();
 
     LLK_ASSERT(
         (custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "compressed_custom_mm: CT_DIM output tiles overrun the DEST sync region");
@@ -120,8 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // bank when call c + 1 changes format. Without the delay math keeps up and neither boundary is contended.
             ckernel::wait(2000);
         }
-        _llk_math_compressed_custom_mm_<false /* finalize */, dest_layout>(
-            params.buffer_C[0] + call * meta_bytes_per_call, params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        _llk_math_compressed_custom_mm_<dest_layout>(params.buffer_C[0] + call * meta_bytes_per_call, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

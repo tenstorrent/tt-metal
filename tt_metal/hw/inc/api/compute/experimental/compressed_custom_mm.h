@@ -128,7 +128,6 @@ ALWI void compressed_custom_mm_block_init_short(
  *
  * | Argument          | Description                                                              | Type               | Valid Range                                             | Required                |
  * |-------------------|--------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
- * | finalize          | Must be false: no supported layout has split partials to merge           | bool               | false                                                   | False (default false)   |
  * | layout            | Must match the init; dst_index counts its custom_mm_tile_rows            | CustomMmDestLayout | Default, Dense, Compact                                 | False (default Default) |
  * | in0_cb_id         | The identifier of the first input circular buffer (CB)                   | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id         | The identifier of the second input circular buffer (CB)                  | uint32_t           | 0 to 31                                                 | True                    |
@@ -138,7 +137,7 @@ ALWI void compressed_custom_mm_block_init_short(
  * | ct_dim            | The width of the output matrix in tiles                                  | uint32_t           | 1 to 64                                                 | False (default 1)       |
  */
 // clang-format on
-template <bool finalize = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 ALWI void compressed_custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -147,8 +146,7 @@ ALWI void compressed_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_compressed_custom_mm(in0_cb_id, in1_cb_id, base_address_meta, kt_dim, ct_dim)));
-    MATH((llk_math_compressed_custom_mm<finalize, layout>(
-        in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_compressed_custom_mm<layout>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -207,7 +205,6 @@ ALWI void compressed_custom_mm_block_unpack(
  *
  * | Argument          | Description                                                              | Type               | Valid Range                                             | Required                |
  * |-------------------|--------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
- * | finalize          | Must be false: no supported layout has split partials to merge           | bool               | false                                                   | False (default false)   |
  * | layout            | Must match the init; dst_index counts its custom_mm_tile_rows            | CustomMmDestLayout | Default, Dense, Compact                                 | False (default Default) |
  * | in0_cb_id         | The identifier of the first input circular buffer (CB)                   | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id         | The identifier of the second input circular buffer (CB)                  | uint32_t           | 0 to 31                                                 | True                    |
@@ -217,7 +214,7 @@ ALWI void compressed_custom_mm_block_unpack(
  * | ct_dim            | The width of the output matrix in tiles                                  | uint32_t           | 1 to 64                                                 | False (default 1)       |
  */
 // clang-format on
-template <bool finalize = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 ALWI void compressed_custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -225,8 +222,7 @@ ALWI void compressed_custom_mm_block_math(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_compressed_custom_mm<finalize, layout>(
-        in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_compressed_custom_mm<layout>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

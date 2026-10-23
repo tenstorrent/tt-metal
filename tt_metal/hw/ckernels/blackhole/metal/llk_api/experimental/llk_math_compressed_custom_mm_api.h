@@ -25,19 +25,14 @@
 template <bool transpose = false, ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
 inline void llk_math_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
     SAN_HOOK(unsupported());
-    // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
-    const std::uint32_t operandB_id = get_operand_id(operand0);
-    const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
-
-    _llk_math_compressed_custom_mm_init_<transpose, layout>(operandB_face_r_dim);
+    // The math thread needs nothing from the operands: unlike plain custom_mm, it has no face-row-dependent setup.
+    _llk_math_compressed_custom_mm_init_<transpose, layout>();
 }
 
-// Shared by the CB-id execute below and the LLKOperand ones (api/compute/experimental/2_0/compressed_custom_mm.h),
-// which differ only in where operandB_face_r_dim comes from.
-template <bool finalize = false, ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
+// Shared by the CB-id execute below and the LLKOperand ones (api/compute/experimental/2_0/compressed_custom_mm.h).
+template <ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
 inline void llk_math_compressed_custom_mm_impl(
     const std::uint32_t base_address_meta,
-    const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
@@ -45,11 +40,10 @@ inline void llk_math_compressed_custom_mm_impl(
         (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, ct_dim)),
         "compressed_custom_mm: dst_index + ct_dim output tiles overrun the DEST sync region");
 
-    _llk_math_compressed_custom_mm_<finalize, layout>(
-        base_address_meta, operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_compressed_custom_mm_<layout>(base_address_meta, dst_index, kt_dim, ct_dim);
 }
 
-template <bool finalize = false, ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
+template <ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default>
 inline void llk_math_compressed_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -58,10 +52,5 @@ inline void llk_math_compressed_custom_mm(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
-    // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
-    const std::uint32_t operandB_id = get_operand_id(operand0);
-    const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
-
-    llk_math_compressed_custom_mm_impl<finalize, layout>(
-        base_address_meta, operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    llk_math_compressed_custom_mm_impl<layout>(base_address_meta, dst_index, kt_dim, ct_dim);
 }

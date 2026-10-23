@@ -45,7 +45,7 @@ ALWI void compressed_custom_mm_block_init_short(
         S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
         "compressed_custom_mm: in1 tile shape must be [32, 32]");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(S0.face_r_dim)));
-    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout>(S0.face_r_dim)));
+    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout>()));
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
@@ -65,15 +65,11 @@ ALWI void compressed_custom_mm_block_init_short(
         const auto in0_id = get_operand_id(in0_cb_id);
         _llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(get_operand_face_r_dim(in0_id));
     }));
-    MATH(({
-        const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_compressed_custom_mm_init_<transpose, layout>(get_operand_face_r_dim(in0_id));
-    }));
+    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout>()));
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 template <
-    bool finalize = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
     DataFormat F0,
     TensorShape S0,
@@ -90,11 +86,10 @@ ALWI void compressed_custom_mm_block(
     static_assert(experimental::is_legal_tile_shape(S0), "Illegal activation tile shape");
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_(in1.l1_address, in0.l1_address, base_address_meta, kt_dim, ct_dim)));
-    MATH((llk_math_compressed_custom_mm_impl<finalize, layout>(
-        base_address_meta, S0.face_r_dim, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_compressed_custom_mm_impl<layout>(base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
-template <bool finalize = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, DataFormat F1, TensorShape S1>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, DataFormat F1, TensorShape S1>
 ALWI void compressed_custom_mm_block(
     const std::uint32_t in0_cb_id,
     experimental::LLKOperand<F1, S1> in1,
@@ -108,11 +103,7 @@ ALWI void compressed_custom_mm_block(
         _llk_unpack_AB_compressed_custom_mm_(
             in1.l1_address, get_local_cb_interface(in0_id).fifo_rd_ptr - 1, base_address_meta, kt_dim, ct_dim);
     }));
-    MATH(({
-        const auto in0_id = get_operand_id(in0_cb_id);
-        llk_math_compressed_custom_mm_impl<finalize, layout>(
-            base_address_meta, get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
-    }));
+    MATH((llk_math_compressed_custom_mm_impl<layout>(base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 }  // namespace ckernel
