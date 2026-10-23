@@ -132,6 +132,7 @@ void kernel_main() {
     cb_push_back(cb_c, Kt * Nt);
 
     CircularBuffer in0(cb_interm), in1(cb_c), mm_out(cb_mm_out);
+    DataflowBuffer a_tiled(cb_a_tiled), b_tiled(cb_b_tiled), interm(cb_interm);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         // A and B are tilize-consumed (popped), so re-mark the resident shards each iteration.
@@ -151,7 +152,7 @@ void kernel_main() {
             add<input(cb_a_tiled, WaitPolicy::PerTile, PopPolicy::PerTile, add_rc),
                 input(cb_b_tiled, WaitPolicy::PerTile, PopPolicy::PerTile, add_rc),
                 output(cb_interm, ReservePolicy::PerTile, PushPolicy::PerTile, add_rc)>(
-                IterationShape::tiles(block_ab_tiles));
+                IterationShape::tiles(block_ab_tiles), a_tiled, b_tiled, interm);
 
             // 4. mm_out = interm @ C. num_k_blocks == 1 (K fits in one block); retain C on the
             //    last (only) K-block so the next chunk's matmul reuses the same weights.
