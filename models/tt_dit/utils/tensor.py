@@ -13,6 +13,8 @@ from loguru import logger
 
 import ttnn
 
+from .torch_threads import cap_torch_threads_to_half_the_cpus
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
@@ -546,6 +548,7 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+@cap_torch_threads_to_half_the_cpus()
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
