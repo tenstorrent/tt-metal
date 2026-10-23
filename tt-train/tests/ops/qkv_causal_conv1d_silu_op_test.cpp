@@ -228,6 +228,8 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{32, 32, 32, 32}, 32, 1},
         MetalCase{{64, 96, 64, 32}, 32, 1},
         MetalCase{{64, 96, 64, 32}, 64, 2},
+        // Blocks that are not a multiple of the DST batch: a buffer overrun here is silent, run with
+        // TT_METAL_LLK_ASSERTS=1 to have the push checked against the buffer end.
         MetalCase{{96, 96, 64, 32}, 192, 2},  // 6 tiles per block: the sigmoid batches are 4 + 2
         MetalCase{{96, 96, 64, 32}, 96, 2},   // 3
         MetalCase{{64, 96, 32, 32}, 160, 2},  // 5
