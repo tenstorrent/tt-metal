@@ -7,13 +7,15 @@ from typing import Optional
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
-from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
 # so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
 # round-robin across BH_NUM_DRAM_BANKS DRAM banks. The address-table builder must match both values.
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
 

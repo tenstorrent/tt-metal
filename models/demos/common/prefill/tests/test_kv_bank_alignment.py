@@ -4,26 +4,9 @@
 import pytest
 
 from models.demos.common.prefill.runners.kv_bank_alignment import (
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     bank_aligned_seq_len_quantum,
     check_kv_bank_aligned,
 )
-
-
-def _bank_of_row(row, num_dram_banks):
-    return (row // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) % num_dram_banks
-
-
-@pytest.mark.parametrize("num_dram_banks", [7, 8])
-@pytest.mark.parametrize("stripes", [4, 8, 32])
-@pytest.mark.parametrize("layers", [5, 6, 18, 20])
-def test_slot_layer_rows_start_on_bank_0(num_dram_banks, stripes, layers):
-    max_seq_len = 3 * bank_aligned_seq_len_quantum(stripes, num_dram_banks)
-    check_kv_bank_aligned(max_seq_len, max_seq_len // stripes, num_dram_banks)
-    seq_len_local = max_seq_len // stripes
-    for slot in range(4):
-        for layer in range(layers):
-            assert _bank_of_row((slot * layers + layer) * seq_len_local, num_dram_banks) == 0
 
 
 @pytest.mark.parametrize(

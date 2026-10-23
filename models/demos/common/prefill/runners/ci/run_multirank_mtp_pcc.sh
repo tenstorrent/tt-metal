@@ -39,6 +39,8 @@ case "${CONFIG}" in
   *) echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2; exit 2 ;;
 esac
 
+# The manifest count is the sc4 ceiling at the manifest's 1,064,960 context. The ranks take it through
+# setdefault but allocate it at MAX_SEQ_LEN, so the leg runs the full slot pool without gating capacity.
 # sc1 runs all 78 layers on one rank, so it overrides down to one user. The export has to be explicit:
 # the rank shell receives a fixed export list, so a value exported into this script does not reach it.
 RUNNER_NUM_USERS=""
