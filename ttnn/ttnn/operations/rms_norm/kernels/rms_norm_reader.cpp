@@ -14,11 +14,12 @@
 // last block has fewer valid rows or the chunk fewer valid tiles; only the NoC transfers are narrowed.
 //
 // Sharded placements (Refinement 2):
-//   TILE: cb_x_tiles IS the resident input shard (zero-copy, ttnn.cb_descriptor_from_sharded_tensor); the
-//         reader issues no NoC read at all — it publishes the whole shard with one reserve/push.
-//   RM:   the shard's sticks are local L1; load_block restrides them (local NoC copies, shard stick stride ->
-//         chunk_w_tiles*32-element tilize stride, plus the M9 tail zero-fill) into cb_x_rm_sticks. Only the
-//         source address changes vs. interleaved: no TensorAccessor read of the shard.
+//   zero-copy (TILE always; RM when the shard is whole tile-rows of whole tiles): cb_x_tiles / cb_x_rm_sticks
+//         IS the resident input shard (ttnn.cb_descriptor_from_sharded_tensor); the reader issues no NoC read
+//         at all — it publishes the whole shard with one reserve/push.
+//   RM restride (any other RM shard): the shard's sticks are local L1; load_block restrides them (local NoC
+//         copies, shard stick stride -> chunk_w_tiles*32-element tilize stride, plus the M9 tail zero-fill)
+//         into cb_x_rm_sticks. Only the source address changes vs. interleaved: no TensorAccessor read.
 //
 // Helper deviation (design rejection R-a): the RM stick read is a raw loop, not
 // dataflow_kernel_lib::read_sticks_for_tilize, because the ragged last chunk / last W slice must keep the
@@ -42,7 +43,9 @@ void kernel_main() {
     constexpr uint32_t chunks_per_row = get_compile_time_arg_val(6);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(8);
-    constexpr bool x_sharded = get_compile_time_arg_val(9) != 0;
+    // x source: 0 = interleaved (TensorAccessor), 1 = local RM shard restride, 2 = zero-copy (shard backs the CB)
+    constexpr uint32_t x_mode = get_compile_time_arg_val(9);
+    constexpr bool x_sharded = x_mode != 0;
     constexpr uint32_t shard_stick_bytes = get_compile_time_arg_val(10);  // RM shard: local stick stride
     constexpr auto x_args = TensorAccessorArgs<11>();
 
@@ -75,11 +78,13 @@ void kernel_main() {
     const auto x_accessor = TensorAccessor(x_args, x_addr);
     const uint32_t num_blocks = (core_rows_tiles + block_rows - 1) / block_rows;
 
-    if constexpr (x_sharded && !is_rm) {
-        // load_block (TILE shard): the shard is already resident in cb_x_tiles; publish all of it at once.
-        const uint32_t shard_tiles = num_blocks * block_rows * chunks_per_row * chunk_w_tiles;
-        cb_reserve_back(cb_x_tiles, shard_tiles);
-        cb_push_back(cb_x_tiles, shard_tiles);
+    if constexpr (x_mode == 2) {
+        // load_block (zero-copy shard): the shard is already resident in the CB compute reads x from (TILE:
+        // cb_x_tiles; RM: cb_x_rm_sticks, the tilize source); publish all of it at once.
+        constexpr uint32_t cb_x_source = is_rm ? cb_x_rm_sticks : cb_x_tiles;
+        const uint32_t shard_pages = num_blocks * block_rows * chunks_per_row * chunk_w_tiles;
+        cb_reserve_back(cb_x_source, shard_pages);
+        cb_push_back(cb_x_source, shard_pages);
         return;
     }
 

@@ -259,3 +259,52 @@ def test_height_wide_streamed_gamma(device, shape, layout, gamma_layout):
     # A HEIGHT shard pins the whole W row on one core; the resident gamma slice no longer fits next to the shards
     # (TILE) / the resident x block (RM), so gamma streams per chunk.
     _run(device, shape, ML.HEIGHT_SHARDED, layout=layout, gamma_layout=gamma_layout, fp32_acc=False)
+
+
+# --------------------------------------------------------------------------- RM zero-copy (whole-tile shards)
+
+RM_ZERO_COPY = [
+    ((1, 1, 256, 512), ML.HEIGHT_SHARDED, ([32, 512], (8, 1))),
+    ((1, 1, 100, 512), ML.HEIGHT_SHARDED, ([64, 512], (2, 1))),  # ragged last shard (36 of 64 sticks valid)
+    ((1, 1, 64, 1024), ML.WIDTH_SHARDED, ([64, 128], (8, 1))),
+    ((1, 1, 32, 5120), ML.WIDTH_SHARDED, ([32, 160], (8, 4))),  # shard 160 = 5 tiles; W-group spans 4 grid rows
+    ((1, 1, 256, 512), ML.BLOCK_SHARDED, ([64, 128], (4, 4))),
+    ((1, 1, 640, 6144), ML.BLOCK_SHARDED, ([64, 704], (9, 10))),  # ragged last W shard
+]
+
+
+@pytest.mark.parametrize("with_gamma", [True, False], ids=["rmg", "nog"])
+@pytest.mark.parametrize(
+    "shape,memory_layout,shard",
+    RM_ZERO_COPY,
+    ids=lambda v: "x".join(map(str, v)) if isinstance(v, tuple) and isinstance(v[0], int) else None,
+)
+def test_rm_zero_copy(device, shape, memory_layout, shard, with_gamma):
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    _run(
+        device,
+        shape,
+        memory_layout,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        gamma_layout=ttnn.ROW_MAJOR_LAYOUT,
+        with_gamma=with_gamma,
+        fp32_acc=False,
+        shard=shard,
+    )
+    # the selector must have taken the zero-copy stick CBs for these whole-tile shards
+    mc = shard_config(
+        shard[0], shard[1], memory_layout, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    tx = ttnn.from_torch(
+        torch.zeros(shape).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mc,
+    )
+    geo = pd._geometry(tx, tx, None, False)
+    sp = pd._shard_placement(tx, geo)
+    assert pd._rm_shard_zero_copy_ok(geo, sp)
+    geo2, _ = pd._select_sharded_blocking(geo, sp, pd._l1_budget_bytes(device))
+    assert geo2.zero_copy

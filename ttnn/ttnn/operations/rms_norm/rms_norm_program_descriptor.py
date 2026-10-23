@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import ttnn
@@ -82,11 +82,13 @@ class Geometry:
     # under fp32_dest_acc_en=True, Float16_b pages under False (a 16-bit DEST value has no extra bits to keep).
     interm_dtype: object
     interm_tile_bytes: int
-    # Sharded placement (Refinement 2). `sharded`: x / out live in L1 shards (same shard spec). TILE shards are
-    # consumed zero-copy: cb_x_tiles / cb_out_tiles are backed on the input / output shard (`zero_copy_tiles`).
-    # RM shards are restrided by local L1 copies into the tilize / untilize staging CBs.
+    # Sharded placement (Refinement 2). `sharded`: x / out live in L1 shards (same shard spec).
+    # `zero_copy`: the shards back the CBs the kernels read x from / write out to — TILE: cb_x_tiles /
+    # cb_out_tiles; RM: cb_x_rm_sticks (tilize source) / cb_out_rm_sticks (untilize destination), possible when
+    # the shard's sticks are whole tile-rows of whole tiles (_rm_shard_zero_copy_ok). Otherwise (RM only) the
+    # shard's sticks are restrided by local L1 copies into / out of those staging CBs.
     sharded: bool = False
-    zero_copy_tiles: bool = False
+    zero_copy: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,12 +140,14 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth, gamma_streamed=False):
     s = k * c
     out_depth = 1 if geo.is_rm else 2  # RM: normalize -> untilize are sequential on compute (no overlap to buy)
     stream_depth = 2  # reader / writer run one chunk ahead of compute
-    x_backing = _BACK_IN if geo.zero_copy_tiles else None
-    out_backing = _BACK_OUT if geo.zero_copy_tiles else None
+    tiles_backed = geo.zero_copy and not geo.is_rm
+    sticks_backed = geo.zero_copy and geo.is_rm
     specs = []
     if geo.is_rm:
-        specs.append((CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN, None))
-    specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN, x_backing))
+        specs.append(
+            (CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN, _BACK_IN if sticks_backed else None)
+        )
+    specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN, _BACK_IN if tiles_backed else None))
     gamma_window_tiles = c if gamma_streamed else n  # tiles landed per gamma load
     if geo.has_gamma and geo.gamma_is_rm:
         # + one alignment unit: a sharded RM slice may start mid-alignment-unit of the gamma stick (read aligned down)
@@ -162,9 +166,17 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth, gamma_streamed=False):
     specs.append((CB_INV_RMS, b, geo.interm_tile_bytes, _FMT_INTERM, None))
     if geo.has_gamma:
         specs.append((CB_X_GAMMA, L * b * c, geo.interm_tile_bytes, _FMT_INTERM, None))
-    specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT, out_backing))
+    specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT, _BACK_OUT if tiles_backed else None))
     if geo.is_rm:
-        specs.append((CB_OUT_RM_STICKS, stream_depth * b * c, geo.out_tile_bytes, _FMT_OUT, None))
+        specs.append(
+            (
+                CB_OUT_RM_STICKS,
+                stream_depth * b * c,
+                geo.out_tile_bytes,
+                _FMT_OUT,
+                _BACK_OUT if sticks_backed else None,
+            )
+        )
     return specs
 
 
@@ -180,12 +192,14 @@ def _footprint(geo: Geometry, b, n, c, k, L, gw, x_depth=X_DEPTH_BLOCKS, gamma_s
 def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
     """Coarsest (chunk, lookahead, block_rows) for a fixed W-group / W slice — the one fit both selectors share.
 
-    Zero-copy TILE shards (geo.zero_copy_tiles) add two wrap-safety constraints: x / out are read and written in
-    place in the resident shard, whose row stride is exactly `n` tiles and whose height is `rows_hi` tile-rows, so
-    the chunk must divide `n` (k·c == n) and the block must divide `rows_hi` (no nominal tail past the shard).
-    Returns None if even the finest chunk does not fit.
+    Zero-copy shards (geo.zero_copy) add wrap-safety constraints: x / out are read and written in place in the
+    resident shard, whose row stride is exactly `n` tiles and whose height is `rows_hi` tile-rows, so the chunk must
+    divide `n` (k·c == n; RM: k == 1, a tilize / untilize row is a whole shard stick) and the block must divide
+    `rows_hi` (no nominal tail past the shard). Returns None if even the finest chunk does not fit.
     """
-    if geo.zero_copy_tiles:
+    if geo.zero_copy and geo.is_rm:
+        chunk_candidates = [(n, 1)]
+    elif geo.zero_copy:
         chunk_candidates = [(n // k, k) for k in range(1, n + 1) if n % k == 0]  # every divisor, largest first
     else:
         # largest balanced chunk first, down to the chunk floor (k <= n: beyond it the chunk stops shrinking)
@@ -201,7 +215,7 @@ def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
                 block_rows = 1  # k > 1 => 1 (M5: a chunk of a multi-row block is not FIFO-contiguous)
                 if k == 1:
                     for b in range(rows_hi, 0, -1):
-                        if geo.zero_copy_tiles and rows_hi % b != 0:
+                        if geo.zero_copy and rows_hi % b != 0:
                             continue
                         if fp(b) <= l1_budget_bytes:
                             block_rows = b
@@ -241,17 +255,29 @@ def _select_blocking(geo: Geometry, num_cores_available: int, l1_budget_bytes: i
     raise RuntimeError("rms_norm: W too wide for the grid")  # M3
 
 
-def _select_sharded_blocking(geo: Geometry, sp: "ShardPlacement", l1_budget_bytes: int) -> BlockingPlan:
+def _rm_shard_zero_copy_ok(geo: Geometry, sp: "ShardPlacement"):
+    """An RM shard can back the tilize source / untilize destination in place iff its sticks are whole tile-rows
+    (shard height % 32 == 0) of whole tiles (shard width % 32 == 0, and W % 32 == 0 so no tile carries the shard's
+    unspecified padding columns into the masked reduce)."""
+    shard_h, shard_w = sp.shard_shape
+    return geo.is_rm and shard_h % TILE == 0 and shard_w % TILE == 0 and geo.tensor_w_elems % TILE == 0
+
+
+def _select_sharded_blocking(geo: Geometry, sp: "ShardPlacement", l1_budget_bytes: int):
     """Sharded placement: the shard spec pins the W-group, the row groups and the W slice (op_design.md
     §Placement axis) — HEIGHT -> R1 (gw = 1), WIDTH / BLOCK -> R2 (gw = shard columns). The shard is the block:
-    `_fit_block` picks the coarsest block that fits, down from the whole resident shard."""
-    plan = _fit_block(geo, sp.num_shard_cols, sp.core_w_tiles, sp.num_shard_rows, sp.rows_hi, l1_budget_bytes)
-    if plan is None:
-        raise RuntimeError(
-            f"rms_norm: sharded geometry (shard {sp.shard_shape}, {sp.num_shard_rows}x{sp.num_shard_cols} shards) "
-            f"leaves {l1_budget_bytes} B of L1 for circular buffers, too little for one {sp.core_w_tiles}-tile slice"
-        )
-    return plan
+    `_fit_block` picks the coarsest block that fits, down from the whole resident shard. RM prefers the zero-copy
+    stick CBs; it falls back to the local restride only for a geometry that cannot feed tilize in place.
+    Returns (geometry, plan) — the geometry records which of the two RM realizations was chosen."""
+    candidates = [replace(geo, zero_copy=True), geo] if _rm_shard_zero_copy_ok(geo, sp) else [geo]
+    for g in candidates:
+        plan = _fit_block(g, sp.num_shard_cols, sp.core_w_tiles, sp.num_shard_rows, sp.rows_hi, l1_budget_bytes)
+        if plan is not None:
+            return g, plan
+    raise RuntimeError(
+        f"rms_norm: sharded geometry (shard {sp.shard_shape}, {sp.num_shard_rows}x{sp.num_shard_cols} shards) "
+        f"leaves {l1_budget_bytes} B of L1 for circular buffers, too little for one {sp.core_w_tiles}-tile slice"
+    )
 
 
 @dataclass(frozen=True)
@@ -382,7 +408,7 @@ def _geometry(input_tensor, output_tensor, gamma, fp32_dest_acc_en) -> Geometry:
         interm_dtype=interm_dtype,
         interm_tile_bytes=ttnn.tile_size(interm_dtype),
         sharded=sharded,
-        zero_copy_tiles=sharded and not is_rm,
+        zero_copy=sharded and not is_rm,
     )
 
 
@@ -444,7 +470,13 @@ def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, input_tensor, output_te
         if backing is None:
             cbs.append(_cb(index, cores, pages, page_bytes, fmt[role]))
         else:
-            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(index, backing_tensor[backing], core_ranges=cores))
+            # Zero-copy on the shard: the buffer, total size and cores come from the shard; the page is the CB's
+            # own unit (a tile, or 32 sticks x one tile-column for the RM stick CBs) — not the buffer's page.
+            desc = ttnn.cb_descriptor_from_sharded_tensor(index, backing_tensor[backing], core_ranges=cores)
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt[role], page_size=page_bytes)
+            ]
+            cbs.append(desc)
     return cbs
 
 
@@ -520,7 +552,8 @@ def _sharded_work(geo: Geometry, plan: BlockingPlan, sp: ShardPlacement):
         if geo.is_rm:
             valid_sticks = min(shard_h, geo.tensor_rows_sticks - sr * shard_h)
             valid_elems = min(shard_w, geo.tensor_w_elems - sc * shard_w)
-            rows = -(-valid_sticks // TILE)
+            # zero-copy: walk the whole nominal shard, like TILE (all W-group members run the same blocks)
+            rows = sp.rows_hi if geo.zero_copy else -(-valid_sticks // TILE)
             slice_w = -(-valid_elems // TILE)
             gamma_col0 = sc * shard_w
         else:
@@ -557,7 +590,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
     l1_budget = _l1_budget_bytes(device)
     if geo.sharded:
         sp = _shard_placement(input_tensor, geo)
-        plan = _select_sharded_blocking(geo, sp, l1_budget)
+        geo, plan = _select_sharded_blocking(geo, sp, l1_budget)
         cores, work = _sharded_work(geo, plan, sp)
         core_order = sp.core_order
     else:
@@ -575,7 +608,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         gamma.dtype if gamma is not None else ttnn.bfloat16,
     )
 
-    # RM shards: local stick stride of the input / output shard = the buffer's aligned page (one padded stick).
+    # How the reader sources x and the writer sinks out (kernel CT arg): 0 = interleaved (TensorAccessor),
+    # 1 = local shard restride (RM), 2 = zero-copy (the shard backs the CB; no data movement).
+    x_out_mode = 0 if not geo.sharded else (2 if geo.zero_copy else 1)
+    # RM restride: local stick stride of the input / output shard = the buffer's aligned page (one padded stick).
     shard_stick_bytes_in = shard_stick_bytes_out = 0
     if geo.sharded and geo.is_rm:
         shard_stick_bytes_in = ttnn.cb_descriptor_from_sharded_tensor(0, input_tensor).format_descriptors[0].page_size
@@ -592,7 +628,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         plan.chunks_per_row,
         geo.in_elem_bytes,
         geo.tensor_w_tiles,
-        int(geo.sharded),
+        x_out_mode,
         shard_stick_bytes_in,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -623,7 +659,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         geo.gamma_elem_bytes,
         geo.tensor_w_tiles,
         geo.tensor_w_elems,
-        int(geo.sharded),
+        x_out_mode,
         SEM_GATHER_ARRIVALS,
         gamma_face_row_read_bytes,
         int(geo.gamma_is_block_float),

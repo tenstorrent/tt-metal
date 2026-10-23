@@ -17,9 +17,10 @@
 //                    inverse-RMS (cb_inv_rms_root) into every member's cb_inv_rms (loopback includes the root).
 //   store_block    — per chunk: valid tiles (TILE) / valid stick bytes (RM) to DRAM, one flush per chunk.
 //
-// Sharded placements (Refinement 2): the output shard is written zero-copy — TILE: cb_out_tiles IS the output
-// shard, so store_block only retires the chunk (wait / pop, no NoC); RM: the untilized sticks are copied into the
-// local output shard (local NoC writes at the shard stick stride). The combine is unchanged: its W-groups are the
+// Sharded placements (Refinement 2): the output shard is written zero-copy — cb_out_tiles (TILE) /
+// cb_out_rm_sticks (RM whose shard is whole tile-rows of whole tiles) IS the output shard, so store_block only
+// retires the chunk (wait / pop, no NoC); any other RM shard: the untilized sticks are copied into the local
+// output shard (local NoC writes at the shard stick stride). The combine is unchanged: its W-groups are the
 // shard grid's rows of cores (host-side Mcast grouping). A sharded RM slice may start mid-tile: the RM gamma slice
 // is read from the DRAM-alignment unit below its first element, and face rows the NoC cannot copy (not 16 B
 // aligned) are copied by the RISC (2 x 16 elements per tile).
@@ -56,7 +57,9 @@ void kernel_main() {
     constexpr uint32_t gamma_elem_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(18);
     [[maybe_unused]] constexpr uint32_t tensor_w_elems = get_compile_time_arg_val(19);
-    constexpr bool out_sharded = get_compile_time_arg_val(20) != 0;
+    // out sink: 0 = interleaved (TensorAccessor), 1 = local RM shard restride, 2 = zero-copy (shard backs the CB)
+    constexpr uint32_t out_mode = get_compile_time_arg_val(20);
+    constexpr bool out_sharded = out_mode != 0;
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(21);
     constexpr uint32_t gamma_face_row_read_bytes = get_compile_time_arg_val(22);
     constexpr bool gamma_is_block_float = get_compile_time_arg_val(23) != 0;
@@ -245,7 +248,7 @@ void kernel_main() {
                         ? 0
                         : (slice_w_tiles - chunk_col0 < chunk_w_tiles ? slice_w_tiles - chunk_col0 : chunk_w_tiles);
                 cb_wait_front(cb_out_tiles, chunk_tiles);
-                if constexpr (!out_sharded) {  // sharded: compute packed straight into the output shard
+                if constexpr (out_mode == 0) {  // zero-copy: compute packed straight into the output shard
                     const uint32_t l1_base = get_read_ptr(cb_out_tiles);
                     const uint32_t tile_bytes = get_tile_size(cb_out_tiles);
                     for (uint32_t r = 0; r < valid_rows; ++r) {
@@ -265,7 +268,7 @@ void kernel_main() {
                 cb_wait_front(cb_out_rm_sticks, chunk_tiles);
                 const uint32_t l1_base = get_read_ptr(cb_out_rm_sticks);
                 const uint32_t slab_bytes = chunk_w_tiles * get_tile_size(cb_out_rm_sticks);
-                if (valid_bytes > 0) {
+                if (out_mode != 2 && valid_bytes > 0) {  // zero-copy: untilize wrote the output shard in place
                     for (uint32_t r = 0; r < valid_rows; ++r) {
                         const uint32_t stick0 = (tile_row_start + block_row0 + r) * TILE_H;
                         if (stick0 >= row_sticks_end) {
