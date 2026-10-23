@@ -449,8 +449,36 @@ class DeepseekV41ForCausalLM:
             return
         self._warmup_join()
 
+    def _padding_lengths(self) -> list[int]:
+        """Every chunk valid length the served prefills will hand the MoE: the chunk, each listed prompt length's
+        single chunk or final chunk, the warm-up prompt's."""
+        chunk = self.model.chunk
+        lengths = {chunk, WARMUP_PROMPT}
+        for n in self.trace_lengths:
+            lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
+        return sorted(lengths)
+
+    def _prebuild_padding_configs(self) -> None:
+        """Build the MoE gates' memoized padding configs (``TtMoEGatePrefill.build_padding_config``, one device
+        tensor per chunk valid length) before any capture. Built lazily, a length's config was allocated the
+        first time it ran, during the per-length captures after the decode capture, where a persistent buffer
+        can take the addresses of a capture's freed intermediates: the decode replay then overwrote the config
+        and the next prefill of that length dispatched pad rows (a one-chunk replay 0.26 to 0.36 s by what the
+        decode had written, the logits unchanged)."""
+        t0 = time.time()
+        gates = [block.ffn.moe.gate for block in self.model.blocks if hasattr(getattr(block, "ffn", None), "moe")]
+        lengths = self._padding_lengths()
+        for gate in gates:
+            for n in lengths:
+                gate.build_padding_config(n, "right", 0)
+        logger.info(
+            f"DeepSeek-V4.1-Flash warm-up: padding configs of {len(gates)} MoE gates for {len(lengths)} lengths "
+            f"{lengths} built in {time.time() - t0:.1f} s"
+        )
+
     def _warmup_join(self) -> None:
         """Prefill the warm-up prompt into every prefill state and join every decode slot from them."""
+        self._prebuild_padding_configs()
         prompt = self._warmup_prompt()
         for k, state in enumerate(self.prefill_states):
             t0 = time.time()
