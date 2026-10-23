@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Matmul program configs (setting MATMUL_CONFIG, P.23): every dense ttnn.linear / ttnn.matmul of the model goes
 through ``linear`` / ``matmul`` here. MATMUL_CONFIG=auto passes no program config (ttnn picks it: the path before
-P.23); tuned passes the config ``program_config`` derives from the call's own M, K, N, dtypes, fp32 DEST and the
-mesh's compute grid (a rule, not a per-call constant for one box), or none (auto) where the rule has no entry. Only
-the program config changes: dtypes, compute kernel config, memory configs and the op sequence are the caller's.
+P.23); WO_A_CONFIG=auto (P.24) does the same for the batched attention wo_a call alone. tuned passes the config
+``program_config`` derives from the call's own M, K, N, dtypes, fp32 DEST and the mesh's compute grid (a rule, not a
+per-call constant for one box), or none (auto) where the rule has no entry. Only the program config changes: dtypes,
+compute kernel config, memory configs and the op sequence are the caller's.
 
 The rule and its numbers come from the sweep tests/perf/test_matmul_sweep.py (one chip, the model's exact calls as
 captured in the model, L1 budget = what the model leaves free there); the table of results is in BREADCRUMBS P.23.
@@ -96,10 +97,10 @@ MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
 def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int = 1, l1_budget: int = L1_BUDGET):
     """(kind, config) of one call, or None (auto). kind "minimal": ttnn.experimental.minimal_matmul with a
     MinimalMatmulConfig; kind "mm": ttnn.linear / matmul with a program config. The rule:
-      - a batched matmul with one weight per batch (attention wo_a): auto. Its only explicit config
-        (MatmulMultiCoreReuseProgramConfig, per_core_N = N, one block per core) round-trips the K-block partials
-        through a bf16 CB: rel vs float64 9.5e-3..2.8e-2 vs auto's 4.4e-3 (sweep), and GLM-5.3 saw it wrong with more
-        blocks than cores;
+      - a batched matmul with one weight per batch (attention wo_a): 2D multicast with fuse_batch=False (auto's own
+        family: each core loops the batches, fp32 partials) at the widest in0 block, 32 tiles of K included: auto
+        picks in0_block_w 1 there (K-51); bit-identical to auto, 4.1x (P.24). Never MatmulMultiCoreReuseProgramConfig:
+        its K-block partials lose fp32 (rel vs float64 9.5e-3..2.8e-2 vs auto's 4.4e-3, DS41-113);
       - bf16 output, N wider than 4 tiles per grid column (q_a, wq_b, wo_b, engram wkv, indexer wq_b): minimal_matmul
         (MIN_BLOCK_*, subblock 2 x 2): 3-4.5x faster than auto, output equal to auto or within 1e-5 rel (the last
         bf16 rounding), the same error vs float64. fp32 outputs never (minimal's fp32 output is further from float64:
@@ -112,9 +113,7 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
     if M % TILE or K % TILE or N % TILE:
         return None
     Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
-    if batch > 1:
-        return None
-    if o_dt == ttnn.bfloat16 and Nt > 4 * grid.x and Mt >= MIN_BLOCK_M:
+    if batch == 1 and o_dt == ttnn.bfloat16 and Nt > 4 * grid.x and Mt >= MIN_BLOCK_M:
         kb = _largest_div(Kt, MIN_BLOCK_K)
         return (
             "minimal",
@@ -140,7 +139,7 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
         ((h, w) for h in range(1, pm + 1) for w in range(1, pn + 1) if pm % h == 0 and pn % w == 0 and h * w <= dst),
         key=lambda t: (t[0] * t[1], t[1]),
     )
-    for bw in (16, 8, 4, 2, 1):
+    for bw in (32, 16, 8, 4, 2, 1) if batch > 1 else (16, 8, 4, 2, 1):
         if Kt % bw:
             continue
         interm = pm * pn * 4096 if fp32 else 0  # fp32 partials between K blocks (packer_l1_acc off)
@@ -158,15 +157,18 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
                     per_core_N=pn,
                     transpose_mcast=False,
                     fused_activation=None,
-                    fuse_batch=True,
+                    fuse_batch=batch == 1,
                 ),
             )
     return None
 
 
 def program_config(x, w, dtype, ckc, batched: bool = False):
-    """The tuned (kind, config) of one call, or None (auto); cached by (M, K, N, batch, dtypes, fp32 DEST, grid)."""
+    """The tuned (kind, config) of one call, or None (auto); cached by (M, K, N, batch, dtypes, fp32 DEST, grid).
+    A batched call (attention wo_a) under WO_A_CONFIG=auto: None (P.24's switch; the path before it)."""
     shape, wshape = tuple(x.shape), tuple(w.shape)
+    if batched and math.prod(wshape[:-2]) > 1 and settings.get("WO_A_CONFIG") == "auto":
+        return None
     dev = x.device()
     grid = dev.compute_with_storage_grid_size()
     fp32 = _ckc_fp32(ckc)
@@ -174,6 +176,9 @@ def program_config(x, w, dtype, ckc, batched: bool = False):
     if key in _cache:
         return _cache[key]
     batch = math.prod(wshape[:-2]) if batched else 1
+    if batch > 1 and math.prod(shape[:-2]) != batch:  # a broadcast over per-batch weights: auto
+        _cache[key] = None
+        return None
     M = math.prod(shape[:-1]) if batch == 1 else shape[-2]
     pc = rule(M, shape[-1], wshape[-1], x.dtype, w.dtype, dtype, fp32, grid, batch)
     _cache[key] = pc

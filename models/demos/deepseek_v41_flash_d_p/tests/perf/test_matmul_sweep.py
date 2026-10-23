@@ -12,7 +12,8 @@ test_sweep     per distinct call of the capture (sites above P23_MIN_MS per chun
                current (auto) config vs explicit 2D-multicast configs (grid, in0_block_w, out subblocks, out blocks,
                transposed mcast), 1D multicast (in0 or in1), minimal_matmul (blockings), and for a batched matmul with
                per-batch weights the one-block-per-core MatmulMultiCoreReuseProgramConfig (GLM-5.3: more blocks than
-               cores gives wrong results). L1 as in the model: a filler L1 buffer occupies what the model holds
+               cores gives wrong results; DS41-113: its partials lose fp32) and 2D multicast with fuse_batch=False
+               (in0 blocks up to 32; P.24). minimal_matmul: every out subblock of each blocking (P.24). L1 as in the model: a filler L1 buffer occupies what the model holds
                above the CBs, so a config that would clash in the model fails here. Each candidate: first run right
                after a same-shape auto run on OTHER inputs (stale-L1 check), twice (determinism), error vs the auto
                output and vs float64 torch on the device's rounded inputs; device time = the real-time profiler's
@@ -160,7 +161,7 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
     dst = 4 if fp32 else 8
     kind = call["op"]
     out = []
-    if B > 1:  # batched, one weight per batch: MatmulMultiCoreReuseProgramConfig, at most one block per core
+    if B > 1:  # batched, one weight per batch: MatmulMultiCoreReuseProgramConfig (at most one block per core), 2D
         cores = grid.x * grid.y
         for pm in _divisors(Mt):
             for pn in _divisors(Nt):
@@ -185,42 +186,11 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
                                 ),
                             )
                         )
+        # P.24: 2D multicast with fuse_batch=False (auto's own family for this call: each core loops the batches and
+        # keeps fp32 partials between K blocks), M = one batch's rows; in0 blocks up to 32 tiles of K
+        out += _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, (1, 2, 4, 8, 16, 32), fuse_batch=False)
         return out
-    # 2D multicast: M over grid rows (transposed: columns), N over the other axis
-    grids = set()
-    for transpose in (False, True):
-        gm_max, gn_max = (grid.x, grid.y) if transpose else (grid.y, grid.x)
-        for gm, gn in ((gm_max, gn_max), (gm_max, max(1, gn_max // 2)), (max(1, gm_max // 2), gn_max)):
-            pm, pn = math.ceil(Mt / gm), math.ceil(Nt / gn)
-            grids.add((transpose, math.ceil(Mt / pm), math.ceil(Nt / pn), pm, pn))
-    for transpose, gm, gn, pm, pn in sorted(grids):
-        gx, gy = (gm, gn) if transpose else (gn, gm)
-        for bw in (2, 4, 8, 16):
-            if Kt % bw:
-                continue
-            for ob_h, ob_w in sorted({(pm, pn), (pm, max(_divisors(pn, max(1, pn // 2))))}):
-                if _l1_2d(pm, pn, bw, a, b, o, fp32, ob_h, ob_w) > budget:
-                    continue
-                for sh, sw in _subblocks(ob_h, ob_w, dst)[:1]:
-                    out.append(
-                        (
-                            f"2d {gx}x{gy}{' T' if transpose else ''} pm{pm} pn{pn} ob{ob_h}x{ob_w} bw{bw} sb{sh}x{sw}",
-                            kind,
-                            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
-                                in0_block_w=bw,
-                                out_subblock_h=sh,
-                                out_subblock_w=sw,
-                                out_block_h=ob_h,
-                                out_block_w=ob_w,
-                                per_core_M=pm,
-                                per_core_N=pn,
-                                transpose_mcast=transpose,
-                                fused_activation=None,
-                                fuse_batch=True,
-                            ),
-                        )
-                    )
+    out += _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, (2, 4, 8, 16), fuse_batch=True)
     # 1D multicast: in0 (N over the cores, all M a core) or in1 (M over the cores, all N a core)
     cores = grid.x * grid.y
     for mcast_in0 in (True, False):
@@ -254,9 +224,7 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
     for mb, kb, nb in itertools.product((4, 8, 16), (4, 8, 16), (4, 8, 16)):
         if mb > Mt or nb > Nt or Kt % kb:
             continue
-        for sh, sw in ((2, 2), (1, 4), (4, 1)):
-            if mb % sh or nb % sw or sh * sw > dst:
-                continue
+        for sh, sw in _all_subblocks(mb, nb, dst):  # P.24: every subblock (P.23 kept only the first that fit)
             if 2 * mb * kb * a + 2 * kb * nb * b + mb * nb * (o + (4096 if fp32 else 0)) > budget:
                 continue
             out.append(
@@ -273,7 +241,55 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
                     ),
                 )
             )
-            break
+    return out
+
+
+def _all_subblocks(h: int, w: int, dst: int) -> list[tuple[int, int]]:
+    """Every out subblock (sh, sw), sh | h, sw | w, sh * sw <= dst (DEST tiles), the largest first."""
+    c = [(sh, sw) for sh in _divisors(h, dst) for sw in _divisors(w, dst) if sh * sw <= dst]
+    c.sort(key=lambda t: (-t[0] * t[1], -t[1]))
+    return c
+
+
+def _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, bws, fuse_batch: bool) -> list:
+    """2D multicast candidates: M over grid rows (transposed: columns), N over the other axis; per in0 block width in
+    ``bws``, full and half out blocks, the largest out subblock. fuse_batch=False: Mt is one batch's rows."""
+    out = []
+    grids = set()
+    for transpose in (False, True):
+        gm_max, gn_max = (grid.x, grid.y) if transpose else (grid.y, grid.x)
+        for gm, gn in ((gm_max, gn_max), (gm_max, max(1, gn_max // 2)), (max(1, gm_max // 2), gn_max)):
+            pm, pn = math.ceil(Mt / gm), math.ceil(Nt / gn)
+            grids.add((transpose, math.ceil(Mt / pm), math.ceil(Nt / pn), pm, pn))
+    for transpose, gm, gn, pm, pn in sorted(grids):
+        gx, gy = (gm, gn) if transpose else (gn, gm)
+        for bw in bws:
+            if Kt % bw:
+                continue
+            for ob_h, ob_w in sorted({(pm, pn), (pm, max(_divisors(pn, max(1, pn // 2))))}):
+                if _l1_2d(pm, pn, bw, a, b, o, fp32, ob_h, ob_w) > budget:
+                    continue
+                for sh, sw in _subblocks(ob_h, ob_w, dst)[:1]:
+                    out.append(
+                        (
+                            f"2d{'' if fuse_batch else ' nofuse'} {gx}x{gy}{' T' if transpose else ''} pm{pm} pn{pn} "
+                            f"ob{ob_h}x{ob_w} bw{bw} sb{sh}x{sw}",
+                            kind,
+                            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                                in0_block_w=bw,
+                                out_subblock_h=sh,
+                                out_subblock_w=sw,
+                                out_block_h=ob_h,
+                                out_block_w=ob_w,
+                                per_core_M=pm,
+                                per_core_N=pn,
+                                transpose_mcast=transpose,
+                                fused_activation=None,
+                                fuse_batch=fuse_batch,
+                            ),
+                        )
+                    )
     return out
 
 
