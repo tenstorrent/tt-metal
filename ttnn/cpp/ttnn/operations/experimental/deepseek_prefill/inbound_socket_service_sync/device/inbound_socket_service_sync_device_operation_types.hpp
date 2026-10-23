@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -45,6 +46,12 @@ struct InboundSocketServiceSyncInputs {
     const Tensor& backing;
     // Extra D2D segment backings; each drains into its own output, after tokens/overhang.
     std::vector<Tensor> extra_backings;
+
+    // Caller-owned destinations, one per output: when set, the op writes into
+    // them instead of allocating.
+    std::optional<Tensor> tokens_out;
+    std::optional<Tensor> overhang_out;
+    std::optional<Tensor> metadata_out;
 };
 
 }  // namespace ttnn::experimental::prim

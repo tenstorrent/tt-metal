@@ -14,7 +14,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -220,6 +220,8 @@ void kernel_main() {
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    // Set when the factory can schedule padded multicast slots on this program (see static_mcast_q_count there).
+    constexpr bool padded_q_slots_enabled = get_named_compile_time_arg_val("padded_q_slots") == 1;
     constexpr uint32_t rotated_iter_stride = kRotatedComputeIterWords;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
@@ -424,6 +426,7 @@ void kernel_main() {
                 q_per_core + get_arg_val<uint32_t>(rotated_iter_base + 1) * (use_zigzag_balancing ? 2 : 1);
             padded_q_slots = group_q_count - rotated_my_count;
         }
+        ASSERT(padded_q_slots_enabled || padded_q_slots == 0);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
         if (packed_sources) {
             for (uint32_t source = 0; source < source_group_size; ++source) {
@@ -732,7 +735,8 @@ void kernel_main() {
                 needs_lightweight_mask,
                 chunked_enabled,
                 q_local_padded_Nt,
-                chunk_size_t>(
+                chunk_size_t,
+                padded_q_slots_enabled>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,

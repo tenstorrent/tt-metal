@@ -26,8 +26,8 @@
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -245,6 +245,7 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     bool streaming_profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_check_enabled = false;
     bool streaming_profiler_inline_enabled = true;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
@@ -741,6 +742,7 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_check_enabled() const { return streaming_profiler_sync_check_enabled; }
     bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }

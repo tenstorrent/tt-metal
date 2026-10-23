@@ -21,7 +21,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>
@@ -135,6 +135,7 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
+    TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
     TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
     TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
@@ -413,6 +414,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
         "Cannot enable both debug printing and the streaming profiler");
+    // The NOC debug dump only reads the profiler's DRAM buffers, so data that trace-only or accumulate profiling keeps
+    // in L1 would never reach the host.
+    TT_FATAL(
+        !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
+        "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
+        "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -1078,6 +1085,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_EVENTS:
             this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // Measures the chip-to-chip accuracy of the clock sync, logs it each time a profiled mesh device closes and
+        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two the streaming profiler always
+        // uses, and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
+            this->streaming_profiler_sync_check_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
