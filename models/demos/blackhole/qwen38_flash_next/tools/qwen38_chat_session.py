@@ -84,7 +84,7 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
     Qwen38ChatFormatError,
 )
 from models.demos.blackhole.qwen38_flash_next.config import LAYER_PATTERN
-from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles, physical_route
+from models.demos.blackhole.qwen38_flash_next.tools import fabric_node_probe, hardware_profiles, physical_route
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as sampling_step
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
@@ -2017,13 +2017,16 @@ def template_decoder(template: Any) -> Callable[[list[int]], str]:
 
 
 def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHardwareProfile, dict]:
-    """The profile with its route: derived from the cluster descriptor (no device is opened; a ring also asks the
-    fabric's control plane for its line order) and adopted when the profile leaves it ``None`` (the p150 line and the
+    """The profile with its route: derived from the cluster descriptor (no mesh is opened; a ring also asks the fabric's
+    control plane for its line order, through a throwaway 1x1 mesh in a child process that runs first, because the
+    descriptor read holds the devices) and adopted when the profile leaves it ``None`` (the p150 line and the
     QuietBox 2: recorded, not pinned), checked against the pinned one otherwise."""
 
     import yaml
 
     lane = f"{hardware_profile.host} partition-{hardware_profile.partition.upper()}"
+    if hardware_profile.ethernet_graph != "line":
+        unique_ids = fabric_node_probe.query_chip_unique_ids(0, range(4))
     descriptor_path = Path(ttnn.cluster.serialize_cluster_descriptor()).resolve(strict=True)
     document = yaml.safe_load(descriptor_path.read_bytes())
     chips_with_mmio = physical_route.parse_chips_with_mmio(
@@ -2039,9 +2042,7 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
         # (1, 0, 3, 2), 2026-09-18, where the ring walk (0, 1, 2, 3) put a mesh neighbour pair on the unused link
         # and the first all_gather failed).  The walk is recorded next to the route for comparison.
         route = physical_route.derive_fabric_line_route(
-            document,
-            chips_with_mmio,
-            lambda mesh_id, chip_id: int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id)),
+            document, chips_with_mmio, lambda mesh_id, chip_id: unique_ids[chip_id]
         )
         ring_walk = physical_route.derive_ring_walk_route(document, chips_with_mmio)
         derivation["route_derivation"] = physical_route.derive_fabric_line_route.__name__

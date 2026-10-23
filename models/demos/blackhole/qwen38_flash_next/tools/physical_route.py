@@ -177,8 +177,9 @@ def derive_fabric_line_route(
     (2026-09-18).  The collectives are Linear along the mesh row, so the mesh must be opened in exactly this order:
     any other ethernet path through the ring puts a mesh neighbour pair on a link the fabric line does not carry
     and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_unique_id(mesh_id,
-    chip_id)`` is ``ttnn.cluster.get_chip_unique_id_from_fabric_node_id`` (no mesh needs to be open; the control plane
-    initializes from the descriptor ``TT_MESH_GRAPH_DESC_PATH`` names); the ASIC unique IDs are mapped back to the
+    chip_id)`` is ``ttnn.cluster.get_chip_unique_id_from_fabric_node_id`` asked of a throwaway 1x1 mesh (the callers use
+    ``fabric_node_probe.query_chip_unique_ids``, a child process; the control plane initializes from the descriptor
+    ``TT_MESH_GRAPH_DESC_PATH`` names); the ASIC unique IDs are mapped back to the
     descriptor's local chip IDs through ``chip_unique_ids``.  The result is checked to be a bijection over the four
     local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric mapping is a function of
     the cluster descriptor and the mesh graph descriptor, not of any open order.

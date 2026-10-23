@@ -185,7 +185,14 @@ def main() -> int:
     import torch
     import yaml
 
-    from models.demos.blackhole.qwen38_flash_next.tools import physical_route
+    from models.demos.blackhole.qwen38_flash_next.tools import fabric_node_probe, physical_route
+
+    # the child probe needs the devices free: it runs before this process discovers them (the ring fallback below)
+    try:
+        fabric_unique_ids = fabric_node_probe.query_chip_unique_ids(0, range(4))
+    except RuntimeError as error:  # only the ring fallback needs it; the line route never reads it
+        print(f"[info] fabric node probe failed: {error}", flush=True)
+        fabric_unique_ids = {}
 
     phase("before-discovery")
     discovered = (int(ttnn.GetNumAvailableDevices()), int(ttnn.get_num_pcie_devices()), int(ttnn.get_num_devices()))
@@ -244,9 +251,7 @@ def main() -> int:
     except physical_route.PhysicalRouteError as error:
         report["topology"]["line_route_error"] = str(error)
         route = physical_route.derive_fabric_line_route(
-            document,
-            chips_with_mmio,
-            lambda mesh_id, chip_id: int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id)),
+            document, chips_with_mmio, lambda mesh_id, chip_id: fabric_unique_ids[chip_id]
         )
         walk = _ring_walk(adjacency)
         report["topology"]["ring_walk_route"] = list(walk)
