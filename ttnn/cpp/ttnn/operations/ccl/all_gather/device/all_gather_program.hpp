@@ -74,14 +74,13 @@ tt::tt_metal::KernelDescriptor writer_kernel(
 
 // Reader runtime args (ag_reader.cpp reads them in this order):
 //   input (Buffer*), output (Buffer*), e0, ne, iters, stripe0, stripe_step, last_skip, last_take, iter_units,
-//   init_wait, end_wait, local_copy, init_sem, data_sem.
+//   end_wait, local_copy, data_sem. The init handshake is the writer's.
 void add_reader_rt_args(
     tt::tt_metal::KernelDescriptor& reader,
     const CoreCoord& core,
     const Tensor& input,
     const Tensor& output,
     const all_gather_plan::WorkerSched& ws,
-    uint32_t init_sem,
     uint32_t data_sem);
 
 }  // namespace ttnn::operations::ccl::all_gather_program

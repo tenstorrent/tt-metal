@@ -4,8 +4,9 @@
 
 // all_gather multicast writer: the slot consumer. Each packet goes once over every connection (one per direction
 // with a neighbor) and reaches every other device of the collective. On an even ring the two directions are
-// unbalanced by one hop, so packets alternate between two route variants. Init and done ride every (connection,
-// variant), so every device counts exactly VARIANTS credits from each other device whichever variant its data took.
+// unbalanced by one hop, so packets alternate between two route variants. Done rides every (connection, variant), so
+// it lands after our data whichever variant the data took, and every device counts VARIANTS done credits from each
+// other device. Init orders nothing, so it rides variant 0 only: one credit from each other device.
 
 #include <cstdint>
 
@@ -89,7 +90,7 @@ FORCE_INLINE void scatter_write_set_state(tt::tt_fabric::RoutingPlaneConnectionM
 
 void kernel_main() {
     constexpr uint32_t A = get_named_compile_time_arg_val("A");
-    constexpr uint32_t P_A = get_named_compile_time_arg_val("P_A");
+    constexpr uint32_t CAP = get_named_compile_time_arg_val("CAP");
     constexpr uint32_t K = get_named_compile_time_arg_val("K");
     constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
     constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
@@ -97,12 +98,13 @@ void kernel_main() {
     constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
     static_assert(VARIANTS == 1 || VARIANTS == 2, "one route, or two alternating on an even ring");
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), P_A);
+    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
     static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
 
     size_t arg_idx = 0;
     const uint32_t take = get_arg_val<uint32_t>(arg_idx++);
     const bool init_send = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const uint32_t init_wait = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t init_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t done_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mirror_x = get_arg_val<uint32_t>(arg_idx++);
@@ -131,10 +133,10 @@ void kernel_main() {
         unicast_route[v] = PacketHeaderPool::allocate_header_n(num_connections);
         scatter_route[v] = PacketHeaderPool::allocate_header_n(num_connections);
     }
-    // Sends one credit to the same core on every other device, once per variant.
-    auto signal_all = [&](uint32_t sem) {
+    // Sends one credit to the same core on every other device, once per variant in [0, variants).
+    auto signal_all = [&](uint32_t sem, uint32_t variants) {
         const uint64_t addr = ag::fabric_frame_addr(mirror_x, mirror_y, sem);
-        for (uint32_t v = 0; v < VARIANTS; ++v) {
+        for (uint32_t v = 0; v < variants; ++v) {
             atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
                 UnicastAtomicIncUpdateMask::Flush>(mgr, unicast_route[v], routes[v], addr);
@@ -145,12 +147,15 @@ void kernel_main() {
     };
 
     if (init_send) {
-        signal_all(init_sem);
+        signal_all(init_sem, 1);
     }
     for (uint32_t v = 0; v < VARIANTS; ++v) {
         unicast_write_set_state(mgr, unicast_route[v], routes[v]);
         scatter_write_set_state(mgr, scatter_route[v], routes[v]);
     }
+    // Our data goes into every other device's output: wait until all are alive (each sent its init the same way).
+    // Our reader fills the slots and does the local copy meanwhile.
+    ag::wait_and_consume(init_sem, init_wait);
 
     uint32_t v = 0;
     for (bool iter_end = take == 0; !iter_end;) {
@@ -186,7 +191,8 @@ void kernel_main() {
 
     // After every data packet on every route, so each receiver's done count implies our data has landed. Sent even
     // with nothing to send: every reader waits for all of them.
-    signal_all(done_sem);
+    signal_all(done_sem, VARIANTS);
     tt::tt_fabric::common::experimental::close_connections(mgr);
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

@@ -23,6 +23,7 @@ tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs slot_ct_args(const all_gath
     return {
         {"A", plan.geo.A},
         {"P_A", plan.geo.P_A},
+        {"CAP", plan.geo.cap},
         {"K", plan.choice.k},
         {"SLOT_BYTES", plan.slot_bytes},
         {"CB_ID", kSlotCb},
@@ -139,7 +140,6 @@ void add_reader_rt_args(
     const Tensor& input,
     const Tensor& output,
     const all_gather_plan::WorkerSched& ws,
-    uint32_t init_sem,
     uint32_t data_sem) {
     const std::vector<uint32_t> args = {
         0u,  // input (Buffer* binding)
@@ -152,10 +152,8 @@ void add_reader_rt_args(
         ws.last_skip,
         ws.last_take,
         ws.iter_units,
-        ws.init_wait,
         ws.end_wait,
         ws.local_copy ? 1u : 0u,
-        init_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         data_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
     };
     ::ttnn::ccl::emplace_runtime_args_with_leading_buffers(reader, core, {input.buffer(), output.buffer()}, args);

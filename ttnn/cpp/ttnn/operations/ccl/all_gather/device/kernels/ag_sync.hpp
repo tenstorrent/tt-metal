@@ -22,10 +22,20 @@
 //
 // Sync protocol (counted units, subtract-consume, never reset: a reset could drop a fast neighbour's credits for
 // the next launch):
-//   - init: the writer sends one increment per active direction; the paired reader waits for `need` and subtracts it.
+//   - init: every writer first sends its init (unicast: one to the paired worker of its neighbor; multicast: one to
+//     every other device), then waits for the init credits addressed to it and subtracts them, before its first
+//     data send. The reader does not wait for init: it fills slots and does the local copy during the round trip.
 //   - data_valid: the writer signals cumulative units after the data they cover, on the same sender (FIFO), at the
 //     SignalCadence below. The reader waits only while holding no slot.
-//   - end: the reader waits for every unit it will receive, subtracts them, and barriers its atomics.
+//   - end: the reader waits for every unit (unicast) or done credit (multicast) it will receive, subtracts them, and
+//     barriers its atomics.
+//
+// Deadlock freedom. The writer's only semaphore wait is init, once, before its first send. Init is sent
+// unconditionally at every writer's start, before that writer waits on anything, so it depends on no slot, no
+// data_valid and no other wait: every init wait is met once every writer has started. Beyond it, a writer waits only
+// for its own reader's slots and for fabric / mux credits, which the fabric drains. The reader waits for data_valid
+// only holding no slot, for units its upstream sent in the previous iteration; iteration 0 reads only the input. So by
+// induction on the iteration every wait is met.
 
 #include <cstdint>
 

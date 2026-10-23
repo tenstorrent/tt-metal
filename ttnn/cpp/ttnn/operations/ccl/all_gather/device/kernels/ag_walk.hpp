@@ -62,6 +62,23 @@ constexpr WalkShape walk_shape(const WalkGeo& g, uint32_t L) {
     return {lambda, std::max<uint32_t>(h, 1), cross_row};
 }
 
+// Segments one fabric scatter packet carries (NOC_SCATTER_WRITE_MAX_CHUNKS; ag_packet.hpp asserts they agree).
+inline constexpr uint32_t kSegmentsPerPacket = 4;
+
+// The packet builder's payload cap: P_A, or less where every segment is short, so a slot spends its L1 and its reads in
+// flight on more packets instead of on payload room no packet uses. A segment is a destination run (or runs that abut);
+// a run is at most one walk column (h elements), and with unit elements it also stops at the stripe-row end (S units),
+// where the other devices' stripes start. Runs abut only along a lane whose column is unclipped (h = P_A's worth), and
+// there kSegmentsPerPacket columns already exceed P_A. Correctness never depends on this bound: a packet that reaches
+// the cap just ends there.
+constexpr uint32_t packet_cap(const WalkGeo& g, const WalkShape& s) {
+    uint64_t segment = uint64_t{s.h} * g.E * g.A;
+    if (g.E != g.Uo) {
+        segment = std::min<uint64_t>(segment, uint64_t{g.S} * g.A);
+    }
+    return static_cast<uint32_t>(std::min<uint64_t>(g.P_A, kSegmentsPerPacket * segment));
+}
+
 // ---- slot layout (one CB page) ----
 // Here rather than in ag_packet.hpp because the host plan sizes slots and cannot include the fabric packet header.
 
@@ -75,33 +92,41 @@ struct SlotInfo {
 
 // sizeof(ag::PacketRecord) (ag_packet.hpp asserts it). Spelled out so host code needs no fabric header.
 inline constexpr uint32_t kPacketRecordBytes = 48;
+// Own-NOC start of each segment of a packet, for the reader's local copy (the record holds fabric-frame addresses).
+inline constexpr uint32_t kLocalAddrBytes = kSegmentsPerPacket * sizeof(uint64_t);
 
-// [SlotInfo][k records | pad to A][k headers, each padded to A][k payloads of P_A]. Every offset is a multiple of A
-// and so is slot_bytes, so payload L1 addresses are congruent with their A-aligned sources (CB bases are
-// DRAM-aligned, a multiple of A). The header region belongs to the writer; the reader never writes it.
+// [SlotInfo][k records][k local-address sets | pad to A][k headers, each padded to A][k payloads of `cap`]. Every
+// offset from the headers on is a multiple of A and so is slot_bytes, so payload L1 addresses are congruent with their
+// A-aligned sources (CB bases are DRAM-aligned, a multiple of A). The records and local addresses belong to the reader
+// while it holds the slot (the local addresses never leave it, so they are not on its stack); the header region
+// belongs to the writer, and the reader never writes it.
 struct SlotLayout {
-    uint32_t rec_off, hdr_off, hdr_stride, pay_off, pay_stride, slot_bytes;
+    uint32_t rec_off, loc_off, hdr_off, hdr_stride, pay_off, pay_stride, slot_bytes;
 
-    // L1 addresses of packet j's record, header and payload in the slot at `slot`.
+    // L1 addresses of packet j's record, local addresses, header and payload in the slot at `slot`.
     constexpr uint32_t record(uint32_t slot, uint32_t j) const { return slot + rec_off + j * kPacketRecordBytes; }
+    constexpr uint32_t local(uint32_t slot, uint32_t j) const { return slot + loc_off + j * kLocalAddrBytes; }
     constexpr uint32_t header(uint32_t slot, uint32_t j) const { return slot + hdr_off + j * hdr_stride; }
     constexpr uint32_t payload(uint32_t slot, uint32_t j) const { return slot + pay_off + j * pay_stride; }
 };
 
 constexpr uint32_t align_up(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
-constexpr SlotLayout slot_offsets(uint32_t k, uint32_t A, uint32_t header_bytes, uint32_t P_A) {
-    // Records hold uint64_t addresses; SlotInfo is 8 bytes, so they start 8-aligned right after it.
+// cap: the packet builder's payload cap (packet_cap), a multiple of A.
+constexpr SlotLayout slot_offsets(uint32_t k, uint32_t A, uint32_t header_bytes, uint32_t cap) {
+    // Records and local addresses hold uint64_t addresses; SlotInfo is 8 bytes and a record 48, so both start
+    // 8-aligned.
     const uint32_t rec_off = sizeof(SlotInfo);
-    const uint32_t hdr_off = align_up(rec_off + k * kPacketRecordBytes, A);
+    const uint32_t loc_off = rec_off + k * kPacketRecordBytes;
+    const uint32_t hdr_off = align_up(loc_off + k * kLocalAddrBytes, A);
     const uint32_t hdr_stride = align_up(header_bytes, A);
     const uint32_t pay_off = hdr_off + k * hdr_stride;
-    return {rec_off, hdr_off, hdr_stride, pay_off, P_A, pay_off + k * P_A};
+    return {rec_off, loc_off, hdr_off, hdr_stride, pay_off, cap, pay_off + k * cap};
 }
 
 // The most units one slot of k packets can carry. A relay reader that has consumed c units of an iteration waits for
 // min(c + max_slot_units, iteration units) before reserving the next slot, so it never waits holding one.
-constexpr uint32_t max_slot_units(uint32_t k, uint32_t A, uint32_t P_A) { return k * (P_A / A); }
+constexpr uint32_t max_slot_units(uint32_t k, uint32_t A, uint32_t cap) { return k * (cap / A); }
 
 // ---- the walk ----
 

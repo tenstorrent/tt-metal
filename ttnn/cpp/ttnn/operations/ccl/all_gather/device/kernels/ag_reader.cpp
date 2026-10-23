@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// all_gather reader, shared by unicast and multicast: the slot producer. It never touches the fabric.
+// all_gather reader, shared by unicast and multicast: the slot producer. It never touches the fabric, and it starts at
+// once: the init handshake gates only the writer's remote sends, so the first slots and the local copy overlap it.
 //
 // Per slot: [relay: wait for the units this slot may read, holding no slot] -> reserve -> build up to K packets
 // (records + payload reads) -> one read barrier -> [local copy, flushed] -> SlotInfo -> push.
@@ -25,6 +26,7 @@
 void kernel_main() {
     constexpr uint32_t A = get_named_compile_time_arg_val("A");
     constexpr uint32_t P_A = get_named_compile_time_arg_val("P_A");
+    constexpr uint32_t CAP = get_named_compile_time_arg_val("CAP");
     constexpr uint32_t K = get_named_compile_time_arg_val("K");
     constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
     constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
@@ -39,7 +41,8 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), P_A);
+    static_assert(CAP % A == 0 && CAP >= A && CAP <= P_A, "the packet cap is a multiple of A within the payload");
+    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
     static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
 
     size_t arg_idx = 0;
@@ -53,10 +56,8 @@ void kernel_main() {
     const uint32_t last_skip = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t last_take = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t iter_units = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t init_wait = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t end_wait = get_arg_val<uint32_t>(arg_idx++);
     const bool local_copy = get_arg_val<uint32_t>(arg_idx++) != 0;
-    const uint32_t init_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t data_sem = get_arg_val<uint32_t>(arg_idx++);
 
     const auto in = TensorAccessor(in_args, in_addr);
@@ -68,17 +69,16 @@ void kernel_main() {
     ag::Walk<decltype(out), ag::FabricFrameAddr> walk(out, geo);
     ag::InputPieces<decltype(in)> input_pieces(in, A, UI, E, SRC_CROSS);
     ag::RelayPieces relay_pieces(A, E);
-    ag::PacketBuilder<decltype(walk), decltype(input_pieces)> input_builder(walk, input_pieces, P_A);
-    ag::PacketBuilder<decltype(walk), decltype(relay_pieces)> relay_builder(walk, relay_pieces, P_A);
-
-    // Our writer (unicast) or every device's writer (multicast) may only send once the destination is alive.
-    ag::wait_and_consume(init_sem, init_wait);
+    ag::PacketBuilder<decltype(walk), decltype(input_pieces)> input_builder(walk, input_pieces, CAP);
+    ag::PacketBuilder<decltype(walk), decltype(relay_pieces)> relay_builder(walk, relay_pieces, CAP);
 
     auto read = [&](uint64_t src, uint32_t dst, uint32_t bytes) {
         noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             PrecomposedUnicastEndpoint{}, CoreLocalMem<uint32_t>(dst), bytes, {.noc_addr = src}, {});
     };
     auto* data_valid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_sem);
+    // Own-NOC segment starts of a slot's packet, for the local copy (records hold fabric-frame addresses).
+    auto local = [&](uint32_t slot, uint32_t j) { return reinterpret_cast<uint64_t*>(lay.local(slot, j)); };
     for (uint32_t i = 0; i < iters; ++i) {
         const bool last = i + 1 == iters;
         const uint32_t skip = last ? last_skip : 0;
@@ -95,20 +95,18 @@ void kernel_main() {
             if (relay) {
                 // Wait before reserving: a slot holds at most max_slot_units, all of this iteration, so the target
                 // covers every read below and is reached without our slot (a ring would deadlock otherwise).
-                const uint32_t ahead = std::min(consumed + ag::max_slot_units(K, A, P_A), take_units);
+                const uint32_t ahead = std::min(consumed + ag::max_slot_units(K, A, CAP), take_units);
                 noc_semaphore_wait_min(data_valid, relay_base + ahead);
             }
             cb.reserve_back(1);
             const uint32_t slot = cb.get_write_ptr();
             uint32_t packets = 0, units = 0;
-            // Own-NOC address of each segment, for the local copy (records hold fabric-frame addresses).
-            uint64_t local[K][NOC_SCATTER_WRITE_MAX_CHUNKS];
             for (; packets < K; ++packets) {
                 auto* rec = reinterpret_cast<ag::PacketRecord*>(lay.record(slot, packets));
                 const uint32_t payload = lay.payload(slot, packets);
                 auto into_payload = [&](uint64_t src, uint32_t off, uint32_t n) { read(src, payload + off, n); };
                 const uint32_t bytes = relay ? relay_builder.next(rec, into_payload)
-                                             : input_builder.next(rec, into_payload, local[packets]);
+                                             : input_builder.next(rec, into_payload, local(slot, packets));
                 if (bytes == 0) {
                     break;
                 }
@@ -121,7 +119,7 @@ void kernel_main() {
                 // traffic on this NOC; flushed before the slot can be overwritten, acked by the barrier at the end.
                 for (uint32_t j = 0; j < packets; ++j) {
                     const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
-                    ag::for_each_segment(rec, local[j], [&](uint32_t off, uint64_t dst, uint32_t bytes) {
+                    ag::for_each_segment(rec, local(slot, j), [&](uint32_t off, uint64_t dst, uint32_t bytes) {
                         noc.async_write<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                             CoreLocalMem<uint32_t>(lay.payload(slot, j) + off),
                             PrecomposedUnicastEndpoint{},

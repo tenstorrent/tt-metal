@@ -4,7 +4,8 @@
 
 #pragma once
 
-// Packet builder: walk runs -> packets of <= P_A bytes and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments, cut on A. The
+// Packet builder: walk runs -> packets of <= cap bytes (packet_cap) and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments, cut
+// on A. The
 // reader builds each packet's record (the fabric's own scatter command) in its slot; the writer encodes it into the
 // slot's header with the official setters. Compiled on host by the kernel-lib sim.
 
@@ -24,6 +25,7 @@ struct PacketRecord {
     uint16_t payload_bytes;
 };
 static_assert(sizeof(PacketRecord) == kPacketRecordBytes, "host slot_offsets() assumes this record size");
+static_assert(NOC_SCATTER_WRITE_MAX_CHUNKS == kSegmentsPerPacket, "host packet_cap() and slot_offsets() assume this");
 
 // Calls f(payload_off, dst[i], bytes) per segment i of a record, in payload order. dst: the record's own addresses
 // (fabric frame), or the per-segment own-NOC addresses PacketBuilder::next reported.
@@ -45,7 +47,7 @@ void for_each_segment(const PacketRecord& rec, const uint64_t* dst, F&& f) {
 template <class W, class Src>
 class PacketBuilder {
 public:
-    PacketBuilder(W& walk, Src& src, uint32_t P_A) : walk_(walk), src_(src), P_A_(P_A) {}
+    PacketBuilder(W& walk, Src& src, uint32_t cap) : walk_(walk), src_(src), cap_(cap) {}
 
     // Fills one packet: read(src_noc_addr, payload_off, bytes) for each read into this packet's payload
     // (payload_off a multiple of A), then builds *rec in place. Returns the payload bytes, 0 when the walk is
@@ -56,13 +58,13 @@ public:
         uint64_t addrs[NOC_SCATTER_WRITE_MAX_CHUNKS];
         uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS];
         uint32_t nseg = 0, used = 0;
-        while (used < P_A_ && (have_ || pull())) {
+        while (used < cap_ && (have_ || pull())) {
             const bool merge = nseg != 0 && dst_ == addrs[nseg - 1] + sizes[nseg - 1];
             if (!merge && nseg == NOC_SCATTER_WRITE_MAX_CHUNKS) {
                 break;
             }
             // Both are multiples of A, so every cut is on A.
-            const uint32_t n = std::min(cur_.bytes, P_A_ - used);
+            const uint32_t n = std::min(cur_.bytes, cap_ - used);
             const uint32_t rd = std::min(n, cur_.readable_bytes);
             if (rd != 0) {
                 read(cur_.src, used, rd);
@@ -116,7 +118,7 @@ private:
 
     W& walk_;
     Src& src_;
-    const uint32_t P_A_;
+    const uint32_t cap_;
     Piece cur_{};                         // the unsent rest of the current piece, valid while have_
     uint64_t dst_ = 0;                    // where cur_ lands
     uint64_t run_dst_ = 0;                // where the run's next piece lands

@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// all_gather unicast writer: the slot consumer, one Mux V2 channel. It only sends; it never waits on a semaphore, so
-// its progress depends on nothing downstream (the CB, mux credits and the mux handshakes only).
+// all_gather unicast writer: the slot consumer, one Mux V2 channel. Its one semaphore wait is init, before its first
+// send, after it has sent its own (ag_sync.hpp: deadlock freedom); otherwise its progress depends only on the CB, mux
+// credits and the mux handshakes.
 //
 // Per slot: wait -> encode each record into the slot's own header (the official setters) -> send header + payload
 // through the mux -> [data_valid at the cadence] -> flush -> pop. Headers live in the slot, so flush-before-pop is
@@ -42,7 +43,7 @@ FORCE_INLINE void set_route(volatile PACKET_HEADER_TYPE* hdr, uint16_t chip, uin
 
 void kernel_main() {
     constexpr uint32_t A = get_named_compile_time_arg_val("A");
-    constexpr uint32_t P_A = get_named_compile_time_arg_val("P_A");
+    constexpr uint32_t CAP = get_named_compile_time_arg_val("CAP");
     constexpr uint32_t K = get_named_compile_time_arg_val("K");
     constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
     constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
@@ -50,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t MUX_BUFS = get_named_compile_time_arg_val("MUX_BUFS");
     constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), P_A);
+    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
     static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
 
     size_t arg_idx = 0;
@@ -60,6 +61,7 @@ void kernel_main() {
     const uint32_t last_take = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cadence_slots = get_arg_val<uint32_t>(arg_idx++);
     const bool init_send = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const uint32_t init_wait = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t init_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t data_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
@@ -94,6 +96,9 @@ void kernel_main() {
                     ag::fabric_frame_addr(partner_x, partner_y, init_sem), 1});
             noc.async_writes_flushed();
         }
+        // Our data goes into the neighbor's output: wait until it is alive (it sent its init the same way). Our reader
+        // fills the slots meanwhile.
+        ag::wait_and_consume(init_sem, init_wait);
         const uint64_t data_valid = ag::fabric_frame_addr(mirror_x, mirror_y, data_sem);
 
         ag::SignalCadence cadence(cadence_slots);
@@ -151,6 +156,7 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
+        noc.async_atomic_barrier();
         sender.close();
     }
 }
