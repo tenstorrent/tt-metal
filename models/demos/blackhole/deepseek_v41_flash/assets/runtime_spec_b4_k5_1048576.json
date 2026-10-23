@@ -24,7 +24,7 @@
                 "block_size": "128",
                 "max_model_len": "1048576",
                 "max_num_seqs": "4",
-                "max_num_batched_tokens": "67584",
+                "max_num_batched_tokens": "16384",
                 "max-log-len": "32",
                 "seed": "9472",
                 "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 1200000000, \"sample_on_device_mode\": \"all\"}}",
