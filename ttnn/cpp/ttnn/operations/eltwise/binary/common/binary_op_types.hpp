@@ -56,6 +56,8 @@ enum class BinaryOpType {
     WHERE_TTS,
     ISCLOSE,
     SITU_GLU,
+    GEGLU_TANH,
+    SILU_GLU,
 };
 
 // Parameters for ops that need more than their BinaryOpType to describe what to compile. One

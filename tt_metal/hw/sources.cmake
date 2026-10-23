@@ -178,6 +178,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/topk_xl.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
+    inc/api/compute/geglu_tanh.h
     inc/api/compute/isclose.h
     inc/api/compute/layernorm.h
     inc/api/compute/lcm.h
@@ -201,6 +202,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
     inc/api/compute/sfpu_binary_bcast.h
+    inc/api/compute/silu_glu.h
     inc/api/compute/situ_glu.h
     inc/api/compute/softmax.h
     inc/api/compute/src_order.h

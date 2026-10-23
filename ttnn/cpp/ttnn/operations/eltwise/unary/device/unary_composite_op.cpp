@@ -304,6 +304,22 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     }
 
     std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
+    // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json).
+    // With more than one sub-device loaded the unary and multiply below run as they always have.
+    if (ab[0].dtype() == DataType::BFLOAT16 && ab[1].dtype() == DataType::BFLOAT16 &&
+        (ab[0].device()->arch() == tt::ARCH::BLACKHOLE) && ab[0].device()->get_sub_device_ids().size() == 1) {
+        return ttnn::detail::invoke_binary_ng(
+            ab[1],
+            ab[0],
+            ttnn::operations::binary::BinaryOpType::SILU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt);
+    }
 
     Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);

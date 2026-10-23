@@ -421,6 +421,20 @@ OpConfig::OpConfig(
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
         // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
         case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
+        case BinaryOpType::GEGLU_TANH:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GEGLU_TANH;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::SILU_GLU:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::SILU_GLU;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -595,6 +609,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
+        case GEGLU_TANH: return {"geglu_tanh_tile_init();", "geglu_tanh_tile"};
+        case SILU_GLU: return {"silu_glu_tile_init();", "silu_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -612,6 +628,13 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
     defines["BINARY_SFPU_INIT"] = std::move(tile_init);
     defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    // A fused activation's compute API is included through its split-include macro, so the binary SFPU
+    // kernels compile it only for the op that calls it.
+    switch (std::get<SfpuBinaryOp>(binary_op)) {
+        case SfpuBinaryOp::GEGLU_TANH: defines["SFPU_OP_GEGLU_TANH_INCLUDE"] = "1"; break;
+        case SfpuBinaryOp::SILU_GLU: defines["SFPU_OP_SILU_GLU_INCLUDE"] = "1"; break;
+        default: break;
+    }
     return defines;
 }
 

@@ -1906,6 +1906,10 @@ void py_module(nb::module_& mod) {
 
            Last dimension of input tensor should be divisible by 64.
 
+           On Blackhole, BFLOAT16 input runs as one program on :func:`ttnn.silu_glu`'s fused SFPU kernel over its two
+           halves, below 1 BF16 ULP of the exact product, while one sub-device is loaded; other dtypes, boards and
+           sub-device setups apply the activation, then multiply.
+
         )doc");
 
     // Other unaries (unary chain operations)

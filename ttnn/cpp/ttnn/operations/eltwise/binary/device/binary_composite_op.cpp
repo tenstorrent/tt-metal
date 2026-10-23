@@ -1480,4 +1480,122 @@ Tensor clamped_silu_glu(
         std::nullopt);
 }
 
+Tensor geglu_tanh(
+    const Tensor& gate,
+    const Tensor& up,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using operations::unary::EltwiseUnaryWithParam;
+    using operations::unary::UnaryOpType;
+
+    TT_FATAL(
+        !(sub_core_grids.has_value() && sub_device_id.has_value()),
+        "geglu_tanh: pass sub_core_grids or sub_device_id, not both");
+    // A host tensor has no device to ask; the multiply below refuses it.
+    if (!sub_core_grids.has_value() && !sub_device_id.has_value() && gate.device() != nullptr) {
+        // Unrestricted, binary_ng runs on the worker cores of get_sub_device_ids().front(): the whole grid only
+        // while one sub-device is loaded, as situ_glu and clamped_silu_glu require.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "geglu_tanh: {} sub-devices are loaded, so leaving the cores unrestricted would run on sub-device 0 rather "
+            "than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
+    // One binary_ng program whose only arithmetic is geglu_tanh_tile, this op's own SFPU kernel, for BF16
+    // operands on a board that has it, at the parameters it is compiled for; every other call keeps the composite.
+    if (gate.device() != nullptr && gate.device()->arch() == tt::ARCH::BLACKHOLE &&
+        gate.dtype() == DataType::BFLOAT16 && up.dtype() == DataType::BFLOAT16) {
+        return ttnn::detail::invoke_binary_ng(
+            gate,
+            up,
+            binary::BinaryOpType::GEGLU_TANH,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
+
+    // One multiply whose operands carry each leaf's unary pre-activation.
+    const auto gate_activations = std::array{EltwiseUnaryWithParam{UnaryOpType::GELU_TANH}};
+    const auto up_activations = std::array<EltwiseUnaryWithParam, 0>{};
+    return ttnn::multiply(
+        gate,
+        up,
+        /*output_dtype=*/std::nullopt,
+        output_mem_config,
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        gate_activations,
+        up_activations,
+        /*fast_and_approximate_mode=*/std::nullopt,
+        sub_core_grids,
+        sub_device_id);
+}
+
+Tensor silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using operations::unary::EltwiseUnaryWithParam;
+    using operations::unary::UnaryOpType;
+
+    TT_FATAL(
+        !(sub_core_grids.has_value() && sub_device_id.has_value()),
+        "silu_glu: pass sub_core_grids or sub_device_id, not both");
+    // A host tensor has no device to ask; the multiply below refuses it.
+    if (!sub_core_grids.has_value() && !sub_device_id.has_value() && gate.device() != nullptr) {
+        // Unrestricted, binary_ng runs on the worker cores of get_sub_device_ids().front(): the whole grid only
+        // while one sub-device is loaded, as situ_glu and clamped_silu_glu require.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "silu_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on sub-device 0 rather "
+            "than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
+    // One binary_ng program whose only arithmetic is silu_glu_tile, this op's own SFPU kernel, for BF16
+    // operands on a board that has it, at the parameters it is compiled for; every other call keeps the composite.
+    if (gate.device() != nullptr && gate.device()->arch() == tt::ARCH::BLACKHOLE &&
+        gate.dtype() == DataType::BFLOAT16 && up.dtype() == DataType::BFLOAT16) {
+        return ttnn::detail::invoke_binary_ng(
+            gate,
+            up,
+            binary::BinaryOpType::SILU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
+
+    // One multiply whose operands carry each leaf's unary pre-activation.
+    const auto gate_activations = std::array{EltwiseUnaryWithParam{UnaryOpType::SILU}};
+    const auto up_activations = std::array<EltwiseUnaryWithParam, 0>{};
+    return ttnn::multiply(
+        gate,
+        up,
+        /*output_dtype=*/std::nullopt,
+        output_mem_config,
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        gate_activations,
+        up_activations,
+        /*fast_and_approximate_mode=*/std::nullopt,
+        sub_core_grids,
+        sub_device_id);
+}
+
 }  // namespace ttnn
