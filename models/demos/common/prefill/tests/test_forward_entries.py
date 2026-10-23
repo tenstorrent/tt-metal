@@ -12,7 +12,6 @@ from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotate
 from models.demos.common.prefill.forward_entries import (
     EMPTY_ENTRY,
     INVALID_SLOT,
-    MAX_FORWARD_CHUNKS,
     SHUTDOWN_WORD,
     WARMUP_WORD,
     PrefillEntry,
@@ -36,32 +35,40 @@ def as_int32_words(metadata: bytes) -> list:
 
 
 def test_metadata_size_bytes(expect_error):
-    assert [metadata_size_bytes(f) for f in (1, 2, 4, MAX_FORWARD_CHUNKS)] == [12, 200, 200, 200]
-    for f in (0, MAX_FORWARD_CHUNKS + 1):
-        with expect_error(ValueError, f"PREFILL_FORWARD_CHUNKS={f} outside"):
-            metadata_size_bytes(f)
+    assert [metadata_size_bytes(f) for f in (1, 2, 4, 16, 32)] == [12, 32, 56, 200, 392]
+    with expect_error(ValueError, "PREFILL_FORWARD_CHUNKS=0 must be >= 1"):
+        metadata_size_bytes(0)
 
 
 def test_batched_layout_is_prefill_batch_metadata():
     entries = [PrefillEntry(0, 0, C), PrefillEntry(1, C, 2 * C), PrefillEntry(1, 2 * C, 2500), EMPTY]
     expected = struct.pack("<11I", 3, 0, 0, 0, C, 1, C, 2 * C, 1, 2 * C, 2500)
-    expected += struct.pack("<3I", INVALID_SLOT, 0, 0) * (MAX_FORWARD_CHUNKS - 3)
-    assert pack_forward_metadata(entries) == expected
+    expected += struct.pack("<3I", INVALID_SLOT, 0, 0)
+    assert pack_forward_metadata(entries, 4) == expected
     assert decode_forward_metadata(as_int32_words(expected), 4) == entries
 
 
 def test_batched_layout_rejects_bad_counts(expect_error):
-    words = as_int32_words(pack_forward_metadata([PrefillEntry(0, 0, C), EMPTY]))
+    words = as_int32_words(pack_forward_metadata([PrefillEntry(0, 0, C), EMPTY], 2))
     for n in (0, 3):
         with expect_error(ValueError, f"num_chunks={n} outside"):
             decode_forward_metadata([n] + words[1:], 2)
     with expect_error(ValueError, "empty entries must come after"):
-        pack_forward_metadata([EMPTY, PrefillEntry(0, 0, C)])
+        pack_forward_metadata([EMPTY, PrefillEntry(0, 0, C)], 2)
+    with expect_error(ValueError, "do not fit a forward of 2"):
+        pack_forward_metadata([PrefillEntry(0, 0, C)] * 3, 2)
 
 
 def test_single_entry_is_todays_metadata():
-    assert pack_forward_metadata([PrefillEntry(3, 2048, 2900)]) == struct.pack("<3I", 3, 2048, 2900)
+    assert pack_forward_metadata([PrefillEntry(3, 2048, 2900)], 1) == struct.pack("<3I", 3, 2048, 2900)
     assert sentinel_metadata(SHUTDOWN_WORD, 1) == struct.pack("<iii", -1, -1, -1)
+
+
+def test_unpadded_entry_takes_the_forward_layout():
+    entry = PrefillEntry(3, 2048, 2900)
+    metadata = pack_forward_metadata([entry], 4)
+    assert len(metadata) == metadata_size_bytes(4)
+    assert decode_forward_metadata(as_int32_words(metadata), 4) == pad_entries([entry], 4)
 
 
 @pytest.mark.parametrize("forward_chunks", range(1, 9))
@@ -74,12 +81,12 @@ def test_roundtrip(forward_chunks):
             start = rng.randrange(0, 1 << 20, 32)
             entries.append(PrefillEntry(rng.randrange(64), start, start + rng.randint(1, C)))
         entries = pad_entries(entries, forward_chunks)
-        metadata = pack_forward_metadata(entries)
+        metadata = pack_forward_metadata(entries, forward_chunks)
         assert len(metadata) == metadata_size_bytes(forward_chunks)
         assert decode_forward_metadata(as_int32_words(metadata), forward_chunks) == entries
 
 
-@pytest.mark.parametrize("forward_chunks", [1, 3, 8, MAX_FORWARD_CHUNKS])
+@pytest.mark.parametrize("forward_chunks", [1, 3, 8, 16, 32])
 @pytest.mark.parametrize("word", [SHUTDOWN_WORD, WARMUP_WORD])
 def test_sentinels_fill_every_word(word, forward_chunks):
     metadata = sentinel_metadata(word, forward_chunks)
@@ -88,13 +95,13 @@ def test_sentinels_fill_every_word(word, forward_chunks):
     entries = decode_forward_metadata(as_int32_words(metadata), forward_chunks)
     assert entries == [PrefillEntry(word, word, word)] * forward_chunks
     # A rank forwards the sentinel it decoded over D2D.
-    assert forward_metadata_words(entries) == as_int32_words(metadata)
+    assert forward_metadata_words(entries, forward_chunks) == as_int32_words(metadata)
 
 
 def test_decode_ignores_trailing_words_and_rejects_short(expect_error):
-    words = as_int32_words(pack_forward_metadata([PrefillEntry(1, 0, C), PrefillEntry(2, 0, 7)])) + [5]
+    words = as_int32_words(pack_forward_metadata([PrefillEntry(1, 0, C), PrefillEntry(2, 0, 7)], 2)) + [5]
     assert decode_forward_metadata(words, 2) == [PrefillEntry(1, 0, C), PrefillEntry(2, 0, 7)]
-    with expect_error(ValueError, "needs 50"):
+    with expect_error(ValueError, "needs 11"):
         decode_forward_metadata(words[:6], 3)
 
 
@@ -157,6 +164,18 @@ BAD = {  # name -> (entries, expected message)
     ),
     "partial_not_last": ([PrefillEntry(0, 0, 500), PrefillEntry(0, C, 2 * C), EMPTY, EMPTY], "must end its slot"),
     "gap_in_run": ([PrefillEntry(0, 0, C), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY], "does not continue"),
+    "duplicate_cache_end_chunk": (
+        [PrefillEntry(0, 6 * C, 7 * C), PrefillEntry(0, 7 * C, 8 * C), PrefillEntry(0, 7 * C, 8 * C), EMPTY],
+        "does not continue",
+    ),
+    "duplicate_clamped_chunk": (
+        [PrefillEntry(0, 6 * C + 96, 7 * C + 96), PrefillEntry(0, 7 * C, 8 * C), PrefillEntry(0, 7 * C, 8 * C), EMPTY],
+        "does not continue",
+    ),
+    "clamped_adds_no_tokens": (
+        [PrefillEntry(0, 6 * C + 96, 7 * C + 96), PrefillEntry(0, 7 * C, 7 * C + 96), EMPTY, EMPTY],
+        "does not continue",
+    ),
     "overlap_not_at_cache_end": (
         [PrefillEntry(0, C + 96, 2 * C + 96), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY],
         "does not continue",
@@ -196,7 +215,6 @@ def test_pack_forward_tokens(starts):
 def test_packed_forward_refusals():
     assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=2, use_trace=True) == []
     assert packed_forward_refusals(4, supports_packed_forward=True) == []
-    assert packed_forward_refusals(0, supports_packed_forward=True)
     reasons = packed_forward_refusals(
         4, supports_packed_forward=False, mtp_levels=1, dflash=True, use_trace=True, d2h_acks=True
     )

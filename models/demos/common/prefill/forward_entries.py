@@ -5,8 +5,8 @@
 
 A forward holds ``forward_chunks`` (F) entries of ``chunk_size`` tokens each. At F = 1 its metadata is the
 single-chunk ``(slot, start, end)`` record, ``struct.pack("<3I", ...)``. Above that it is ``{num_chunks,
-reserved}`` followed by ``MAX_FORWARD_CHUNKS`` records, little-endian uint32, 200 bytes; records past
-``num_chunks`` are ``(INVALID_SLOT, 0, 0)``. ``[start, end)`` is the absolute KV-position range of the entry's
+reserved}`` followed by F records, little-endian uint32, ``8 + 12 * F`` bytes; records past ``num_chunks`` are
+``(INVALID_SLOT, 0, 0)``. ``[start, end)`` is the absolute KV-position range of the entry's
 real tokens, and ``start == end`` is an empty entry (no attention, no KV write). Sentinels fill every word with
 ``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
 
@@ -18,7 +18,6 @@ from dataclasses import dataclass
 
 ENTRY_WORDS = 3
 ENTRY_BYTES = 4 * ENTRY_WORDS
-MAX_FORWARD_CHUNKS = 16  # tt-d-gen's kMaxPrefillChunksPerBatch
 HEADER_WORDS = 2
 INVALID_SLOT = 0xFFFFFFFF
 SHUTDOWN_WORD = -1
@@ -46,9 +45,9 @@ EMPTY_ENTRY = PrefillEntry(0, 0, 0)
 
 
 def metadata_size_bytes(forward_chunks: int) -> int:
-    if not 1 <= forward_chunks <= MAX_FORWARD_CHUNKS:
-        raise ValueError(f"PREFILL_FORWARD_CHUNKS={forward_chunks} outside [1, {MAX_FORWARD_CHUNKS}]")
-    return ENTRY_BYTES if forward_chunks == 1 else 4 * (HEADER_WORDS + ENTRY_WORDS * MAX_FORWARD_CHUNKS)
+    if forward_chunks < 1:
+        raise ValueError(f"PREFILL_FORWARD_CHUNKS={forward_chunks} must be >= 1")
+    return ENTRY_BYTES if forward_chunks == 1 else 4 * (HEADER_WORDS + ENTRY_WORDS * forward_chunks)
 
 
 def pad_entries(entries, forward_chunks: int) -> list:
@@ -59,21 +58,21 @@ def pad_entries(entries, forward_chunks: int) -> list:
     return entries + [EMPTY_ENTRY] * (forward_chunks - len(entries))
 
 
-def forward_metadata_words(entries) -> list:
+def forward_metadata_words(entries, forward_chunks: int) -> list:
     """The metadata of a forward of ``entries`` (empty ones at the tail) as int32 words, as the device tensor
     holds them."""
+    if len(entries) > forward_chunks:
+        raise ValueError(f"{len(entries)} entries do not fit a forward of {forward_chunks}")
     e = entries[0]
     if e.is_sentinel:
-        return sentinel_words(e.slot, len(entries))
-    if len(entries) == 1:
+        return sentinel_words(e.slot, forward_chunks)
+    if forward_chunks == 1:
         return [e.slot, e.start, e.end]
-    if len(entries) > MAX_FORWARD_CHUNKS:
-        raise ValueError(f"{len(entries)} entries do not fit the {MAX_FORWARD_CHUNKS}-record metadata")
     real = [e for e in entries if not e.is_empty]
     if entries[: len(real)] != real:
         raise ValueError(f"empty entries must come after every non-empty one: {entries}")
     words = [len(real), 0] + [w for e in real for w in (e.slot, e.start, e.end)]
-    words += [INVALID_SLOT, 0, 0] * (MAX_FORWARD_CHUNKS - len(real))
+    words += [INVALID_SLOT, 0, 0] * (forward_chunks - len(real))
     return [w - (1 << 32) if w >= 1 << 31 else w for w in words]
 
 
@@ -81,8 +80,8 @@ def _pack_words(words) -> bytes:
     return struct.pack(f"<{len(words)}i", *words)
 
 
-def pack_forward_metadata(entries) -> bytes:
-    return _pack_words(forward_metadata_words(entries))
+def pack_forward_metadata(entries, forward_chunks: int) -> bytes:
+    return _pack_words(forward_metadata_words(entries, forward_chunks))
 
 
 def sentinel_words(word: int, forward_chunks: int) -> list:
@@ -144,8 +143,8 @@ def validate_forward_entries(entries, *, chunk_size: int, forward_chunks: int, n
                 raise ValueError(f"{e}: slot {e.slot} appears in two separate runs")
             if prev.end != prev.start + chunk_size:
                 raise ValueError(f"{prev}: a partial entry must end its slot's run")
-            # tt-d-gen moves a run's last chunk back to end at the cache end (#430), overlapping its predecessor.
-            clamped = e.start + chunk_size == max_seq_len and prev.start <= e.start < prev.end
+            # tt-d-gen moves a run's last chunk back to end at the cache end (tenstorrent/tt-d-gen#430).
+            clamped = e.start + chunk_size == max_seq_len and prev.start < e.start < prev.end < e.end
             if e.start != prev.end and not clamped:
                 raise ValueError(f"{e}: does not continue {prev}")
         seen.add(e.slot)
@@ -162,8 +161,6 @@ def packed_forward_refusals(
     d2h_acks: bool = False,
 ) -> list:
     """Why a configuration cannot run ``forward_chunks`` entries per forward (empty list: it can)."""
-    if forward_chunks < 1:
-        return [f"PREFILL_FORWARD_CHUNKS must be >= 1, got {forward_chunks}"]
     if forward_chunks == 1:
         return []
     reasons = []
