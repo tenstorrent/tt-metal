@@ -104,12 +104,19 @@ nlohmann::json kernel_json(Kernel& kernel) {
     const auto named = kernel.named_compile_time_args();
     k["named_ct_args"] = std::map<std::string, uint32_t>(named.begin(), named.end());
     k["defines"] = kernel.defines();
+    // Read through RuntimeArgsData, which is what a cache-hit override writes: once a program is enqueued it points at
+    // the dispatch copy of the args (and holds the padded count), so the kernel's own vectors can be stale.
     nlohmann::json rt = nlohmann::json::array();
     for (const auto& core : kernel.cores_with_runtime_args()) {  // a std::set: sorted
-        rt.push_back({{"core", {core.x, core.y}}, {"args", kernel.runtime_args(core)}});
+        const RuntimeArgsData& data = kernel.runtime_args_data(core);
+        std::vector<uint32_t> args =
+            data.size() > 0 ? std::vector<uint32_t>(data.data(), data.data() + data.size()) : kernel.runtime_args(core);
+        rt.push_back({{"core", {core.x, core.y}}, {"args", std::move(args)}});
     }
     k["rt_args"] = std::move(rt);
-    k["common_rt_args"] = kernel.common_runtime_args();
+    const RuntimeArgsData& common = kernel.common_runtime_args_data();
+    k["common_rt_args"] = common.size() > 0 ? std::vector<uint32_t>(common.data(), common.data() + common.size())
+                                            : kernel.common_runtime_args();
     return k;
 }
 
