@@ -9,6 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -131,23 +132,16 @@ void accumulate_partial(DataflowBuffer& partial, bool first, bool last) {
     if (first) {
         partial.reserve_back(total);
     }
+    reconfig_data_format(dfb::grad_preact_tile, dfb::x_shifted_tile);
+    mul_init(dfb::grad_preact_tile, dfb::x_shifted_tile);
     for (uint32_t base = 0; base < total; base += dst_tiles) {
         const uint32_t n = batch_size<total>(base);
         tile_regs_acquire();
-        reconfig_data_format(dfb::grad_preact_tile, dfb::x_shifted_tile);
-        mul_init(dfb::grad_preact_tile, dfb::x_shifted_tile);
         for (uint32_t i = 0; i < n; ++i) {
             mul_tiles(dfb::grad_preact_tile, dfb::x_shifted_tile, (base + i) % channel_tiles_per_block, base + i, i);
         }
         tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb::partial);
-        pack_reconfig_l1_acc(first ? 0 : 1);
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile<true>(i, dfb::partial, base + i);
-        }
-        pack_reconfig_l1_acc(0);
-        tile_regs_release();
+        pack_l1_acc_block(dfb::partial, first, n, base);
     }
     if (last) {
         partial.push_back(total);
