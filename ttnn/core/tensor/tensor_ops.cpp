@@ -51,6 +51,23 @@ using ttnn::Tensor;
 
 namespace ttnn {
 
+namespace {
+
+// The label of a tensor allocated across the mesh without a mapper, one shard per device: Replicate along every mesh
+// axis, over every coordinate. create_device_tensor and allocate_tensor_on_host label their tensors alike.
+TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
+        mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
+    coordinates.reserve(mesh_shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        coordinates.push_back(coord);
+    }
+    return TensorTopology{mesh_shape, std::move(placements), std::move(coordinates)};
+}
+
+}  // namespace
+
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -71,9 +88,8 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        host_tensor_from_buffer_with_topology(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
+    return Tensor(host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), tensor_spec, replicated_over_mesh(device->shape())));
 }
 
 Tensor create_device_tensor(
@@ -94,22 +110,7 @@ Tensor create_device_tensor(
         if (tensor_topology.has_value()) {
             return std::move(*tensor_topology);
         }
-        // TODO (#25340): Implement correct logic and add test for this
-        // River: why are we constructing the topology here like this instead of using the
-        // TensorTopology::create_fully_replicated_tensor_topology function?
-        //
-        // Use Replicate as default value for placements in MeshMapperConfig
-        const auto& mesh_shape = mesh_device->shape();
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
-            mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
-        coordinates.reserve(mesh_shape.mesh_size());
-        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
-            coordinates.push_back(coord);
-        }
-
-        return TensorTopology{mesh_shape, placements, std::move(coordinates)};
+        return replicated_over_mesh(mesh_device->shape());
     });
 
     output = Tensor(allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, topology));
