@@ -977,3 +977,21 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   on every chip) could keep the GLM streams at link rate, for at most ~9 us on GLM and none on K3.
 - Projection note: the latent's line-vs-ring difference (3 blocks a direction on the line's end chips, 2 on the
   ring) is not credited in galaxy_projection - K3's SE path is overestimated by about one latent block (~6 us).
+
+### GLM: the engine's router phase (both paths) - two buffered rounds, the x lead on NOC0
+- GLM's two paths bind together (SE 158-161, chain 153-163). The router phase on the engine (x rows along the rows,
+  W_r^T down the columns, the partial logits) ran ~18 us before gate / up: in GU_ALONE (89 vs 73 without it) and in
+  front of every chain step. Per-round stamps (SE_PROBE=RTRSTAT, not kept): 4 rounds of 8-tile chunks, each a chain
+  of DRAM read + multicast + ready word + acks, lockstep over the grid; the x leads' 64 KB reads take 4-8 us at
+  kernel start (DRAM contended: XLOAD and the gather's ports read the same x shard - XLOAD ends at up to 19 us).
+- Now: two rounds of KTO / 2, a buffer each (no slot reused: no acks), the W_r^T lead reading the next round while
+  the last one's multicast goes; the row's x lead is the BRISC (NOC0) - the NCRISC's x row and W_r^T column
+  multicasts were on one NoC (row + column multicasts on one NoC stall). The x lead sets the row's ready word from
+  its own source word (RXS): each core's NCRISC re-arms its ready words after the last round.
+- Router load end 19 -> 16 us; GU_ALONE (GLM, router on the engine; SE_PROBE=NOXWAIT, the slowest chip's gate / up
+  end) re-measured 89 -> 82 (galaxy_projection updated). Head, Galaxy-projected from the mesh's last launch, 3 runs:
+  162 / 161 / 164 (SE 162 / 150 / 164 - gather-bound runs vary with the launch skew; chain 160 / 161 / 161). K3
+  (router cores) unaffected: 388. Soak: GLM 1000, K3 300, clean.
+- The chain (dev 6, LoudBox): logits in 60, fin + sigmoid + top-K to 96 (floor 14), rows 92, the planner's
+  pre-exchange to ~110 (RA_DBG: home counts 2.4, totals exchange 3.9, staging 7-9), the exchange, post-arrival
+  20-24 (headers / sources / ranges 4.5, then 6, 8.5). Not cut yet.

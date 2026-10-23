@@ -33,7 +33,7 @@ U = {"glm": 28.0, "k3": 49.0}  # (us: one unit at 47 GB/s)
 E_GATHER = 1.3  # (the fused gather's time over its link floor, measured on the line)
 # (gate / up's end with no gather wait, from a chip's start - the router phase on the engine included when it runs
 # there: the head's own shapes, SE_PROBE=NOXWAIT, the slowest chip; keyed by the router's place)
-GU_ALONE = {("glm", True): 89.0, ("glm", False): 73.0, ("k3", True): 307.0, ("k3", False): 272.0}
+GU_ALONE = {("glm", True): 82.0, ("glm", False): 73.0, ("k3", True): 307.0, ("k3", False): 272.0}
 CHAIN_GROWTH = {"glm": 20.0, "k3": 20.0}
 LOGITS_AFTER_GATHER = {"glm": False, "k3": False}
 FREQ = 1350.0
