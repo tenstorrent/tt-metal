@@ -6960,13 +6960,13 @@ def run_ring_joint_sdpa_sliding_lanes_case(
             ),
         )
 
-        def make_program_config(max_k_splits):
+        def make_program_config(k_splits):
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=runtime.sdpa_compute_grid,
                 q_chunk_size=q_chunk_size,
                 k_chunk_size=k_chunk_size,
                 exp_approx_mode=False,
-                max_k_splits=max_k_splits,
+                k_splits=k_splits,
             )
 
         program_config = make_program_config(1)
@@ -7125,7 +7125,7 @@ def run_ring_joint_sdpa_sliding_lanes_case(
             return
 
         # A lanes call runs one unit per (lane, head, Q chunk): a K split is rejected at validation.
-        with expect_error(RuntimeError, "max_k_splits must be 1 and segmented accumulation off"):
+        with expect_error(RuntimeError, "k_splits must be 1 and segmented accumulation off"):
             invoke(tt_lanes_q, lane_slots, lane_prefixes, config=make_program_config(3))
         # The other lanes contract checks.
         with expect_error(RuntimeError, "must have one element per lane like slot_id"):

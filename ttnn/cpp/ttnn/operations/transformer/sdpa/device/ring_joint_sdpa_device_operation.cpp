@@ -445,9 +445,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !tensor_args.joint_q.has_value() && !tensor_args.attention_sink.has_value() && !args.circular_kv_cache,
             "Lanes do not support joint tensors, an attention sink, or a circular cache");
         TT_FATAL(
-            args.program_config.has_value() && args.program_config->max_k_splits <= 1 &&
+            args.program_config.has_value() && args.program_config->k_splits <= 1 &&
                 !args.program_config->segmented_accumulation,
-            "Lanes run one unit per (lane, head, Q chunk): max_k_splits must be 1 and segmented accumulation off");
+            "Lanes run one unit per (lane, head, Q chunk): k_splits must be 1 and segmented accumulation off");
         TT_FATAL(
             gathered_input_tensor_k.logical_shape()[0] == num_lanes &&
                 (!tensor_args.gathered_v.has_value() || tensor_args.gathered_v->logical_shape()[0] == num_lanes),

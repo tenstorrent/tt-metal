@@ -751,7 +751,7 @@ void bind_sdpa(nb::module_& mod) {
         Q holds their CP-local rows stacked request-major, [1 x nh x B*N/num_devices x d] (Q batch 1, rows
         split into B tile-aligned lanes), and the output stacks the same way. Request b reads cache slot
         slot_id[b] with prior length kv_actual_isl[b]. The persistent K/V halo buffers take batch B.
-        Lanes need chunked sliding attention on the metadata path, max_k_splits 1 without segmented
+        Lanes need chunked sliding attention on the metadata path, k_splits 1 without segmented
         accumulation, kv_stripe_split 1, and no joint tensors, attention sink or circular cache.
 
         Returns:
