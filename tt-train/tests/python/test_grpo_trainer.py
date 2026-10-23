@@ -15,12 +15,11 @@ Speed strategy:
     ``_download_hf_repo`` and ``load_from_safetensors`` in
     ``ttml.trainers.grpo_trainer.grpo_ttml_model`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
-  * Exactly one optimizer step (``gradient_accumulation_steps=1``,
-    ``num_iterations=1``, ``prompts_to_train=2``). On this single device
+  * Exactly one optimizer step (``num_iterations=1``,
+    ``prompts_to_train=2 * gradient_accumulation_steps``). On this single device
     ``per_device_train_batch_size=4`` and ``num_generations=2`` give a
-    per-micro-batch prompt count of ``4 * 1 / 2 = 2``, and with
-    ``gradient_accumulation_steps=1`` the generation batch is also 2 prompts
-    (one micro-batch per optimizer step).
+    per-micro-batch prompt count of ``4 * 1 / 2 = 2``, so the generation batch
+    has ``gradient_accumulation_steps`` micro-batches of 2 prompts.
   * ``num_generations=2`` is the minimum that yields a non-zero advantage
     (group of 1 -> mean == reward -> advantage == 0 -> loss == 0).
 
@@ -34,7 +33,6 @@ from __future__ import annotations
 
 import collections
 import contextlib
-import csv
 import queue
 import threading
 from types import SimpleNamespace
@@ -48,6 +46,7 @@ from datasets import Dataset
 from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import repeat_interleave
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import (
@@ -61,6 +60,12 @@ from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
 from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, sync_remote_rollout_batch_source
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
+from ttml.trainers.grpo_trainer.rollout_batch_source import (
+    InProcessRolloutBatchSource,
+    RolloutBatchSource,
+    score_rollout,
+    validate_rollout_batch,
+)
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -158,6 +163,7 @@ class _RecordingCallback(TrainerCallback):
         self.step_end = 0
         self.train_end = 0
         self.last_step_metrics: dict | None = None
+        self.final_step_time_s: float | None = None
 
     def on_train_begin(self, trainer):
         self.train_begin += 1
@@ -171,6 +177,7 @@ class _RecordingCallback(TrainerCallback):
 
     def on_train_end(self, trainer):
         self.train_end += 1
+        self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
 @pytest.fixture
@@ -189,15 +196,21 @@ def patch_llama_weight_loading(monkeypatch):
 
 @pytest.mark.requires_device
 @pytest.mark.parametrize(
-    "lr_scheduler_type, warmup_steps, use_clip_grad_norm, expected_first_lr_scale",
+    "lr_scheduler_type, warmup_steps, use_clip_grad_norm, gradient_accumulation_steps, expected_first_lr_scale",
     [
-        ("constant", 0, False, 1.0),
-        ("cosine", 0, True, 1.0),
-        ("constant_with_warmup", 2, False, 0.5),
+        ("constant", 0, False, 1, 1.0),
+        ("cosine", 0, True, 2, 1.0),
+        ("constant_with_warmup", 2, False, 1, 0.5),
     ],
 )
 def test_grpo_trainer_one_step_smoke(
-    patch_llama_weight_loading, tmp_path, lr_scheduler_type, warmup_steps, use_clip_grad_norm, expected_first_lr_scale
+    patch_llama_weight_loading,
+    tmp_path,
+    lr_scheduler_type,
+    warmup_steps,
+    use_clip_grad_norm,
+    gradient_accumulation_steps,
+    expected_first_lr_scale,
 ):
     """One full GRPO optimizer step on a tiny random-init Llama.
 
@@ -210,12 +223,12 @@ def test_grpo_trainer_one_step_smoke(
         epsilon=0.2,
         per_device_train_batch_size=4,
         num_iterations=1,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         logging_steps=1,
         output_dir=str(tmp_path),
         checkpointing=False,
         checkpoint_interval=999,
-        prompts_to_train=2,
+        prompts_to_train=2 * gradient_accumulation_steps,
         temperature=1.0,
         max_completion_length=4,
         num_generations=2,
@@ -226,7 +239,7 @@ def test_grpo_trainer_one_step_smoke(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
-    user_prompts = ["What is 1+1?", "Name a color."]
+    user_prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"]
     dataset = Dataset.from_dict(
         {
             "prompt": [
@@ -237,7 +250,7 @@ def test_grpo_trainer_one_step_smoke(
                 )
                 for p in user_prompts
             ],
-            "answer": ["2", "blue"],
+            "answer": ["2", "blue", "apple", "4"],
         }
     )
 
@@ -318,13 +331,8 @@ def test_grpo_trainer_one_step_smoke(
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
 
-    # ``step_time_s`` is sealed after the non-monitor ``on_step_end`` callbacks
-    # and cleared by the end-of-step metrics reset, so read it from the row the
-    # default GRPOMonitor wrote.
-    with open(tmp_path / "grpo_metrics.csv", newline="") as f:
-        rows = list(csv.DictReader(f))
-    assert len(rows) == 1, f"expected one metrics row, got {len(rows)}"
-    step_time_s = float(rows[0]["step_time_s"])
+    step_time_s = recorder.final_step_time_s
+    assert step_time_s is not None, "missing metric step_time_s"
     assert np.isfinite(step_time_s) and step_time_s > 0.0, f"step_time_s is not a positive duration: {step_time_s}"
 
     after = trainer.model.parameters()[snapshot_name].to_numpy(ttnn.DataType.FLOAT32)
@@ -594,7 +602,7 @@ def _run_train_loop_on_host(monkeypatch):
     """Run ``GRPOTrainer.train()`` on host fakes: one scored batch of 2 prompts x 2 generations,
     ``num_iterations=2``, a checkpoint every step. The fake scheduler halves the LR each step."""
     from ttml.trainers import GRPOMonitor
-    from ttml.trainers.grpo_trainer.rollout_batch_source import RolloutBatchSource, ScoredRolloutBatch
+    from ttml.trainers.grpo_trainer.rollout_batch_source import ScoredRolloutBatch
 
     run = SimpleNamespace(clock=0.0, batches_drawn=0, events=[], pi_old=[], saved_lrs=[], metrics_by_step={})
     monkeypatch.setattr(grpo_trainer_module, "time", SimpleNamespace(perf_counter=lambda: run.clock))
@@ -945,3 +953,122 @@ def test_failed_trainer_shuts_down_the_rollout_server(mpi_loopback, monkeypatch,
     assert at_exit == [client.shutdown]
     at_exit[0]()
     assert queues[mpi_rollout._INFER_REQ_HDR_TAG].empty()
+
+
+class _RepeatSampler(_EchoSampler):
+    """Returns each prompt twice, as its two completions."""
+
+    def generate(self, prompts):
+        return super().generate(repeat_interleave(prompts, 2))
+
+
+def test_in_process_source_scores_each_batch():
+    answers = []
+
+    def length_reward(completions, answer, **_):
+        answers.append(answer)
+        return [float(len(c)) for c in completions]
+
+    source = InProcessRolloutBatchSource(
+        sampler=_RepeatSampler(),
+        prompts=[[1], [2, 3], [4], [5, 6]],
+        extra_columns={"answer": ["a", "b", "c", "d"]},
+        batch_prompts=2,
+        tokenizer=_IdsTokenizer(),
+        reward_funcs=[length_reward],
+        num_generations=2,
+        max_completion_length=4,
+    )
+    batches = list(source)
+
+    assert [b.rollout.prompts for b in batches] == [[[1], [1], [2, 3], [2, 3]], [[4], [4], [5, 6], [5, 6]]]
+    assert answers == [["a", "a", "b", "b"], ["c", "c", "d", "d"]]
+    np.testing.assert_array_equal(batches[0].rewards, [3.0, 3.0, 6.0, 6.0])
+
+
+def test_score_rollout_rejects_unexpanded_prompts(expect_error):
+    rollout = RolloutBatch(
+        weight_version=0, prompts=[[1], [2]], completions=[[7], [7]], logprobs=np.zeros((2, 4), np.float32)
+    )
+    with expect_error(RuntimeError, "each prompt repeated num_generations times"):
+        score_rollout(
+            rollout,
+            [[1], [2]],
+            {},
+            tokenizer=_IdsTokenizer(),
+            reward_funcs=[lambda completions, **_: [0.0] * len(completions)],
+            num_generations=2,
+            generation_time_s=0.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "completions, logprobs, message",
+    [
+        ([[7]], np.zeros((1, 4), np.float32), "expected 2 rows"),
+        ([[7], [7]], np.zeros((2, 3), np.float32), "logprobs must be a float32 array"),
+        ([[7], [7]], np.zeros((2, 4), np.float64), "logprobs must be a float32 array"),
+        ([[7], [7] * 5], np.zeros((2, 4), np.float32), "completion length 5 > max_completion_length 4"),
+        ([[7], [7]], np.array([[0.5, 0, 0, 0], [0, 0, 0, 0]], np.float32), "invalid behavior log-probs"),
+        ([[7], [7]], np.array([[np.nan, 0, 0, 0], [0, 0, 0, 0]], np.float32), "invalid behavior log-probs"),
+    ],
+)
+def test_validate_rollout_batch_rejects(expect_error, completions, logprobs, message):
+    rollout = RolloutBatch(
+        weight_version=0, prompts=[[1]] * len(completions), completions=completions, logprobs=logprobs
+    )
+    with expect_error(RuntimeError, message):
+        validate_rollout_batch(rollout, num_prompts=1, num_generations=2, max_completion_length=4)
+
+
+class _FakeRolloutClient:
+    """Records weight pushes; remote_generate echoes the prompts at the version the rollout rank holds."""
+
+    def __init__(self, applies_pushes=True):
+        self.applies_pushes = applies_pushes
+        self.pushed = []
+        self.version = -1
+
+    def send_weights(self, weights, version):
+        self.pushed.append(version)
+        if self.applies_pushes:
+            self.version = version
+
+    def remote_generate(self, prompts):
+        return prompts, [[-0.5] * len(p) for p in prompts], self.version
+
+
+def _sync_source(monkeypatch, client, weight_sync_every):
+    monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    return SyncRemoteRolloutBatchSource(
+        client=client,
+        prompts=[[1], [2], [3], [4]],
+        extra_columns={},
+        batch_prompts=1,
+        tokenizer=_IdsTokenizer(),
+        reward_funcs=[lambda completions, **_: [0.0] * len(completions)],
+        num_generations=1,
+        max_completion_length=4,
+        weight_sync_every=weight_sync_every,
+    )
+
+
+def test_sync_remote_source_pushes_every_weight_sync_every_steps(monkeypatch):
+    client = _FakeRolloutClient()
+    source = _sync_source(monkeypatch, client, weight_sync_every=2)
+
+    source.update_weights(None, 0)
+    versions = []
+    for step, scored in enumerate(source, start=1):
+        versions.append(scored.rollout.weight_version)
+        source.update_weights(None, step)
+
+    assert versions == [0, 0, 2, 2]
+    assert client.pushed == [0, 2, 4]
+
+
+def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_error):
+    source = _sync_source(monkeypatch, _FakeRolloutClient(applies_pushes=False), weight_sync_every=1)
+    source.update_weights(None, 0)
+    with expect_error(RuntimeError, "generated with weight_version -1, expected 0"):
+        next(iter(source))
