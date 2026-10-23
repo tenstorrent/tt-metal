@@ -7429,7 +7429,7 @@
   ],
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 4938.8,
+  "duration_s": 0.0,
   "full_pending": true,
   "history": [
    {
@@ -7448,9 +7448,14 @@
     "s": 4938.8,
     "status": "PASS",
     "t": "2026-10-23T01:48:49"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-23T01:49:49"
    }
   ],
-  "last_run": "2026-10-23T01:48:49",
+  "last_run": "2026-10-23T01:49:49",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.17.log",
   "metrics": {
    "device_ms_total": 83.47,
@@ -7521,51 +7526,10 @@
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": {
-   "reused": [],
-   "units": {
-    "P.17#dec_candidate": "4e462a21373bf12a",
-    "P.17#dec_candidate_14": "b7fb77d3993b2054",
-    "P.17#dec_reindex": "e3559397c45ee947",
-    "P.17#dec_reindex_13": "8507a0bf47a86ca9",
-    "P.17#dec_reuse": "3e110b3a9afbcf68",
-    "P.17#dec_reuse_12": "1079813ee12c4932",
-    "P.17#enc_reuse": "516ca7a1862e01ec",
-    "P.17#enc_reuse_12": "51b3d4300d36f6f4",
-    "P.17#enc_source": "e2f14bd4f61a33d9",
-    "P.17#enc_source_14": "d5d2c4dfc888d2ab",
-    "P.17#enc_source_engram": "96595af3fee29e8a",
-    "P.17#enc_source_engram_17": "e2f862b57b3c993d",
-    "P.17#swa": "b4ddedd7a90f0ee6",
-    "P.17#swa_12": "9903b71844cc3ffd",
-    "P.17#swa_engram": "4c6443a971ec5474",
-    "P.17#swa_engram_15": "74991fa21b9bd7ac",
-    "P.17#test_ladder": "3687b37e2872f20d",
-    "P.17#test_profile": "462779ab65fdb066"
-   }
-  },
-  "started": "2026-10-23T00:26:29",
+  "stamp": null,
+  "started": "2026-10-23T01:49:48",
   "status": "PASS",
-  "units": {
-   "P.17#dec_candidate": "PASS",
-   "P.17#dec_candidate_14": "PASS",
-   "P.17#dec_reindex": "PASS",
-   "P.17#dec_reindex_13": "PASS",
-   "P.17#dec_reuse": "PASS",
-   "P.17#dec_reuse_12": "PASS",
-   "P.17#enc_reuse": "PASS",
-   "P.17#enc_reuse_12": "PASS",
-   "P.17#enc_source": "PASS",
-   "P.17#enc_source_14": "PASS",
-   "P.17#enc_source_engram": "PASS",
-   "P.17#enc_source_engram_17": "PASS",
-   "P.17#swa": "PASS",
-   "P.17#swa_12": "PASS",
-   "P.17#swa_engram": "PASS",
-   "P.17#swa_engram_15": "PASS",
-   "P.17#test_ladder": "PASS",
-   "P.17#test_profile": "PASS"
-  },
+  "units": null,
   "waiting": null
  },
  "P.18": {
@@ -9144,7 +9108,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
