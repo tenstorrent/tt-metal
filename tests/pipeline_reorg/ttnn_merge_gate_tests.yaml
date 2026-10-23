@@ -170,3 +170,50 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
+
+# ---------------------------------------------------------------------------------------------
+# Quasar simulator smoke (#61750 follow-up): a merge-gate-sized subset of the four sim_quasar sanity
+# groups in ttnn_sanity_tests.yaml, on the same two-compute-node grid
+# (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2"). Only files whose every case passes on the
+# simulator are listed, so these legs do not depend on the quasar section of ttsim-skip-list.yaml (the
+# impl still applies it). The sanity groups keep the full suites. -n 0 on the model-op suites: their
+# conftest holds one device flock per module, which makes xdist workers time out.
+# ---------------------------------------------------------------------------------------------
+
+# resnet50 per-op files: tilize/untilize/to_layout/sharding data movement, add, the FC linear and a
+# downsample conv2d (the Quasar matmul and conv compute kernels).
+- name: "ttnn quasar resnet50 ops smoke"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
+
+# llama32_1b decode-path graph ops: embedding, linear, qkv heads create/concat, transpose, concat,
+# untilize, add, memory config.
+- name: "ttnn quasar llama32_1b graph ops smoke"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" MESH_DEVICE=N150 pytest --timeout 600 -v -n 0 -m emulator models/experimental/llama32_1b_quasar/tests/graph_ops/test_embedding_small_grid.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_linear_small_grid.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_nlp_create_qkv_heads_decode.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_nlp_concat_heads_decode_small_grid.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_transpose.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_concat_small_grid.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_untilize_small_grid.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_add.py models/experimental/llama32_1b_quasar/tests/graph_ops/test_to_memory_config.py
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
+
+# Compute ops the yolo suite adds: max_pool2d, upsample, sigmoid, binary multiply/subtract/div, pad,
+# reshard, slice, to_dtype. (Not mixed with qwen3_vl files: each suite's conftest marks `emulator`
+# cases with its own rule over every collected item, so a joint session selects cases the other suite
+# does not run.)
+- name: "ttnn quasar yolo ops smoke"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/yolo_ops/test_max_pool2d.py models/experimental/ops/quasar/tests/yolo_ops/test_upsample.py models/experimental/ops/quasar/tests/yolo_ops/test_sigmoid.py models/experimental/ops/quasar/tests/yolo_ops/test_multiply.py models/experimental/ops/quasar/tests/yolo_ops/test_subtract.py models/experimental/ops/quasar/tests/yolo_ops/test_div.py models/experimental/ops/quasar/tests/yolo_ops/test_pad.py models/experimental/ops/quasar/tests/yolo_ops/test_reshard.py models/experimental/ops/quasar/tests/yolo_ops/test_slice.py models/experimental/ops/quasar/tests/yolo_ops/test_to_dtype.py
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
