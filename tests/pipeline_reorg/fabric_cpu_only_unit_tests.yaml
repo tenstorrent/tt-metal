@@ -102,7 +102,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
   skus:
     cpu_medium:
-      timeout: 40
+      timeout: 37
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
