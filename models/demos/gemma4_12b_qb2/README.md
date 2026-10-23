@@ -43,14 +43,14 @@ The device sampler covers top_k 1..32, so the server caps the checkpoint's top_k
 
 | Point | TTFT | Decode |
 |---|---|---|
-| 1 user, 128/128 | 36 ms | 12.3 ms/token |
-| 32 users, 128/128 | 0.89 s | 1,494 tok/s total |
-| 1 user, 4096/128 | 210 ms | 13.2 ms/token |
-| 32 users, 4096/128 | 2.23 s | 466 tok/s total |
-| 1 user, 32768/128 | 2.37 s | 13.7 ms/token |
-| 1 user, 131072/128 | 20.4 s | 15.6 ms/token |
+| 1 user, 128/128 | 36 ms | 12.6 ms/token |
+| 32 users, 128/128 | 0.89 s | 1,499 tok/s total |
+| 1 user, 4096/128 | 212 ms | 15.9 ms/token |
+| 32 users, 4096/128 | 2.25 s | 466 tok/s total |
+| 1 user, 32768/128 | 2.36 s | 22.3 ms/token |
+| 1 user, 131072/128 | 20.2 s | 44.3 ms/token |
 
-GPQA Diamond 66.7 (198 questions, thinking on; card 78.8, TT reference 65). Earlier CI runs on the same model code:
+GPQA Diamond 67.2 (198 questions, thinking on; card 78.8, TT reference 65). Earlier CI runs on the same model code:
 AIME 2026 71.7 (30 x 4; card 77.5), MMLU-Pro 73.1 (849 questions, 16K output cap; card 77.2). Accuracy against HF on
 the AIME24 chat reference (100 tokens): top-1 95-96%, top-5 / top-100 100%.
 
