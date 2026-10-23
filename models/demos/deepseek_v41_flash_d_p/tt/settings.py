@@ -29,6 +29,15 @@ TABLE = {
         "chunk (engram_kv 6.02 -> 4.87; mHC hc_fn, router: unchanged); the engram wkv matmul at bfp8 [1024, 6144] x "
         "[6144, 12800]: 2.48 ms HiFi2 (rel 0.0041 vs float64, bias -0.28 %, K-25)",
     ),
+    "MATMUL_CONFIG": Setting(
+        "tuned",
+        ("tuned", "auto"),
+        "the program config of the model's dense ttnn.linear / ttnn.matmul calls (tt/mm_configs.py, P.23, owner "
+        "comparison): auto = none passed, ttnn picks it (the path before P.23); tuned = the config a rule derives "
+        "from the call's M, K, N, dtypes, fp32 DEST and the compute grid (swept per call site by "
+        "tests/perf/test_matmul_sweep.py), auto where the rule has no entry. Dtypes, compute kernel configs, memory "
+        "configs and the op sequence are the same either way",
+    ),
     "FP32_ACC": Setting(
         "needed",
         ("all", "needed"),

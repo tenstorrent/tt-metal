@@ -3039,3 +3039,51 @@ Left as literals (not switches): HiFi4 + fp32 DEST in tt/norm.py (the rms_norm f
 Forks: mhc_pre_ttnn / rms_norm_ttnn env reads are marked `diagnostic`; flat_routed_expert_ttnn's ~60 MIMO_FL_* reads
 are pre-existing fork knobs (F106, not converted here; the model's tuned values come from the fork defaults). Listed for the
 owner: converting them to op arguments is a separate task.
+
+## P.23 perf attempt 1 (2026-10-23): matmul program configs from a rule (MATMUL_CONFIG tuned / auto)
+
+What: every dense ttnn.linear / ttnn.matmul of the model goes through `tt/mm_configs.py` (`mm.linear` / `mm.matmul`;
+sites attn.wq_b / wo_a / wo_b, q_a, engram_kv, router, indexer.wq_b / weights_proj, compressor, hc.fn). Setting
+MATMUL_CONFIG: auto = no program config (the old path), tuned (default) = `mm_configs.rule(M, K, N, dtypes, fp32 DEST,
+grid, batch)`. Nothing else changed: dtypes, compute kernel configs (HiFi2, fp32 DEST, packer_l1_acc off), DRAM
+interleaved memory configs, op sequence. The rule (K-51: auto is slow at fp32 DEST):
+- batch > 1 (wo_a, one weight per group): auto. DS41-113: MatmulMultiCoreReuseProgramConfig needs per_core_N == N and
+  rounds its K-block partials to bf16 (rel vs fp64 9.5e-3..2.8e-2 vs auto 4.4e-3); no other config takes per-batch
+  weights.
+- bf16 output and N > 4 tiles per grid column: ttnn.experimental.minimal_matmul, M4 K4 N8, subblock 2x2 (DS41-112).
+- else 2D multicast (GLM-5.3's mm2d): M over grid rows, N over grid columns, in0_block_w 16/8/4/2/1 within
+  L1_BUDGET 1.1 MB, the largest-area out subblock in DEST.
+Sweep (tests/perf/test_matmul_sweep.py; one call per site, model's exact shapes / dtypes / ckc from an in-model capture,
+L1 as the model leaves it: 1382 KiB free for CBs at every matmul call, DS41-114; stale-L1 check = a same-shape auto run
+on other inputs right before each candidate; determinism over 2 runs and 4 chips; device time from the real-time
+profiler, 20 calls; error vs float64 on the device-rounded inputs). 2x2, grid 11x10, ms per call:
+
+| site (calls / chunk) | shape | auto | tuned | config | vs auto (rel) | vs fp64 (both) | ms / chunk |
+|---|---|---|---|---|---|---|---|
+| attn.wq_b (8) | 1024x1280 bf16 . 1280x8192 bfp8 -> bf16 | 0.6254 | 0.1533 | minimal M4 K4 N8 | 0 | 4.378e-3 | 5.00 -> 1.23 |
+| attn.wo_b (8) | 1024x2048 bf16 . 2048x5120 bfp8 -> bf16 | 0.5928 | 0.1376 | minimal M4 K4 N8 | 3.4e-6 | 4.382e-3 | 4.74 -> 1.10 |
+| engram_kv (2) | 1024x6144 bf16 . 6144x12800 bfp8 -> bf16 | 2.3117 | 0.7956 | minimal M4 K4 N8 | 1.1e-5 | 4.380e-3 | 4.62 -> 1.59 |
+| attn.wo_a (8) | 2x1024x4096 bf16 . 2x4096x1024 bfp8 -> bf16 | 0.4761 | = | auto (DS41-113) | 0 | 4.382e-3 | 3.81 |
+| q_a (8) | 1024x2560 bf16 . 2560x1792 bfp8 -> bf16 | 0.3072 | 0.0684 | minimal M4 K4 N8 | 0 | 4.381e-3 | 2.46 -> 0.55 |
+| router (8) | 1024x5120 bf16 . 5120x96 bf16 -> fp32 | 0.0862 | 0.0692 | 2d 3x8 pm4 pn1 bw16 sb4x1 | 0 | 4.072e-3 | 0.69 -> 0.55 |
+| indexer.wq_b (4) | 512x1280 bf16 . 1280x4096 bfp8 -> bf16 | 0.1573 | 0.0492 | minimal M4 K4 N8 | 0 | 4.386e-3 | 0.63 -> 0.20 |
+| hc.fn (3) | 1024x10240 bf16 . 10240x32 fp32 -> fp32 | 0.1540 | 0.0993 | 2d 1x8 pm4 pn1 bw16 sb4x1 | 0 | 4.587e-3 | 0.46 -> 0.30 |
+| compressor (2) | 1024x2560 bf16 . 2560x1024 bf16 -> bf16 | 0.1511 | 0.0452 | 2d 11x8 pm4 pn3 bw16 sb4x1 | 0 | 4.375e-3 | 0.30 -> 0.09 |
+
+Best seen per site: within 2 % of the rule's pick everywhere except indexer.wq_b (minimal N16 0.0466) and wo_b (minimal
+M16 0.1365); router 1D in1-mcast bw8 0.0632. Rejected: minimal for fp32 outputs (router vs fp64 4.33e-3 vs 4.07e-3);
+every batched config (above). Explicit 2D on wo_b reached 0.1456 (bit-identical) vs minimal 0.137.
+Other boxes (test_rule_boxes): every call at 640 / 512 rows (galaxy_8x4) with TP-4 widths (2560 -> 1280, 12800 ->
+6400), on the 11x10 grid and an 8x8 sub-grid: the rule's config ran, deterministic, error vs fp64 = auto's, 1.6-3.3x
+faster (e.g. wq_b 640 rows 0.264 -> 0.087; engram 0.733 -> 0.293); wo_a -> auto.
+In the model: capture with tuned: chunk out vs golden rel 0.02803 (auto 0.02803). Quick A/B (measure, on): every layer
+and state within its limit, worst L03 rel 0.08050 (P.22 0.08050), wall 97.4 ms. gate P.23 --check: PASS (8 swap units,
+ladder last, profile), device_ms_total 69.66 (X.3 83.08): attention 30.27 -> 22.83, engram_kv 4.62 -> 1.59, q_a 3.09
+-> 1.19, indexer 11.69 -> 11.24, compressor 1.33 -> 1.03, attn_hc 1.74 -> 1.58, router 1.04 -> 0.90; clean wall 98.6 ms
+(X.3 120.3). Out of scope: the experts' fused matmuls; packer_l1_acc (GLM's other change) untouched.
+Gotchas: `-k sweep` also selects test_capture (module name); MemoryView block addresses are base-relative (DS41-114);
+minimal_matmul M8 K8 N16 (and on engram M8 K4 N16 / M16 K4 N8) refused: CBs beyond L1 (dataflow_buffer.cpp:2695) or clashing with the filler that stands for the model's L1 buffers (:2704); the rule's M4 K4 N8 needs ~330 KB.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k "test_capture"` (DS41_MATMUL_CONFIG=auto writes
+calls_auto.json), then `-k "test_sweep or test_rule_boxes"`; gate: `PYTHONPATH=$PWD python -m
+models.demos.common.bringup gate P.23 --spec models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.
