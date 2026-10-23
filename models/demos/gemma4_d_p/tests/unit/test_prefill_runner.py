@@ -3,6 +3,8 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -120,6 +122,52 @@ def test_prefix_reuse_replays_computed_chunks(slot_id, previous_end, actual_star
     runtime.slot_ends = [0] * runtime.config.num_users
     runtime.slot_ends[slot_id] = previous_end
     runtime.validate_chunk(slot_id, actual_start, actual_end)
+
+
+@pytest.mark.parametrize(
+    "slot_id,previous_end,actual_start,actual_end",
+    [(0, 16384, 0, 8192), (1, 32768, 8192, 12000)],
+    ids=["restart-at-zero", "shorter-shared-prefix"],
+)
+def test_prefill_replay_invalidates_old_suffix_before_continuing(
+    monkeypatch, expect_error, slot_id, previous_end, actual_start, actual_end
+):
+    import ttnn
+
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = service_params()
+    runtime.mesh_config = SimpleNamespace(cp_degree=8)
+    runtime.mesh_device = object()
+    runtime.input_tokens = object()
+    runtime.trace_id = 1
+    runtime.d2h_service = None
+    runtime.layer_completion_sink = None
+    runtime.slot_ends = [8192] * runtime.config.num_users
+    runtime.slot_ends[slot_id] = previous_end
+    monkeypatch.setattr(runtime, "_check_cache", Mock())
+    monkeypatch.setattr(runtime, "_stage_positions", Mock())
+    for name in ("reshape", "copy", "execute_trace", "synchronize_device", "deallocate"):
+        monkeypatch.setattr(ttnn, name, Mock())
+
+    kv_cache = object()
+
+    def prefill(start, end):
+        runtime.prefill_chunk(object(), kv_cache, slot_id=slot_id, actual_start=start, actual_end=end)
+
+    prefill(actual_start, actual_end)
+    expected_ends = [8192] * runtime.config.num_users
+    expected_ends[slot_id] = actual_end
+    assert runtime.slot_ends == expected_ends
+
+    with expect_error(ValueError, f"Slot {slot_id} holds {actual_end} tokens, got a chunk at {previous_end}"):
+        prefill(previous_end, previous_end + runtime.config.chunk_size)
+
+    # Recompute the suffix, replaying the partial tail when needed, then extend past the old end.
+    chunk_size = runtime.config.chunk_size
+    for start in range(actual_end // chunk_size * chunk_size, previous_end + chunk_size, chunk_size):
+        prefill(start, start + chunk_size)
+        expected_ends[slot_id] = start + chunk_size
+        assert runtime.slot_ends == expected_ends
 
 
 @pytest.mark.parametrize(

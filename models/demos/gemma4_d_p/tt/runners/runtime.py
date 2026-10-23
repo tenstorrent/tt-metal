@@ -172,6 +172,9 @@ class Gemma4PrefillRuntime:
         self._stage_positions(slot_id, actual_start)
         ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.mesh_device)
+        # Replay can write different tokens or padding, invalidating the previous suffix.
+        # Track this request's valid KV frontier, even when it shrinks; later chunks must
+        # recompute that suffix before they can continue from the old frontier.
         self.slot_ends[slot_id] = actual_end
         if self.layer_completion_sink is not None:
             self.layer_completion_sink.layers_completed(0, self.num_ack_layers, slot_id, actual_start, actual_end)
