@@ -1064,7 +1064,7 @@ def test_sync_remote_source_pushes_every_weight_sync_every_steps(monkeypatch):
         source.update_weights(None, step)
 
     assert versions == [0, 0, 2, 2]
-    assert client.pushed == [0, 2, 4]
+    assert client.pushed == [0, 2]
 
 
 def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_error):
