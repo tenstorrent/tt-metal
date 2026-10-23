@@ -23,11 +23,12 @@ The plugin decides host or device per step before the call (min_p, logit_bias, b
 min_tokens, structured output and logprobs stay on its host sampler) and a step without ``sampling_params`` returns
 the row as before.  Prefill sampling (mode ``"all"``) is refused at warmup: prefill returns the row.
 
-The prefill form is the environment's (``prefill_form``): ``QWEN38_PREFILL_SLAB`` (default 2048) opens the chain
-with a prefill slab of that many rows ahead of the 128-row and 32-row chunks; ``0`` or ``off`` serves without the
-slab, where ``QWEN38_LONG_CHUNKS=1`` still turns the 128-row chunks on.  The slab's resident dense weights are
-admitted against the free DRAM when the chain opens; a refusal ends the start-up naming the knob, never a silent
-fallback.  One log line after the open states the form the chain opened in.
+The prefill form is the environment's (``prefill_form``): ``QWEN38_PREFILL_SLAB`` opens the chain with a prefill
+slab of that many rows ahead of the 128-row and 32-row chunks; unset, ``0`` or ``off`` serves without the slab: the
+128-row chunks, then the 32-row chunks, as the chat server serves (``QWEN38_LONG_CHUNKS=0``: the 32-row chunks
+alone).  When the chain opens, the slab's resident dense weights are admitted against the free DRAM and the model
+asks moe_compute whether it takes the slab's rows in one call; a refusal of either ends the start-up naming the knob,
+never a silent fallback.  One log line after the open states the form the chain opened in.
 
 vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened
 here and ``sys.argv`` is not read.
@@ -68,10 +69,10 @@ from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_QSA_CACHE_CAPACITIES, Qwen38ResidentContext
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
-    DEFAULT_SLAB_ROWS,
     FABRIC_CONFIG,
     MESH_SHAPE,
     TP_SIZE,
+    Qwen38SlabRefused,
     is_slab_rows,
 )
 
@@ -82,8 +83,8 @@ PROTOCOL_SHIM_MESSAGE = "Qwen38ForCausalLM runs on the device through prefill_fo
 HF_REPO_ID = "Qwen/Qwen3.8-Flash-Next"
 SAMPLING_EPS = 1e-5  # vLLM's _SAMPLING_EPS: a temperature below it is greedy
 REDUCED_CANDIDATES = 1024  # the top candidates the host sampler works on in place of the full row
-PREFILL_SLAB_VARIABLE = "QWEN38_PREFILL_SLAB"  # the slab's rows; default DEFAULT_SLAB_ROWS; "0" / "off": no slab
-LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # "1": the 128-row chunks without a slab (a slab implies them)
+PREFILL_SLAB_VARIABLE = "QWEN38_PREFILL_SLAB"  # the slab's rows; unset, "0" / "off": no slab
+LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # unset / "1": the 128-row chunks; "0": none (refused with a slab)
 PREFILL_SLAB_OFF = ("0", "off")
 # The DRAM admission's refusal of the slab's resident prefill weights (ttnn/prefill_dense.py, admit_prefill_dense_dram).
 PREFILL_DENSE_REFUSAL_MARK = "refused: the resident prefill weights need"
@@ -247,17 +248,16 @@ def _sample_full_row(scaled: torch.Tensor, top_k: int, top_p: float, generator: 
 
 def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | None]:
     """The prefill form the chain is opened with, as ``(long_chunks, slab_rows)``, from the environment (``os.environ``
-    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..4096 (default 2048, the
-    measured form); ``0`` or ``off`` serves without the slab.  A slab implies the 128-row chunks; without one,
-    ``QWEN38_LONG_CHUNKS=1`` turns the 128-row chunks on alone.  Any other value is refused by name."""
+    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..4096 (the model serves
+    multiples of 512); unset, ``0`` or ``off`` serves without the slab, as the chat server does.  The 128-row chunks
+    run ahead of the 32-row ones, as on the chat server: ``QWEN38_LONG_CHUNKS=0`` turns them off without a slab and
+    is refused with one (``1`` or unset: on).  Any other value of either is refused by name."""
 
     environ = os.environ if environ is None else environ
     raw = environ.get(PREFILL_SLAB_VARIABLE)
     value = "" if raw is None else raw.strip().lower()
-    if value == "":
-        slab_rows: int | None = DEFAULT_SLAB_ROWS
-    elif value in PREFILL_SLAB_OFF:
-        slab_rows = None
+    if value == "" or value in PREFILL_SLAB_OFF:
+        slab_rows: int | None = None
     else:
         rows = int(value) if value.isascii() and value.isdigit() else None
         if rows is None or not is_slab_rows(rows):
@@ -266,8 +266,17 @@ def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | 
                 f"slab, got {raw!r}"
             )
         slab_rows = rows
-    long_chunks = slab_rows is not None or environ.get(LONG_CHUNKS_VARIABLE, "").strip() == "1"
-    return long_chunks, slab_rows
+    switch = environ.get(LONG_CHUNKS_VARIABLE, "").strip()
+    if switch not in ("", "0", "1"):
+        raise ValueError(
+            f"{LONG_CHUNKS_VARIABLE} must be 1 (the 128-row chunks, the default) or 0 (none without a slab), "
+            f"got {environ[LONG_CHUNKS_VARIABLE]!r}"
+        )
+    if switch == "0" and slab_rows is not None:
+        raise ValueError(
+            f"{LONG_CHUNKS_VARIABLE}=0 needs {PREFILL_SLAB_VARIABLE} unset or 0: a slab runs the 128-row chunks"
+        )
+    return switch != "0", slab_rows
 
 
 def describe_prefill_form(long_chunks: bool, slab_rows: int | None) -> str:
@@ -378,7 +387,7 @@ class Qwen38ForCausalLM:
         The checkpoint is ``MODEL_WEIGHTS_DIR``, else the ``--model`` path, else the pinned revision of the repo id
         (``QWEN38_HF_REPO``, else ``--model``, else ``Qwen/Qwen3.8-Flash-Next``) in the local Hugging Face hub cache.
         The prefill form is ``prefill_form()``'s (the slab rows and the 128-row chunks); the slab's DRAM admission
-        refusal is re-raised naming ``QWEN38_PREFILL_SLAB``."""
+        refusal and the model's ``Qwen38SlabRefused`` are re-raised naming ``QWEN38_PREFILL_SLAB``."""
 
         if not TRACE_ALLOC_TRACKING:
             raise ValueError("the trace chain needs TT_METAL_TRACE_ALLOC_TRACKING=1 exported before ttnn is imported")
@@ -487,14 +496,16 @@ class Qwen38ForCausalLM:
                 slab_rows=slab_rows,
             )
         except Exception as error:
+            refused = next((item for item in (error, error.__cause__) if isinstance(item, Qwen38SlabRefused)), None)
+            if slab_rows is not None and refused is not None:
+                raise ValueError(f"{refused} (unset {PREFILL_SLAB_VARIABLE} or set it to 0)") from error
             refusal = None if slab_rows is None else prefill_dense_refusal(error)
             if refusal is None:
                 raise
             detail = str(error) if refusal is error else f"{error} (cause: {refusal})"
             raise ValueError(
                 f"the {slab_rows}-row prefill slab does not fit beside the resident build at context "
-                f"{allocated_context}: {detail}; {PREFILL_SLAB_VARIABLE}=0 serves this context without the slab "
-                f"({LONG_CHUNKS_VARIABLE}=1 keeps the 128-row chunks)"
+                f"{allocated_context}: {detail}; {PREFILL_SLAB_VARIABLE}=0 serves this context without the slab"
             ) from error
         logger.info(f"prefill form: {describe_prefill_form(long_chunks, slab_rows)}")  # the form the chain opened in
         return cls(chain, allocated_context=allocated_context)

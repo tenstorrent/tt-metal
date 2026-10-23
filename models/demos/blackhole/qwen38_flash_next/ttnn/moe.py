@@ -96,22 +96,15 @@ def moe_compute_output_height_shard_dim(rows: int, *, matmul_ring_size: int) -> 
     return -(-rows // (MOE_COMPUTE_TOKEN_SIZE * data_parallel_cores))
 
 
-# Both multi-row counts have run moe_compute on this model's silicon and matched the rows-1 path
-# bitwise (the rows-1 path is the production decode; 5 = the MTP verifier, 32 = the prefill chunk share
-# one code path past rows == 1): rows 32 vs 32 one-row calls on all 48 real layers, 1536/1536 rows
-# (2026-09-03, prefill stage-1 chunk discriminator); rows 5 vs one-row in the MTP-v2 step-1
-# discriminator and 245/245 rows in the MTP-v2 numerics gates (2026-09-03/04).  The 128-row form ran on
-# silicon 2026-09-05/06: its per-tile routed stream (four moe_compute calls of 32 tokens) bitwise the 32-row
-# chunk on 48 layers, and one moe_compute call of 128 tokens bitwise the per-tile calls page for page (the
-# moe_compute 128 micro-test, 2026-09-06).
+# The multi-row counts share moe_compute's one code path past rows == 1 (5 = the MTP verifier, 32 = the prefill chunk,
+# 128 = the long chunk's one call); each matched the one-row calls bitwise on this model's silicon in its own check (the
+# prefill chunk discriminator on all 48 layers, the MTP-v2 numerics gates, the moe_compute 128 micro-test).
 ROWS5_HARDWARE_PROVEN = True
 ROWS32_HARDWARE_PROVEN = True
 ROWS128_HARDWARE_PROVEN = True
 # The 128-row chunk's routed stream: one moe_compute call of 128 tokens, so the union of the chunk's experts
 # streams from DRAM once instead of once per row tile.  32 selects the per-tile form (four calls of the 32-row
-# program; the micro-tests' oracle).  Until 2026-09-06 the 128-token call's rows past the first tile came back
-# wrong: the fault was the weighted reduce (deepseek_moe_fast_reduce_nc_fused built one score tile for token
-# rows 0..31 and scaled every row tile with it), fixed in this tree's tt-metal sources; moe_compute itself was right.
+# program; the micro-tests' oracle).
 LONG_CHUNK_ROUTED_TOKENS_PER_CALL = LONG_PREFILL_CHUNK_ROWS
 
 
@@ -504,8 +497,7 @@ class Qwen38TTNNMoE:
     ) -> None:
         """``routed_tokens_per_call`` is the token count of one ``moe_compute`` call: the rows themselves up to 32 and
         for a slab, and for the 128-row form 128 (the default, ``routed_tokens_per_call_for``: one call, the chunk's
-        expert union streamed once; bitwise the per-tile form page for page since the weighted reduce's one-tile score
-        table was fixed) or 32 (four calls of the 32-row program, bitwise the 32-row chunk per tile; the
+        expert union streamed once) or 32 (four calls of the 32-row program, bitwise the 32-row chunk per tile; the
         micro-tests' oracle).  ``local_combine_output`` hands in a shared
         ``[10, routed_tokens_per_call, 2560]`` ROW_MAJOR BF16 combine buffer (the 48 long-chunk instances share one:
         the layers run one after another and every call fills it first); it is borrowed, so
@@ -544,7 +536,7 @@ class Qwen38TTNNMoE:
             )
         self.routed_calls = self.rows // self.routed_tokens
         if self.slab and self.rows % SLAB_REDUCE_BLOCK_ROWS:
-            raise ValueError(
+            raise Qwen38SlabRefused(
                 f"the slab reduces in {SLAB_REDUCE_BLOCK_ROWS}-row blocks; {self.rows} rows is not a multiple"
             )
         # The one-tile router tail (rows <= 32): the fused program (ttnn/fused/router_tail) by default, the composed

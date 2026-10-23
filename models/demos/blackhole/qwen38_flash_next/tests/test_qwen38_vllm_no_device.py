@@ -9,7 +9,7 @@ runner's position); every refusal, made before any chain call; the LM-head paddi
 the driver test's fake model; construction with the library's construction functions replaced by recorders (the
 context table, the cache layout, the corpus pair, the switches, the checkpoint and cache-identity resolution orders,
 the refusals; the prefill-form knobs: the slab rows and the 128-row chunks the chain is opened with, the values
-refused by name, the DRAM admission's refusal of the slab re-raised naming the knob); the class surface the plugin
+refused by name, the slab's DRAM and model refusals re-raised naming the knob); the class surface the plugin
 reads; the device-sampling contract (``sampling_params`` present): the int32 token drawn on the host from the same
 row, greedy = the host path's argmax, seeded draws deterministic and inside the nucleus, vLLM's penalties from the
 contract's history, and the reduced sampler's draws against vLLM's sampler algorithm transcribed (chi-square over
@@ -58,7 +58,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import HF_REPO_I
 from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import RuntimeAdmissionError
 from models.demos.blackhole.qwen38_flash_next.ttnn import prefill_dense
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM, Qwen38CacheRoots
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, DEFAULT_SLAB_ROWS
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, Qwen38SlabRefused
 
 HF_ARCHITECTURE = "Qwen4ExpForConditionalGeneration"
 TT_ARCHITECTURE = "TT" + HF_ARCHITECTURE
@@ -911,13 +911,12 @@ def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -
         "marker": constructed["marker"],
         "stage_missing_bf4": False,
     }
-    assert DEFAULT_SLAB_ROWS == 2048  # the measured form (docs/PREFILL.md), the default slab
     assert opened == {
         "marker": opened["marker"],
         "chunked_prefill": True,
         "sampling": True,
         "long_chunks": True,
-        "slab_rows": DEFAULT_SLAB_ROWS,
+        "slab_rows": None,
     }
     assert all(callable(kwargs["marker"]) for kwargs in (prepared, constructed, opened))
     assert os.environ["QWEN38_HARDWARE_MODE"] == MODE
@@ -940,7 +939,8 @@ def test_construction_honours_the_label_and_the_conversion_and_long_chunk_switch
     assert prepared["model_io_cache_root"] == construction.caches / "c32768-custom" / "model-io"
     assert prepared["routed_bf4_scratch_root"] == construction.caches / "bf4-experts"
     assert prepared["bf4_corpus_root"] is None and prepared["bf4_corpus_verification"] is None
-    assert constructed["stage_missing_bf4"] is expected and opened["long_chunks"] is expected
+    assert constructed["stage_missing_bf4"] is expected, constructed
+    assert opened["long_chunks"] is (switch != "0"), opened  # the 128-row chunks unless switched off
     assert opened["slab_rows"] is None
 
 
@@ -1067,17 +1067,17 @@ def test_construction_requires_trace_allocation_tracking(construction, monkeypat
 @pytest.mark.parametrize(
     "slab, long_chunks, expected",
     (
-        (None, None, (True, DEFAULT_SLAB_ROWS)),
-        ("", None, (True, DEFAULT_SLAB_ROWS)),
-        (None, "1", (True, DEFAULT_SLAB_ROWS)),
-        (None, "0", (True, DEFAULT_SLAB_ROWS)),
-        ("0", None, (False, None)),
-        ("off", None, (False, None)),
+        (None, None, (True, None)),
+        ("", None, (True, None)),
+        (None, "1", (True, None)),
+        (None, "0", (False, None)),
+        ("0", None, (True, None)),
+        ("off", "", (True, None)),
         ("OFF", "0", (False, None)),
         ("0", "1", (True, None)),
         ("0", " 1 ", (True, None)),
         ("1024", None, (True, 1024)),
-        (" 256 ", "0", (True, 256)),
+        (" 256 ", "", (True, 256)),
         ("4096", "1", (True, 4096)),
     ),
 )
@@ -1127,6 +1127,27 @@ def test_construction_refuses_a_slab_row_count_outside_the_contract(
         vllm_module.prefill_form({"QWEN38_PREFILL_SLAB": value})
 
 
+@pytest.mark.parametrize("value", ("2", "on", "off", "true", "yes", "01", "-1"))
+def test_construction_refuses_a_long_chunk_switch_other_than_0_or_1(
+    construction, monkeypatch, value: str, expect_error
+) -> None:
+    monkeypatch.setenv("QWEN38_LONG_CHUNKS", value)
+    with expect_error(ValueError, re.escape("QWEN38_LONG_CHUNKS must be 1 (the 128-row chunks, the default) or 0")):
+        _initialize(construction)
+    assert construction.calls == [], construction.calls  # refused before any library call
+    for slab in ("0", "2048"):  # refused with or without a slab
+        with expect_error(ValueError, "got " + re.escape(repr(value))):
+            vllm_module.prefill_form({"QWEN38_PREFILL_SLAB": slab, "QWEN38_LONG_CHUNKS": value})
+
+
+def test_construction_refuses_the_32_row_chunks_alone_with_a_slab(construction, monkeypatch, expect_error) -> None:
+    monkeypatch.setenv("QWEN38_PREFILL_SLAB", "2048")
+    monkeypatch.setenv("QWEN38_LONG_CHUNKS", "0")
+    with expect_error(ValueError, "QWEN38_LONG_CHUNKS=0 needs QWEN38_PREFILL_SLAB unset or 0"):
+        _initialize(construction)
+    assert construction.calls == [], construction.calls  # refused before any library call
+
+
 def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_slab(construction, monkeypatch) -> None:
     refusal = ValueError(
         "prefill slab refused: the resident prefill weights need 1177 MiB per device "
@@ -1143,6 +1164,7 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
     raised: dict[str, BaseException | None] = {"error": refusal}
     messages: list[str] = []
     monkeypatch.setattr(vllm_module, "logger", SimpleNamespace(info=messages.append, warning=lambda *_: None))
+    monkeypatch.setenv("QWEN38_PREFILL_SLAB", "2048")
 
     def open_chain(constructed, **kwargs):
         construction.calls.append(("open", constructed, kwargs))
@@ -1162,8 +1184,8 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
     message = str(error.value)
     assert message.startswith("the 2048-row prefill slab does not fit beside the resident build at context 32768: ")
     assert str(refusal) in message and "QWEN38_PREFILL_SLAB=0 serves this context without the slab" in message
-    assert "QWEN38_LONG_CHUNKS=1 keeps the 128-row chunks" in message and error.value.__cause__ is refusal
-    assert _recorded(construction)[2]["slab_rows"] == DEFAULT_SLAB_ROWS  # the open was attempted with the slab
+    assert "QWEN38_LONG_CHUNKS" not in message and error.value.__cause__ is refusal, message
+    assert _recorded(construction)[2]["slab_rows"] == 2048, _recorded(construction)[2]  # the open had the slab
     assert not [line for line in messages if line.startswith("prefill form: ")]  # a refused start logs no form
     # The wrapped form: the hint survives, the message carries the wrapper and the cause, the chain is kept.
     raised["error"] = wrapped
@@ -1200,11 +1222,47 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
         "marker": _recorded(construction)[2]["marker"],
         "chunked_prefill": True,
         "sampling": True,
-        "long_chunks": False,
+        "long_chunks": True,
         "slab_rows": None,
     }
     assert model.chain is construction.chain
-    assert [line for line in messages if line.startswith("prefill form: ")] == ["prefill form: 32-row chunks"]
+    assert [line for line in messages if line.startswith("prefill form: ")] == [
+        "prefill form: 128-row chunks, then 32-row chunks"
+    ], messages
+
+
+def test_construction_names_the_slab_knob_when_the_model_refuses_the_slab(construction, monkeypatch) -> None:
+    refusal = Qwen38SlabRefused(
+        "the 2048-row prefill slab is refused: moe_compute refuses its one 2048-token call "
+        "(Too many tokens in input, got: 2048 but expected max: 128); serve without the slab"
+    )
+    # A refusal can arrive wrapped, with the refusal as the cause (a failed open whose cleanup also failed).
+    wrapped = RuntimeError("chain open failed and its cleanup also failed")
+    wrapped.__cause__ = refusal
+    raised: dict[str, BaseException] = {"error": refusal}
+
+    def open_chain(constructed, **kwargs):
+        construction.calls.append(("open", constructed, kwargs))
+        raise raised["error"]
+
+    monkeypatch.setattr(vllm_module, "Qwen38TracedChain", SimpleNamespace(open=open_chain))
+    monkeypatch.setenv("QWEN38_PREFILL_SLAB", "2048")
+    for refused in (refusal, wrapped):
+        raised["error"] = refused
+        construction.calls.clear()
+        with pytest.raises(ValueError) as error:  # allow-pytest.raises: the test reads the exception object
+            _initialize(construction)
+        assert str(error.value) == f"{refusal} (unset QWEN38_PREFILL_SLAB or set it to 0)", str(error.value)
+        assert error.value.__cause__ is refused, error.value.__cause__
+        assert _recorded(construction)[2]["slab_rows"] == 2048, _recorded(construction)[2]
+    # The type is the mark: the same text in a plain ValueError, or a refusal without a slab, is not re-worded.
+    for slab, other in (("2048", ValueError(str(refusal))), ("off", refusal)):
+        monkeypatch.setenv("QWEN38_PREFILL_SLAB", slab)
+        raised["error"] = other
+        construction.calls.clear()
+        with pytest.raises(type(other)) as error:  # allow-pytest.raises: the test reads the exception object
+            _initialize(construction)
+        assert error.value is other, error.value
 
 
 # -- the class surface and the bundle ----------------------------------------------------------------------------------

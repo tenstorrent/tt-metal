@@ -2212,8 +2212,7 @@ def _parser() -> argparse.ArgumentParser:
         "--long-chunks",
         action="store_true",
         help="accepted for compatibility: the 128-row chunk trace and the 128-row chunks ahead of the 32-row ones are "
-        "the served default of the chunked prefill (bitwise the 32-row chunks, docs/PREFILL.md); --prefill-mode "
-        "teacher_forced has no chunks at all",
+        "the served default of the chunked prefill; --prefill-mode teacher_forced has no chunks at all",
     )
     parser.add_argument(
         "--prefill-slab",
@@ -2380,9 +2379,9 @@ def main() -> int:
     lanes_switch = lanes_switches(args)  # the lanes' geometry and refusals
     if lanes_switch is None and args.lanes_stall_budget != DEFAULT_STALL_BUDGET_SECONDS:
         raise SystemExit("--lanes-stall-budget needs --lanes (the budget is the lane scheduler's)")
-    # The 128-row chunks are the served default of the chunked prefill (bitwise the 32-row chunks; the 560-token chat
-    # prompt prefills in 0.81 s against 1.19 s in 32-row chunks alone, docs/PREFILL.md): the flag is accepted, the
-    # teacher-forced mode has no chunk trace to extend.
+    # The 128-row chunks are the served default of the chunked prefill (the 560-token chat prompt prefills in 0.81 s
+    # against 1.19 s in 32-row chunks alone, docs/PREFILL.md): the flag is accepted, the teacher-forced mode has no
+    # chunk trace to extend.
     args.long_chunks = args.prefill_mode == "chunked"
     if args.agreement_reference is not None and not args.sampling:
         raise SystemExit("--agreement-reference needs --sampling (the records read the candidate row)")
