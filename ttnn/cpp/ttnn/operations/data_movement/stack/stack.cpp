@@ -5,6 +5,7 @@
 #include "stack.hpp"
 
 #include <algorithm>
+#include <vector>
 
 #include <tt-metalium/tensor/tensor_types.hpp>
 
@@ -69,8 +70,16 @@ Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
         });
     const bool trailing_axis_on_pages =
         (layout == Layout::ROW_MAJOR && rank >= 1) || (layout == Layout::TILE && rank >= 2);
-    if (uniform_interleaved && !tt::tt_metal::is_block_float(first.dtype()) && trailing_axis_on_pages &&
-        normalized_dim == rank) {
+    // One input on a trailing axis is only a reshape, and the leading-axis route would spend a
+    // permute on it (permute's no-op check refuses to move a last axis even of size 1). For tile
+    // the one tiled reshape writes the same padded output as that permute and measures cheaper, so
+    // every single tile input keeps unsqueeze-then-concat. For row-major the reshape is a view when
+    // the last dim is 1 and otherwise the one-element-stick rewrite, so only the view case keeps it.
+    const auto& shape = first.logical_shape();
+    const bool single_input_prefers_reshape =
+        input_tensors.size() == 1 && rank >= 1 && (layout == Layout::TILE || shape[-1] == 1);
+    if (uniform_interleaved && !single_input_prefers_reshape && !tt::tt_metal::is_block_float(first.dtype()) &&
+        trailing_axis_on_pages && normalized_dim == rank) {
         return stack_via_leading_axis(input_tensors, rank);
     }
     std::vector<Tensor> expanded_tensors;
