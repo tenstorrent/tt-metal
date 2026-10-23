@@ -1756,7 +1756,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+    for d in /mnt/weka/model-weights/video/vbench /mnt/models/vbench /mnt/MLPerf/vbench; do
       if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
     done
     [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"

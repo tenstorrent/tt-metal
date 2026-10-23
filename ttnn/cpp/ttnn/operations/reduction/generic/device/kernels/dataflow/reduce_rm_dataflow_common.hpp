@@ -6,7 +6,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
 // Pulled in for UnicastEndpoint (used by rm_fill_page_with_clear_template below) and, at the
 // includers, experimental::local_addr.
