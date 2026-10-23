@@ -36,4 +36,10 @@ tt::tt_metal::ShardSpec generate_transpose_shard_spec(
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt,
     OutputTiling output_tiling = OutputTiling::Default);
 
+std::optional<tt::tt_metal::ShardSpec> generate_transpose_rm_shard_spec(
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    std::optional<tt::tt_metal::ShardOrientation> orientation_hint);
+
 }  // namespace ttnn::operations::data_movement::transpose
