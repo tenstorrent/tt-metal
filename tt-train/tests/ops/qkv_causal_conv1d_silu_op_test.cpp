@@ -200,8 +200,9 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{256, 128, 64, 64}, 32, 5},
         MetalCase{{512, 256, 128, 128}, 256, 0},
         MetalCase{{512, 256, 128, 128}, 32, 0},
-        MetalCase{{256, 128, 64, 64}, 0, 0},  // auto chunk: 256
-        MetalCase{{96, 96, 64, 32}, 0, 2}));  // auto chunk: 192 (C = 192 is not a multiple of 256)
+        MetalCase{{256, 320, 320, 320}, 32, 5},  // 150 items: cores run two, some across a channel block
+        MetalCase{{256, 128, 64, 64}, 0, 0},     // auto chunk: 256
+        MetalCase{{96, 96, 64, 32}, 0, 2}));     // auto chunk: 192 (C = 192 is not a multiple of 256)
 
 TEST_F(QkvCausalConv1dSiluTest, RepeatedRunsAreStable) {
     for (uint32_t i = 0; i < 10; ++i) {
@@ -319,6 +320,31 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 }
 
 INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
+
+// The consumer's per-chip shape (Qwen3.8 27B, TP=4) through the autograd op with frozen taps, auto work split.
+TEST_F(QkvCausalConv1dSiluTest, NIGHTLY_QwenShapeFrozenTaps) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{1024, 512, 512, 1536};
+    auto p = random_problem(s, 9);
+    auto ref = reference(s, p);
+    p.grad_y = ref.y;
+    ref = reference(s, p);
+    auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
+    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+    std::array<TensorPtr, 4> tap_tensors;
+    for (size_t j = 0; j < 4; ++j) {
+        tap_tensors[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ false);
+    }
+    auto [q, k, v] = ops::qkv_causal_conv1d_silu(
+        input, history, tap_tensors[0], tap_tensors[1], tap_tensors[2], tap_tensors[3], s.Q, s.K, s.V);
+    expect_close(slice_cols(ref.y, 0, s.Q), core::to_xtensor(q->get_value()), "q");
+    for (const auto& out : {q, k, v}) {
+        out->set_grad(out->get_value());
+    }
+    q->backward();
+    expect_close(ref.grad_input, core::to_xtensor(input->get_grad()), "grad_input");
+}
 
 // Rank-4 [1,1,T,C] activations are accepted and returned.
 TEST_F(QkvCausalConv1dSiluTest, RankFour) {
