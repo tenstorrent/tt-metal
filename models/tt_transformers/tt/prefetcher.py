@@ -246,6 +246,7 @@ class Prefetcher(LightweightModule):
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.enable_performance_mode: bool = True
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
+        self._global_cb_addresses = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
         self.num_tensors: int = num_tensors
         self.num_layers: int = num_layers
@@ -362,8 +363,33 @@ class Prefetcher(LightweightModule):
         NOTE: All DRAM prefetcher APIs can only be called after init() is called for the given mode
         NOTE: Calling init() again for the same mode is a no-op
         """
-        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
-        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
+        if mode == Mode.PREFILL:
+            # Prefill uses the full default worker grid and needs the GCB's L1
+            # space for static circular buffers. The manager switch finishes
+            # queued decode work before prefill can reuse the released memory.
+            if self.global_cb is not None:
+                self.global_cb.deallocate()
+                self.global_cb = None
+            if self.mode != Mode.PREFILL or not self.init_prefill_done:
+                self.mesh_device.clear_loaded_sub_device_manager()
+                self.mesh_device.reset_sub_device_stall_group()
+            self.mode = Mode.PREFILL
+            self.init_prefill_done = True
+            return
+        if self.init_decode_done:
+            if self.mode != Mode.DECODE:
+                self.mesh_device.load_sub_device_manager(self.prefetcher_sub_device.manager_id)
+                self.mesh_device.set_sub_device_stall_group(self.prefetcher_sub_device.sub_devices_id)
+                try:
+                    if self._global_cb_addresses is not None:
+                        self._create_global_cb()
+                except Exception:
+                    # Keep the device and logical mode consistent after a
+                    # collision, so callers may still run prefill or retry.
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                    self.mesh_device.reset_sub_device_stall_group()
+                    raise
+                self.mode = Mode.DECODE
             return
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
@@ -374,16 +400,10 @@ class Prefetcher(LightweightModule):
                 self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
             )
         )
-        match mode:
-            case Mode.DECODE:
-                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-                self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
-                self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
-                self.prefetcher_sub_device.init_sub_device_manager()
-            case Mode.PREFILL:
-                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-                self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
-                self.prefetcher_sub_device.init_sub_device_manager()
+        self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
+        self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
+        self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
+        self.prefetcher_sub_device.init_sub_device_manager()
 
         self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
         logger.info("=" * 50)
@@ -474,28 +494,43 @@ class Prefetcher(LightweightModule):
             if not self.prefetch_done:
                 for callback in self.callbacks:
                     callback()
+                # Keep this persistent L1 tensor above the GCB and transient
+                # decode inputs so that later prefill circular buffers can fit.
+                self.prefetched_tt_addr_tensor = self.create_address_tensor()
                 self.prefetch_done = True
         # NO-OP for prefill mode
         return
+
+    def _create_global_cb(self):
+        if self.global_cb is None:
+            self.global_cb_size = self.max_tensor_block_size
+            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
+            buffer_address, config_address = self._global_cb_addresses or (None, None)
+            self.global_cb = ttnn.create_global_circular_buffer(
+                self.mesh_device,
+                self.sender_receiver_mapping,
+                self.global_cb_size,
+                buffer_address=buffer_address,
+                config_address=config_address,
+            )
+            self.global_cb.acknowledge_corruptible()
+
+    def prepare_trace(self):
+        """Fix the GCB placement after warmup and before the first decode capture."""
+        assert self.mode == Mode.DECODE, "Decode mode must be active before preparing the prefetcher trace"
+        self._create_global_cb()
+        if self._global_cb_addresses is None:
+            self._global_cb_addresses = (self.global_cb.buffer_address(), self.global_cb.config_address())
 
     def run(self):
         """
         Start prefetching weights into global CB with dram_prefetcher op
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot run prefetcher"
-        # Create global cb buffer if it was not yet created.
-        if self.global_cb is None:
-            self.global_cb_size = self.max_tensor_block_size
-            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
-            self.global_cb = ttnn.create_global_circular_buffer(
-                self.mesh_device,
-                self.sender_receiver_mapping,
-                self.global_cb_size,
-            )
-
         # Create address tensor if it was not created yet
         if self.prefetched_tt_addr_tensor is None:
             self.prefetched_tt_addr_tensor = self.create_address_tensor()
+        self._create_global_cb()
 
         # Run prefetcher op (prefetcher op will start asynchronously prefetching weights until prefetcher.stop() is called)
         self.garbage = ttnn.dram_prefetcher(

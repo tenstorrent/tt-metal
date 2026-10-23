@@ -61,7 +61,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
         compiled.append(penalties_on)
 
     sampling._run_sampling = run_sampling
-    sampling.precompile(logits, all_configs=all_configs)
+    sampling.precompile(logits, tt_out_tok=object(), all_configs=all_configs)
 
     assert compiled
     torch.testing.assert_close(logits, original, rtol=0, atol=0)
@@ -160,7 +160,8 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
         )
     )
 
-    sampling.precompile(object(), all_configs=True)
+    token_output = object()
+    sampling.precompile(object(), tt_out_tok=token_output, all_configs=True)
 
     assert set(calls) == {
         (penalties, log_probs, force_argmax, False, False)
@@ -173,6 +174,7 @@ def test_precompile_all_configs_selects_supported_grammar_matrix():
     grammar = torch.ones((1, 1), dtype=torch.int32)
     sampling.precompile(
         object(),
+        tt_out_tok=token_output,
         grammar_bitmask=grammar,
         compile_token_update=True,
         all_configs=True,
