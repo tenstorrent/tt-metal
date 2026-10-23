@@ -476,6 +476,8 @@ def ttsim_skip_arch(sku):
         return "wormhole_b0"
     if sku.startswith("sim_bh"):
         return "blackhole"
+    if sku.startswith("sim_quasar"):
+        return "quasar"
     return None
 
 
