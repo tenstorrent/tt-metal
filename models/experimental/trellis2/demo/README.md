@@ -1,22 +1,23 @@
 # TRELLIS.2-4B on Tenstorrent: image to 3D mesh demo
 
 Turns one RGBA image of an object into a textured 3D mesh (vertex-coloured PLY) with
-[TRELLIS.2-4B](https://github.com/microsoft/TRELLIS.2). The three flow transformers (structure, shape, texture: about
-95% of the model's compute) run on **one Blackhole chip**. The rest stays on the host CPU in fp32: DINOv3
-conditioning, the structure decoder, the cascade upsampler and the SC-VAE mesh decoders. The demo drives the reference
-pipeline code and only swaps the flow models' forward, so stage order, sampler settings and RNG order are TRELLIS.2's own.
+[TRELLIS.2-4B](https://github.com/microsoft/TRELLIS.2). Every neural stage runs on **one Blackhole chip**: DINOv3
+conditioning, the three flow transformers (structure, shape, texture), the structure decoder and the SC-VAE shape and
+texture decoders. The host keeps the samplers, the coordinate work around the decoders (neighbour maps, subdivision
+children), the cascade upsampler, mesh extraction and the PLY export. The demo drives the reference pipeline code and
+only swaps the models' forward, so stage order, sampler settings and RNG order are TRELLIS.2's own.
 
-Status (branch `nkira/trellis2-port`): bring-up. Every TT flow model matches the CPU fp32 reference on single passes
-(PCC >= 0.9999). Over a full 12-step sample it tracks a CPU bf16 run at 1.0 to 1.8x the bf16 error, depending on the
-input. Untraced; host-driven sampler; 1024 and above not yet validated against a reference.
+Status (branch `nkira/trellis2-port`): bring-up. Every TT model passes its gate against the CPU fp32 reference
+(`../tests/`): the flow models at single-pass PCC >= 0.9999 and within 1.5x the CPU bf16 error over a full sample, the
+decoders on occupancy and topology flips. Untraced; host-driven sampler; 1024 and above not yet validated against a
+reference.
 
 ## Hardware and host
 
 - One Blackhole chip. Tested on one chip of a Blackhole Galaxy. Any single Blackhole chip with 32 GB should work
   (p150, one chip of a p300 or QuietBox 2), but that is untested. On a multi-chip box, pick a chip with
   `TT_VISIBLE_DEVICES=<n>`.
-- Host: about 40 GB free RAM for `512`; `1024` and above need more and take longer, since the mesh decoders run on
-  the CPU (see Timings).
+- Host: about 40 GB free RAM for `512` (the reference pipeline still loads its CPU models); `1024` and above need more.
 - Disk: about 11 GB of weights for `512`, plus 5 GB for the 1024 models.
 
 ## Setup
@@ -41,7 +42,8 @@ input. Untraced; host-driven sampler; 1024 and above not yet validated against a
 3. DINOv3 weights are gated. Request access at
    https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m (Meta approves manually), then log in once with
    `hf auth login` (or set `HF_TOKEN`). The other weights download anonymously on the first run, into
-   `~/.cache/trellis2_tt` (change with `--weights-dir` or `TRELLIS2_WEIGHTS_DIR`).
+   `~/.cache/trellis2_tt` (change with `--weights-dir` or `TRELLIS2_WEIGHTS_DIR`). Files already there are not
+   fetched again, so later runs work offline (`HF_HUB_OFFLINE=1`).
 
 ## Run
 
@@ -75,6 +77,8 @@ needs CUDA-only libraries.
 
 ## Timings (512, one BH chip at 160 W, AMD EPYC 9354P host, untraced)
 
+These timings predate the device decoders and DINOv3 (the "CPU" rows); see the summary JSON of a run for current ones.
+
 Measured on a 1024 px Tenstorrent-logo image, 6,320 voxels, mesh 3.1M vertices / 6.5M faces:
 
 | Stage | Where | Time |
@@ -95,7 +99,7 @@ The first run of each new token count also compiles kernels; later runs are fast
 - `demo.py`: the demo (`run_e2e()` is also what the test calls).
 - `trellis2_cpu_overlay.patch`: CPU overlay for TRELLIS.2 75fbf018.
 - `requirements.txt`: extra Python packages on top of the tt-metal env.
-- `../tt/`: the TT flow models; `../reference/`: host-side tables and the torch mirror used for bring-up;
+- `../tt/`: the TT models; `../reference/`: host-side tables and the torch mirrors used for bring-up;
   `../tests/`: PCC tests against CPU goldens and the end-to-end test.
 
 Licences: TRELLIS.2 is MIT. DINOv3 has its own licence (attribution and use limits). The demo never loads RMBG-2.0,

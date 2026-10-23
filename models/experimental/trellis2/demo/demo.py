@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""TRELLIS.2-4B image to textured 3D mesh, with the three flow DiTs on one Tenstorrent Blackhole chip.
+"""TRELLIS.2-4B image to textured 3D mesh, with every neural stage on one Tenstorrent Blackhole chip.
 
 Runs the reference TRELLIS.2 pipeline (microsoft/TRELLIS.2 75fbf018 with the CPU overlay in this folder) and replaces
-the forward of its structure, shape and texture flow DiTs with the TT models of this branch. Everything else stays on
-the host CPU in fp32: DINOv3 conditioning, the structure decoder, the cascade upsampler and the SC-VAE decoders.
+the forward of its models with the TT models of this branch: DINOv3 conditioning, the structure, shape and texture
+flow DiTs, the structure decoder and the SC-VAE shape and texture decoders. The host keeps the samplers, coordinate
+work (decoder neighbour maps, subdivision children), the cascade upsampler, mesh extraction and the PLY export.
+Weights already in --weights-dir are used as they are, so with HF_HUB_OFFLINE=1 the run needs no network.
 Output: a vertex-coloured PLY, a six-view preview PNG and a timing JSON. Setup and usage: README.md next to this file.
 
     python models/experimental/trellis2/demo/demo.py --trellis-dir <TRELLIS.2 clone> --image <rgba image> [--out <dir>]
@@ -64,7 +66,11 @@ def fetch_weights(weights_dir: str, ptype: str) -> str:
     from huggingface_hub import hf_hub_download, snapshot_download
 
     t2 = os.path.join(weights_dir, "TRELLIS.2-4B")
-    get = lambda repo, rev, f, d: hf_hub_download(repo, f, revision=rev, local_dir=d)
+
+    def get(repo, rev, f, d):
+        if not os.path.exists(os.path.join(d, f)):
+            hf_hub_download(repo, f, revision=rev, local_dir=d)
+
     get(TRELLIS2_REPO, TRELLIS2_REV, "pipeline.json", t2)
     names = [FLOW_MODELS[m][0] for m in models_for(ptype) if m in FLOW_MODELS] + list(DECODERS.values())
     for name in names:
@@ -107,32 +113,17 @@ class _NoRembg:
         raise RuntimeError("the input has no alpha channel; pass an RGBA image or --matte-white")
 
 
-def _dinov3_features(self, image: torch.Tensor) -> torch.Tensor:
-    """TRELLIS.2's DinoV3FeatureExtractor.extract_features for both transformers layouts: 4.x keeps the blocks in
-    model.layer, 5.x in model.model.layer."""
-    image = image.to(self.model.embeddings.patch_embeddings.weight.dtype)
-    h = self.model.embeddings(image, bool_masked_pos=None)
-    pe = self.model.rope_embeddings(image)
-    layers = self.model.layer if hasattr(self.model, "layer") else self.model.model.layer
-    for layer in layers:
-        h = layer(h, position_embeddings=pe)
-        h = h[0] if isinstance(h, tuple) else h
-    return F.layer_norm(h, h.shape[-1:])
-
-
 def build_pipeline(trellis_dir: str, weights_dir: str, config_name: str):
     os.environ.setdefault("ATTN_BACKEND", "sdpa")
     os.environ.setdefault("SPARSE_ATTN_BACKEND", "sdpa")
     os.environ.setdefault("SPARSE_CONV_BACKEND", "torch")
     sys.path.insert(0, trellis_dir)
-    from trellis2.modules import image_feature_extractor
     from trellis2.modules.utils import convert_module_to
     from trellis2.pipelines import Trellis2ImageTo3DPipeline, rembg
 
     if not os.path.exists(os.path.join(trellis_dir, "trellis2", "utils", "fdg_torch.py")):
         raise SystemExit(f"{trellis_dir} is not TRELLIS.2 75fbf018 with trellis2_cpu_overlay.patch applied (README)")
     rembg.BiRefNet = _NoRembg
-    image_feature_extractor.DinoV3FeatureExtractor.extract_features = _dinov3_features
     pipe = Trellis2ImageTo3DPipeline.from_pretrained(os.path.join(weights_dir, "TRELLIS.2-4B"), config_file=config_name)
     pipe.low_vram = False
     for m in pipe.models.values():
@@ -170,14 +161,29 @@ def load_image(path: str, matte_white: bool) -> Image.Image:
 # ---------------------------------------------------------------------------------------------------- TT models
 
 
-class TtFlows:
+class _Counted:
+    """Counts the calls routed to the chip and their wall time, for the per-stage timings."""
+
+    calls: int = 0
+    device_s: float = 0.0
+
+    def _count(self, fn):
+        def wrapped(*args, **kwargs):
+            t0 = time.time()
+            out = fn(*args, **kwargs)
+            self.calls, self.device_s = self.calls + 1, self.device_s + time.time() - t0
+            return out
+
+        return wrapped
+
+
+class TtFlows(_Counted):
     """Loads the TT flow DiTs the pipeline needs and routes the pipeline's flow-model calls to them."""
 
     def __init__(self, mesh_device, weights_dir: str):
         self.mesh_device = mesh_device
         self.ckpts = os.path.join(weights_dir, "TRELLIS.2-4B", "ckpts")
         self.models, self.tables = {}, {}
-        self.calls, self.device_s = 0, 0.0
 
     def _model(self, name: str):
         if name not in self.models:
@@ -196,13 +202,9 @@ class TtFlows:
 
     def _forward(self, name: str):
         def structure(x, t, cond, **kw):
-            t0 = time.time()
-            out = self._model(name)(x.float(), t.float(), cond.float())
-            self.calls, self.device_s = self.calls + 1, self.device_s + time.time() - t0
-            return out
+            return self._model(name)(x.float(), t.float(), cond.float())
 
         def slat(x, t, cond, concat_cond=None, **kw):
-            t0 = time.time()
             model = self._model(name)
             feats = x.feats.float()
             if concat_cond is not None:
@@ -211,11 +213,9 @@ class TtFlows:
             key = (coords.shape[0], hashlib.sha1(coords.numpy().tobytes()).hexdigest(), cond.shape[1])
             if key not in self.tables:
                 self.tables[key] = model.prepare(coords, cond.shape[1])
-            out = model(feats, t.float(), cond.float(), self.tables[key])
-            self.calls, self.device_s = self.calls + 1, self.device_s + time.time() - t0
-            return x.replace(out)
+            return x.replace(model(feats, t.float(), cond.float(), self.tables[key]))
 
-        return structure if FLOW_MODELS[name][1] is None else slat
+        return self._count(structure if FLOW_MODELS[name][1] is None else slat)
 
     def patch(self, pipe) -> None:
         for name in FLOW_MODELS:
@@ -223,20 +223,107 @@ class TtFlows:
                 pipe.models[name].forward = self._forward(name)
 
 
+class TtStages(_Counted):
+    """Loads the TT DINOv3, structure decoder and SC-VAE decoders and routes the pipeline's calls to them.
+
+    `models` maps a stage to a callable with the TT module's torch-in, torch-out signature; it is filled on first use,
+    and a caller may fill it beforehand (the host mirrors in `../reference/` have the same signatures)."""
+
+    def __init__(self, mesh_device, weights_dir: str):
+        self.mesh_device = mesh_device
+        self.weights_dir = weights_dir
+        self.models = {}
+
+    def _model(self, name: str):
+        if name not in self.models:
+            from models.experimental.trellis2.reference import dinov3_host, scvae_host, ss_decoder_host
+
+            path = lambda rel: os.path.join(self.weights_dir, rel)
+            if name == "dinov3":
+                from models.experimental.trellis2.tt.dinov3 import TtDinoV3
+
+                model = TtDinoV3(mesh_device=self.mesh_device)
+                model.load_torch_state_dict(dinov3_host.load_state_dict(path(dinov3_host.WEIGHTS)))
+            elif name == "ss_decoder":
+                from models.experimental.trellis2.tt.ss_decoder import TtSSDecoder
+
+                model = TtSSDecoder(
+                    ss_decoder_host.load_state_dict(path(ss_decoder_host.CKPT)), mesh_device=self.mesh_device
+                )
+            else:
+                from models.experimental.trellis2.tt.scvae import TtSCVAEDecoder
+
+                ckpt = scvae_host.SHAPE_CKPT if name == "shape_slat_decoder" else scvae_host.TEX_CKPT
+                model = TtSCVAEDecoder(scvae_host.load_state_dict(path(ckpt)), mesh_device=self.mesh_device)
+            self.models[name] = model
+        return self.models[name]
+
+    def _dinov3(self, image: torch.Tensor) -> torch.Tensor:
+        assert image.shape[0] == 1, "one image per call"
+        return self._model("dinov3")(image.float())
+
+    def _ss_decoder(self, z: torch.Tensor) -> torch.Tensor:
+        return self._model("ss_decoder")(z.float())
+
+    def _shape_decoder(self, decoder, x, return_subs: bool = False, **kw):
+        """FlexiDualGridVaeDecoder.forward (eval) with the SparseUnet on the chip: the mesh comes from the device
+        output, and `subs` holds each level's subdivision logits on that level's coords for the texture decoder."""
+        from trellis2.models.sc_vaes import fdg_vae
+        from trellis2.modules import sparse as sp
+
+        from models.experimental.trellis2.reference import scvae_host
+
+        out, coords, logits = self._count(self._model("shape_slat_decoder"))(x.feats.float(), x.coords.int())
+        subs, level = [], x.coords.int()
+        for lg in logits:
+            subs.append(sp.SparseTensor(feats=lg, coords=level))
+            level = scvae_host.children(level, lg > 0).coords
+        m = decoder.voxel_margin
+        vertices = (1 + 2 * m) * torch.sigmoid(out[:, 0:3]) - m
+        mesh = fdg_vae.Mesh(
+            *fdg_vae.flexible_dual_grid_to_mesh(
+                coords[:, 1:],
+                vertices,
+                out[:, 3:6] > 0,
+                F.softplus(out[:, 6:7]),
+                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                grid_size=decoder.resolution,
+                train=False,
+            )
+        )
+        return ([mesh], subs) if return_subs else [mesh]
+
+    def _tex_decoder(self, x, guide_subs=None, **kw):
+        from trellis2.modules import sparse as sp
+
+        keep = [s.feats > 0 for s in guide_subs]
+        out, coords, _ = self._model("tex_slat_decoder")(x.feats.float(), x.coords.int(), guide_keep=keep)
+        return sp.SparseTensor(feats=out, coords=coords)
+
+    def patch(self, pipe) -> None:
+        pipe.image_cond_model.extract_features = self._count(self._dinov3)
+        pipe.models["sparse_structure_decoder"].forward = self._count(self._ss_decoder)
+        shape = pipe.models["shape_slat_decoder"]
+        shape.forward = partial(self._shape_decoder, shape)
+        pipe.models["tex_slat_decoder"].forward = self._count(self._tex_decoder)
+
+
 # ---------------------------------------------------------------------------------------------------- run
 
 
-def run_pipeline(pipe, flows: TtFlows, image: Image.Image, ptype: str, seed: int):
+def run_pipeline(pipe, tt: tuple[_Counted, ...], image: Image.Image, ptype: str, seed: int):
     """TRELLIS2ImageTo3DPipeline.run without decode_latent's CUDA-only hole filling. Returns meshes, texture voxels,
     the output resolution, voxel / token counts and per-stage timings."""
     timings, stats = {}, {}
+    counts = lambda: (sum(m.calls for m in tt), sum(m.device_s for m in tt))
 
     def stage(name, fn):
-        c0, d0, t0 = flows.calls, flows.device_s, time.time()
+        (c0, d0), t0 = counts(), time.time()
         out = fn()
         timings[name] = {"wall_s": round(time.time() - t0, 1)}
-        if flows.calls > c0:
-            timings[name].update(tt_calls=flows.calls - c0, tt_s=round(flows.device_s - d0, 1))
+        c1, d1 = counts()
+        if c1 > c0:
+            timings[name].update(tt_calls=c1 - c0, tt_s=round(d1 - d0, 1))
         print(f"  {name}: {timings[name]}", flush=True)
         return out
 
@@ -314,7 +401,7 @@ def write_ply(path: str, mesh, tex_voxels, res: int) -> dict:
     face = np.empty(len(f), dtype=[("n", "u1"), ("i", "<i4", (3,))])
     face["n"], face["i"] = 3, f
     header = (
-        "ply\nformat binary_little_endian 1.0\ncomment TRELLIS.2-4B, flow DiTs on Tenstorrent\n"
+        "ply\nformat binary_little_endian 1.0\ncomment TRELLIS.2-4B on Tenstorrent\n"
         f"element vertex {len(v)}\nproperty float x\nproperty float y\nproperty float z\n"
         "property uchar red\nproperty uchar green\nproperty uchar blue\n"
         f"element face {len(f)}\nproperty list uchar int vertex_indices\nend_header\n"
@@ -371,13 +458,15 @@ def run_e2e(
     pipe = build_pipeline(trellis_dir, weights_dir, config_name)
     flows = TtFlows(mesh_device, weights_dir)
     flows.patch(pipe)
+    stages = TtStages(mesh_device, weights_dir)
+    stages.patch(pipe)
     load_s = round(time.time() - t0, 1)
     print(f"loaded the pipeline in {load_s} s; running {pipeline_type}", flush=True)
 
     image = pipe.preprocess_image(load_image(image_path, matte_white))
     stem = os.path.splitext(os.path.basename(image_path))[0]
     image.save(os.path.join(out_dir, f"{stem}_preprocessed.png"))
-    mesh, tex_voxels, res, stats, timings = run_pipeline(pipe, flows, image, pipeline_type, seed)
+    mesh, tex_voxels, res, stats, timings = run_pipeline(pipe, (flows, stages), image, pipeline_type, seed)
 
     ply = os.path.join(out_dir, f"{stem}_{pipeline_type}_seed{seed}.ply")
     mesh_stats = write_ply(ply, mesh, tex_voxels, res)
@@ -395,6 +484,7 @@ def run_e2e(
         "load_s": load_s,
         "stages": timings,
         "tt_flow_s": round(flows.device_s, 1),
+        "tt_other_s": round(stages.device_s, 1),
         "host_peak_rss_gb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 1),
         "total_s": round(time.time() - t_all, 1),
     }
