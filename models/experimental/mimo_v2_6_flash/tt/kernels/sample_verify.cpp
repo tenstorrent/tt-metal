@@ -14,7 +14,8 @@
 //   top_p in Q24, top_k (0: none), greedy, 1 / T as fp32 bits, three unused words.
 // - argmax: uint32 row-major [1, max_batch], each slot's greedy token (GreedyHead's: the lowest id among tied
 //   maxima), the token the argmax_ids walk compares with.
-// - ctrl: uint32 row-major [1, groups * 16], per group: first slot (0xFFFFFFFF: unused), drafts n, greedy, unused,
+// - ctrl: uint32 row-major [1, groups * group_words], per group: first slot (0xFFFFFFFF: unused), drafts n, greedy,
+// unused,
 //   drafts [D], then the uniforms in Q24: bonus, accept [D], correction; zero padding.
 // Per group: a greedy group accepts draft j while it equals argmax[s0 + j] and commits the argmax chain. A sampled
 // group accepts draft j when its probability under slot s0 + j's distribution (as sample_merge.cpp builds it:
@@ -26,7 +27,7 @@
 // A slot whose walk took a candidate after a chip's list ran out (so possibly not the row's next largest), or ran out
 // of candidates with the nucleus still open, marks its group truncated; the group is still accepted on its
 // candidates, as the decode sampler draws from the nucleus's tokens among them.
-// Output: uint32 row-major [1, groups * 8], per group: committed count (0: unused group), the committed tokens
+// Output: uint32 row-major [1, groups * out_words], per group: committed count (0: unused group), the committed tokens
 // [D + 1] (0xFFFFFFFF past the count), truncated, unused.
 
 #include <cstdint>
@@ -70,13 +71,13 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(5);
     constexpr uint32_t D = get_compile_time_arg_val(6);  // drafts per group at most
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(7);
-    static_assert(users >= 1 && users <= 4 && tp <= 32 && max_batch * 4 <= 1024);
-    static_assert(groups <= users && D + 1 <= users && 6 + 2 * D <= 16 && 3 + D <= 8);
-    constexpr uint32_t group_words = 16;
-    constexpr uint32_t out_words = 8;
+    constexpr uint32_t group_words = get_compile_time_arg_val(8);
+    constexpr uint32_t out_words = get_compile_time_arg_val(9);
+    static_assert(users >= 1 && users <= 8 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 2048);
+    static_assert(groups <= users && D + 1 <= users && 6 + 2 * D <= group_words && 3 + D <= out_words);
     constexpr uint32_t slot_bytes = K * 8;
-    constexpr uint32_t cand_bytes = users * slot_bytes;  // every slot's list of a chip page
-    constexpr uint32_t norm_bytes = 64;                  // every slot's normalizer of a chip page
+    constexpr uint32_t cand_bytes = users * slot_bytes;     // every slot's list of a chip page
+    constexpr uint32_t norm_bytes = users <= 4 ? 64 : 128;  // every slot's normalizer of a chip page
     constexpr uint32_t params_bytes = max_batch * 32;
     constexpr uint32_t argmax_bytes = max_batch * 4;
     constexpr uint32_t ctrl_bytes = groups * group_words * 4;

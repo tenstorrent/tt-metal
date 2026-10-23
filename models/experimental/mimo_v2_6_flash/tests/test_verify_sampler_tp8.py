@@ -3,9 +3,9 @@
 
 """VerifySampler (kernels/sample_verify.cpp) on one Galaxy row (TP=8), eager and traced. Galaxy only.
 
-The decode slots 0-3 of a [32, 152576] fp32 logit tile hold verify passes (reference.spec_decode.plan_verify_passes):
-one request with three drafts, two requests sharing a pass, greedy and sampled requests, top_k and nucleus rows. Two
-checks per pass:
+The decode slots 0 .. SPEC_SLOTS - 1 of a [32, 152576] fp32 logit tile hold verify passes
+(reference.spec_decode.plan_verify_passes): one request with every draft, several requests sharing a pass, greedy and
+sampled requests, top_k and nucleus rows (MIMO_SPEC_SLOTS=8: 8 slots, the sampler's 8 users). Two checks per pass:
 
 - bit for bit: the kernel's output page equals the host mirror (reference.sample_verify.verify_pass) run on the
   device's own candidate pages (DeviceSampler.chip_cands, read back per chip) and parameters: steps 1-2 are the decode
@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference import sample_verify as sv
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, plan_verify_passes
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, plan_verify_passes
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes
 from models.experimental.mimo_v2_6_flash.tests.test_sample_verify_host import q24, ref_walk
 from models.experimental.mimo_v2_6_flash.tt.common import TILE, MeshPlan
@@ -32,16 +32,25 @@ from models.experimental.mimo_v2_6_flash.tt.verify_sampler import VerifySampler
 
 VOCAB = 152576
 B = 32
-USERS = 4
+USERS = SPEC_SLOTS
 REPLAYS = 50
 # Per case: the pass's requests (drafts, (temperature, top_k, top_p)); temperature 0 is greedy.
-CASES = [
-    [(3, (1.0, 0, 0.95))],
-    [(3, (0.7, 20, 0.9))],
-    [(3, (0.0, 0, 1.0))],
-    [(1, (1.0, 0, 0.95)), (0, (1.3, 40, 1.0)), (0, (0.0, 0, 1.0))],
-    [(2, (1.0, 5, 1.0)), (0, (0.9, 0, 0.5))],
-]
+CASES = {
+    4: [
+        [(3, (1.0, 0, 0.95))],
+        [(3, (0.7, 20, 0.9))],
+        [(3, (0.0, 0, 1.0))],
+        [(1, (1.0, 0, 0.95)), (0, (1.3, 40, 1.0)), (0, (0.0, 0, 1.0))],
+        [(2, (1.0, 5, 1.0)), (0, (0.9, 0, 0.5))],
+    ],
+    8: [
+        [(7, (1.0, 0, 0.95))],
+        [(7, (0.7, 20, 0.9))],
+        [(7, (0.0, 0, 1.0))],
+        [(2, (1.0, 0, 0.95)), (1, (1.3, 40, 1.0)), (0, (0.0, 0, 1.0)), (1, (0.8, 0, 0.9))],
+        [(5, (1.0, 5, 1.0)), (1, (0.9, 0, 0.5))],
+    ],
+}[SPEC_SLOTS]
 
 
 def raw_page(t):

@@ -365,14 +365,14 @@ class TtMiMoModel:
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        # The device sampler serves up to 4 users (its candidate pages); more decode users sample on the host.
+        # The device sampler serves up to 8 users (its candidate pages); more decode users sample on the host.
         self.sampler = None
-        if self.decode_users <= 4:
+        if self.decode_users <= 8:
             self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         if self.mtp is not None or self.dflash is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
-            # inputs and output, like the samplers' buffers, before any capture. A verify whose slots the device
-            # sampler does not serve (MIMO_SPEC_SLOTS=8) accepts greedy requests only.
+            # inputs and output, like the samplers' buffers, before any capture. A verify with more slots than the
+            # device sampler's users (or no device sampler: more than 8 decode users) accepts greedy requests only.
             if self.sampler is not None and self.sampler.users >= SPEC_SLOTS:
                 self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
             else:

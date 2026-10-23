@@ -3,16 +3,17 @@
 
 // Decode sampling head, step 1, reader (tt/device_sampler.py): over a range of tile columns of this chip's vocab
 // shard, the tiles for the compute kernel (sample_norm_compute.cpp), which sums exp((logit - the range's largest) / T)
-// per row, and users 0-1's K largest logits (sample_topk.hpp); the writer (sample_scan_writer.cpp) takes users 2-3.
+// per row, and the first half of the user slots' K largest logits (sample_topk.hpp: users 0-1 of 4 slots, 0-3 of 8);
+// the writer (sample_scan_writer.cpp) takes the other half.
 //
 // Input: logits [1, 1, 32, V] fp32 TILE, DRAM interleaved; users in rows 0..users-1 (row u: face 0 elements
 // u*16 .. u*16+15 for columns 0-15, face 1 the same for columns 16-31). params: uint32 row-major [1, max_batch * 8],
 // row r's word 4 = 1 / T as fp32 bits.
-// Output: user slots 0-1 of this core's block of the top-K partials (raw 4096-byte pages: 4 user slots of K (key,
-// local index) pairs, best first, at page core / 4, byte offset (core % 4) * 4 * K * 8); slots of users past `users`
-// zero. To the compute kernel: the range's tiles (cb_x), and two tiles whose row u holds, in every column, user u's
-// largest logit of the range (cb_m) and 1 / T (cb_a), rows past the users zero. To the writer: the tiles' address
-// (cb_ready).
+// Output: the first half of the user slots of this core's block of the top-K partials (raw 4096-byte pages: `slots`
+// user slots (4, or 8 past 4 users) of K (key, local index) pairs, best first, at page core / (4096 / block), byte
+// offset (core % (4096 / block)) * block, block = slots * K * 8); slots of users past `users` zero. To the compute
+// kernel: the range's tiles (cb_x), and two tiles whose row u holds, in every column, user u's largest logit of the
+// range (cb_m) and 1 / T (cb_a), rows past the users zero. To the writer: the tiles' address (cb_ready).
 
 #include <cstdint>
 
@@ -48,10 +49,12 @@ void kernel_main() {
     constexpr uint32_t cb_a = get_compile_time_arg_val(5);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t cb_ready = get_compile_time_arg_val(7);
-    static_assert(users >= 1 && users <= 4, "users in rows 0-3");
+    constexpr uint32_t slots = get_compile_time_arg_val(8);  // user slots of a core's block: 4, or 8
+    static_assert(users >= 1 && users <= slots && (slots == 4 || slots == 8), "users in rows 0-7");
+    constexpr uint32_t half = slots / 2;  // the reader's slots
     constexpr uint32_t tile_bytes = 4096;
     constexpr uint32_t slot_bytes = K * 8;
-    constexpr uint32_t block_bytes = 4 * slot_bytes;
+    constexpr uint32_t block_bytes = slots * slot_bytes;
     static_assert(4096 % block_bytes == 0, "a page holds whole core blocks");
     constexpr uint32_t blocks_per_page = 4096 / block_bytes;
     constexpr uint32_t params_bytes = max_batch * 32;
@@ -60,8 +63,8 @@ void kernel_main() {
     cb_reserve_back(cb_x, n);
     const uint32_t x_l1 = get_write_ptr(cb_x);
     cb_reserve_back(cb_scratch, 1);
-    const uint32_t out_l1 = get_write_ptr(cb_scratch);  // slots 0-1, then the params page
-    const uint32_t params_l1 = out_l1 + 2 * slot_bytes;
+    const uint32_t out_l1 = get_write_ptr(cb_scratch);  // the reader's slots, then the params page
+    const uint32_t params_l1 = out_l1 + half * slot_bytes;
 
     const InterleavedAddrGen<true> logits_gen = {.bank_base_address = logits_addr, .page_size = tile_bytes};
     for (uint32_t i = 0; i < n; ++i) {
@@ -73,7 +76,7 @@ void kernel_main() {
 
     // Each user's largest logit of the range: the normalizer's shift, released to the compute kernel first.
     const uint32_t* x = reinterpret_cast<const uint32_t*>(x_l1);
-    uint32_t largest[4] = {0, 0, 0, 0};
+    uint32_t largest[slots] = {};
     for (uint32_t i = 0; i < n; ++i) {
         for (uint32_t u = 0; u < users; ++u) {
             const uint32_t* __restrict row0 = x + i * 1024 + u * 16;
@@ -106,7 +109,7 @@ void kernel_main() {
     cb_push_back(cb_ready, 1);
 
     uint32_t* out = reinterpret_cast<uint32_t*>(out_l1);
-    for (uint32_t u = 0; u < 2; ++u) {
+    for (uint32_t u = 0; u < half; ++u) {
         if (u < users) {
             sample::range_topk<K>(x, n, tile_begin, u, out + u * 2 * K);
         } else {
@@ -117,6 +120,8 @@ void kernel_main() {
     }
     const InterleavedAddrGen<false> part_gen = {.bank_base_address = partials_addr, .page_size = 4096};
     noc_async_write(
-        out_l1, get_noc_addr(core / blocks_per_page, part_gen, (core % blocks_per_page) * block_bytes), 2 * slot_bytes);
+        out_l1,
+        get_noc_addr(core / blocks_per_page, part_gen, (core % blocks_per_page) * block_bytes),
+        half * slot_bytes);
     noc_async_write_barrier();
 }

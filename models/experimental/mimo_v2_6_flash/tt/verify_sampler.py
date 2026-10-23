@@ -18,8 +18,9 @@ The host reads 128 bytes per pass instead of 4 slots x 152k fp32 logits, and wal
 accept trace goes on with the chain step (tt/spec_chain.py), which copies this page into the pass's result page and
 derives the MTP draft from it; an ``argmax_ids`` step runs it too, every request greedy.
 
-GreedyVerify is the accept step of a verify whose slots the device sampler does not serve (MIMO_SPEC_SLOTS=8, or more
-decode users than its 4): every request greedy on the argmax ids (kernels/greedy_verify.cpp), the same pages.
+GreedyVerify is the accept step of a verify whose slots the device sampler does not serve (more slots than the
+replica's decode users, which it serves up to 8): every request greedy on the argmax ids (kernels/greedy_verify.cpp),
+the same pages.
 """
 
 import numpy as np
@@ -178,7 +179,7 @@ class VerifySampler(GreedyVerify):
         ]
         scratch = (
             _align64(tp * s.users * s.k * 8)
-            + _align64(tp * 64)
+            + _align64(tp * s.slots * 16)
             + _align64(self.max_batch * PARAM_WORDS * 4)
             + _align64(self.max_batch * 4)
             + _align64(GROUPS * GROUP_WORDS * 4)
@@ -189,7 +190,7 @@ class VerifySampler(GreedyVerify):
             "sample_verify.cpp",
             cores,
             _ranges(cores),
-            [s.users, tp, s.k, s.vocab_local, self.max_batch, GROUPS, MAX_DRAFTS, CB_SCRATCH],
+            [s.users, tp, s.k, s.vocab_local, self.max_batch, GROUPS, MAX_DRAFTS, CB_SCRATCH, GROUP_WORDS, OUT_WORDS],
             [args],
             ttnn.ReaderConfigDescriptor(),
         )
