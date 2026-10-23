@@ -2,27 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Readback test for the math thread's ALU source-format programming on Wormhole.
-//
-// ALU_FORMAT_SPEC_REG0_SrcA and ALU_FORMAT_SPEC_REG1_SrcB are adjacent 4-bit fields of one config
-// word (SrcA bits 17..20, SrcB bits 21..24). The host passes some DataFormat values with bits above
-// the field width set (UInt8 = 30, UInt32 = 24) and expects the register-write site to mask them.
-// A write that shifts the raw value in spills bit 4 of SrcA onto the LSB of SrcB, and the combined
-// RMW mask of the two-field writers carries that bit into the register: SrcB is programmed as
-// (srcb | 1), e.g. Int8 (14) becomes Bfp2_b (15), Int32 (8) becomes UInt16 (9).
-//
-// MATH seeds the word through the shipped configurator, then programs each (srcA, srcB) pair through
-// each writer under test and reads the word back. The writers that re-derive the INT8 math enable
-// bit are seeded with Float32 x Float32 (INT8 = 0); the skip_int8 writer is seeded with
-// Int8 x Float16_b (INT8 = 1) and must leave that bit as it found it, so a skip path that clears it
-// is caught. Only MATH runs; UNPACK and PACK do nothing. The variant is built with FP32 dest
-// accumulation (is_fp32_dest_acc_en), which the Int8/UInt8/Int32 formats require.
-//
-// Result words:
-//   0        magic
-//   1        number of records
-//   2        words per record
-//   3 + 4r   record r: writer, srcA (raw), srcB (raw), config word read back
+// Wormhole readback test: the math thread's ALU source-format writers must mask each DataFormat to
+// its 4-bit field, or bit 4 of SrcA (UInt8 = 30, UInt32 = 24) spills onto the LSB of SrcB (srcB | 1).
+// Output: magic, record count, words per record, then per record {writer, srcA, srcB, config word}.
 
 #include <cstdint>
 
@@ -62,11 +44,8 @@ struct FormatPair
     DataFormat srcb;
 };
 
-// The first six pairs carry a SrcA value with bit 4 set (UInt8 = 30, UInt32 = 24) and a SrcB value
-// with bit 0 clear, so a spill from SrcA is visible as SrcB | 1. {UInt32, Tf32} is the only pair
-// whose SrcB does not enable INT8 math by itself, so it decides that UInt32 alone does not either.
-// The last two pairs have no spill (Int8 = 14 and Float16_b = 5 fit the field) and only show that
-// the readback tracks the write.
+// Spill pairs first (SrcA bit 4 set, SrcB bit 0 clear, so a spill reads as srcB | 1); {UInt32, Tf32}
+// is the only spill pair where neither operand enables INT8 math. The last two fit the field (controls).
 constexpr FormatPair PAIRS[] = {
     {DataFormat::UInt8, DataFormat::Int8},
     {DataFormat::UInt8, DataFormat::Int32},
@@ -86,10 +65,8 @@ inline std::uint32_t read_alu_format_word()
     return get_cfg_pointer()[ALU_FORMAT_SPEC_REG0_SrcA_ADDR32];
 }
 
-// Seed the word so a stale read cannot match the expectation: no seed equals a pair's masked write
-// in both fields. The skip_int8 writer must not touch the INT8 math enable bit, so it is seeded
-// with that bit set (Int8 x Float16_b); the others re-derive the bit and are seeded with it clear
-// (Float32 x Float32).
+// Seed so a stale read cannot match a pair: the skip_int8 writer must leave INT8 math enable as it
+// found it (seeded set); the other writers re-derive it (seeded clear).
 inline void seed(const Writer writer)
 {
     if (writer == Writer::ReconfigSkipInt8)

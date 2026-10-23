@@ -2,16 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-The math thread's ALU source-format writers must mask the format value to the 4-bit register
-field before shifting it in.
-
-ALU_FORMAT_SPEC_REG0_SrcA and ALU_FORMAT_SPEC_REG1_SrcB are adjacent 4-bit fields of one config
-word. The host passes UInt8 as 30 and UInt32 as 24, which have bit 4 set; a writer that shifts the
-raw value lands that bit on the LSB of SrcB, and the two-field writers' RMW mask carries it into
-the register, so SrcB is programmed as (srcB | 1): Int8 becomes Bfp2_b, Int32 becomes UInt16.
-
-MATH programs each (srcA, srcB) pair through each writer and reads the config word back. See
-sources/math_hw_configure_format_mask_test.cpp for the result layout.
+Wormhole: the math thread's ALU source-format writers must mask each DataFormat to its 4-bit field, or
+bit 4 of SrcA (UInt8 = 30, UInt32 = 24) spills onto the LSB of SrcB (srcB | 1). Reads the config word
+back after each writer; result layout in sources/math_hw_configure_format_mask_test.cpp.
 """
 
 from collections import namedtuple
