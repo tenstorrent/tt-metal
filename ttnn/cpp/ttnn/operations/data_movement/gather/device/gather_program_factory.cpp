@@ -9,6 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -573,14 +574,17 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
     ProgramDescriptor desc;
     constexpr uint32_t buffer_scale_factor = 2;
 
+    // Each input CB page holds one input row. The page size is rounded up to the input buffer
+    // alignment so that the second page starts at an aligned address, like the source row does.
+    const uint32_t input_cb_page_size = tt::align(input_stick_size_bytes, input_tensor_buffer->alignment());
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = buffer_scale_factor * input_stick_size_bytes,
+        .total_size = buffer_scale_factor * input_cb_page_size,
         .core_ranges = core_range,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(input_tensor_cb_index),
             .data_format = input_tensor_cb_data_format,
-            .page_size = input_stick_size_bytes,
+            .page_size = input_cb_page_size,
         }}},
     });
 
