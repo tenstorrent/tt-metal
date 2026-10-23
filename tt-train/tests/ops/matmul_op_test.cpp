@@ -105,19 +105,31 @@ protected:
 class MatmulOpFrozenInputTest : public MatmulOpTest, public ::testing::WithParamInterface<MatmulFrozenCase> {};
 
 // ttnn's matmul rejects a batched transpose_a forward unless op(a)'s M fits in one tile, so M = 32 is the shape that
-// reaches matmul_op's backward. There, flattening a [batch, K, M] a misaligns its rows with dL/dout's, so backward must
-// refuse it before adding any grad.
-TEST_F(MatmulOpTest, BatchedTransposeARejectedInBackward) {
-    const MatmulFrozenGraph g = build_graph(MatmulFrozenCase{
-        .name = "BatchedTransposeA",
-        .M = 32,
-        .K = 64,
-        .N = 32,
-        .transpose_a = true,
-        .b_requires_grad = false,
-        .batch = 2});
-    EXPECT_THROW(g.out->backward(), std::runtime_error);
-    EXPECT_FALSE(g.t_a->is_grad_initialized()) << "a received a gradient from the unsupported backward";
+// would reach matmul_op's backward. There, flattening a [batch, K, M] a misaligns its rows with dL/dout's, so matmul_op
+// must refuse it at the call site.
+TEST_F(MatmulOpTest, BatchedTransposeARejectedInForward) {
+    EXPECT_THROW(
+        build_graph(MatmulFrozenCase{
+            .name = "BatchedTransposeA",
+            .M = 32,
+            .K = 64,
+            .N = 32,
+            .transpose_a = true,
+            .b_requires_grad = false,
+            .batch = 2}),
+        std::runtime_error);
+}
+
+// Backward reduces dB over a's flattened batch, so a per-batch b must be refused at the call site.
+TEST_F(MatmulOpTest, BatchedBRejectedInForward) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto a = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor(make_small_ints({2U, 1U, 32U, 64U}, /*bound=*/2.4F, /*seed=*/1U), device),
+        /*requires_grad=*/true);
+    const auto b = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor(make_small_ints({2U, 1U, 64U, 96U}, /*bound=*/2.4F, /*seed=*/2U), device),
+        /*requires_grad=*/false);
+    EXPECT_THROW(ttml::ops::matmul_op(a, b, /*transpose_a=*/false, /*transpose_b=*/false), std::runtime_error);
 }
 
 // add_grad drops a frozen tensor's grad, so the grads alone cannot show that a frozen side's matmul was skipped.

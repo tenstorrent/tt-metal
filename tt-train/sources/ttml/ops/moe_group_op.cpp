@@ -46,6 +46,12 @@ MoEGroupOutputs moe_group_op(
 
     autograd::GradFunction grad =
         [dispatched, scores, grouped_out, grouped_scores_out, plan, offsets, k_slot, e_local, k, d, b, s, t_cap]() {
+            const bool dispatched_needs_grad = dispatched->get_requires_grad() && grouped_out->is_grad_initialized();
+            const bool scores_needs_grad = scores->get_requires_grad() && grouped_scores_out->is_grad_initialized();
+            if (!dispatched_needs_grad && !scores_needs_grad) {
+                return;
+            }
+
             auto* device = &autograd::ctx().get_device();
             // ones_gs: per-row weight = 1 so moe_ungroup applies no scaling.
             auto ones_gs = ttnn::full(
@@ -58,7 +64,7 @@ MoEGroupOutputs moe_group_op(
             // Step A — d(dispatched) via row-scatter, H = hidden_dim. Skipped
             // when dispatched is frozen or grouped's grad was never accumulated
             // (some test paths only exercise the d(scores) branch).
-            if (dispatched->get_requires_grad() && grouped_out->is_grad_initialized()) {
+            if (dispatched_needs_grad) {
                 auto d_grouped = grouped_out->get_grad();
                 auto d_dispatched = ttml::metal::moe_ungroup(d_grouped, plan, offsets, ones_gs, e_local, d, b, s);
                 dispatched->add_grad(d_dispatched);
@@ -69,7 +75,7 @@ MoEGroupOutputs moe_group_op(
             // k_slot[i] and 0 elsewhere; metal::moe_ungroup with that as
             // expert_out and ones_gs as the per-row weight produces
             // d(scores)[D,B,S,K].
-            if (!scores->get_requires_grad() || !grouped_scores_out->is_grad_initialized()) {
+            if (!scores_needs_grad) {
                 return;
             }
             auto d_grouped_scores = grouped_scores_out->get_grad();

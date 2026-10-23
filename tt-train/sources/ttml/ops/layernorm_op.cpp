@@ -157,7 +157,7 @@ autograd::TensorPtr composite_layernorm(
     autograd::GradFunction grad = [tensor, out, gamma, beta_opt, mean, rstd]() {
         auto dout = out->get_grad();
 
-        if (tensor->get_requires_grad() || gamma->get_requires_grad()) {
+        if (autograd::any_requires_grad(tensor, gamma)) {
             // recalculate normalized tensor to save memory and avoid storing it
             auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
 

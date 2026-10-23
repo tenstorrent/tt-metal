@@ -155,7 +155,7 @@ autograd::TensorPtr swiglu(
         gated.deallocate();
 
         // Everything below feeds only the tensor, w1 and w3 grads.
-        if (!tensor->get_requires_grad() && !w1->get_requires_grad() && !w3->get_requires_grad()) {
+        if (!autograd::any_requires_grad(tensor, w1, w3)) {
             dL_dout.deallocate();
             return;
         }
