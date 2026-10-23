@@ -1537,3 +1537,55 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Open (new): one 2x4 traced run hung in the fused tail on the first call (all chips: the tail engine's compute waiting
   z, its ports waiting a fabric slot / their reader); the next run with the same code passed. Triage in
   moe_block_runs/hang_blk_bar_2x4.log. To narrow in the stress phase.
+
+### Generality: the model x rows x mesh map, fixes (Phase 1) and the device matrix (Phase 2)
+- Tests: test_generality_map.py (host-only, mock clusters: 2x4 line, 1x4 ring, Galaxy 4x4 / 8x4; one JSON line a cell in
+  generated/moe_block/gmap.jsonl - plan, arenas, tail slots, the error and where) and test_moe_block_matrix.py (device,
+  tiers quick / nightly / soak; models x rows x routing scenarios, eager + traced replays checked vs the host model on
+  the device's routing). Both fold a model past 64 experts a chip (the flat op's limit) as the device does.
+- GLM-5.3 1024 rows (fused head NCH 4, router cores) hung in the warm-up: the FFREE CB (the ports' FINB-free credits)
+  had 2 pages, and a core no port reads (fnr 0) credits every chunk up front - NCH - 1 = 3 - so its NCRISC blocked on
+  the reserve inside its poll loop and stopped serving the W stream (trisc0 waiting WIN on every core). Sized
+  max(2, NCH - 1). 2x4 traced: PCC 0.9867, span 2610 us (head 640 | dispatch 234 | experts 1642 | tail ops).
+- GLM-5.3 512 / 640: the head's arena clashed with the movers' static CB (x gather port CB 2 x 4 x rp pages: rp 6 with
+  GLM-5.3's fabric payload, end 210 KB vs ARENA_MAX's 177 KB allowance). The arena cap is now the free L1 at plan time
+  less that CB (se_engine3.arena_cap). 2x4: PCC 0.9866; span 2120 / 2232 us (head 331 / 393).
+- The ops fallback ran into the failed fused head's L1 (arena still allocated: its programs held it). The fallback now
+  force-frees every L1 tensor of the partly built moe_block.tt objects (MoEBlock._free_partial_l1).
+- K3 1280 rows on a 4x4: two planner regions (295 KB each) missed the router's overlay (xr + wr + hold, 576 KB) by 384 B.
+  sc / idx / best (dead once the rows are made, like the bias) moved under the overlay; regions past the router's
+  buffers when they still don't fit. Device K3 640 / 1024 (router on engine / cores): unchanged, PCC 0.996.
+- K3 768 rows on Galaxy: the tail arena (1395 KB, under the 1400 KB cap) plus 36 KB the block keeps later exceeded the
+  bank. Cap = free L1 at plan time less 44 KB (KEPT_LATER). Tail slots at 640 / 1024 / 1280 unchanged (4/4, 4/7, 4/8);
+  768 5 -> 4.
+- Ops router: the fold (top-K id / fold) - K3 at 2048 rows (no fused-head layout) now has a head.
+- Top-K 4 / 6 (M3, DeepSeek V4.1): the planner unpacked joint rows by 8 / 12-byte NoC copies - a NoC copy needs source
+  and destination equally 16 B aligned, so every other row was garbage; the home loop then indexed want[] with junk
+  source chips and looped (M3's first call hung; triage: every planner instance at ++wl[src]). Rows under 16 B now
+  unpack by words. K 6 also broke the staging alignment (24 B rows: back on 64 B every lcm(64, 24) / 24 = 8 rows),
+  router_topk's row writes (r x 24 B destinations from 64 B slots) and dispatch_prep's landing slots (a row could run
+  into the next one). zz_scratch_plan_k.py: the planner at K 4 / 6 / 8, 1 / 32 rows a page, bit-exact on every chip.
+- DeepSeek V4.1: the ops router takes sqrtsoftplus (softplus, then sqrt fused into the bias add). The fused head stays
+  sigmoid-only (falls back to ops).
+- MoEBlock.close() frees the block's device tensors. test_moe_block_switch: K3 at 640 / 1024 / 128 / 2048 / 640 / 256
+  / 640 rows, eager and traced, in one process - all PCC 0.996. test_moe_block_first_call: 24 builds + first calls in
+  one process, clean; 12 fresh processes (builds 1) clean too - the 2x4 fused-tail first-call hang
+  (hang_blk_bar_2x4.log) not reproduced in 36 first calls.
+- 11-column boards (the 4xP150 mock): dispatch_prep's copy cores clamped to the grid.
+
+Device matrix, LoudBox 2x4, traced (uniform routing unless noted; PCC min over 34 checks; span = slowest chip's
+replay, us; all routings on the device's own routing):
+
+| model | rows a mesh row: PCC / span | head / tail |
+|---|---|---|
+| K3 (E 896 fold 4, 28 a chip) | 128: .9962 / 1505; 256: .9962 / 1767; 512: .9961 / 1951; 640: .9960 / 2083; 1024: .9961 / 2762; 2048: .9962 / 5554 | fused (2048: ops) / fused |
+| K3 640, routings | zipf spread .9961 / 1885; one hot .9960 / 2150; empty experts .9961 / 1650; zero-row chip .9961 / 2092 | fused / fused |
+| GLM-5.3-Flash | 128: .9865 / 1394; 256: .9865 / 1446; 512: .9865 / 1612; 640: .9865 / 1676; 1024: .9867 / 1900; 2048: .9869 / 2919 | fused (2048: ops) / ops |
+| GLM-5.3-Flash 640, routings | zipf spread .9863 / 1118; one hot .9865 / 1724; empty experts .9847 / 1104; zero-row chip .9865 / 1682 | fused / ops |
+| GLM-5.3 | 128: .9864 / 1797; 256: .9866 / 1917; 512: .9866 / 2120; 640: .9866 / 2232; 1024: .9867 / 2608; 2048: .9870 / 4220 | fused (2048: ops) / ops |
+| MiniMax M3 | 128: .9885 / 1418; 256: .9887 / 1542; 512: .9889 / 1838; 640: .9889 / 1986; 1024: .9891 / 2395; 2048: does not build | ops / ops |
+| DeepSeek V4.1-Flash | 128: .9907 / 2293; 256: .9908 / 2408; 512: .9908 / 2667; 640: .9909 / 2767; 1024: .9909 / 3156; 2048: .9910 / 4110 | ops / ops |
+| soak (10k replays, every 25th checked) | K3 640 .9960; K3 1024 .9961; GLM-5.3-Flash 640 .9865 - clean | |
+
+zipf_packed / ties are skipped on the fused head (the planner's rows_cap overflow: the token-dropping policy is
+pending). Not built: M3 at 2048 rows (the flat op's arena 1288 KB > the 1256 KB left).

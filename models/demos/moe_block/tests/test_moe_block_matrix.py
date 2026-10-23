@@ -286,7 +286,7 @@ def test_moe_block_switch(mesh_device, device_params):
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("builds", [24])
+@pytest.mark.parametrize("builds", [24, 1])  # (1: a fresh process a build - run it repeatedly)
 @pytest.mark.timeout(7200)
 def test_moe_block_first_call(mesh_device, device_params, builds):
     """The block built again and again in one process (closed in between), each build's warm-ups and first call checked:
