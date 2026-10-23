@@ -20,7 +20,9 @@ size_t replica_group_key(
 //  - every populated local shard sits at a coordinate the label lists, and every labelled coordinate holds a shard
 //    (or is remote to this host, as in multi-host LOCAL dumps);
 //  - shards the label calls replicas of each other (coordinates that differ only along Replicate axes) have the
-//    same size and, with `compare_replica_contents`, the same bytes.
+//    same size and, with `compare_replica_contents`, the same values (tile padding and alignment bytes, which hold
+//    whatever the producing op left there, are not compared; whatever keeps one copy per group keeps that copy's
+//    padding).
 // Device ops relabel their outputs, so a label can be wrong, and anything that keeps one copy per replica group
 // would then drop a shard silently. The flatbuffer writer runs this first; it is exported for any other caller that
 // keeps one copy per group, such as a checkpoint gather that composes a tensor by its label.

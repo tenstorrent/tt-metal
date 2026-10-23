@@ -47,9 +47,10 @@ struct Config {
         // order, so a new member goes at the end.
         bool strict_ccl_topology = false;
         // dump_tensor writes shards that the tensor topology labels as replicas of each other once. Before folding
-        // a shard into its group it compares the bytes and fails if they differ, since a wrong Replicate label
-        // would otherwise drop data silently. One memcmp per replica; turn off only when replicas are known to
-        // legitimately differ, in which case the first replica is the one written.
+        // a shard into its group it compares the values (tile padding excluded) and fails if they differ, since a
+        // wrong Replicate label would otherwise drop data silently. One memcmp per replica, plus one pass over the
+        // logical region of both shards when a padded tensor's padding bytes differ; turn off only when replicas are
+        // known to legitimately differ, in which case the first replica is the one written.
         bool verify_replicated_shards_on_dump = true;
     };
 

@@ -8,6 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/cleanup.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -27,10 +28,12 @@
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cinttypes>
 #include <cstdio>
+#include <random>
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
@@ -46,6 +49,7 @@
 namespace ttnn {
 namespace {
 
+using ::testing::Each;
 using ::testing::FloatEq;
 using ::testing::HasSubstr;
 using ::testing::Pointwise;
@@ -713,6 +717,306 @@ TEST(TensorSerializationFlatbufferGuardTest, PlacementCountMismatchRejected) {
     Tensor tensor = make_host_tensor(MeshShape(2, 2), coords, {{0.0f}, {1.0f}, {2.0f}, {3.0f}}, label);
 
     expect_dump_rejected(test_file, tensor, "one placement per distribution dimension");
+}
+
+// A 30 x 30 float32 tile-layout tensor is one 32 x 32 tile with 124 padding elements. `from_vector` encodes the
+// logical ones with zero padding; the result is the physical buffer of replica A, and replica B is a copy with every
+// padding element overwritten by a distinct non-zero value, so the two differ in bytes but not in values.
+struct PaddedReplicas {
+    TensorSpec spec{ttnn::Shape{1, 1, 30, 30}, TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{})};
+    std::vector<float> a;  // zero padding
+    std::vector<float> b;  // random padding
+};
+PaddedReplicas make_padded_replicas() {
+    PaddedReplicas r;
+    const Tensor encoded = Tensor::from_vector(std::vector<float>(30 * 30, 1.0f), r.spec);
+    const auto& buffer = encoded.host_storage().buffer();
+    const auto shard = buffer.get_shard(*buffer.shard_coords().begin());
+    TT_FATAL(shard.has_value(), "test bug: the encoded tensor has no shard");
+    const auto view = shard->view_as<float>();
+    r.a.assign(view.begin(), view.end());
+    TT_FATAL(r.a.size() == 32 * 32, "test bug: expected one 32 x 32 tile");
+    r.b = r.a;
+    float fill = 2.0f;
+    for (float& value : r.b) {
+        if (value == 0.0f) {  // every logical value is one, so a zero is a padding element
+            value = fill;
+            fill += 0.5f;
+        }
+    }
+    TT_FATAL(fill > 2.0f, "test bug: no padding element found");
+    return r;
+}
+
+// Builds the 1x2 host tensor with `a` at (0,0) and `b` at (0,1) under a Replicate label.
+Tensor make_padded_replica_tensor(const PaddedReplicas& r, const std::vector<float>& b) {
+    const MeshShape buffer_shape(1, 2);
+    const std::vector<MeshCoordinate> coords = all_coords(buffer_shape);
+    const TensorTopology label(MeshShape(2), Placements{kReplicate}, coords);
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    buffer.emplace_shard(coords[0], [&r]() { return HostBuffer(std::vector<float>(r.a)); });
+    buffer.emplace_shard(coords[1], [&b]() { return HostBuffer(std::vector<float>(b)); });
+    return Tensor(host_tensor_from_buffer_with_topology(std::move(buffer), r.spec, label));
+}
+
+// Replicas whose logical values match while every tile padding element differs. Padding holds whatever the producing
+// op left there, so the label is honest: the dump writes one copy and the logical values load back intact at both
+// coordinates. The bytes differ, so the values decide (the in-place walk over the logical region).
+TEST(TensorSerializationFlatbufferGuardTest, ReplicasDifferingOnlyInTilePaddingAccepted) {
+    TemporaryFile test_file("replicas_padding_differs.tensorbin");
+    const PaddedReplicas r = make_padded_replicas();
+    Tensor tensor = make_padded_replica_tensor(r, r.b);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_topology(), tensor.tensor_topology());
+    for (const auto& coord : all_coords(MeshShape(1, 2))) {
+        const auto shard = loaded_tensor.host_storage().buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value()) << "no shard at " << coord;
+        const auto values = tt::tt_metal::HostTensor::from_buffer(*shard, r.spec).to_vector<float>();
+        EXPECT_THAT(values, SizeIs(30 * 30));
+        EXPECT_THAT(values, Each(FloatEq(1.0f)));
+    }
+}
+
+// The same padded replicas, but one logical value of the second differs as well: the value comparison rejects the
+// dump, so differing padding does not hide a real difference.
+TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasWithDifferentValuesRejected) {
+    TemporaryFile test_file("padded_replicas_values_differ.tensorbin");
+    const PaddedReplicas r = make_padded_replicas();
+    std::vector<float> b = r.b;
+    const auto logical = std::find(b.begin(), b.end(), 1.0f);
+    ASSERT_NE(logical, b.end());
+    *logical = 3.0f;
+    Tensor tensor = make_padded_replica_tensor(r, b);
+
+    expect_dump_rejected(test_file, tensor, "contents differ");
+}
+
+// The value comparison of padded replicas across layouts: partial tiles in both dimensions, padding rows inside
+// every batch element, a single column, a single row, rank 3; bf16, fp32, uint8 and uint32. Replica A is the
+// encoding of random values with zero padding, B carries the same values under random padding and is accepted, C is
+// B with one logical value changed and is rejected.
+template <typename T>
+T padded_value(float f) {
+    if constexpr (std::is_same_v<T, bfloat16>) {
+        return bfloat16(f);
+    } else {
+        return static_cast<T>(f);
+    }
+}
+template <typename T>
+bool padded_is_zero(T v) {
+    if constexpr (std::is_same_v<T, bfloat16>) {
+        return static_cast<float>(v) == 0.0f;
+    } else {
+        return v == T(0);
+    }
+}
+template <typename T>
+DataType padded_dtype() {
+    if constexpr (std::is_same_v<T, bfloat16>) {
+        return DataType::BFLOAT16;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
+        return DataType::UINT8;
+    } else {
+        return DataType::UINT32;
+    }
+}
+// The physical buffer of `spec` encoded from random non-zero values (so a zero marks a padding element), with the
+// padding positions.
+template <typename T>
+std::pair<std::vector<T>, std::vector<size_t>> encode_random_padded(const TensorSpec& spec, std::mt19937& rng) {
+    std::vector<T> logical(spec.logical_shape().volume());
+    std::uniform_int_distribution<int> value(1, 100);
+    for (auto& v : logical) {
+        v = padded_value<T>(static_cast<float>(value(rng)));
+    }
+    const Tensor encoded = Tensor::from_vector(logical, spec);
+    const auto& buffer = encoded.host_storage().buffer();
+    const auto shard = buffer.get_shard(*buffer.shard_coords().begin());
+    TT_FATAL(shard.has_value(), "test bug: the encoded tensor has no shard");
+    const auto view = shard->view_as<T>();
+    std::vector<T> physical(view.begin(), view.end());
+    std::vector<size_t> padding;
+    for (size_t i = 0; i < physical.size(); ++i) {
+        if (padded_is_zero(physical[i])) {
+            padding.push_back(i);
+        }
+    }
+    return {physical, padding};
+}
+template <typename T>
+Tensor two_replicas(const TensorSpec& spec, const std::vector<T>& a, const std::vector<T>& b) {
+    const MeshShape buffer_shape(1, 2);
+    const std::vector<MeshCoordinate> coords = all_coords(buffer_shape);
+    const TensorTopology label(MeshShape(2), Placements{kReplicate}, coords);
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    buffer.emplace_shard(coords[0], [&a]() { return HostBuffer(std::vector<T>(a)); });
+    buffer.emplace_shard(coords[1], [&b]() { return HostBuffer(std::vector<T>(b)); });
+    return Tensor(host_tensor_from_buffer_with_topology(std::move(buffer), spec, label));
+}
+template <typename T>
+void check_padded_replicas(const ttnn::Shape& shape, std::mt19937& rng) {
+    const TensorSpec spec(shape, TensorLayout(padded_dtype<T>(), Layout::TILE, MemoryConfig{}));
+    auto [a, padding] = encode_random_padded<T>(spec, rng);
+    ASSERT_FALSE(padding.empty()) << shape;
+    std::vector<size_t> logical_positions;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (!padded_is_zero(a[i])) {
+            logical_positions.push_back(i);
+        }
+    }
+    std::uniform_int_distribution<int> fill(1, 250);
+    std::uniform_int_distribution<size_t> pick(0, logical_positions.size() - 1);
+    for (int trial = 0; trial < 4; ++trial) {
+        std::vector<T> b = a;
+        for (size_t idx : padding) {
+            b[idx] = padded_value<T>(static_cast<float>(fill(rng)));
+        }
+        std::vector<T> c = b;
+        const size_t pos = logical_positions[pick(rng)];
+        if constexpr (std::is_integral_v<T>) {
+            c[pos] = static_cast<T>(c[pos] + T(1));  // wrapping still differs from the original
+        } else {
+            c[pos] = padded_value<T>(static_cast<float>(fill(rng)) + 300.0f);
+        }
+        ASSERT_FALSE(padded_is_zero(c[pos])) << "test bug: the changed value reads as padding";
+        EXPECT_NO_THROW(verify_shards_match_topology(two_replicas<T>(spec, a, b))) << shape << " trial " << trial;
+        EXPECT_THAT(
+            [&]() { verify_shards_match_topology(two_replicas<T>(spec, a, c)); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("contents differ")))
+            << shape << " trial " << trial;
+    }
+}
+
+TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasAcrossLayoutsAcceptedAndRejected) {
+    std::mt19937 rng(7);
+    for (const auto& shape :
+         {ttnn::Shape{1, 1, 30, 30},
+          ttnn::Shape{1, 1, 100, 70},
+          ttnn::Shape{2, 3, 45, 33},
+          ttnn::Shape{1, 1, 33, 1},
+          ttnn::Shape{3, 17, 40},
+          ttnn::Shape{1, 1, 1, 50}}) {
+        check_padded_replicas<bfloat16>(shape, rng);
+        check_padded_replicas<float>(shape, rng);
+        check_padded_replicas<uint8_t>(shape, rng);
+        check_padded_replicas<uint32_t>(shape, rng);
+    }
+}
+
+// Padded replicas on the layouts the in-place walk does not describe (block floats, a transposed tile, a rank-1
+// tensor), on every tile shape the host supports, and on a row-major tensor with alignment padding. Each replica is
+// encoded from the same values with a different pad value, so the bytes differ in the padding alone; a third replica
+// changes one logical value. Values 2..100 keep a block float's shared exponents unchanged by a pad value of 1.
+// The shard buffer `from_vector` produces, kept as is so it carries the element type the dtype's readers expect
+// (uint32 for packed block floats), as a shard read back from a device does.
+HostBuffer encoded_shard(const TensorSpec& spec, const std::vector<float>& logical, float pad_value) {
+    const Tensor encoded = Tensor::from_vector(logical, spec, /*device=*/nullptr, /*cq_id=*/std::nullopt, pad_value);
+    const auto& buffer = encoded.host_storage().buffer();
+    const auto shard = buffer.get_shard(*buffer.shard_coords().begin());
+    TT_FATAL(shard.has_value(), "test bug: the encoded tensor has no shard");
+    return *shard;
+}
+std::vector<std::byte> bytes_of(const HostBuffer& shard) {
+    const auto view = shard.view_bytes();
+    return std::vector<std::byte>(view.begin(), view.end());
+}
+Tensor two_encoded_replicas(const TensorSpec& spec, const HostBuffer& a, const HostBuffer& b) {
+    const MeshShape buffer_shape(1, 2);
+    const std::vector<MeshCoordinate> coords = all_coords(buffer_shape);
+    const TensorTopology label(MeshShape(2), Placements{kReplicate}, coords);
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    buffer.emplace_shard(coords[0], [&a]() { return a; });
+    buffer.emplace_shard(coords[1], [&b]() { return b; });
+    return Tensor(host_tensor_from_buffer_with_topology(std::move(buffer), spec, label));
+}
+void check_encoded_padded_replicas(const std::string& what, const TensorSpec& spec, std::mt19937& rng) {
+    ASSERT_NE(spec.logical_2d_shape(), spec.physical_shape()) << what << ": the spec has no padding";
+    std::vector<float> logical(spec.logical_shape().volume());
+    std::uniform_int_distribution<int> value(2, 100);
+    for (auto& v : logical) {
+        v = static_cast<float>(value(rng));
+    }
+    std::vector<float> changed = logical;
+    std::uniform_int_distribution<size_t> pick(0, logical.size() - 1);
+    const size_t pos = pick(rng);
+    changed[pos] = logical[pos] + 300.0f;
+
+    const HostBuffer a = encoded_shard(spec, logical, 0.0f);
+    const HostBuffer b = encoded_shard(spec, logical, 1.0f);
+    const HostBuffer c = encoded_shard(spec, changed, 1.0f);
+    ASSERT_NE(bytes_of(a), bytes_of(b)) << what << ": the pad value left the bytes unchanged";
+
+    EXPECT_NO_THROW(verify_shards_match_topology(two_encoded_replicas(spec, a, b))) << what;
+    EXPECT_THAT(
+        [&]() { verify_shards_match_topology(two_encoded_replicas(spec, a, c)); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("contents differ")))
+        << what;
+}
+
+TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasOnEveryTileShapeAcceptedAndRejected) {
+    std::mt19937 rng(13);
+    const ttnn::Shape shape{1, 1, 30, 30};
+    for (const auto& tile_shape : std::vector<std::array<uint32_t, 2>>{
+             {32, 32},
+             {16, 32},
+             {32, 16},
+             {16, 16},
+             {8, 32},
+             {4, 32},
+             {2, 32},
+             {1, 32},
+             {8, 16},
+             {4, 16},
+             {2, 16},
+             {1, 16}}) {
+        for (const DataType dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
+            const TensorSpec spec(
+                shape, TensorLayout(dtype, PageConfig(Layout::TILE, Tile(tile_shape)), MemoryConfig{}));
+            check_encoded_padded_replicas(fmt::format("tile {}x{} {}", tile_shape[0], tile_shape[1], dtype), spec, rng);
+        }
+    }
+}
+
+TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasBeyondTheInPlaceWalkAcceptedAndRejected) {
+    std::mt19937 rng(17);
+    // Block floats: packed rows share an exponent, so the comparison is on unpacked values.
+    check_encoded_padded_replicas(
+        "bfloat8_b 30x30",
+        TensorSpec(ttnn::Shape{1, 1, 30, 30}, TensorLayout(DataType::BFLOAT8_B, Layout::TILE, MemoryConfig{})),
+        rng);
+    check_encoded_padded_replicas(
+        "bfloat4_b 30x30",
+        TensorSpec(ttnn::Shape{1, 1, 30, 30}, TensorLayout(DataType::BFLOAT4_B, Layout::TILE, MemoryConfig{})),
+        rng);
+    // A transposed tile.
+    check_encoded_padded_replicas(
+        "transposed tile bf16 30x30",
+        TensorSpec(
+            ttnn::Shape{1, 1, 30, 30},
+            TensorLayout(
+                DataType::BFLOAT16, PageConfig(Layout::TILE, Tile({32, 32}, /*transpose_tile=*/true)), MemoryConfig{})),
+        rng);
+    // Rank 1.
+    check_encoded_padded_replicas(
+        "rank-1 bf16 50",
+        TensorSpec(ttnn::Shape{50}, TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{})),
+        rng);
+    // Row-major with alignment padding on the width.
+    check_encoded_padded_replicas(
+        "row-major bf16 30x30 aligned to 64",
+        TensorSpec(
+            ttnn::Shape{1, 1, 30, 30},
+            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, Alignment({64}))),
+        rng);
 }
 
 // One HostBuffer emplaced at both coordinates shares one copy on disk whatever the label says: the pointer lookup
