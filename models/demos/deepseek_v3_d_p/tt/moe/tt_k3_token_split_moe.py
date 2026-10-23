@@ -752,6 +752,26 @@ class TtK3TokenSplitMoE:
         for c in wcores:
             zr.setdefault(c, []).append((int(self.words.buffer_address()), 192 * 16 * 4, 0, 1))
         self.zero_desc = l1_zero_program(mesh_device, zr)
+        # the arena's per-call zeroing folded into the dispatch (routed_only, the separate dispatch): its kernels on the
+        # cells (the dispatch's port cores' runs by other cells), each counting in on the chip's dispatch ports, whose
+        # senders send no END before every one did - the dispatch stays the barrier that orders the zeroing before any
+        # chip's combine writes (MoE block: one program less a layer, ~5 us)
+        self.zero_gate = None
+        if routed_only and self.sparse_dispatch and not dispatch_in_program and os.environ.get("K3_ZGATE", "1") == "1":
+            from ttnn.bringup.combine_rf.l1_zero import l1_zero_kernels
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
+
+            ch_, _, _ = mesh_plan(mesh_device, 2, self.torus)
+            dpc = place_ports(mesh_device, ch_)
+            busy = {(v.x, v.y) for v in dpc.values()}
+            pcrs = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(busy)]
+            )
+            self._zg_sems = [ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(2)]
+            ctr, ep = (int(ttnn.get_global_semaphore_address(x)) for x in self._zg_sems)
+            ports_of = lambda coord: sorted({(v.x, v.y) for (c_, _, _), v in dpc.items() if c_ == coord})  # noqa: E731
+            fn, nz = l1_zero_kernels(mesh_device, zr, busy, ports_of, ctr)
+            self.zero_gate = dict(key=("zero_gate", ctr, ep, nz, self.arena_addr), ctr=ctr, ep=ep, n=nz, kernels=fn)
         ttnn.deallocate(self.arena)
         self.arena = None
         self.key = 7_000_000 + id(self) % 1_000_000
@@ -982,7 +1002,7 @@ class TtK3TokenSplitMoE:
             self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route
 
-    def dispatch(self, lat_rm, prep=None, x_se=None):
+    def dispatch(self, lat_rm, prep=None, x_se=None, zero=None):
         """The gathered tokens [N S, latent] (row home * S + t). Sparse (default): each row only to the chips holding
         one of its experts (sparse_all_gather_2d, its neighbour fences and END markers make it a barrier as the
         dense all-gathers were); dense: two all-gathers."""
@@ -1004,7 +1024,9 @@ class TtK3TokenSplitMoE:
         # (rows wider than K3's 7 KB: a 2-row group, its CBs (2 x group rows) below the arena and the manifest: GLM's 8 KB
         # rows at 8 a group clashed with the arena in the layer test, at 4 with the manifest in the whole model)
         group = 8 if 2 * self.d.latent <= 7168 else 2
-        sparse_all_gather_2d(xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus, group=group)
+        sparse_all_gather_2d(
+            xbuf, route, num_links=2, manifest=man, extra=extra, torus=self.torus, group=group, zero=zero
+        )
         ttnn.deallocate(man)
         if not self.routed_only:
             ttnn.deallocate(route)
@@ -1018,8 +1040,9 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(arena)
         return ok
 
-    def alloc_arena(self):
-        """The call's arena (uninitialized) with the combine's state zeroed."""
+    def alloc_arena(self, zero=True):
+        """The call's arena (uninitialized) with the combine's state zeroed (zero False: the dispatch's zero gate does
+        it - self.zero_gate)."""
         arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         assert (
             int(arena.buffer_address()) == self.arena_addr
@@ -1032,7 +1055,8 @@ class TtK3TokenSplitMoE:
         ):  # (the CBs bind the arena's buffer: a program-cache miss rebuilds them from this one)
             self.desc = self.combine.rebind(arena)
         # (routed_only: rebound only when the experts op will build a program - _experts_combine)
-        ttnn.generic_op([arena, self.words], self.zero_desc)
+        if zero:
+            ttnn.generic_op([arena, self.words], self.zero_desc)
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
@@ -1403,11 +1427,13 @@ class TtK3TokenSplitMoE:
         mark = hook or (lambda _: None)
         if self.dispatch_in_program:
             return self._routed_in_program(prep, op, mark, tilize)
-        arena = self.alloc_arena()
-        mark("arena_zero")
-        xg = self.dispatch(
-            None, prep
-        )  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+        # (the arena's zeroing in the dispatch's program when it can: its END markers wait for it - still the barrier
+        # that orders every chip's zeroing before any chip's combine writes)
+        zg = self.zero_gate
+        arena = self.alloc_arena(zero=zg is None)
+        if zg is None:
+            mark("arena_zero")
+        xg = self.dispatch(None, prep, zero=zg)  # (also the barrier: every chip zeroed its arena before any experts)
         mark("dispatch")
         self.experts_combine(xg, self.planner.outs, arena, op)
         ttnn.deallocate(arena)

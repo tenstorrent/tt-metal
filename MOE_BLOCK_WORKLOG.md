@@ -1202,3 +1202,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   (~30 us, the slowest chip on the LoudBox: W' + its own rows tilized and row-multicast) + 4 x the compute-bound chunk
   cadence (~14.5 us: matmul 8.3 + finish 3.5 + squares / s / partner ~2.5) = ~88 us, vs the ops tail ~229 (all-gather
   on the ring ~41, norm / up 163, add 17, tilize 8). Block (Galaxy-projected): ~2043 -> ~1860 us.
+
+### The arena's per-call zeroing folded into the dispatch (fused-head path)
+- What l1_zero zeroed (sparse_combine_rf zero_runs + the writers' words): 51 cores a chip, 12-18 KB each - 4 of them the
+  dispatch's port cores (their RISCs taken). Now kernels of the dispatch's program (l1_zero_kernels): each non-port
+  core zeroes its runs (stores, then NoC copies of its first zeroed block), the port cores' runs by other cells (NoC
+  writes from their zeroed block), then counts in (+1) on every dispatch port of its chip. A port sender sends no END
+  marker before the count reached its call count x the kernels (a persistent counter that only grows, the call count
+  in another word - no re-arm): a chip that has not zeroed holds every chip's dispatch from completing (the END(GMAX)
+  wave), so no combine writes into its L1 before - the old program boundary's ordering, the rows' sends overlapping
+  the zeroing. Only on routed_prepped's path (routed() with a shared expert dispatches before the arena is taken -
+  there the zero program stays); K3_ZGATE=0 (probe) the old program.
+- Device time noisy (K3 dispatch 140 / 148 with vs 140 / 135 + 5 without); traced, a win: K3 replay 3041-3045 vs
+  3048-3055 us (back to back 2989-2996 vs 2995-2998). Programs a layer: K3 6 -> 5 (4 traced), GLM 8 -> 7 (6 traced).
+  Soaks: K3 eager 300 + traced 300, GLM 200 + 200.

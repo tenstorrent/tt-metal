@@ -434,6 +434,15 @@ void kernel_main() {
 
     uint32_t ends = 0;
     bool done = false;
+#ifdef SA_ZGATE_CTR
+    // (the zero gate: the call's scratch zeroing (other kernels of this program) counts in here, SA_ZGATE_N a call -
+    // the counter only grows, my call count after it; no END leaves before it: a chip that has not zeroed holds every
+    // other chip's dispatch from completing, so no combine writes into its L1 before)
+    volatile tt_l1_ptr uint32_t* zep = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SA_ZGATE_EP);
+    const uint32_t zneed = (*zep + 1) * SA_ZGATE_N;
+    *zep = *zep + 1;
+    bool zok = false;
+#endif
     while (!done) {
         if (!cb_pages_available_at_front(cb_meta, group)) {
             for (uint32_t s = 0; s < 3; ++s) send_manifest(s);  // about to wait: nothing may sit staged
@@ -446,6 +455,15 @@ void kernel_main() {
         for (uint32_t i = 0; i < group; ++i) {
             const uint32_t w0 = meta[i * META_WORDS], m = meta[i * META_WORDS + 1];
             if (w0 & END) {
+#ifdef SA_ZGATE_CTR
+                if (!zok) {
+                    volatile tt_l1_ptr uint32_t* zc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SA_ZGATE_CTR);
+                    do {
+                        invalidate_l1_cache();
+                    } while (*zc < zneed);
+                    zok = true;
+                }
+#endif
                 for (uint32_t s = 0; s < 3; ++s) {
                     if (s_on[s]) stage(s, w0, 0);
                 }
@@ -687,6 +705,7 @@ def sparse_all_gather_2d(
     debug=None,
     spin_limit=0,
     extra=None,
+    zero=None,
 ):
     """output: [1, 1, N * S, W] ROW_MAJOR, DRAM interleaved, replicated layout per chip (each chip's own rows already at
     slots idx * S + t, idx = r * C + c); plan_tensor: [1, 1, 1, S] uint32 per chip, the route words of its own rows.
@@ -710,6 +729,7 @@ def sparse_all_gather_2d(
             pack,
             spin_limit,
             ttnn.get_tt_fabric_max_payload_size_bytes(),
+            None if zero is None else zero["key"],
         )
         hit = _DESC_CACHE.get(dkey)
         if hit is not None and hit[0] is output.device():
@@ -783,6 +803,11 @@ def sparse_all_gather_2d(
     for k, v in common.items():
         reader_src = reader_src.replace(k, v)
         sender_src = sender_src.replace(k, v)
+    if zero is not None:  # (the zero gate's counter / call-count words: persistent, on every port core)
+        sender_src = (
+            f"#define SA_ZGATE_CTR {zero['ctr']}u\n#define SA_ZGATE_EP {zero['ep']}u\n#define SA_ZGATE_N {zero['n']}u\n"
+            + sender_src
+        )
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
     def axis_dirs(d):
@@ -881,6 +906,8 @@ def sparse_all_gather_2d(
             cbs_x, kernels_x = extra[1](coord)
             program.cbs = list(program.cbs) + list(cbs_x)
             program.kernels = list(program.kernels) + list(kernels_x)
+        if zero is not None:
+            program.kernels = list(program.kernels) + list(zero["kernels"](coord))
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
     if dkey is not None:
         if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call buffers at ever new addresses)
